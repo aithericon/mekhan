@@ -1,0 +1,193 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 52, "y": 280 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Safety gate — {{ subject_kind }}",
+        "initial": {
+          "id": "in",
+          "label": "Subject + evidence",
+          "fields": [
+            {
+              "name": "subject_text",
+              "label": "Subject text (the upstream LLM output to critique)",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "evidence_text",
+              "label": "Evidence text (what the subject was supposed to be grounded in — OCR text / passages / transcript)",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "subject_kind",
+              "label": "Subject kind (letter | qa | soap | extraction | other)",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "critic",
+      "type": "automated_step",
+      "position": { "x": 416, "y": 280 },
+      "data": {
+        "type": "automated_step",
+        "label": "Safety critic (LLM)",
+        "description": "Low-temperature critic. Reads the subject text + the evidence it was supposed to be grounded in, flags overconfident dosing, off-label use, unsupported diagnoses, and claims that don't appear in the evidence. Each flag must carry a verbatim `supporting_text` from the SUBJECT (what looked wrong) — the downstream verifier checks whether that text actually appears in the EVIDENCE.",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "max_tokens": 2048,
+            "system_prompt": "Du bist ein medizinischer Sicherheits-Kritiker (clinical safety critic). Du erhaeltst (a) einen vom Modell erzeugten Text (subject) und (b) den Quelltext, auf dem dieser hätte basieren sollen (evidence). Markiere jede problematische Aussage im subject:\n- overconfident_dosing: Dosierungsangaben ohne klare Quelle.\n- off_label: Anwendungen ausserhalb der Zulassung.\n- unsupported_diagnosis: Diagnose ohne Belegstelle in evidence.\n- unsupported_claim: Sonstige Aussagen, die nicht in evidence vorkommen.\n- contradicts_evidence: Aussagen, die der evidence direkt widersprechen.\n\nJedes Flag MUSS ein supporting_text-Feld haben, das die problematische Textstelle aus dem subject wortwoertlich zitiert (1-30 Worte). Pruefe selbst nicht, ob die Stelle in der evidence vorkommt — das macht der nachgelagerte Verifier. Sei konservativ: lieber kein Flag als ein erfundenes.",
+            "prompt": "SUBJECT:\n---\n{{ start.subject_text }}\n---\n\nEVIDENCE:\n---\n{{ start.evidence_text }}\n---\n\nReturn JSON: {flags: [{kind, severity, message, supporting_text}]}. severity ∈ {info, warn, critical}. If no issues, return {flags: []}.",
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "$ref": "#/definitions/CriticFlags"
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Flags",
+          "fields": [
+            { "name": "flags", "label": "Flags", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "verify",
+      "type": "automated_step",
+      "position": { "x": 780, "y": 280 },
+      "data": {
+        "type": "automated_step",
+        "label": "Verify flag provenance",
+        "description": "For each flag, check whether `supporting_text` actually appears in the SUBJECT (i.e. the critic didn't hallucinate the quote). Mekhan analogue of the clinic's `provenance` step kind with `matcher=hybrid_auto, min_confidence=0.7`. A flag whose quote can't be found is dropped — we'd rather under-block than block on a fabricated quote.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Verified flags",
+          "fields": [
+            { "name": "verified_flags", "label": "Verified flags", "kind": "json", "required": true },
+            { "name": "dropped_flags", "label": "Dropped flags (couldn't verify quote)", "kind": "json", "required": true },
+            { "name": "verified_count", "label": "Verified count", "kind": "number", "required": true },
+            { "name": "dropped_count", "label": "Dropped count", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "decide",
+      "type": "automated_step",
+      "position": { "x": 1144, "y": 280 },
+      "data": {
+        "type": "automated_step",
+        "label": "Safety decision",
+        "description": "Aggregate verified flags into a single {pass | warn | block} action. Mirrors online-clinic's `safety_decision_from_flags` compute function. Default rules: any `critical` flag → block; any `warn` flag → warn; else → pass. Returns the reasons[] list for transparency.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Decision",
+          "fields": [
+            { "name": "action", "label": "Action", "kind": "text", "required": true },
+            { "name": "reasons", "label": "Reasons", "kind": "json", "required": true },
+            { "name": "critical_count", "label": "Critical flags", "kind": "number", "required": true },
+            { "name": "warn_count", "label": "Warn flags", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end-ok",
+      "type": "end",
+      "position": { "x": 1508, "y": 280 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "action", "expression": "decide.action" },
+          { "targetField": "reasons", "expression": "decide.reasons" },
+          { "targetField": "flags", "expression": "verify.verified_flags" },
+          { "targetField": "subject_kind", "expression": "start.subject_kind" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e-start-critic", "source": "start", "target": "critic", "targetHandle": "in", "type": "sequence" },
+    { "id": "e-critic-verify", "source": "critic", "target": "verify", "targetHandle": "in", "type": "sequence" },
+    { "id": "e-verify-decide", "source": "verify", "target": "decide", "targetHandle": "in", "type": "sequence" },
+    { "id": "e-decide-end", "source": "decide", "target": "end-ok", "targetHandle": "in", "type": "sequence" }
+  ],
+  "definitions": {
+    "CriticFlags": {
+      "type": "object",
+      "required": ["flags"],
+      "properties": {
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "severity", "message", "supporting_text"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "overconfident_dosing",
+                  "off_label",
+                  "unsupported_diagnosis",
+                  "unsupported_claim",
+                  "contradicts_evidence"
+                ]
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["info", "warn", "critical"]
+              },
+              "message": { "type": "string" },
+              "supporting_text": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

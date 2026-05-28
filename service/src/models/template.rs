@@ -28,6 +28,14 @@ pub struct WorkflowTemplate {
     // Compiled AIR (populated on publish)
     pub air_json: Option<serde_json::Value>,
 
+    // Per-node compiler sub-graph interface registry (populated on publish,
+    // alongside `air_json`). Sidecar — *not* embedded in AIR. Parent compiles
+    // that embed this template via a `SubWorkflow` node read this directly
+    // (no string-shape filtering on the child's AIR) to find the child's
+    // entry place + workflow-exit terminals. NULL on pre-prototype rows;
+    // `resolve_subworkflow_air` falls back to the old filter in that case.
+    pub interface_json: Option<serde_json::Value>,
+
     // GitOps provenance — the git ref a `mekhan apply` published from
     // (shape: `SourceRef`). NULL for UI-published / new_version rows, so its
     // presence also marks a git-managed version. Stored raw to match the
@@ -38,6 +46,13 @@ pub struct WorkflowTemplate {
     pub author_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+
+    // Workspace + visibility — added by migration 20240124. The handler-side
+    // permission gate (`gate_template_read` / `gate_template_write`) reads
+    // these directly off the row; the OpenAPI surface exposes them so the
+    // frontend can render visibility badges and per-workspace filtering.
+    pub workspace_id: Uuid,
+    pub visibility: String,
 }
 
 // --- Visual editor data model (Section 2) ---
@@ -48,6 +63,50 @@ pub struct WorkflowGraph {
     pub edges: Vec<WorkflowEdge>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<Viewport>,
+    /// How concurrent fires (from triggers / manual / API) interact with
+    /// already-running instances of this template. Defaults to `Unlimited`
+    /// so existing templates load unchanged.
+    ///
+    /// Distinct from the per-`Trigger`-node `ConcurrencyPolicy` (which
+    /// gates *fires* by Skip/Queue/DedupKey before they reach this
+    /// template-level check). `InstanceConcurrencyPolicy` operates at the
+    /// instance lifecycle layer — it sees a fire that already passed the
+    /// per-trigger gate and decides whether to spawn now or coalesce.
+    #[serde(default, skip_serializing_if = "is_default_instance_concurrency")]
+    pub instance_concurrency: InstanceConcurrencyPolicy,
+    /// Workflow-scoped reusable JSON-Schema fragments. Referenced from
+    /// `executionSpec.config` (today: LLM `response_format.schema`) as
+    /// `{"$ref": "#/definitions/<name>"}` and inlined at compile time by
+    /// `compiler::schema_refs::inline_refs`. Local pointers only; external
+    /// `$ref`s and JSON-Schema 2020-12 sibling-key merge semantics are
+    /// rejected at validation. BTreeMap for byte-stable compile output.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub definitions: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+fn is_default_instance_concurrency(c: &InstanceConcurrencyPolicy) -> bool {
+    matches!(c, InstanceConcurrencyPolicy::Unlimited)
+}
+
+/// Template-level instance concurrency policy. Read by the trigger
+/// dispatcher on fire and the lifecycle listener on instance terminal.
+///
+/// Tagged on the wire as `{"mode": "unlimited"}` / `{"mode":
+/// "single_active_coalesce"}` so future variants (e.g. queue, locked)
+/// can land without breaking the existing wire shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum InstanceConcurrencyPolicy {
+    /// Every fire spawns a new instance. Default — matches legacy behaviour.
+    #[default]
+    Unlimited,
+    /// At most one active instance at a time. While an instance is running,
+    /// additional fires are *coalesced*: the dispatcher records that a fire
+    /// was missed and dispatches exactly one follow-up after the active
+    /// instance terminates. Right for state-mutating workflows whose body
+    /// re-reads its inputs (e.g., BO retrain reading the catalogue) where
+    /// a single follow-up absorbs N missed-while-busy fires.
+    SingleActiveCoalesce,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -82,6 +141,13 @@ pub struct WorkflowNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
 }
+
+// `ToolMeta` removed: agent tools are discovered structurally (target of
+// an agent's `tools`-handle outgoing edge) and the LLM-facing
+// `tool_name` / `tool_description` are derived from the node's own
+// `data.label()` / `data.description()` rather than duplicated in a
+// side-channel struct. The compiler slugifies the label via
+// `sanitize_slug` to keep the name Rhai-identifier-safe.
 
 impl WorkflowNode {
     /// Author-facing slug candidate: the explicit `slug` when set and
@@ -221,8 +287,8 @@ pub enum WorkflowNodeData {
         /// direct executor-lifecycle path. `Scheduled` = submit through the
         /// long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
         /// optionally pinning a job template + resources. `#[serde(default)]`
-        /// + `Inline` default ⇒ every existing template round-trips unchanged
-        /// (same precedent as `retry_policy`).
+        /// together with the `Inline` default ⇒ every existing template
+        /// round-trips unchanged (same precedent as `retry_policy`).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
     },
@@ -232,6 +298,13 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
         conditions: Vec<BranchCondition>,
+        /// Otherwise/else branch handle id. The wire shape is `Option<String>`
+        /// for forward-compat with future multi-default-branch decisions, but
+        /// today the only accepted value is `DEFAULT_BRANCH_HANDLE_ID`
+        /// (`"default"`) — both the editor's xyflow Handle id and the
+        /// compiler's default output place use that literal, so any other
+        /// value would render as a floating edge in the editor and is
+        /// rejected at compile time (see `compiler::validate`).
         #[serde(rename = "defaultBranch", skip_serializing_if = "Option::is_none")]
         default_branch: Option<String>,
     },
@@ -241,16 +314,31 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
-    #[serde(rename = "parallel_join")]
-    ParallelJoin {
+    /// Unified converge primitive. `mode == All` is the AND-join: waits for
+    /// every incoming branch and merges payloads per `merge_strategy`.
+    /// `mode == Any` is the canonical petri-net XOR-join (dual of `Decision`'s
+    /// XOR-split) — fires per arriving token. Both modes park each branch's
+    /// inbound token in `p_<id>_data` so downstream `<slug>.<field>` borrows
+    /// resolve through the standard read-arc pipeline (the `output` Port
+    /// declares the addressable shape).
+    #[serde(rename = "join")]
+    Join {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        /// How tokens arriving on the joined branches are merged into the
-        /// single output token. `ShallowLastWins` (default) preserves the
-        /// historical behaviour; `DeepMerge` recursively merges nested maps.
-        #[serde(rename = "mergeStrategy", default)]
-        merge_strategy: MergeStrategy,
+        /// `All` (AND-join) waits for every incoming branch. `Any` (XOR-join)
+        /// fires per arriving token.
+        #[serde(default)]
+        mode: JoinMode,
+        /// Honoured only when `mode == All`. For `Any` only one payload ever
+        /// arrives per firing, so there is nothing to merge.
+        #[serde(rename = "mergeStrategy", default, skip_serializing_if = "Option::is_none")]
+        merge_strategy: Option<MergeStrategy>,
+        /// Declared output shape. Each branch's inbound payload is parked at
+        /// `p_<id>_data`; the declared fields here describe what downstream
+        /// `<slug>.<field>` borrows can read.
+        #[serde(default = "default_join_output_port")]
+        output: Port,
     },
     #[serde(rename = "loop")]
     Loop {
@@ -338,6 +426,39 @@ pub enum WorkflowNodeData {
         )]
         error_result_mapping: Vec<FieldMapping>,
     },
+    /// Fire-and-forget delay. Waits `durationMsExpr` milliseconds then
+    /// forwards the input token on its single output. Compiles to the engine's
+    /// `timer_schedule` effect (see `ctx.delay()` in
+    /// `engine/sdk/src/context.rs`). `durationMsExpr` is a Rhai expression so
+    /// the delay can be data-driven from upstream refs (`<slug>.<field>`).
+    #[serde(rename = "delay")]
+    Delay {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Rhai expression evaluated against the inbound token at runtime.
+        /// Must return an integer number of milliseconds. Examples:
+        /// `"5000"`, `"order.sla_ms"`, `"input.timeout * 1000"`.
+        #[serde(rename = "durationMsExpr")]
+        duration_ms_expr: String,
+    },
+    /// Body-container that races a wrapped subgraph against a deadline.
+    /// Body work flows out the `body_in` source handle; the body's terminal
+    /// edge targets `body_out`. Two outputs: `default` (the "done" path —
+    /// body completed in time, timer cancelled) and `timeout` (timer fired
+    /// first; in-flight body work in cancellable children is also drained
+    /// via per-kind cancel effects).
+    #[serde(rename = "timeout")]
+    Timeout {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Rhai expression evaluated against the inbound token at runtime.
+        /// Must return an integer number of milliseconds. Same shape as
+        /// `Delay.duration_ms_expr`.
+        #[serde(rename = "durationMsExpr")]
+        duration_ms_expr: String,
+    },
     /// Trigger node (Phase 5). Lives at the template level and connects to a
     /// target input port via a single outgoing edge. Triggers are never edge
     /// targets; they are *inputs to the workflow*, not part of it. AIR
@@ -381,6 +502,71 @@ pub enum WorkflowNodeData {
             skip_serializing_if = "Option::is_none"
         )]
         air_target_place_id: Option<String>,
+    },
+    /// Agent block — one LLM call, optionally extended with tool children
+    /// and a multi-turn loop. PR 1 only models the type; the degenerate
+    /// single-turn path lowers byte-identically to `AutomatedStep(Llm)`. The
+    /// full agent-loop lowering (parked state place + dispatch/collect per
+    /// tool + turn counter) lands in a follow-up PR (see
+    /// `docs/12-agent-node-design.md` § 3).
+    ///
+    /// Tools are child nodes of this container in a future PR (tagged via a
+    /// `tool_meta` field on `WorkflowNodeData`); PR 1 ignores children
+    /// structurally and rejects non-degenerate shapes with
+    /// `CompileError::Compilation`.
+    #[serde(rename = "agent")]
+    Agent {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// LLM model + provider selection. Same shape the existing
+        /// `LlmConfig` carries in `executionSpec.config`; the degenerate
+        /// path uses these fields verbatim when constructing the equivalent
+        /// `LlmConfig` payload.
+        model: ModelRef,
+        /// Optional system prompt template (supports `{{<slug>.<field>}}`
+        /// placeholders, same as the LLM `system_prompt` config field).
+        #[serde(
+            rename = "systemPrompt",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        system_prompt: Option<String>,
+        /// Initial user prompt template (supports `{{<slug>.<field>}}`
+        /// placeholders, corresponds to `LlmConfig::prompt`).
+        #[serde(rename = "userPrompt")]
+        user_prompt: String,
+        /// Optional response-format constraint (`{"type": "text"}` or
+        /// `{"type": "json_schema", "schema": {...}}`). Opaque JSON in the
+        /// model layer — the executor LLM backend validates it.
+        #[serde(
+            rename = "responseFormat",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        response_format: Option<serde_json::Value>,
+        /// Hard cap on agent turns. `1` (default) is the single-shot LLM
+        /// call indistinguishable from `AutomatedStep(Llm)` — the degenerate
+        /// path the equivalence test pins down.
+        #[serde(rename = "maxTurns", default = "default_max_turns")]
+        max_turns: u32,
+        /// Optional terminal Rhai guard. When `Some`, the agent loop exits
+        /// once this expression evaluates true on the parked agent state.
+        /// Inert in the degenerate (single-turn) path.
+        #[serde(
+            rename = "stopWhen",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        stop_when: Option<String>,
+        /// Context-window management strategy. Defaults to `None` (no
+        /// compaction). Inert in the degenerate path.
+        #[serde(rename = "contextStrategy", default)]
+        context_strategy: ContextStrategy,
+        /// What happens when a tool call fails. Defaults to `Feedback`.
+        /// Inert in PR 1 (no tools).
+        #[serde(rename = "onToolError", default)]
+        on_tool_error: ToolErrorPolicy,
     },
     /// Calls another published template as a child net and returns its
     /// terminal result, correlated per invocation. Compiles (via
@@ -433,36 +619,29 @@ impl WorkflowNodeData {
             | Self::End { label, .. }
             | Self::HumanTask { label, .. }
             | Self::AutomatedStep { label, .. }
+            | Self::Agent { label, .. }
             | Self::Decision { label, .. }
             | Self::ParallelSplit { label, .. }
-            | Self::ParallelJoin { label, .. }
+            | Self::Join { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
+            | Self::Delay { label, .. }
+            | Self::Timeout { label, .. }
             | Self::Trigger { label, .. }
             | Self::SubWorkflow { label, .. } => label,
         }
     }
 
-    pub fn type_name(&self) -> &str {
-        match self {
-            Self::Start { .. } => "start",
-            Self::End { .. } => "end",
-            Self::HumanTask { .. } => "human_task",
-            Self::AutomatedStep { .. } => "automated_step",
-            Self::Decision { .. } => "decision",
-            Self::ParallelSplit { .. } => "parallel_split",
-            Self::ParallelJoin { .. } => "parallel_join",
-            Self::Loop { .. } => "loop",
-            Self::Scope { .. } => "scope",
-            Self::PhaseUpdate { .. } => "phase_update",
-            Self::ProgressUpdate { .. } => "progress_update",
-            Self::Failure { .. } => "failure",
-            Self::Trigger { .. } => "trigger",
-            Self::SubWorkflow { .. } => "sub_workflow",
-        }
+    /// Snake-case wire tag. The registry's `NodeDecl::wire_name` is the
+    /// single source of truth — this method is a thin lookup for callers
+    /// that have `&WorkflowNodeData` but no `NodeDecl` in scope.
+    pub fn type_name(&self) -> &'static str {
+        crate::nodes::lookup_by_variant(self)
+            .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES")
+            .wire_name
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -471,175 +650,48 @@ impl WorkflowNodeData {
             | Self::End { description, .. }
             | Self::HumanTask { description, .. }
             | Self::AutomatedStep { description, .. }
+            | Self::Agent { description, .. }
             | Self::Decision { description, .. }
             | Self::ParallelSplit { description, .. }
-            | Self::ParallelJoin { description, .. }
+            | Self::Join { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
+            | Self::Delay { description, .. }
+            | Self::Timeout { description, .. }
             | Self::Trigger { description, .. }
             | Self::SubWorkflow { description, .. } => description.as_deref(),
         }
     }
 
-    /// Typed input ports declared or derived for this node. Returns owned
-    /// ports because some variants (HumanTask, Decision, ...) derive their
-    /// ports from inner config rather than carrying a stored `Port`. The
-    /// returned list is small (1-2 entries) so allocation is negligible.
+    /// Typed input ports declared or derived for this variant. Routes to
+    /// the registry's per-variant `input_ports` fn pointer; the actual
+    /// derivation lives in `service/src/nodes/<variant>.rs`.
     ///
     /// An empty list means "single anonymous input" — edges with
     /// `target_handle: "in"` still resolve via the pass-through path in
     /// `validate_edges_typed`.
     pub fn input_ports(&self) -> Vec<Port> {
-        match self {
-            Self::Start { .. } => vec![],
-            Self::End { terminal, .. } => vec![terminal.clone()],
-            Self::AutomatedStep { input, .. } => vec![input.clone()],
-
-            // Phase 4: derived inputs. Each control-flow block accepts a
-            // single anonymous "in" port that's a Json pass-through — the
-            // typed-edge check treats empty target fields as compatible with
-            // anything, which matches the proposal §3.3 semantics for these
-            // blocks ("they don't transform the token, they route or fan it").
-            Self::HumanTask { .. }
-            | Self::Decision { .. }
-            | Self::ParallelSplit { .. }
-            | Self::ParallelJoin { .. }
-            | Self::Scope { .. }
-            | Self::PhaseUpdate { .. }
-            | Self::ProgressUpdate { .. }
-            | Self::Failure { .. }
-            // SubWorkflow accepts the single anonymous upstream token; its
-            // `input_mapping` shapes it into the child Start input at compile
-            // time, so the parent-side input port is a Json pass-through.
-            | Self::SubWorkflow { .. } => vec![Port::empty_input()],
-
-            // Loop accepts the outer `in` and a `body_out` handle from its
-            // body children. Both are Json pass-throughs.
-            Self::Loop { .. } => vec![
-                Port::empty_input(),
-                Port {
-                    id: "body_out".to_string(),
-                    label: "Body Out".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            // Trigger nodes are never edge targets — the editor refuses to draw
-            // an edge into a Trigger node. Return empty so any malformed graph
-            // that does attempt it surfaces as `UnknownTargetPort` during
-            // `validate_edges_typed`.
-            Self::Trigger { .. } => vec![],
-        }
+        let decl = crate::nodes::lookup_by_variant(self)
+            .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");
+        (decl.input_ports)(self)
     }
 
-    /// Typed output ports declared or derived for this node.
+    /// Typed output ports declared or derived for this variant. Routes to
+    /// the registry's per-variant `output_ports` fn pointer; the actual
+    /// derivation lives in `service/src/nodes/<variant>.rs`.
     ///
-    /// Derived ports (Phase 4):
-    /// - `HumanTask` → single `out` port whose fields are the union of every
-    ///   Input block's `TaskFieldConfig` across all steps, mapped via
-    ///   `FieldKind::from(TaskFieldKind)`.
-    /// - `Decision` → one port per branch (id = `BranchCondition.edge_id`,
-    ///   label = branch label) plus a `default` port for the catch-all.
-    ///   Phase 4 stub: each branch port has empty fields (pass-through), so
-    ///   downstream type-checking flows through unchanged.
-    /// - `ParallelSplit` / `ParallelJoin` / `Loop` → single `out` port,
-    ///   empty fields (pass-through).
-    /// - `Scope` → single `out` port, empty fields (pass-through). The
-    ///   scope's *boundary* port editor lands separately.
+    /// Derived-shape variants worth knowing (the derivation lives in the
+    /// per-variant module): `HumanTask` unions step input fields; `Decision`
+    /// emits one port per branch + the default; `Agent`/`AutomatedStep`/
+    /// `SubWorkflow` append a canonical `error` port; `Loop` exposes outer
+    /// `out` plus `body_in`; `End` returns empty.
     pub fn output_ports(&self) -> Vec<Port> {
-        match self {
-            Self::Start { initial, .. } => vec![initial.clone()],
-            // Declared success output + an always-present "error" output
-            // (retries exhausted / infra failure). Empty fields ⇒ pass-through
-            // so wiring it to any handler/End type-checks. The compiler maps
-            // this to the node's `p_{id}_error` place.
-            Self::AutomatedStep { output, .. } => vec![
-                output.clone(),
-                Port {
-                    id: "error".to_string(),
-                    label: "On error".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            // Declared child-result success output + an always-present
-            // "error" output (child failure / spawn failure). Mirrors
-            // AutomatedStep; the compiler maps "error" to `p_{id}_error`.
-            Self::SubWorkflow { output, .. } => vec![
-                output.clone(),
-                Port {
-                    id: "error".to_string(),
-                    label: "On error".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            Self::HumanTask { steps, .. } => vec![derive_human_task_output_port(steps)],
-
-            Self::Decision { conditions, default_branch, .. } => {
-                let mut out: Vec<Port> = conditions
-                    .iter()
-                    .map(|c| Port {
-                        id: c.edge_id.clone(),
-                        label: c.label.clone(),
-                        fields: vec![],
-                    })
-                    .collect();
-                if let Some(default_id) = default_branch {
-                    out.push(Port {
-                        id: default_id.clone(),
-                        label: "Default".to_string(),
-                        fields: vec![],
-                    });
-                }
-                out
-            }
-
-            Self::ParallelSplit { .. }
-            | Self::ParallelJoin { .. }
-            | Self::Scope { .. }
-            | Self::PhaseUpdate { .. }
-            | Self::ProgressUpdate { .. }
-            | Self::Failure { .. } => vec![Port {
-                id: "out".to_string(),
-                label: "Output".to_string(),
-                fields: vec![],
-            }],
-
-            // Loop exposes its outer `out` plus a `body_in` handle that feeds
-            // body children. Body children's outgoing edges back into the
-            // loop carry `targetHandle: "body_out"` (declared in `input_ports`).
-            Self::Loop { .. } => vec![
-                Port {
-                    id: "out".to_string(),
-                    label: "Output".to_string(),
-                    fields: vec![],
-                },
-                Port {
-                    id: "body_in".to_string(),
-                    label: "Body In".to_string(),
-                    fields: vec![],
-                },
-            ],
-
-            // End has no output port — tokens terminate here.
-            Self::End { .. } => vec![],
-
-            // Trigger nodes "wear the shape" of whatever they target. The
-            // resolved shape is computed at compile / fire time by
-            // looking up the outgoing edge's target port; statically here we
-            // emit an empty pass-through port. `validate_edges_typed` skips
-            // type-checking when the source is a Trigger; payload-mapping
-            // validation handles the field-level contract instead.
-            Self::Trigger { .. } => vec![Port {
-                id: "out".to_string(),
-                label: "Output".to_string(),
-                fields: vec![],
-            }],
-        }
+        let decl = crate::nodes::lookup_by_variant(self)
+            .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");
+        (decl.output_ports)(self)
     }
 }
 
@@ -687,6 +739,18 @@ impl From<TaskFieldKind> for FieldKind {
             TaskFieldKind::Checkbox => FieldKind::Bool,
             TaskFieldKind::File => FieldKind::File,
             TaskFieldKind::Signature => FieldKind::Signature,
+            // Radio is a Select with inline option rendering — wire kind is
+            // identical so downstream borrow-checking treats them the same.
+            TaskFieldKind::Radio => FieldKind::Select,
+            // Date is an ISO 8601 string on the wire; reuse Text so guards
+            // can do lexicographic comparison (`step.due < "2026-01-01"`).
+            // A dedicated `FieldKind::Date` could come later if we want
+            // typed-date guard helpers; for now Text-with-format is enough.
+            TaskFieldKind::Date => FieldKind::Text,
+            // Range / Rating both emit numbers; min/max/step/max_rating are
+            // renderer hints, not wire-shape constraints.
+            TaskFieldKind::Range => FieldKind::Number,
+            TaskFieldKind::Rating => FieldKind::Number,
         }
     }
 }
@@ -720,7 +784,7 @@ pub enum TaskBlockConfig {
     #[serde(rename = "divider")]
     Divider,
     /// `filenames` references compile-time staged assets; `url` is a direct
-    /// (often `{{ token.path }}`-interpolated) source resolved at instance
+    /// (often `{{ <slug>.<field> }}`-interpolated) source resolved at instance
     /// time. When `url` is set the human-task UI renders it as the image
     /// source (matching the frontend `{type:"image",url,alt?,caption?}`).
     #[serde(rename = "image")]
@@ -740,7 +804,7 @@ pub enum TaskBlockConfig {
     File { filename: String },
     /// Embedded PDF viewer (rendered inline in the task UI). `height` is a
     /// CSS length string, default ~"400px"; `caption` is rendered above the
-    /// viewer. `url`, when set (typically via `{{ token.path }}`
+    /// viewer. `url`, when set (typically via `{{ <slug>.<field> }}`
     /// interpolation), is the direct PDF source.
     #[serde(rename = "pdf")]
     Pdf {
@@ -755,9 +819,56 @@ pub enum TaskBlockConfig {
     },
     /// Downloadable artifact list. Serializes to the frontend
     /// `{type:"download",downloads:[{url,filename,...}]}` shape. `url` is
-    /// typically `{{ token.path }}`-interpolated to an uploaded file.
+    /// typically `{{ <slug>.<field> }}`-interpolated to an uploaded file.
     #[serde(rename = "download")]
     Download { downloads: Vec<DownloadItemConfig> },
+    /// Feature B — render N copies of a sub-task body, one per element of an
+    /// upstream array. `items_ref` is a Feature-B `<slug>.<field>[*]`
+    /// reference; the compiler synthesizes a read-arc on the parked array
+    /// and the frontend renderer iterates `task.data[<items_ref>]`,
+    /// instantiating the sub-`blocks` per element. The block's typed
+    /// output is `<output_slug>.results: array<{<inputs>}>`, where
+    /// `<inputs>` is the union of every `Input` child block's field —
+    /// visible to downstream pickers via the standard `TyDescriptor::Array`
+    /// machinery. Non-Input children (Mdsvex, Callout, Divider, Image,
+    /// Pdf, File, Download) are render-only and contribute nothing to the
+    /// per-row schema.
+    ///
+    /// `item_label_ref`, when set, names a `<slug>.<field>[*].<label>`
+    /// ref whose per-element string is used as the row header (e.g. the
+    /// task title from an LLM-extracted task list). Static-only: B v1
+    /// rejects `[*]` chained twice (`NestedIterationUnsupported`) and
+    /// rejects a Repeater nested inside another Repeater.
+    #[serde(rename = "repeater")]
+    Repeater {
+        /// Producer-namespaced ref carrying exactly one `[*]` boundary,
+        /// e.g. `extract.tasks[*]`. The pre-`[*]` segments address an
+        /// upstream parked array; iteration happens consumer-side.
+        items_ref: String,
+        /// Optional per-element row label ref, e.g.
+        /// `extract.tasks[*].title`. Must share the same iteration prefix
+        /// as `items_ref`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_label_ref: Option<String>,
+        /// The sub-task body rendered per element. Any TaskBlockConfig
+        /// variant except a nested Repeater. `Input` children declare the
+        /// per-row form schema and contribute to `<output_slug>.results`
+        /// element shape; display blocks (Mdsvex/Callout/Image/Pdf/File/
+        /// Download/Divider) are rendered per row with placeholders
+        /// resolved against the current row's element.
+        ///
+        /// `no_recursion` breaks the recursive schema cycle for
+        /// utoipa — the wire schema still references `TaskBlockConfig`
+        /// via `$ref`, but the generator stops descending here.
+        #[schema(no_recursion)]
+        blocks: Vec<TaskBlockConfig>,
+        /// Rhai-safe slug under which the Repeater's typed output is
+        /// addressable downstream as `<output_slug>.results`. Defaults to
+        /// the parent HumanTask's slug when empty; must be unique within
+        /// the graph (the compiler's existing slug-collision check
+        /// covers it).
+        output_slug: String,
+    },
 }
 
 /// One entry in a `download` task block. Mirrors the frontend `DownloadItem`
@@ -799,7 +910,8 @@ pub enum ImageDisplay {
     Gallery,
 }
 
-/// How a `ParallelJoin` merges the tokens arriving on its joined branches.
+/// How a `Join { mode: All }` merges the tokens arriving on its joined
+/// branches.
 ///
 /// `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
 /// last branch to arrive wins on a key collision). `DeepMerge` recursively
@@ -810,6 +922,17 @@ pub enum MergeStrategy {
     #[default]
     ShallowLastWins,
     DeepMerge,
+}
+
+/// Firing rule for a `Join` node. `All` (the default) is the AND-join —
+/// waits for every incoming branch. `Any` fires per arriving token — the
+/// canonical petri-net XOR-join, dual of `Decision`'s XOR-split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinMode {
+    #[default]
+    All,
+    Any,
 }
 
 /// Author-selected status for a `PhaseUpdate` control node. Serialized
@@ -882,19 +1005,14 @@ impl Default for RetryPolicy {
 /// version at the parent's publish time and the resolved AIR is frozen into
 /// the parent, so runtime is always deterministic / replay-safe. Keep the
 /// `mode` strings in lockstep with the `snake_case` derive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum VersionPin {
     /// Resolve the family's `is_latest` row at parent publish time.
+    #[default]
     Latest,
     /// Freeze an explicit child version.
     Pinned { version: i32 },
-}
-
-impl Default for VersionPin {
-    fn default() -> Self {
-        Self::Latest
-    }
 }
 
 /// Deserialization default for `SubWorkflow.output` — an empty `out` port
@@ -908,14 +1026,26 @@ pub fn default_subworkflow_output_port() -> Port {
     }
 }
 
+/// Deserialization default for `Join.output` — an empty `out` port. The
+/// editor or author fills in the fields the join exposes downstream via
+/// `<slug>.<field>`.
+pub fn default_join_output_port() -> Port {
+    Port {
+        id: "out".to_string(),
+        label: "Output".to_string(),
+        fields: vec![],
+    }
+}
+
 /// Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
 /// `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
 /// "resources":{...}}`. Keep the `mode` strings in lockstep with the
 /// `snake_case` derive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum DeploymentModel {
     /// Current behaviour: direct executor-lifecycle dispatch (NATS).
+    #[default]
     Inline,
     /// Submit through the long-lived scheduler-net (Nomad/Slurm) — queued /
     /// GPU execution. `job_template` selects the scheduler's parameterized
@@ -926,12 +1056,6 @@ pub enum DeploymentModel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
     },
-}
-
-impl Default for DeploymentModel {
-    fn default() -> Self {
-        Self::Inline
-    }
 }
 
 /// Optional resource hints forwarded to the scheduler for a `Scheduled` step.
@@ -946,7 +1070,69 @@ pub struct ResourceConfig {
     pub gpu: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors
+/// the subset of `aithericon_executor_backend_configs::llm::LlmConfig` the
+/// editor authors directly (provider, model, optional creds / sampling
+/// knobs); the degenerate single-turn lowering reconstructs the full
+/// `LlmConfig` from these fields plus the Agent's prompts. Wire shape
+/// matches the existing `LlmConfig` JSON one-for-one so the equivalence
+/// test (PR 1) produces byte-identical `config_ref` blobs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRef {
+    /// `"openai"` | `"anthropic"` | `"ollama"`. Wire format is lowercase to
+    /// line up with `LlmConfig::Provider`'s `rename_all = "lowercase"`.
+    pub provider: String,
+    /// Provider-specific model identifier (e.g. `"gpt-4o"`,
+    /// `"claude-sonnet-4-20250514"`).
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Workspace resource alias the LLM call binds to (e.g. `"openai_prod"`).
+    /// Same channel as `LlmConfig::resource_alias` — the compiler emits a
+    /// `ResourceEnvelope` borrow when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+}
+
+/// Context-window management strategy for an [`WorkflowNodeData::Agent`].
+/// Inert in PR 1's degenerate path; declared upfront so the type stays
+/// stable across the follow-up loop-lowering PR (`docs/12` § 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextStrategy {
+    #[default]
+    None,
+    /// Drop oldest non-system messages once the budget is exceeded.
+    DropOldest,
+    /// Summarize oldest messages into a single rolling summary turn.
+    SummarizeOldest,
+}
+
+/// What happens when a tool call inside an [`WorkflowNodeData::Agent`]
+/// fails after the tool's own retry budget is exhausted. Default `Feedback`
+/// — append a synthetic `role: tool, content: "Tool '<name>' failed: …"`
+/// message to the conversation and re-enter the LLM call. `Bubble` routes
+/// the failure straight to the agent's `error` output. Inert in PR 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorPolicy {
+    #[default]
+    Feedback,
+    Bubble,
+}
+
+fn default_max_turns() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
     pub label: String,
@@ -955,16 +1141,150 @@ pub struct TaskFieldConfig {
     pub required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
+    /// Per-field helper text shown under the input. Mdsvex source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mdsvex: Option<String>,
+    /// Choice list for `kind = "select"` / `"radio"`. Authored as
+    /// `[{"value": "approve", "label": "Approve"}, …]` — `value` is the
+    /// canonical wire value submitted by the form, `label` is the
+    /// human-facing display string. A bare string shorthand
+    /// (`["approve", "reject"]`) is accepted at deserialize time and
+    /// normalized to `{value, label}` where `label = value` — convenient
+    /// for trivial sets while keeping the runtime representation uniform.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_task_field_options"
+    )]
+    pub options: Option<Vec<SelectOption>>,
+    /// For `File` kind: accepted file types as an HTML input `accept`
+    /// attribute (e.g. `"image/png,image/jpeg,.pdf"`). Ignored for
+    /// non-file kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept: Option<String>,
+    /// For `File` kind: maximum file size in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_file_size: Option<u64>,
+    /// For `File` kind: maximum number of files (defaults to 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_files: Option<u32>,
+    /// For `Signature` kind: capture mode (currently only `"draw"` is
+    /// implemented).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_mode: Option<String>,
+    /// For `Signature` kind: ink color (CSS color string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pen_color: Option<String>,
+    /// For `Number` / `Range` kinds: minimum allowed value (inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    /// For `Number` / `Range` kinds: maximum allowed value (inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// For `Number` / `Range` kinds: step increment (defaults to 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+    /// For `Rating` kind: number of stars (defaults to 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rating: Option<u32>,
+    /// For `Date` kind: when true, capture date + time (`YYYY-MM-DDTHH:MM`);
+    /// otherwise capture date only (`YYYY-MM-DD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_time: Option<bool>,
+}
+
+/// One choice in a `kind = "select"` field. `value` is what the form
+/// submits / what guards downstream compare against; `label` is what the
+/// UI renders. Authors typically write `{value, label}`; the deserializer
+/// also accepts a bare string and stretches it to `{value: s, label: s}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SelectOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// Hand-rolled deserializer for `TaskFieldConfig::options`. Accepts two
+/// authoring shapes and normalizes to `Vec<SelectOption>`:
+///
+///   - `["approve", "reject"]` — bare string shorthand for the common
+///     case where the value doubles as the label. Stretched to
+///     `{value: "approve", label: "approve"}` etc.
+///   - `[{"value": "approve", "label": "Approve as-extracted"}, …]` —
+///     full rich shape.
+///
+/// Any other shape (numbers, bools, mixed arrays without those exact
+/// keys) is rejected with an actionable error that names the field
+/// index — much better than serde's default "invalid type" surface that
+/// doesn't point at the offending entry.
+fn deserialize_task_field_options<'de, D>(de: D) -> Result<Option<Vec<SelectOption>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = Option::<serde_json::Value>::deserialize(de)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let arr = value
+        .as_array()
+        .ok_or_else(|| D::Error::custom(
+            "task field `options` must be a list (either of strings or of `{value,label}` objects)",
+        ))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        match item {
+            serde_json::Value::String(s) => out.push(SelectOption {
+                value: s.clone(),
+                label: s.clone(),
+            }),
+            serde_json::Value::Object(map) => {
+                let value = map
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        D::Error::custom(format!(
+                            "task field `options[{i}]` is an object but missing a string `value` key"
+                        ))
+                    })?
+                    .to_string();
+                // `label` is optional — defaults to `value` so trivial
+                // entries can be authored as `{"value": "approve"}`.
+                let label = map
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| value.clone());
+                out.push(SelectOption { value, label });
+            }
+            other => {
+                return Err(D::Error::custom(format!(
+                    "task field `options[{i}]` must be a string or `{{value,label}}` object; got {}",
+                    match other {
+                        serde_json::Value::Null => "null",
+                        serde_json::Value::Bool(_) => "a boolean",
+                        serde_json::Value::Number(_) => "a number",
+                        serde_json::Value::Array(_) => "a list",
+                        _ => "an unsupported value",
+                    }
+                )));
+            }
+        }
+    }
+    Ok(Some(out))
 }
 
 /// Form-field control kind for `input` task blocks. Snake-case wire values
 /// such as `"text"`, `"textarea"`, `"number"`, `"select"`, `"checkbox"`,
-/// `"file"`, `"signature"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+/// `"file"`, `"signature"`, `"radio"`, `"date"`, `"range"`, `"rating"`.
+/// Must stay in sync with the engine's `TaskFieldKind` in
+/// `engine/core-engine/crates/domain/src/human.rs` and the frontend's
+/// `TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the
+/// compiler accepts an author's choice that the engine rejects (or
+/// vice-versa).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskFieldKind {
+    #[default]
     Text,
     Textarea,
     Number,
@@ -972,6 +1292,21 @@ pub enum TaskFieldKind {
     Checkbox,
     File,
     Signature,
+    /// Radio button group — same `{value, label}` options as `Select`,
+    /// rendered inline (all options visible at once) instead of as a
+    /// dropdown. Picked-value wire shape matches `Select`.
+    Radio,
+    /// Date picker (`YYYY-MM-DD`) or datetime picker (`YYYY-MM-DDTHH:MM`)
+    /// when the field carries `include_time = true`. Wire value is a
+    /// plain ISO string; downstream comparisons can use lexicographic
+    /// ordering up to minute precision.
+    Date,
+    /// Slider control — emits a `number` on the wire. Customize the
+    /// span via `min` / `max` / `step` on the field config.
+    Range,
+    /// Star-rating control — emits a `number` from 0 to `max_rating`
+    /// (default 5) on the wire.
+    Rating,
 }
 
 /// Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`
@@ -1023,8 +1358,16 @@ pub struct PortField {
     pub kind: FieldKind,
     #[serde(default)]
     pub required: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
+    /// Choice list for `kind = Select`. Same `{value, label}` shape as
+    /// [`TaskFieldConfig::options`]; the deserializer accepts either bare
+    /// strings or `{value, label}` objects and normalizes to the rich
+    /// form. See [`SelectOption`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_task_field_options"
+    )]
+    pub options: Option<Vec<SelectOption>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// For `File` kind: accepted formats as an HTML input `accept` list
@@ -1132,60 +1475,76 @@ pub fn default_automated_input_port() -> Port {
 
 /// Canonical output-port shape for an `AutomatedStep` whose `output` field
 /// hasn't been customized. Each backend declares the fields its executor
-/// reliably surfaces. Editor exposes "Reset to default" by re-deriving against
-/// the current `backendType`.
+/// reliably surfaces via [`crate::backends::BackendDecl::default_output_fields`].
+/// Editor exposes "Reset to default" by re-deriving against the current
+/// `backendType`.
+///
+/// `BACKENDS` covers every `ExecutionBackendType` variant — the registry test
+/// (`backend_registry_coverage.rs`) enforces it. No fallback needed.
 pub fn default_output_port(backend: ExecutionBackendType) -> Port {
-    let fields = match backend {
-        ExecutionBackendType::Python => vec![port_field("result", "Result", FieldKind::Json)],
-        ExecutionBackendType::Process => vec![
-            port_field("stdout", "Stdout", FieldKind::Textarea),
-            port_field("stderr", "Stderr", FieldKind::Textarea),
-            port_field("exit_code", "Exit Code", FieldKind::Number),
-        ],
-        ExecutionBackendType::Docker => vec![
-            port_field("stdout", "Stdout", FieldKind::Textarea),
-            port_field("stderr", "Stderr", FieldKind::Textarea),
-            port_field("exit_code", "Exit Code", FieldKind::Number),
-            port_field("image", "Image", FieldKind::Text),
-        ],
-        ExecutionBackendType::Http => vec![
-            port_field("status_code", "Status Code", FieldKind::Number),
-            port_field("body", "Body", FieldKind::Json),
-            port_field("headers", "Headers", FieldKind::Json),
-        ],
-        ExecutionBackendType::Llm => vec![
-            port_field("text", "Text", FieldKind::Textarea),
-            port_field("usage", "Usage", FieldKind::Json),
-        ],
-        ExecutionBackendType::FileOps => vec![port_field("files", "Files", FieldKind::Json)],
-        ExecutionBackendType::Kreuzberg => vec![
-            port_field("text", "Text", FieldKind::Textarea),
-            port_field("metadata", "Metadata", FieldKind::Json),
-        ],
-        // Matches the engine `catalogue_lookup` handler's result token.
-        ExecutionBackendType::CatalogueQuery => vec![
-            port_field("artifacts", "Artifacts", FieldKind::Json),
-            port_field("total_count", "Total", FieldKind::Number),
-            port_field("source_process_ids", "Source Process IDs", FieldKind::Json),
-        ],
-    };
+    let decl = crate::backends::lookup(backend)
+        .expect("BACKENDS must cover every ExecutionBackendType; enforced by registry test");
     Port {
         id: "out".to_string(),
         label: "Output".to_string(),
-        fields,
+        fields: decl
+            .default_output_fields
+            .iter()
+            .map(|f| f.into_port_field())
+            .collect(),
     }
 }
 
-fn port_field(name: &str, label: &str, kind: FieldKind) -> PortField {
-    PortField {
-        name: name.to_string(),
-        label: label.to_string(),
-        kind,
-        required: false,
-        options: None,
-        description: None,
-        accept: None,
-    }
+/// Agent-specific fields the loop path packs under `detail.outputs`
+/// alongside the canonical Llm four. Declared so the picker surfaces
+/// `<agent_slug>.turn`, `<agent_slug>.history`, etc. without the author
+/// having to know they exist. Source of truth for what `t_*_route_final`
+/// emits in `service/src/compiler/lower/agent.rs`.
+pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
+    vec![
+        PortField {
+            name: "turn".to_string(),
+            label: "Final turn count".to_string(),
+            kind: FieldKind::Number,
+            required: false,
+            options: None,
+            description: Some(
+                "Number of LLM round-trips before the agent exited.".to_string(),
+            ),
+            accept: None,
+        },
+        PortField {
+            name: "history".to_string(),
+            label: "Conversation history".to_string(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: Some(
+                "Array of `{role, content, …}` entries the agent sent + received.".to_string(),
+            ),
+            accept: None,
+        },
+        PortField {
+            name: "final_response".to_string(),
+            label: "Full LLM turn result".to_string(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: Some(
+                "The last `LlmTurnResult` (content, tool_calls, stop_reason, usage).".to_string(),
+            ),
+            accept: None,
+        },
+        PortField {
+            name: "input".to_string(),
+            label: "Original input".to_string(),
+            kind: FieldKind::Json,
+            required: false,
+            options: None,
+            description: Some("The inbound token the agent received.".to_string()),
+            accept: None,
+        },
+    ]
 }
 
 pub fn default_automated_output_port() -> Port {
@@ -1198,6 +1557,59 @@ pub fn default_automated_output_port() -> Port {
         label: "Output".to_string(),
         fields: vec![],
     }
+}
+
+/// Single source of truth for "what LLM config would this Agent send?".
+/// The agent loop, the degenerate-path delegate, the resource borrow
+/// planner, the publish-time resource-discovery scan, and the
+/// `output_ports` deriver all need an equivalent `LlmConfig` payload —
+/// before this helper they each rebuilt their own subset and drifted.
+///
+/// Field names match `aithericon_executor_backend_configs::llm::LlmConfig`
+/// 1:1 so `validate_and_transform`'s LLM arm round-trips this without
+/// coercion. `tools` is passed through verbatim — the agent loop populates
+/// it with one entry per tool child; resource discovery / borrow planning
+/// pass `&[]` because tool wiring is irrelevant to those scans.
+pub fn agent_to_llm_config(
+    model: &ModelRef,
+    system_prompt: Option<&str>,
+    user_prompt: &str,
+    response_format: Option<&serde_json::Value>,
+    tools: &[serde_json::Value],
+) -> serde_json::Value {
+    use serde_json::{Number, Value};
+    let mut config = serde_json::Map::new();
+    config.insert("provider".to_string(), Value::String(model.provider.clone()));
+    config.insert("model".to_string(), Value::String(model.model.clone()));
+    if let Some(k) = &model.api_key {
+        config.insert("api_key".to_string(), Value::String(k.clone()));
+    }
+    if let Some(b) = &model.base_url {
+        config.insert("base_url".to_string(), Value::String(b.clone()));
+    }
+    if let Some(a) = &model.resource_alias {
+        config.insert("resource_alias".to_string(), Value::String(a.clone()));
+    }
+    config.insert("prompt".to_string(), Value::String(user_prompt.to_string()));
+    if let Some(sp) = system_prompt {
+        config.insert("system_prompt".to_string(), Value::String(sp.to_string()));
+    }
+    if let Some(t) = model.temperature {
+        config.insert(
+            "temperature".to_string(),
+            Number::from_f64(t).map(Value::Number).unwrap_or(Value::Null),
+        );
+    }
+    if let Some(m) = model.max_tokens {
+        config.insert("max_tokens".to_string(), Value::Number(m.into()));
+    }
+    if let Some(rf) = response_format {
+        config.insert("response_format".to_string(), rf.clone());
+    }
+    if !tools.is_empty() {
+        config.insert("tools".to_string(), Value::Array(tools.to_vec()));
+    }
+    Value::Object(config)
 }
 
 // --- Trigger nodes (Phase 5) ---
@@ -1372,11 +1784,11 @@ pub struct FieldMapping {
     pub expression: String,
 }
 
-/// How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
+/// How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.
 /// The caller selects per-request (query `?reply=`, `Prefer` header, or a
 /// JSON body field); a Trigger node's optional `replyDefault` is used only
 /// when the caller doesn't specify. `Sse` is never *executed* on the fire
-/// endpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is
+/// endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
 /// modeled so a node can advertise it as the intended consumption mode.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema,
@@ -1396,6 +1808,16 @@ pub enum ReplyMode {
 }
 
 // --- Branch conditions ---
+
+/// xyflow Handle id for a Decision node's otherwise/else branch. The editor's
+/// `DecisionNode.svelte` hardcodes this literal as the source-handle id for
+/// the Otherwise row, and the compiler's default output place uses the same
+/// literal — so an edge with `sourceHandle = "default"` is the only wiring
+/// shape that renders correctly in the editor and lowers correctly in the
+/// compiler. `WorkflowNodeData::Decision::default_branch` stays
+/// `Option<String>` for forward-compat with future multi-default-branch
+/// decisions, but `compiler::validate` rejects any other value today.
+pub const DEFAULT_BRANCH_HANDLE_ID: &str = "default";
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1419,48 +1841,11 @@ pub struct ExecutionSpecConfig {
     pub config: serde_json::Value,
 }
 
-/// Discriminator selecting which executor backend handles an automated step.
-/// Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
-/// `"llm"`, `"file_ops"`, `"kreuzberg"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionBackendType {
-    Python,
-    Process,
-    Docker,
-    Http,
-    Llm,
-    FileOps,
-    Kreuzberg,
-    /// Point-in-time read of the data catalogue. Does NOT dispatch an executor
-    /// job — the compiler lowers it to the engine's registered
-    /// `catalogue_lookup` effect (input port `query`, output `results`).
-    CatalogueQuery,
-}
-
-impl ExecutionBackendType {
-    /// Canonical snake_case wire string. Keep in lockstep with the
-    /// `#[serde(rename_all = "snake_case")]` derive — these strings are what
-    /// the executor and editor pass around at runtime.
-    pub fn as_wire_str(&self) -> &'static str {
-        match self {
-            Self::Python => "python",
-            Self::Process => "process",
-            Self::Docker => "docker",
-            Self::Http => "http",
-            Self::Llm => "llm",
-            Self::FileOps => "file_ops",
-            Self::Kreuzberg => "kreuzberg",
-            Self::CatalogueQuery => "catalogue_query",
-        }
-    }
-}
-
-impl std::fmt::Display for ExecutionBackendType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_wire_str())
-    }
-}
+// Wire-tag enum lives in the cross-crate `aithericon-backends` crate so
+// `mekhan-service` and `aithericon-executor-service` share one source of
+// truth. Re-exported here so existing imports (`models::template::ExecutionBackendType`)
+// keep working.
+pub use aithericon_backends::ExecutionBackendType;
 
 // --- Edge types ---
 
@@ -1486,8 +1871,8 @@ pub struct WorkflowEdge {
 
 // --- API request/response types ---
 
-/// Request body for stateless compilation. Used by `POST /api/compile` and
-/// `POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map
+/// Request body for stateless compilation. Used by `POST /api/v1/compile` and
+/// `POST /api/v1/templates/{id}/compile`. `files` is a per-node, per-filename map
 /// of inline contents; the preview compile emits `InputSource::Raw` entries so
 /// the AIR matches the StoragePath-keyed shape produced by publish.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1516,7 +1901,7 @@ pub struct SourceRef {
     pub git_ref: Option<String>,
 }
 
-/// Request body for `POST /api/templates/{id}/apply` — the GitOps path.
+/// Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
 /// The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
 /// assets are uploaded out-of-band via the files endpoint before this call.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1614,6 +1999,12 @@ pub struct ListTemplatesQuery {
     pub published: Option<bool>,
     pub search: Option<String>,
     pub base_template_id: Option<Uuid>,
+    /// Restrict to templates attached to a project (M:N via
+    /// `project_templates.base_template_id`). The join is non-restrictive
+    /// w.r.t. version chain — the live `is_latest` row wins.
+    pub project_id: Option<Uuid>,
+    /// Restrict to templates carrying this tag in the user's workspace.
+    pub tag: Option<String>,
 }
 
 fn default_page() -> i64 {
@@ -1677,6 +2068,8 @@ impl WorkflowGraph {
                 edge_type: "sequence".to_string(),
             }],
             viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
         }
     }
 }
@@ -1690,9 +2083,10 @@ impl WorkflowGraph {
 /// DSL→model direction can't silently swallow a known type.
 pub mod dsl {
     use super::{
-        default_output_port, default_terminal_port, BranchCondition, DeploymentModel,
-        ExecutionBackendType, ExecutionSpecConfig, Port, RetryPolicy, TaskBlockConfig,
-        TaskStepConfig, WorkflowNode, WorkflowNodeData,
+        default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
+        BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
+        ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef, Port, RetryPolicy, TaskBlockConfig,
+        TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -1737,6 +2131,10 @@ pub mod dsl {
         // automated_step
         #[serde(skip_serializing_if = "Option::is_none")]
         pub execution: Option<DslExecution>,
+
+        // agent
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub agent: Option<DslAgent>,
 
         // decision
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1785,6 +2183,29 @@ pub mod dsl {
         /// so legacy DSL files keep their prior semantics.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub retry_policy: Option<RetryPolicy>,
+    }
+
+    /// DSL payload for an Agent step. Mirrors [`WorkflowNodeData::Agent`]
+    /// 1:1 — same fields, same defaults — so a graph→DSL→graph round-trip
+    /// is the identity. PR 1 only models the degenerate (single-turn) path
+    /// at the compiler; the DSL surface stays full-fidelity so authoring
+    /// future multi-turn agents needs no DSL schema change.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DslAgent {
+        pub model: ModelRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub system_prompt: Option<String>,
+        pub user_prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub response_format: Option<serde_json::Value>,
+        #[serde(default = "default_max_turns")]
+        pub max_turns: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub stop_when: Option<String>,
+        #[serde(default)]
+        pub context_strategy: ContextStrategy,
+        #[serde(default)]
+        pub on_tool_error: ToolErrorPolicy,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1901,6 +2322,23 @@ pub mod dsl {
                         steps: task_steps,
                     })
                 }
+                "agent" => {
+                    let a = step.agent.as_ref().ok_or_else(|| {
+                        format!("agent '{}' requires an 'agent' field", key)
+                    })?;
+                    Ok(WorkflowNodeData::Agent {
+                        label: label.to_string(),
+                        description: step.description.clone(),
+                        model: a.model.clone(),
+                        system_prompt: a.system_prompt.clone(),
+                        user_prompt: a.user_prompt.clone(),
+                        response_format: a.response_format.clone(),
+                        max_turns: a.max_turns,
+                        stop_when: a.stop_when.clone(),
+                        context_strategy: a.context_strategy,
+                        on_tool_error: a.on_tool_error,
+                    })
+                }
                 "automated_step" => {
                     let exec = step.execution.as_ref().ok_or_else(|| {
                         format!("automated_step '{}' requires an 'execution' field", key)
@@ -1933,7 +2371,7 @@ pub mod dsl {
                     )
                     .map_err(|_| {
                         format!(
-                            "automated_step '{}' has unknown backend '{}' (expected one of: python, process, docker, http, llm, file_ops, kreuzberg)",
+                            "automated_step '{}' has unknown backend '{}' (expected one of: python, process, docker, http, llm, file_ops, kreuzberg, smtp)",
                             key, exec.backend
                         )
                     })?;
@@ -1989,10 +2427,12 @@ pub mod dsl {
                     label: label.to_string(),
                     description: step.description.clone(),
                 }),
-                "parallel_join" => Ok(WorkflowNodeData::ParallelJoin {
+                "join" => Ok(WorkflowNodeData::Join {
                     label: label.to_string(),
                     description: step.description.clone(),
-                    merge_strategy: Default::default(),
+                    mode: JoinMode::default(),
+                    merge_strategy: Some(MergeStrategy::default()),
+                    output: default_join_output_port(),
                 }),
                 "loop" => {
                     let max_iter = step
@@ -2019,7 +2459,8 @@ pub mod dsl {
                 // They previously fell into the generic catch-all error; keep
                 // that behaviour but make it explicit per kind so the
                 // round-trip asymmetry is greppable rather than silent.
-                "phase_update" | "progress_update" | "failure" | "trigger" => Err(format!(
+                "phase_update" | "progress_update" | "failure" | "trigger" | "delay"
+                | "timeout" => Err(format!(
                     "step '{}' has GUI-only type '{}' which the DSL format does not model",
                     key, step.step_type
                 )),
@@ -2043,6 +2484,7 @@ pub mod dsl {
                 instructions: None,
                 steps: None,
                 execution: None,
+                agent: None,
                 conditions: None,
                 default_branch: None,
                 max_iterations: None,
@@ -2158,7 +2600,12 @@ pub mod dsl {
                     }
                 }
                 WorkflowNodeData::ParallelSplit { .. } => {}
-                WorkflowNodeData::ParallelJoin { .. } => {}
+                WorkflowNodeData::Join { .. } => {
+                    // Join's mode/merge_strategy/output are GUI-only for now —
+                    // the DSL has no schema for them. Round-trip through DSL
+                    // drops the join-specific config, mirroring how
+                    // process-control nodes behave.
+                }
                 WorkflowNodeData::Scope { .. } => {
                     // children are populated by the CLI envelope after the
                     // step map is built
@@ -2173,9 +2620,33 @@ pub mod dsl {
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }
-                | WorkflowNodeData::Failure { .. } => {
+                | WorkflowNodeData::Failure { .. }
+                | WorkflowNodeData::Delay { .. }
+                | WorkflowNodeData::Timeout { .. } => {
                     // DSL doesn't model the process-control nodes — GUI-authored
                     // for now. Same lossy-drop behaviour as triggers.
+                }
+                WorkflowNodeData::Agent {
+                    model,
+                    system_prompt,
+                    user_prompt,
+                    response_format,
+                    max_turns,
+                    stop_when,
+                    context_strategy,
+                    on_tool_error,
+                    ..
+                } => {
+                    step.agent = Some(DslAgent {
+                        model: model.clone(),
+                        system_prompt: system_prompt.clone(),
+                        user_prompt: user_prompt.clone(),
+                        response_format: response_format.clone(),
+                        max_turns: *max_turns,
+                        stop_when: stop_when.clone(),
+                        context_strategy: *context_strategy,
+                        on_tool_error: *on_tool_error,
+                    });
                 }
                 WorkflowNodeData::Trigger { .. }
                 | WorkflowNodeData::SubWorkflow { .. } => {
@@ -2204,6 +2675,169 @@ mod tests {
             description: None,
             accept: None,
         }
+    }
+
+    // ── TaskFieldKind / TaskFieldConfig type-parity tests ─────────────
+    //
+    // These pin the wire-shape sync between the compiler-side
+    // `TaskFieldKind` (this file) and the engine-side equivalent in
+    // `engine/core-engine/crates/domain/src/human.rs`. The two have to
+    // agree exactly — a kind the compiler accepts but the engine
+    // rejects wedges a live net at the human-task effect handler.
+    //
+    // The frontend's `TASK_FIELD_KINDS` in
+    // `app/src/lib/hpi/types.ts` is the third leg; it isn't
+    // auto-generated but is asserted against the OpenAPI schema in CI's
+    // `openapi-drift` check.
+
+    #[test]
+    fn task_field_kind_all_variants_round_trip_through_json() {
+        // Every TaskFieldKind round-trips through serde with its
+        // snake_case wire form. Adding a new variant without serde
+        // tagging or with a wrong rename_all here would slip past type
+        // checks but fail at compile-to-air time.
+        let cases = [
+            (TaskFieldKind::Text, "\"text\""),
+            (TaskFieldKind::Textarea, "\"textarea\""),
+            (TaskFieldKind::Number, "\"number\""),
+            (TaskFieldKind::Select, "\"select\""),
+            (TaskFieldKind::Checkbox, "\"checkbox\""),
+            (TaskFieldKind::File, "\"file\""),
+            (TaskFieldKind::Signature, "\"signature\""),
+            (TaskFieldKind::Radio, "\"radio\""),
+            (TaskFieldKind::Date, "\"date\""),
+            (TaskFieldKind::Range, "\"range\""),
+            (TaskFieldKind::Rating, "\"rating\""),
+        ];
+        for (kind, wire) in cases {
+            let ser = serde_json::to_string(&kind).expect("serialize");
+            assert_eq!(ser, wire, "wire form drift for {kind:?}");
+            let back: TaskFieldKind = serde_json::from_str(wire).expect("deserialize");
+            assert_eq!(back, kind, "round-trip drift for {wire}");
+        }
+    }
+
+    #[test]
+    fn task_field_kind_maps_to_typed_port_field_kind() {
+        // The compiler emits a typed `Port` for the HumanTask's parked
+        // output by mapping each Input block's field kind through this
+        // From impl. Pin the mapping so downstream borrow-checking can
+        // rely on the typed-ports superset (`Bool` for checkbox, etc.).
+        assert_eq!(FieldKind::from(TaskFieldKind::Text), FieldKind::Text);
+        assert_eq!(FieldKind::from(TaskFieldKind::Textarea), FieldKind::Textarea);
+        assert_eq!(FieldKind::from(TaskFieldKind::Number), FieldKind::Number);
+        assert_eq!(FieldKind::from(TaskFieldKind::Select), FieldKind::Select);
+        assert_eq!(FieldKind::from(TaskFieldKind::Checkbox), FieldKind::Bool);
+        assert_eq!(FieldKind::from(TaskFieldKind::File), FieldKind::File);
+        assert_eq!(FieldKind::from(TaskFieldKind::Signature), FieldKind::Signature);
+        // New in Feature B parity sync: Radio borrows Select's option
+        // semantics, Date is wire-text (ISO string), Range/Rating emit
+        // plain numbers.
+        assert_eq!(FieldKind::from(TaskFieldKind::Radio), FieldKind::Select);
+        assert_eq!(FieldKind::from(TaskFieldKind::Date), FieldKind::Text);
+        assert_eq!(FieldKind::from(TaskFieldKind::Range), FieldKind::Number);
+        assert_eq!(FieldKind::from(TaskFieldKind::Rating), FieldKind::Number);
+    }
+
+    #[test]
+    fn task_field_config_renderer_metadata_round_trips() {
+        // Authors set min/max/step on a Range field (or max_rating on a
+        // Rating field, or include_time on a Date field). The compiler
+        // must serialize these so the engine can forward them to the
+        // renderer — otherwise the per-field customization disappears
+        // between editor and run.
+        let raw = serde_json::json!({
+            "name": "score",
+            "label": "Score",
+            "kind": "range",
+            "required": true,
+            "min": 0,
+            "max": 10,
+            "step": 0.5,
+        });
+        let field: TaskFieldConfig =
+            serde_json::from_value(raw.clone()).expect("range field parses");
+        assert_eq!(field.kind, TaskFieldKind::Range);
+        assert_eq!(field.min, Some(0.0));
+        assert_eq!(field.max, Some(10.0));
+        assert_eq!(field.step, Some(0.5));
+        // And round-trip: re-serializing must preserve the metadata.
+        let back = serde_json::to_value(&field).expect("serialize");
+        assert_eq!(back["min"], 0.0);
+        assert_eq!(back["max"], 10.0);
+        assert_eq!(back["step"], 0.5);
+    }
+
+    #[test]
+    fn task_field_config_omits_unset_metadata_from_wire() {
+        // skip_serializing_if = "Option::is_none" must hold for every
+        // optional metadata key — otherwise byte-identity guards for
+        // legacy TaskField shapes break and OpenAPI drift cycles
+        // forever as tests churn the spec.
+        let field = TaskFieldConfig {
+            name: "x".into(),
+            label: "X".into(),
+            kind: TaskFieldKind::Text,
+            required: None,
+            placeholder: None,
+            description_mdsvex: None,
+            options: None,
+            accept: None,
+            max_file_size: None,
+            max_files: None,
+            signature_mode: None,
+            pen_color: None,
+            min: None,
+            max: None,
+            step: None,
+            max_rating: None,
+            include_time: None,
+        };
+        let wire = serde_json::to_value(&field).expect("serialize");
+        let obj = wire.as_object().expect("object");
+        // Only name + label + kind survive when nothing else is set.
+        let mut keys: Vec<&str> = obj.keys().map(|s| s.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["kind", "label", "name"]);
+    }
+
+    #[test]
+    fn workflow_graph_definitions_roundtrip() {
+        let mut defs = std::collections::BTreeMap::new();
+        defs.insert(
+            "ExtractionFields".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "fields": { "type": "array", "items": { "type": "object" } }
+                }
+            }),
+        );
+        let graph = WorkflowGraph {
+            nodes: vec![],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
+            definitions: defs,
+        };
+        let s = serde_json::to_string(&graph).unwrap();
+        let parsed: WorkflowGraph = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed.definitions.len(), 1);
+        assert!(parsed.definitions.contains_key("ExtractionFields"));
+        assert_eq!(
+            parsed.definitions["ExtractionFields"]["properties"]["fields"]["type"],
+            "array"
+        );
+
+        let empty = WorkflowGraph {
+            nodes: vec![],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
+            definitions: std::collections::BTreeMap::new(),
+        };
+        let s2 = serde_json::to_string(&empty).unwrap();
+        assert!(!s2.contains("definitions"));
     }
 
     #[test]
@@ -2382,19 +3016,19 @@ mod tests {
         let img = TaskBlockConfig::Image {
             filenames: vec![],
             display: ImageDisplay::Single,
-            url: Some("/api/files/k.png".to_string()),
+            url: Some("/api/v1/files/k.png".to_string()),
             alt: Some("Invoice".to_string()),
             caption: None,
         };
         let j = serde_json::to_value(&img).unwrap();
         assert_eq!(j["type"], "image");
-        assert_eq!(j["url"], "/api/files/k.png");
+        assert_eq!(j["url"], "/api/v1/files/k.png");
         assert!(j.get("filenames").is_none(), "empty filenames omitted: {j}");
         assert!(j.get("caption").is_none());
 
         let dl = TaskBlockConfig::Download {
             downloads: vec![DownloadItemConfig {
-                url: "/api/files/k.pdf".to_string(),
+                url: "/api/v1/files/k.pdf".to_string(),
                 filename: "invoice.pdf".to_string(),
                 size: None,
                 mime_type: Some("application/pdf".to_string()),
@@ -2404,7 +3038,7 @@ mod tests {
         };
         let j = serde_json::to_value(&dl).unwrap();
         assert_eq!(j["type"], "download");
-        assert_eq!(j["downloads"][0]["url"], "/api/files/k.pdf");
+        assert_eq!(j["downloads"][0]["url"], "/api/v1/files/k.pdf");
         assert_eq!(j["downloads"][0]["mime_type"], "application/pdf");
         assert!(j["downloads"][0].get("size").is_none());
 
@@ -2481,7 +3115,7 @@ mod tests {
     #[test]
     fn all_block_types_deserialize() {
         // Verify all block types roundtrip through JSON
-        let blocks = vec![
+        let blocks = [
             serde_json::json!({"type": "input", "field": {"name": "f", "label": "F", "kind": "text"}}),
             serde_json::json!({"type": "mdsvex", "content": "# Hello"}),
             serde_json::json!({"type": "callout", "severity": "warning", "content": "Watch out"}),

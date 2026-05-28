@@ -76,6 +76,23 @@ async-trait = "0.1"
 
 # SDK for compiling workflow graphs to AIR
 aithericon-sdk = { path = "../engine/sdk" }
+
+# Typed Resource registry (built-in types: postgres, openai, slack, s3,
+# google_oauth). The resolver in petri/resource_resolver.rs looks types up
+# by name via `aithericon_resources::lookup`. The `vault` feature pulls in
+# `VaultResourceStore` so the CRUD handlers can write Vault-backed secret
+# storage when `VAULT_ADDR` is set.
+aithericon-resources = { path = "../shared/resources", features = ["vault"] }
+# Cross-crate backend metadata — the wire-name enum (ExecutionBackendType),
+# DispatchMode, ResourceChannel, and the &'static [BackendMeta] slice. The
+# compile-time decl (validate/ref_scan/default_editor_config fn pointers)
+# layers on top in `mekhan_service::backends::BackendDecl`.
+aithericon-backends = { path = "../shared/backends" }
+
+# Path-format regex for the B.9 Resource CRUD validator
+# (`POST /api/v1/resources`).
+regex = "1"
+
 schemars = "0.8"
 petgraph = "0.6"
 
@@ -132,3 +149,9 @@ wiremock = "0.6"
 # Used by integration tests that share global NATS streams (e.g. PETRI_GLOBAL)
 # to force sequential execution and avoid stream-state collisions.
 serial_test = "3"
+# `petri-application` is the runtime that fires our transitions; tests that
+# need to assert a compiled prepare transition would actually EXECUTE under
+# the real engine (instead of just inspecting the AIR string) construct a
+# `RhaiRuntime` here — same engine, same registered helpers (`__pluck`, ...)
+# the service publishes to.
+petri-application = { path = "../engine/core-engine/crates/application" }

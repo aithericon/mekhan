@@ -257,10 +257,10 @@ catalogue_entries
 
 The causality tables power two HTTP endpoints:
 
-- `GET /api/provenance/{net_id}/{token_id}?depth=N` — Walks token
+- `GET /api/v1/provenance/{net_id}/{token_id}?depth=N` — Walks token
   ancestry via a recursive CTE on `causality_event_tokens`, returning
   the chain of events that produced a token.
 
-- `GET /api/provenance/link/{signal_key}` — Looks up a cross-net bridge
+- `GET /api/v1/provenance/link/{signal_key}` — Looks up a cross-net bridge
   link, returning both egress and ingress sides with their net IDs and
   event sequences.

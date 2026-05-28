@@ -11,6 +11,7 @@ use petri_domain::{DomainEvent, PersistedEvent};
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::config::CleanupConfig;
 use crate::nats::MekhanNats;
+use crate::observability::record_silent_drop_with;
 use crate::petri::client::PetriClient;
 use crate::triggers::{ResultWaiters, TerminalOutcome, TriggerDispatcher};
 
@@ -52,6 +53,78 @@ async fn resolve_waiter(
 /// the orphan event. 10s comfortably covers the real race (the row is written
 /// synchronously before the net is deployed).
 const MAX_ORPHAN_EVENT_DELIVERIES: i64 = 10;
+
+/// Apply a terminal status (`completed` / `cancelled` / `failed`) to the
+/// instance row and run all post-update side-effects (waiter resolution,
+/// subscription cleanup, trigger evaluation). Handles orphan-event retry +
+/// poison-cutoff and DB-error retry inline — the caller never touches the
+/// message ack on the failure paths.
+///
+/// Returns `true` if the message was already ack'd/NAK'd here (caller should
+/// `continue` the outer loop), or `false` if the update landed and the caller
+/// should fall through to the outer ack.
+async fn handle_terminal_event(
+    db: &PgPool,
+    msg: &async_nats::jetstream::Message,
+    waiters: &ResultWaiters,
+    subscription_manager: &SubscriptionManager,
+    triggers: Option<&Arc<TriggerDispatcher>>,
+    net_id: &str,
+    status: &str,
+    result_envelope: Option<serde_json::Value>,
+) -> bool {
+    let result = sqlx::query(
+        "UPDATE workflow_instances \
+         SET status = $2, completed_at = NOW(), result = COALESCE($3::jsonb, result) \
+         WHERE net_id = $1 AND status = 'running'",
+    )
+    .bind(net_id)
+    .bind(status)
+    .bind(result_envelope.clone())
+    .execute(db)
+    .await;
+
+    match result {
+        Ok(r) if r.rows_affected() == 0 => {
+            let delivered = msg.info().map(|i| i.delivered).unwrap_or(0);
+            if delivered >= MAX_ORPHAN_EVENT_DELIVERIES {
+                tracing::warn!(
+                    "no instance for {net_id} after {delivered} deliveries; \
+                     dropping orphan {status} lifecycle event"
+                );
+                let _ = msg.ack().await;
+            } else {
+                tracing::warn!(
+                    "no running instance found for {net_id} ({status}), will retry \
+                     (delivery {delivered})"
+                );
+                let _ = msg
+                    .ack_with(AckKind::Nak(Some(Duration::from_secs(1))))
+                    .await;
+            }
+            return true;
+        }
+        Err(e) => {
+            tracing::error!("failed to update instance status for {net_id} ({status}): {e}");
+            let _ = msg
+                .ack_with(AckKind::Nak(Some(Duration::from_secs(1))))
+                .await;
+            return true;
+        }
+        Ok(_) => {}
+    }
+
+    resolve_waiter(db, waiters, net_id, status, result_envelope).await;
+    subscription_manager.cleanup_net_subscriptions(net_id).await;
+
+    // NetCompletion triggers fire on every terminal status (completed,
+    // cancelled, failed). SingleActiveCoalesce: dispatch coalesced follow-up.
+    if let Some(disp) = triggers {
+        crate::triggers::sources::net_completion::evaluate(disp, db, net_id, status).await;
+        disp.on_instance_terminal(net_id).await;
+    }
+    false
+}
 
 /// Start the NATS lifecycle event listener.
 /// Subscribes to `petri.events.mekhan-*.net.>` and updates the DB
@@ -95,7 +168,16 @@ pub async fn start_lifecycle_listener(
         let parts: Vec<&str> = subject.split('.').collect();
 
         if parts.len() < 5 {
-            tracing::warn!("unexpected lifecycle subject format: {subject}");
+            // Subject doesn't match the `petri.events.{net_id}.net.{event_type}`
+            // shape this consumer is bound to — either a producer drift or a
+            // subject filter misconfiguration. Either way the message will
+            // never be processable, so ACK + loud.
+            record_silent_drop_with(
+                "lifecycle_subject",
+                &format!("unexpected subject: {subject}"),
+                serde_json::json!({ "subject": subject }),
+                None, // subject-only failure — no payload to capture
+            );
             let _ = msg.ack().await;
             continue;
         }
@@ -104,152 +186,83 @@ pub async fn start_lifecycle_listener(
         let event_type = parts[parts.len() - 1];
 
         // The subject carries the terminal status; the payload carries the
-        // structured result envelope (`NetCompleted.exit_code`). Best-effort:
-        // a malformed/absent payload simply leaves `result` NULL (tolerant —
-        // bare-terminal workflows have no `exit_code` and stay NULL).
-        let persisted: Option<PersistedEvent> = serde_json::from_slice(&msg.payload).ok();
+        // structured result envelope (`NetCompleted.exit_code`). An *empty*
+        // payload is intentional (bare-terminal workflows have no
+        // `exit_code` — `result` stays NULL); a *garbage* payload is a
+        // producer drift bug we want to surface.
+        let persisted: Option<PersistedEvent> = if msg.payload.is_empty() {
+            None
+        } else {
+            match serde_json::from_slice(&msg.payload) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    record_silent_drop_with(
+                        "lifecycle_envelope",
+                        &e,
+                        serde_json::json!({ "subject": subject, "net_id": net_id }),
+                        Some(&msg.payload),
+                    );
+                    None
+                }
+            }
+        };
 
-        match event_type {
-            "completed" => {
-                tracing::info!("net {net_id} completed");
-                let result_envelope: Option<serde_json::Value> =
-                    persisted.as_ref().and_then(|p| match &p.event {
+        let (status, result_envelope): (Option<&'static str>, Option<serde_json::Value>) =
+            match event_type {
+                "completed" => {
+                    tracing::info!("net {net_id} completed");
+                    let envelope = persisted.as_ref().and_then(|p| match &p.event {
                         DomainEvent::NetCompleted { exit_code, .. } => exit_code.clone(),
                         _ => None,
                     });
-                let result = sqlx::query(
-                    "UPDATE workflow_instances SET status = 'completed', completed_at = NOW(), result = COALESCE($2::jsonb, result) WHERE net_id = $1 AND status = 'running'"
-                )
-                .bind(net_id)
-                .bind(result_envelope.clone())
-                .execute(&db)
-                .await;
-
-                match result {
-                    Ok(r) if r.rows_affected() == 0 => {
-                        let delivered = msg.info().map(|i| i.delivered).unwrap_or(0);
-                        if delivered >= MAX_ORPHAN_EVENT_DELIVERIES {
-                            tracing::warn!(
-                                "no instance for {net_id} after {delivered} deliveries; \
-                                 dropping orphan lifecycle event"
-                            );
-                            let _ = msg.ack().await;
-                            continue;
-                        }
-                        tracing::warn!(
-                            "no running instance found for {net_id}, will retry \
-                             (delivery {delivered})"
-                        );
-                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to update instance status for {net_id}: {e}");
-                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
-                        continue;
-                    }
-                    Ok(_) => {}
+                    (Some("completed"), envelope)
                 }
-
-                resolve_waiter(&db, &waiters, net_id, "completed", result_envelope).await;
-                subscription_manager.cleanup_net_subscriptions(net_id).await;
-
-                // Phase 5d: NetCompletion triggers fire on terminal status.
-                if let Some(ref disp) = triggers {
-                    crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "completed")
-                        .await;
+                "cancelled" => {
+                    tracing::info!("net {net_id} cancelled");
+                    // Synthesize a uniform error envelope so the WaitForResult /
+                    // SSE / poll contract is shape-stable across terminal kinds.
+                    let reason = persisted.as_ref().and_then(|p| match &p.event {
+                        DomainEvent::NetCancelled { reason, .. } => reason.clone(),
+                        _ => None,
+                    });
+                    let envelope = serde_json::json!({
+                        "ok": false,
+                        "error": { "reason": reason, "value": serde_json::Value::Null }
+                    });
+                    (Some("cancelled"), Some(envelope))
                 }
-            }
-            "cancelled" => {
-                tracing::info!("net {net_id} cancelled");
-                // Synthesize a uniform error envelope so the WaitForResult /
-                // SSE / poll contract is shape-stable across terminal kinds.
-                let cancel_reason = persisted.as_ref().and_then(|p| match &p.event {
-                    DomainEvent::NetCancelled { reason, .. } => reason.clone(),
-                    _ => None,
-                });
-                let result_envelope = serde_json::json!({
-                    "ok": false,
-                    "error": { "reason": cancel_reason, "value": serde_json::Value::Null }
-                });
-                let result = sqlx::query(
-                    "UPDATE workflow_instances SET status = 'cancelled', completed_at = NOW(), result = COALESCE($2::jsonb, result) WHERE net_id = $1 AND status = 'running'"
-                )
-                .bind(net_id)
-                .bind(result_envelope.clone())
-                .execute(&db)
-                .await;
-
-                match result {
-                    Ok(r) if r.rows_affected() == 0 => {
-                        let delivered = msg.info().map(|i| i.delivered).unwrap_or(0);
-                        if delivered >= MAX_ORPHAN_EVENT_DELIVERIES {
-                            tracing::warn!(
-                                "no instance for {net_id} after {delivered} deliveries; \
-                                 dropping orphan lifecycle event"
-                            );
-                            let _ = msg.ack().await;
-                            continue;
-                        }
-                        tracing::warn!(
-                            "no running instance found for {net_id}, will retry \
-                             (delivery {delivered})"
-                        );
-                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to update instance status for {net_id}: {e}");
-                        let _ = msg.ack_with(AckKind::Nak(Some(Duration::from_secs(1)))).await;
-                        continue;
-                    }
-                    Ok(_) => {}
+                "failed" => {
+                    tracing::info!("net {net_id} failed");
+                    let reason = persisted
+                        .as_ref()
+                        .and_then(|p| match &p.event {
+                            DomainEvent::NetFailed { reason, .. } => Some(reason.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| "net failed".to_string());
+                    let envelope = serde_json::json!({
+                        "ok": false,
+                        "error": { "reason": reason, "value": serde_json::Value::Null }
+                    });
+                    (Some("failed"), Some(envelope))
                 }
+                _ => (None, None), // Ignore created, initialized, etc.
+            };
 
-                resolve_waiter(
-                    &db,
-                    &waiters,
-                    net_id,
-                    "cancelled",
-                    Some(result_envelope),
-                )
-                .await;
-                subscription_manager.cleanup_net_subscriptions(net_id).await;
-
-                if let Some(ref disp) = triggers {
-                    crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "cancelled")
-                        .await;
-                }
-            }
-            "failed" => {
-                tracing::info!("net {net_id} failed");
-                // Uniform error envelope so WaitForResult / SSE / poll see a
-                // shape-stable result across all terminal kinds.
-                let result_envelope = serde_json::json!({
-                    "ok": false,
-                    "error": { "reason": "net failed", "value": serde_json::Value::Null }
-                });
-                let result = sqlx::query(
-                    "UPDATE workflow_instances SET status = 'failed', completed_at = NOW(), result = COALESCE($2::jsonb, result) WHERE net_id = $1 AND status = 'running'"
-                )
-                .bind(net_id)
-                .bind(result_envelope.clone())
-                .execute(&db)
-                .await;
-                if let Err(e) = result {
-                    tracing::error!("failed to update instance status for {net_id}: {e}");
-                }
-
-                resolve_waiter(&db, &waiters, net_id, "failed", Some(result_envelope)).await;
-                subscription_manager.cleanup_net_subscriptions(net_id).await;
-
-                if let Some(ref disp) = triggers {
-                    crate::triggers::sources::net_completion::evaluate(disp, &db, net_id, "failed")
-                        .await;
-                }
-            }
-            _ => {
-                // Ignore created, initialized, etc.
+        if let Some(status) = status {
+            if handle_terminal_event(
+                &db,
+                &msg,
+                &waiters,
+                &subscription_manager,
+                triggers.as_ref(),
+                net_id,
+                status,
+                result_envelope,
+            )
+            .await
+            {
+                continue;
             }
         }
 

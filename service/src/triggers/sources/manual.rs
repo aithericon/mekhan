@@ -1,7 +1,7 @@
 //! Manual trigger source (Phase 5a).
 //!
 //! The manual source has no background listener — it fires synchronously from
-//! the `POST /api/triggers/{node_id}/fire` handler. The handler hands the
+//! the `POST /api/v1/triggers/{node_id}/fire` handler. The handler hands the
 //! request body verbatim to `TriggerDispatcher::fire`, which evaluates the
 //! trigger's `payload_mapping` against it as the `payload` scope.
 //!

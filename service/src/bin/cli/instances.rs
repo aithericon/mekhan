@@ -18,7 +18,7 @@ struct PaginatedResponse {
 }
 
 pub async fn run(server: &str, template_id: Option<&str>) -> Result<()> {
-    let mut url = format!("{}/api/instances?page=1&per_page=50", server);
+    let mut url = format!("{}/api/v1/instances?page=1&per_page=50", server);
     if let Some(tid) = template_id {
         url.push_str(&format!("&template_id={}", tid));
     }
@@ -37,8 +37,8 @@ pub async fn run(server: &str, template_id: Option<&str>) -> Result<()> {
     }
 
     println!(
-        "{:<38}  {:<25}  {:<12}  {}",
-        "ID", "TEMPLATE", "STATUS", "CREATED"
+        "{:<38}  {:<25}  {:<12}  CREATED",
+        "ID", "TEMPLATE", "STATUS"
     );
     println!("{}", "-".repeat(90));
 

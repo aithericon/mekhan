@@ -25,7 +25,7 @@
 		if (!nodeId) return;
 		loading = true;
 		try {
-			const res = await fetch(`/api/triggers/${encodeURIComponent(nodeId)}/history`);
+			const res = await fetch(`/api/v1/triggers/${encodeURIComponent(nodeId)}/history`);
 			if (!res.ok) {
 				error = `History fetch failed: ${res.status}`;
 				return;

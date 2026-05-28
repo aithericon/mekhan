@@ -1,8 +1,24 @@
 import type { Page } from '@playwright/test';
-import { showcaseGraph } from '../../../src/lib/templates/showcase';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 
 const DEMO_ID = 'demo-template-test';
 const DEMO_NAME = 'Invoice Processing Demo';
+
+let cachedGraph: unknown = null;
+
+/// Load the literal showcase graph from `demos/invoice-processing/graph.json`
+/// — the same fixture the runtime seeder publishes. Cached per-process so
+/// multiple `gotoDemoEditor` calls in one test run only touch disk once.
+async function loadShowcaseGraph(): Promise<unknown> {
+	if (cachedGraph) return cachedGraph;
+	// `app/tests/e2e/helpers/demo.ts` → repo root is four levels up.
+	const repoRoot = path.resolve(__dirname, '../../../..');
+	const graphPath = path.join(repoRoot, 'demos/invoice-processing/graph.json');
+	const text = await fs.readFile(graphPath, 'utf8');
+	cachedGraph = JSON.parse(text);
+	return cachedGraph;
+}
 
 /**
  * Stand up the demo template editor for non-integration e2e tests.
@@ -10,9 +26,11 @@ const DEMO_NAME = 'Invoice Processing Demo';
  * The /demo route was retired in favor of seeding a real template and using
  * the consolidated /templates/[id] editor. For unit-style e2e tests that
  * don't run the full backend, we mock the API responses so the editor loads
- * the showcase graph deterministically.
+ * the showcase graph deterministically — sourced from the canonical disk
+ * fixture so it stays aligned with what the service seeder publishes.
  */
 export async function gotoDemoEditor(page: Page) {
+	const graph = await loadShowcaseGraph();
 	await page.route('**/api/templates/' + DEMO_ID, async (route) => {
 		if (route.request().method() === 'GET') {
 			await route.fulfill({
@@ -22,7 +40,7 @@ export async function gotoDemoEditor(page: Page) {
 					id: DEMO_ID,
 					name: DEMO_NAME,
 					description: 'Showcase workflow',
-					graph: showcaseGraph,
+					graph,
 					version: 1,
 					published: false,
 					author_id: '00000000-0000-0000-0000-000000000000',

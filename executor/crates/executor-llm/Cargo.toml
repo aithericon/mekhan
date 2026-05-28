@@ -105,6 +105,12 @@ kreuzberg = [
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }
+aithericon-executor-worker = { workspace = true }
+aithericon-executor-process = { workspace = true }
+aithericon-secrets = { workspace = true }
+async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 serde_json = { workspace = true }
+tempfile = "3"
+wiremock = "0.6"

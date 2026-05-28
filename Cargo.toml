@@ -17,6 +17,9 @@ resolver = "2"
 
 members = [
     "service",
+    "shared/backends",
+    "shared/resources",
+    "shared/resources-derive",
 ]
 
 exclude = [

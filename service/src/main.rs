@@ -7,7 +7,7 @@ use mekhan_service::auth::authenticator::{
 use mekhan_service::auth::bff::oidc::{OidcClient, OidcConfig};
 use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
-use mekhan_service::auth::resolver::StaticPrincipalResolver;
+use mekhan_service::auth::resolver::DbPrincipalResolver;
 use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
 use mekhan_service::auth::{IntrospectionVerifier, PrincipalResolver, TokenVerifier, ZitadelMgmt};
 use mekhan_service::config::{AppConfig, AuthMode};
@@ -45,6 +45,22 @@ async fn main() -> anyhow::Result<()> {
 
     let mekhan_nats = MekhanNats::connect(&config.nats_url, config.nats_creds.as_deref()).await?;
     tracing::info!("NATS connected at {}", config.nats_url);
+
+    // Silent-drop DLQ wiring: ensure the JetStream stream + spawn the
+    // background drainer. After this point, every `record_silent_drop*`
+    // call also publishes a `SilentDropRecord` to MEKHAN_SILENT_DROPS,
+    // queryable via `GET /api/v1/observability/silent-drops`.
+    mekhan_nats
+        .ensure_silent_drops_stream()
+        .await
+        .expect("failed to create MEKHAN_SILENT_DROPS stream");
+    if let Some(drain_rx) = mekhan_service::observability::install_drainer() {
+        let drain_nats = mekhan_nats.clone();
+        tokio::spawn(async move {
+            mekhan_service::observability::drain_silent_drops(drain_nats, drain_rx).await;
+        });
+        tracing::info!("silent drop drainer started");
+    }
 
     // Create catalogue subscription manager (KV-backed, in-memory cached)
     let sub_kv = mekhan_nats
@@ -131,6 +147,16 @@ async fn main() -> anyhow::Result<()> {
         Some(trigger_dispatcher.clone()),
     ));
 
+    // Step-executions projection (PETRI_GLOBAL domain events → step_execution
+    // table). Folds per-step inputs/outputs/metrics for the instance-view
+    // canvas overlay.
+    tokio::spawn(
+        mekhan_service::projections::step_executions::start_step_executions_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder
@@ -145,8 +171,14 @@ async fn main() -> anyhow::Result<()> {
     // callback verifies the IdP's token with them, then caches the resolved
     // `AuthUser`. The per-request hot path goes through the `Authenticator`.
     let token_verifier = build_token_verifier(&config).await?;
+    // `DbPrincipalResolver` enriches the static claim mapping with a
+    // workspace lookup against `workspaces`/`workspace_members`, so every
+    // resolved `AuthUser` carries a `workspace_id`. Tests keep using
+    // `StaticPrincipalResolver` (no DB) — that path yields `workspace_id =
+    // None` which handlers tolerate by falling back to the default
+    // workspace at the call site.
     let principal_resolver: Arc<dyn PrincipalResolver> =
-        Arc::new(StaticPrincipalResolver);
+        Arc::new(DbPrincipalResolver::new(db.clone()));
 
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
     let (authenticator, oidc) =
@@ -173,6 +205,33 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Phase B.9 — write-side secret store for the Resource CRUD handlers.
+    // `VAULT_ADDR` + `VAULT_TOKEN` set → real Vault; either missing → an
+    // in-memory placeholder + a WARN so operators notice before secrets
+    // start landing in process memory in prod.
+    let resource_store: Arc<dyn aithericon_resources::ResourceSecretStore> =
+        match aithericon_resources::VaultResourceStore::from_env() {
+            Some(vrs) => {
+                tracing::info!("resource_store: Vault-backed (VAULT_ADDR set)");
+                Arc::new(vrs)
+            }
+            None => {
+                tracing::warn!(
+                    "resource_store: VAULT_ADDR/VAULT_TOKEN unset — falling back to \
+                     in-memory store. Resource secrets WILL NOT SURVIVE A RESTART. \
+                     Configure Vault before production deployments."
+                );
+                Arc::new(aithericon_resources::InMemoryResourceStore::new())
+            }
+        };
+
+    // Publish-time resource resolver. Stateless on construction — every call
+    // joins workspace + version + ACL inline. Shared as `Arc` so the publish
+    // path can clone it cheaply.
+    let resource_resolver = Arc::new(
+        mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+    );
+
     let state = AppState {
         db,
         petri,
@@ -192,7 +251,35 @@ async fn main() -> anyhow::Result<()> {
         zitadel_mgmt,
         triggers: trigger_dispatcher,
         result_waiters,
+        resource_store,
+        resource_resolver,
     };
+
+    // Seed built-in demos before the listener accepts requests. Idempotent
+    // by stable template id (see `mekhan_service::demos`); best-effort —
+    // a failure to seed logs a warning and is otherwise transparent. Gated
+    // by `demos.seed` so production deployments must opt in.
+    if config.demos.seed {
+        let demos_dir = std::path::PathBuf::from(&config.demos.dir);
+        match mekhan_service::demos::seed_all(&state, &demos_dir).await {
+            Ok(outcomes) => {
+                let seeded = outcomes
+                    .iter()
+                    .filter(|(_, o)| matches!(o, mekhan_service::demos::SeedOutcome::Seeded))
+                    .count();
+                let already = outcomes.len() - seeded;
+                tracing::info!(
+                    demos_dir = %demos_dir.display(),
+                    seeded,
+                    already_present = already,
+                    "demo seeder finished"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "demo seeder failed — proceeding without demos");
+            }
+        }
+    }
 
     let app = build_router(state);
 
@@ -318,7 +405,7 @@ async fn build_introspection(
 }
 
 /// Build the optional Zitadel Management broker for the embedded
-/// `/api/auth/tokens` feature. Active only in `bff` mode when `auth.broker_pat`
+/// `/api/v1/auth/tokens` feature. Active only in `bff` mode when `auth.broker_pat`
 /// is configured (provisioned by `deploy/zitadel/bootstrap.sh`); otherwise
 /// `None` and the token endpoints 503 / the UI hides the section. Mirrors
 /// [`build_introspection`]; synchronous — the client validates its PAT lazily.
@@ -332,7 +419,7 @@ fn build_zitadel_mgmt(config: &AppConfig) -> anyhow::Result<Option<Arc<ZitadelMg
     ) else {
         tracing::info!(
             "auth: token broker disabled (no auth.broker_pat) \
-             — embedded /api/auth/tokens unavailable"
+             — embedded /api/v1/auth/tokens unavailable"
         );
         return Ok(None);
     };

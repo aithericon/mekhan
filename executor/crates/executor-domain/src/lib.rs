@@ -3,6 +3,7 @@ pub mod batch;
 pub mod error;
 pub mod event;
 pub mod job;
+pub mod llm;
 pub mod logs;
 pub mod metrics;
 pub mod progress;
@@ -19,6 +20,7 @@ pub use job::{
     ExecutionJob, ExecutionSpec, InputDeclaration, InputSource, JobPriority, OutputDeclaration,
     OutputUploadConfig,
 };
+pub use llm::{LlmStopReason, LlmToolCall, LlmTurnResult, LlmUsage, ToolSchema};
 pub use logs::{LogBatch, LogEntry, LogLevel, LogSummary};
 pub use metrics::{MetricBatch, MetricPoint, MetricSummary, MetricType};
 pub use progress::{Phase, PhaseStatus, Progress};
@@ -90,6 +92,7 @@ mod tests {
                     "working_dir": "/tmp",
                     "inherit_env": true
                 }),
+                    config_ref: None,
             },
             metadata: HashMap::from([("petri_net_id".into(), "my-net".into())]),
             timeout: Some(std::time::Duration::from_secs(300)),
@@ -131,12 +134,14 @@ mod tests {
                     name: "model.pt".into(),
                     path: Some("model.pt".into()),
                     required: true,
+                    kind: None,
                     upload_to: None,
                 }],
                 config: serde_json::json!({
                     "command": "python3",
                     "args": ["train.py"]
                 }),
+                    config_ref: None,
             },
             metadata: Default::default(),
             timeout: None,
@@ -176,6 +181,7 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![],
                 config: serde_json::json!({"command": "echo"}),
+                config_ref: None,
             },
             metadata: Default::default(),
             timeout: None,
@@ -256,6 +262,7 @@ mod tests {
                         secret_key: "secret".into(),
                     },
                     retry: Default::default(),
+                    resource_alias: None,
                 }),
             },
             required: true,
@@ -318,6 +325,7 @@ mod tests {
             name: "result.json".into(),
             path: Some("result.json".into()),
             required: true,
+            kind: None,
             upload_to: Some(OutputUploadConfig {
                 storage: StorageConfig {
                     backend: StorageBackend::Gcs,
@@ -327,6 +335,7 @@ mod tests {
                     prefix: "outputs/".into(),
                     credentials: Default::default(),
                     retry: Default::default(),
+                    resource_alias: None,
                 },
                 destination_path: Some("custom/path/result.json".into()),
             }),
@@ -356,6 +365,7 @@ mod tests {
             name: "out.txt".into(),
             path: Some("out.txt".into()),
             required: false,
+            kind: None,
             upload_to: None,
         };
         let json = serde_json::to_string(&output).unwrap();
@@ -385,6 +395,7 @@ mod tests {
                                     secret_key: "secret".into(),
                                 },
                                 retry: Default::default(),
+                                resource_alias: None,
                             }),
                         },
                         required: true,
@@ -402,6 +413,7 @@ mod tests {
                     name: "result".into(),
                     path: Some("result.tar.gz".into()),
                     required: true,
+                    kind: None,
                     upload_to: Some(OutputUploadConfig {
                         storage: StorageConfig {
                             backend: StorageBackend::Gcs,
@@ -411,11 +423,13 @@ mod tests {
                             prefix: "results/".into(),
                             credentials: Default::default(),
                             retry: Default::default(),
+                            resource_alias: None,
                         },
                         destination_path: None,
                     }),
                 }],
                 config: serde_json::json!({"command": "run.sh"}),
+                config_ref: None,
             },
             metadata: Default::default(),
             timeout: None,

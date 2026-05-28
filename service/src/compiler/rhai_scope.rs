@@ -149,7 +149,8 @@ fn collect_local_vars(source: &str) -> HashSet<String> {
             i += 1;
             continue;
         }
-        let keyword_len = if bytes[i] == b'l' { 3 } else { 3 };
+        // `let` and `for` are both 3 bytes — no per-keyword branch needed.
+        let keyword_len = 3;
         let after = i + keyword_len;
         // Boundary check after the keyword.
         if after >= bytes.len() || is_ident_cont(bytes[after]) {

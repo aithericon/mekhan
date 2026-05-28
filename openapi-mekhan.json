@@ -2,14 +2,28 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Mekhan API",
-    "description": "SOP workflow management — Petri-net backed, real-time collaborative editing.\n\nRoutes are organized by domain: templates (the visual workflow editor'ssaved state), instances (running workflows), processes (HPI observabilityover running instances), catalogue (artifact registry), and provenance(token-level causality across nets).\n\nThe Yjs WebSocket endpoint at `/api/yjs/{template_id}` carries thecollaborative editor's binary CRDT protocol and is intentionally notmodeled here.",
+    "description": "SOP workflow management — Petri-net backed, real-time collaborative editing.\n\nRoutes are organized by domain: templates (the visual workflow editor'ssaved state), instances (running workflows), processes (HPI observabilityover running instances), catalogue (artifact registry), and provenance(token-level causality across nets).\n\nThe JSON API lives under `/api/v1/*`; `/healthz` is the unauthenticatedliveness probe. The Yjs WebSocket endpoint at `/api/yjs/{template_id}`carries the collaborative editor's binary CRDT protocol and isintentionally not modeled here.",
     "license": {
       "name": ""
     },
     "version": "0.1.0"
   },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same-origin BFF (production single-origin posture)."
+    },
+    {
+      "url": "http://localhost:3100",
+      "description": "Local mekhan-service direct."
+    },
+    {
+      "url": "http://localhost:5173",
+      "description": "SvelteKit dev server (proxies /api/* to mekhan)."
+    }
+  ],
   "paths": {
-    "/api/analyze": {
+    "/api/v1/analyze": {
       "post": {
         "tags": [
           "templates"
@@ -40,12 +54,12 @@
         }
       }
     },
-    "/api/auth/tokens": {
+    "/api/v1/auth/tokens": {
       "get": {
         "tags": [
           "auth-tokens"
         ],
-        "summary": "GET /api/auth/tokens — the caller's automation tokens.",
+        "summary": "GET /api/v1/auth/tokens — the caller's automation tokens.",
         "operationId": "list_tokens",
         "responses": {
           "200": {
@@ -87,7 +101,7 @@
         "tags": [
           "auth-tokens"
         ],
-        "summary": "POST /api/auth/tokens — mint a token. The `secret` is returned once.",
+        "summary": "POST /api/v1/auth/tokens — mint a token. The `secret` is returned once.",
         "operationId": "create_token",
         "requestBody": {
           "content": {
@@ -143,12 +157,12 @@
         }
       }
     },
-    "/api/auth/tokens/{id}": {
+    "/api/v1/auth/tokens/{id}": {
       "delete": {
         "tags": [
           "auth-tokens"
         ],
-        "summary": "DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded).",
+        "summary": "DELETE /api/v1/auth/tokens/{id} — revoke a token (ownership-guarded).",
         "operationId": "revoke_token",
         "parameters": [
           {
@@ -198,13 +212,85 @@
         }
       }
     },
-    "/api/catalogue": {
+    "/api/v1/backends": {
+      "get": {
+        "tags": [
+          "backends"
+        ],
+        "summary": "GET /api/v1/backends",
+        "description": "List every registered backend with its display metadata, default editor\nconfig, default output port shape, dispatch mode (executor job vs.\nengine effect), resource channel (staged file vs. config overlay), and\nschedulability.\n\nThe frontend reads this once per session (cached in\n`app/src/lib/editor/backend-registry.svelte.ts`) and drives the\nAutomatedStep editor panel from it — backend picker label/icon,\ndefault config seed, default output port. The Svelte config-panel\ncomponent map (`backend-panels.ts`) stays hand-written; everything\nelse flows from here.",
+        "operationId": "list_backends",
+        "responses": {
+          "200": {
+            "description": "Registered backends",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BackendDescriptor"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backends/{name}/derive-output": {
+      "post": {
+        "tags": [
+          "backends"
+        ],
+        "summary": "POST /api/v1/backends/{name}/derive-output",
+        "description": "Compute the canonical output [`Port`] for an AutomatedStep with this\nbackend, given its current config. Frontend calls this for\n`output_authoring == \"derived\"` backends (LLM today) whenever the\nstep's config changes, so the read-only port editor always reflects\nthe actual runtime envelope.\n\nPermissive: a half-typed config (missing fields, partial schema)\nreturns the closest valid port — not an error. Hard validation runs at\npublish time via `BackendDecl::validate`.\n\nReturns:\n- 200 with the derived [`Port`] on success.\n- 400 when the backend exists but isn't `Derived` (callers should use\n  `default_output_port` from `GET /api/v1/backends` for `Fixed` /\n  `Free` backends).\n- 404 when the backend name doesn't resolve.",
+        "operationId": "derive_backend_output",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Backend wire name (e.g. `llm`, `python`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Derived output port",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Port"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Backend's output is not derived from config"
+          },
+          "404": {
+            "description": "Unknown backend"
+          }
+        }
+      }
+    },
+    "/api/v1/catalogue": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue",
-        "description": "List/search catalogue entries with full filter, sort, pagination support.\n\nQuery parameters:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-created_at`, `+name`, `size_bytes`\n  - `search` — free-text search across name, filename, storage_path\n  - `filter[field][op]=value` — typed filters (eq, ne, gt, gte, lt, lte,\n    contains, starts_with, ends_with, in, not_in, is_null, is_not_null)\n  - `metadata` — JSONB containment on user_metadata (e.g. `{\"kernel\":\"rbf\"}`)\n  - `file_metadata` — JSONB containment on file_metadata\n\nExample:\n  GET /api/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10",
+        "summary": "GET /api/v1/catalogue",
+        "description": "List/search catalogue entries with full filter, sort, pagination support.\n\nQuery parameters:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-created_at`, `+name`, `size_bytes`\n  - `search` — free-text search across name, filename, storage_path\n  - `filter[field][op]=value` — typed filters (eq, ne, gt, gte, lt, lte,\n    contains, starts_with, ends_with, in, not_in, is_null, is_not_null)\n  - `metadata` — JSONB containment on user_metadata (e.g. `{\"kernel\":\"rbf\"}`)\n  - `file_metadata` — JSONB containment on file_metadata\n\nExample:\n  GET /api/v1/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10",
         "operationId": "list_entries",
         "responses": {
           "200": {
@@ -230,13 +316,13 @@
         }
       }
     },
-    "/api/catalogue/distinct-jsonb/{column}/{key}": {
+    "/api/v1/catalogue/distinct-jsonb/{column}/{key}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/distinct-jsonb/:column/:key",
-        "description": "Distinct values for a JSONB key within file_metadata or user_metadata.\nExample: GET /api/catalogue/distinct-jsonb/file_metadata/format → [\"json\", \"csv\"]",
+        "summary": "GET /api/v1/catalogue/distinct-jsonb/:column/:key",
+        "description": "Distinct values for a JSONB key within file_metadata or user_metadata.\nExample: GET /api/v1/catalogue/distinct-jsonb/file_metadata/format → [\"json\", \"csv\"]",
         "operationId": "distinct_jsonb_values",
         "parameters": [
           {
@@ -285,13 +371,13 @@
         }
       }
     },
-    "/api/catalogue/distinct/{column}": {
+    "/api/v1/catalogue/distinct/{column}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/distinct/:column",
-        "description": "Returns distinct non-null values for a column (for populating filter dropdowns).\nColumn must be in the allowed filter fields whitelist.\n\nExample: GET /api/catalogue/distinct/category → [\"model\", \"dataset\", \"plot\"]",
+        "summary": "GET /api/v1/catalogue/distinct/:column",
+        "description": "Returns distinct non-null values for a column (for populating filter dropdowns).\nColumn must be in the allowed filter fields whitelist.\n\nExample: GET /api/v1/catalogue/distinct/category → [\"model\", \"dataset\", \"plot\"]",
         "operationId": "distinct_values",
         "parameters": [
           {
@@ -331,13 +417,13 @@
         }
       }
     },
-    "/api/catalogue/download/{*path}": {
+    "/api/v1/catalogue/download/{*path}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/download/{path} — download artifact bytes by storage path.",
-        "description": "The path parameter is the S3 storage_path from the catalogue entry.\nExample: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json",
+        "summary": "GET /api/v1/catalogue/download/{path} — download artifact bytes by storage path.",
+        "description": "The path parameter is the S3 storage_path from the catalogue entry.\nExample: GET /api/v1/catalogue/download/artifacts/exec-123/gp_model/gp_model.json",
         "operationId": "download_artifact",
         "parameters": [
           {
@@ -380,12 +466,12 @@
         }
       }
     },
-    "/api/catalogue/lineage/{process_id}": {
+    "/api/v1/catalogue/lineage/{process_id}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.",
+        "summary": "GET /api/v1/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step.",
         "operationId": "lineage",
         "parameters": [
           {
@@ -422,12 +508,12 @@
         }
       }
     },
-    "/api/catalogue/stats": {
+    "/api/v1/catalogue/stats": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/stats",
+        "summary": "GET /api/v1/catalogue/stats",
         "description": "Aggregate statistics. Accepts the same filter params as the list endpoint,\nso you can get stats for a subset (e.g., stats for a specific net or category).",
         "operationId": "stats",
         "responses": {
@@ -454,12 +540,12 @@
         }
       }
     },
-    "/api/catalogue/stats/by-net": {
+    "/api/v1/catalogue/stats/by-net": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/stats/by-net — per-net breakdown.",
+        "summary": "GET /api/v1/catalogue/stats/by-net — per-net breakdown.",
         "operationId": "stats_by_net",
         "responses": {
           "200": {
@@ -488,12 +574,12 @@
         }
       }
     },
-    "/api/catalogue/{execution_id}/{id}": {
+    "/api/v1/catalogue/{execution_id}/{id}": {
       "get": {
         "tags": [
           "catalogue"
         ],
-        "summary": "GET /api/catalogue/{execution_id}/{id} — single catalogue entry.",
+        "summary": "GET /api/v1/catalogue/{execution_id}/{id} — single catalogue entry.",
         "operationId": "get_entry",
         "parameters": [
           {
@@ -542,12 +628,12 @@
         }
       }
     },
-    "/api/compile": {
+    "/api/v1/compile": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/compile\nPOST /api/compile",
+        "summary": "POST /api/v1/compile\nPOST /api/v1/compile",
         "description": "Stateless compilation: accepts a graph (and optional inline file contents)\nand returns AIR JSON without database access. Used by the editor's \"Preview\nAIR\" button before publish.",
         "operationId": "compile_graph",
         "requestBody": {
@@ -582,12 +668,12 @@
         }
       }
     },
-    "/api/files/upload/{id}/{node_id}": {
+    "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
           "files"
         ],
-        "summary": "POST /api/files/upload/{id}/{node_id}\nAccepts multipart/form-data with a `file` field.",
+        "summary": "POST /api/v1/files/upload/{id}/{node_id}\nAccepts multipart/form-data with a `file` field.",
         "operationId": "upload_file",
         "parameters": [
           {
@@ -654,12 +740,12 @@
         }
       }
     },
-    "/api/files/{*key}": {
+    "/api/v1/files/{*key}": {
       "get": {
         "tags": [
           "files"
         ],
-        "summary": "GET /api/files/{key}\nServes a file from S3 with the correct content type.",
+        "summary": "GET /api/v1/files/{key}\nServes a file from S3 with the correct content type.",
         "description": "`key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).\nutoipa-axum 0.2 forwards the path string verbatim to axum::Router, so a\nplain `{key}` only matches a single segment and every real key 404s before\nreaching the handler. Use axum's catch-all `{*key}`; `Path<String>` still\nextracts the full remaining path. (Same fix as the catalogue download\nroute — see commit d61bccb.)",
         "operationId": "get_file",
         "parameters": [
@@ -693,12 +779,12 @@
         }
       }
     },
-    "/api/instances": {
+    "/api/v1/instances": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances",
+        "summary": "GET /api/v1/instances",
         "operationId": "list_instances",
         "parameters": [
           {
@@ -741,6 +827,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "Filter by `mode`. Default behavior when omitted is to return only\n`live` instances; pass `mode=any` to include drafts and test runs,\nor `mode=draft` / `mode=test_run` to scope explicitly.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -760,7 +858,7 @@
         "tags": [
           "instances"
         ],
-        "summary": "POST /api/instances",
+        "summary": "POST /api/v1/instances",
         "operationId": "create_instance",
         "requestBody": {
           "content": {
@@ -826,12 +924,12 @@
         }
       }
     },
-    "/api/instances/{id}": {
+    "/api/v1/instances/{id}": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/:id",
+        "summary": "GET /api/v1/instances/:id",
         "operationId": "get_instance",
         "parameters": [
           {
@@ -882,7 +980,7 @@
         "tags": [
           "instances"
         ],
-        "summary": "DELETE /api/instances/:id",
+        "summary": "DELETE /api/v1/instances/:id",
         "operationId": "cancel_instance",
         "parameters": [
           {
@@ -930,12 +1028,12 @@
         }
       }
     },
-    "/api/instances/{id}/events": {
+    "/api/v1/instances/{id}/events": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/:id/events",
+        "summary": "GET /api/v1/instances/:id/events",
         "description": "Returns the full event log for an instance from JetStream.",
         "operationId": "get_instance_events",
         "parameters": [
@@ -984,12 +1082,76 @@
         }
       }
     },
-    "/api/instances/{id}/state": {
+    "/api/v1/instances/{id}/promote-to-test": {
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/v1/instances/{id}/promote-to-test — create a `template_tests` row\nfrom an existing instance's event log.",
+        "description": "Scoops the instance's start tokens (from the initial Start-place tokens)\nand human-task completions (from signal-place tokens) into a new test\nfixture attached to the instance's template family. The user typically\ncompletes authoring by adding assertions in the editor afterward.",
+        "operationId": "promote_instance_to_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteToTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A test with this name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{id}/state": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/:id/state",
+        "summary": "GET /api/v1/instances/:id/state",
         "description": "Returns instance state with marking projected from JetStream events (source\nof truth) and best-effort engine status for enabled transitions / run mode.",
         "operationId": "get_instance_state",
         "parameters": [
@@ -1038,12 +1200,69 @@
         }
       }
     },
-    "/api/instances/{id}/stream": {
+    "/api/v1/instances/{id}/step-executions": {
       "get": {
         "tags": [
           "instances"
         ],
-        "summary": "GET /api/instances/{id}/stream",
+        "summary": "GET /api/v1/instances/:id/step-executions",
+        "description": "Returns one row per workflow node × execution iteration for an instance.\nMaterialized by the step-executions projection consumer; the frontend\noverlays this data on the canvas node cards.",
+        "operationId": "list_step_executions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Instance id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-step execution rows for this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StepExecutionResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Instance not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/{id}/stream": {
+      "get": {
+        "tags": [
+          "instances"
+        ],
+        "summary": "GET /api/v1/instances/{id}/stream",
         "description": "SSE stream of the instance's domain events, replayed from the start\n(`DeliverPolicy::All`) then live, terminated by a final `result` event\ncarrying the structured envelope. Composes with FireAndForget: fire, get\nthe instance id, then open this stream. No per-instance ownership check —\nconsistent with `get_instance` (auth middleware gates the route).",
         "operationId": "stream_instance",
         "parameters": [
@@ -1088,12 +1307,80 @@
         }
       }
     },
-    "/api/processes": {
+    "/api/v1/node-types": {
+      "get": {
+        "tags": [
+          "node-types"
+        ],
+        "summary": "GET /api/v1/node-types",
+        "description": "List every registered workflow node type with its display metadata,\nruntime kind, and protocol flags. The frontend reads this once per\nsession (cached alongside the backends registry) and drives the\neditor's palette + property-panel dispatch from it. The Svelte\ncomponent map (`lib/components/editor/nodes/index.ts`) and the Lucide\nicon map stay hand-written — components and icon imports can't be\nserialized through JSON — but the palette label, description, kind,\nand protocol flags flow from here.",
+        "operationId": "list_node_types",
+        "responses": {
+          "200": {
+            "description": "Registered node types",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeDescriptor"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/observability/silent-drops": {
+      "get": {
+        "tags": [
+          "observability"
+        ],
+        "summary": "`GET /api/v1/observability/silent-drops`",
+        "description": "Reads the dead-letter queue: every record any consumer ACKed and\ndropped because it couldn't parse the input. Drains up to `limit`\nrecent records from `MEKHAN_SILENT_DROPS` and returns them along\nwith the process-wide counter.\n\nThe stream itself enforces retention (currently 7d / 10k msgs); this\nendpoint just exposes whatever is currently retained.",
+        "operationId": "list_silent_drops",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max records to return (default 100, hard cap 1000)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Filter by kind (broker-side subject filter)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Counter + recent dead-letter records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SilentDropsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/processes": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes — list processes with filter/sort/pagination.",
+        "summary": "GET /api/v1/processes — list processes with filter/sort/pagination.",
         "description": "Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,\n`sort`, `page`, `page_size`. Response shape is paginated.",
         "operationId": "list_processes",
         "responses": {
@@ -1120,12 +1407,12 @@
         }
       }
     },
-    "/api/processes/stats": {
+    "/api/v1/processes/stats": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/stats — aggregate process statistics.",
+        "summary": "GET /api/v1/processes/stats — aggregate process statistics.",
         "operationId": "process_stats",
         "responses": {
           "200": {
@@ -1151,12 +1438,12 @@
         }
       }
     },
-    "/api/processes/{process_id}": {
+    "/api/v1/processes/{process_id}": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).",
+        "summary": "GET /api/v1/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).",
         "operationId": "get_process",
         "parameters": [
           {
@@ -1199,7 +1486,7 @@
         "tags": [
           "processes"
         ],
-        "summary": "PUT /api/processes/{process_id} — partial update of a process.",
+        "summary": "PUT /api/v1/processes/{process_id} — partial update of a process.",
         "operationId": "update_process",
         "parameters": [
           {
@@ -1249,12 +1536,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/artifacts": {
+    "/api/v1/processes/{process_id}/artifacts": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/artifacts — list catalogue entries for a process.",
+        "summary": "GET /api/v1/processes/{process_id}/artifacts — list catalogue entries for a process.",
         "operationId": "get_process_artifacts",
         "parameters": [
           {
@@ -1291,7 +1578,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/artifacts/list": {
+    "/api/v1/processes/{process_id}/artifacts/list": {
       "get": {
         "tags": [
           "processes-live"
@@ -1389,7 +1676,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/artifacts/stream": {
+    "/api/v1/processes/{process_id}/artifacts/stream": {
       "get": {
         "tags": [
           "processes-live"
@@ -1452,12 +1739,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/logs": {
+    "/api/v1/processes/{process_id}/logs": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination.",
+        "summary": "GET /api/v1/processes/{process_id}/logs — list logs for a process with filter/pagination.",
         "operationId": "get_process_logs",
         "parameters": [
           {
@@ -1494,7 +1781,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/logs/stream": {
+    "/api/v1/processes/{process_id}/logs/stream": {
       "get": {
         "tags": [
           "processes-live"
@@ -1568,7 +1855,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/logs/tail": {
+    "/api/v1/processes/{process_id}/logs/tail": {
       "get": {
         "tags": [
           "processes-live"
@@ -1675,12 +1962,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics": {
+    "/api/v1/processes/{process_id}/metrics": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/metrics — list metrics for a process.",
+        "summary": "GET /api/v1/processes/{process_id}/metrics — list metrics for a process.",
         "operationId": "get_process_metrics",
         "parameters": [
           {
@@ -1743,7 +2030,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics/series": {
+    "/api/v1/processes/{process_id}/metrics/series": {
       "get": {
         "tags": [
           "processes-live"
@@ -1840,7 +2127,7 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics/stream": {
+    "/api/v1/processes/{process_id}/metrics/stream": {
       "get": {
         "tags": [
           "processes-live"
@@ -1904,12 +2191,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/metrics/summary": {
+    "/api/v1/processes/{process_id}/metrics/summary": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/metrics/summary — aggregated metric stats per key.",
+        "summary": "GET /api/v1/processes/{process_id}/metrics/summary — aggregated metric stats per key.",
         "operationId": "get_process_metrics_summary",
         "parameters": [
           {
@@ -1949,12 +2236,12 @@
         }
       }
     },
-    "/api/processes/{process_id}/tasks": {
+    "/api/v1/processes/{process_id}/tasks": {
       "get": {
         "tags": [
           "processes"
         ],
-        "summary": "GET /api/processes/{process_id}/tasks — list tasks for a process.",
+        "summary": "GET /api/v1/processes/{process_id}/tasks — list tasks for a process.",
         "operationId": "get_process_tasks",
         "parameters": [
           {
@@ -1992,12 +2279,161 @@
         }
       }
     },
-    "/api/provenance/from-artifact/{execution_id}/{artifact_id}": {
+    "/api/v1/projects/{id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "DELETE /api/v1/projects/{id}",
+        "operationId": "delete_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/templates": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "POST /api/v1/projects/{id}/templates",
+        "description": "Attach a template (by *base* id — the chain root). The caller must be\nan editor on the project's workspace AND able to read the template\n(workspace member OR template is public).",
+        "operationId": "attach_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Attached"
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/templates/{base_template_id}": {
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "DELETE /api/v1/projects/{id}/templates/{base_template_id}",
+        "operationId": "detach_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "base_template_id",
+            "in": "path",
+            "description": "Base template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Detached"
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10",
+        "summary": "GET /api/v1/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10",
         "description": "Resolves a catalogue entry to its producing token and returns the full\nancestry chain. Uses `source_event_sequence` for direct lookup when\navailable, falling back to signal_key → cross-link resolution.",
         "operationId": "provenance_from_artifact",
         "parameters": [
@@ -2057,12 +2493,12 @@
         }
       }
     },
-    "/api/provenance/link/{signal_key}": {
+    "/api/v1/provenance/link/{signal_key}": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/link/{signal_key}",
+        "summary": "GET /api/v1/provenance/link/{signal_key}",
         "description": "Look up a cross-net bridge link by signal_key.",
         "operationId": "cross_link",
         "parameters": [
@@ -2103,12 +2539,12 @@
         }
       }
     },
-    "/api/provenance/{net_id}/{event_seq}/detail": {
+    "/api/v1/provenance/{net_id}/{event_seq}/detail": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/{net_id}/{event_seq}/detail",
+        "summary": "GET /api/v1/provenance/{net_id}/{event_seq}/detail",
         "description": "Returns the full context for a causality event by joining to domain\ntables based on effect_handler. Enables rich detail views in the\nprovenance DAG visualization.",
         "operationId": "event_detail",
         "parameters": [
@@ -2149,12 +2585,12 @@
         }
       }
     },
-    "/api/provenance/{net_id}/{token_id}": {
+    "/api/v1/provenance/{net_id}/{token_id}": {
       "get": {
         "tags": [
           "provenance"
         ],
-        "summary": "GET /api/provenance/{net_id}/{token_id}?depth=10",
+        "summary": "GET /api/v1/provenance/{net_id}/{token_id}?depth=10",
         "description": "Recursive CTE walking token ancestry: for a given token, find which events\nproduced it, what tokens those events consumed, and recurse.",
         "operationId": "token_provenance",
         "parameters": [
@@ -2211,12 +2647,453 @@
         }
       }
     },
-    "/api/tasks": {
+    "/api/v1/resources": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/v1/resources` — paginated list, optionally filtered by type.",
+        "operationId": "list_resources",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "resource_type",
+            "in": "query",
+            "description": "Optional filter: only return resources of this type.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "description": "Optional workspace filter. v1 default is `Uuid::nil()` so the\nno-workspace deployment Just Works; when workspaces land, the auth\nlayer fills this in.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of resources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_ResourceSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`POST /api/v1/resources` — create a logical resource and its v1 row.",
+        "operationId": "create_resource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Resource created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Path already exists in workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resources/types": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/v1/resources/types` — registry introspection. Powers the\nfrontend picker's type list and the schema-driven create form.",
+        "operationId": "list_resource_types",
+        "responses": {
+          "200": {
+            "description": "Registered resource types",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceTypeInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resources/{id}": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/v1/resources/{id}` — admin view. Secret fields are listed by\nname only; values never leave Vault on the read path.",
+        "operationId": "get_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resource detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`PUT /api/v1/resources/{id}` — update display_name and/or config. Setting\n`config` bumps `latest_version` and writes a fresh vault_path; name-only\nupdates do not.",
+        "operationId": "update_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resource updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`DELETE /api/v1/resources/{id}` — soft delete. Preserves\n`resource_versions` rows + Vault paths so already-pinned instances keep\nresolving.",
+        "operationId": "delete_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Resource soft-deleted"
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resources/{id}/audit": {
+      "get": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`GET /api/v1/resources/{id}/audit` — paginated audit trail for a resource.",
+        "operationId": "list_resource_audit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated audit entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_ResourceAuditEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/resources/{id}/rotate": {
+      "post": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`POST /api/v1/resources/{id}/rotate` — write a new version. Identical to\n`update_resource` with only `config` set, plus a different audit verb.",
+        "operationId": "rotate_resource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resource rotated to a new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks": {
       "get": {
         "tags": [
           "tasks"
         ],
-        "summary": "GET /api/tasks — list all tasks with filter/sort/pagination.",
+        "summary": "GET /api/v1/tasks — list all tasks with filter/sort/pagination.",
         "description": "Returns `{ tasks, total, page, page_size, total_pages, has_next, has_previous }`\nwhere each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).\nThe `tasks` key is what the Mekhan frontend's task store expects; the rest\nof the pagination envelope is preserved for richer clients.",
         "operationId": "list_tasks",
         "responses": {
@@ -2243,12 +3120,12 @@
         }
       }
     },
-    "/api/tasks/stream": {
+    "/api/v1/tasks/stream": {
       "get": {
         "tags": [
           "tasks"
         ],
-        "summary": "GET /api/tasks/stream — SSE endpoint for real-time task events from NATS.",
+        "summary": "GET /api/v1/tasks/stream — SSE endpoint for real-time task events from NATS.",
         "description": "Emits `{event, data}` lines for `task_created`, `task_completed`,\n`task_failed`, `task_cancelled`, `process_update`. `data` is the raw\nNATS payload as a JSON string (clients re-parse it).",
         "operationId": "task_stream",
         "responses": {
@@ -2261,12 +3138,12 @@
         }
       }
     },
-    "/api/tasks/{id}": {
+    "/api/v1/tasks/{id}": {
       "get": {
         "tags": [
           "tasks"
         ],
-        "summary": "GET /api/tasks/:id — get a single task.",
+        "summary": "GET /api/v1/tasks/:id — get a single task.",
         "description": "Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`\nJSONB projected by the causality consumer. This includes `task_id`, `steps`,\n`instructions_mdsvex`, `net_id`, `place`, etc. — everything the frontend\ntask form needs to render.",
         "operationId": "get_task",
         "parameters": [
@@ -2305,12 +3182,12 @@
         }
       }
     },
-    "/api/tasks/{id}/cancel": {
+    "/api/v1/tasks/{id}/cancel": {
       "post": {
         "tags": [
           "tasks"
         ],
-        "summary": "POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal.",
+        "summary": "POST /api/v1/tasks/{id}/cancel — cancel a task and publish NATS signal.",
         "operationId": "cancel_task",
         "parameters": [
           {
@@ -2367,12 +3244,12 @@
         }
       }
     },
-    "/api/tasks/{id}/complete": {
+    "/api/v1/tasks/{id}/complete": {
       "post": {
         "tags": [
           "tasks"
         ],
-        "summary": "POST /api/tasks/{id}/complete — complete a task and publish NATS signal.",
+        "summary": "POST /api/v1/tasks/{id}/complete — complete a task and publish NATS signal.",
         "operationId": "complete_task",
         "parameters": [
           {
@@ -2429,12 +3306,12 @@
         }
       }
     },
-    "/api/templates": {
+    "/api/v1/templates": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates",
+        "summary": "GET /api/v1/templates",
         "operationId": "list_templates",
         "parameters": [
           {
@@ -2488,6 +3365,31 @@
               ],
               "format": "uuid"
             }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Restrict to templates attached to a project (M:N via\n`project_templates.base_template_id`). The join is non-restrictive\nw.r.t. version chain — the live `is_latest` row wins.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Restrict to templates carrying this tag in the user's workspace.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -2507,7 +3409,7 @@
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates",
+        "summary": "POST /api/v1/templates",
         "operationId": "create_template",
         "requestBody": {
           "content": {
@@ -2543,13 +3445,13 @@
         }
       }
     },
-    "/api/templates/apply-air": {
+    "/api/v1/templates/apply-air": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/apply-air",
-        "description": "Clinic-style headless template upload: accepts pre-compiled AIR\n(`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,\nbypassing the editor's `WorkflowGraph` → AIR compile pass entirely.\nThe supplied `air_json` is stored verbatim into the `air_json` column;\na synthetic stub graph containing just the `Trigger` node is stored\ninto the `graph` column so the trigger dispatcher's `register_triggers`\nfinds it post-commit.\n\nIdempotency: name-based. A first apply with a given `name` Seeds a\nfresh v1 chain (`is_latest = true`); subsequent applies with the same\n`name` Bump the chain to a new born-published version (prior latest's\ntriggers `forget_template`'d, new version's triggers registered).\n\nDistinct from `POST /api/templates/{id}/apply` (the GitOps path for\ngraph-authored templates): that one demands an existing `{id}` and a\n`WorkflowGraph`, then runs the compile pass. This endpoint takes\nneither.",
+        "summary": "POST /api/v1/templates/apply-air",
+        "description": "Clinic-style headless template upload: accepts pre-compiled AIR\n(`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,\nbypassing the editor's `WorkflowGraph` → AIR compile pass entirely.\nThe supplied `air_json` is stored verbatim into the `air_json` column;\na synthetic stub graph containing just the `Trigger` node is stored\ninto the `graph` column so the trigger dispatcher's `register_triggers`\nfinds it post-commit.\n\nIdempotency: name-based, scoped per workspace. A first apply with a\ngiven `name` in the caller's workspace Seeds a fresh v1 chain\n(`is_latest = true`); subsequent applies with the same `(name,\nworkspace_id)` pair Bump the chain. Cross-workspace name collisions\nare independent chains.\n\nDistinct from `POST /api/v1/templates/{id}/apply` (the GitOps path for\ngraph-authored templates): that one demands an existing `{id}` and a\n`WorkflowGraph`, then runs the compile pass. This endpoint takes\nneither.",
         "operationId": "apply_air_template",
         "requestBody": {
           "content": {
@@ -2595,12 +3497,12 @@
         }
       }
     },
-    "/api/templates/{id}": {
+    "/api/v1/templates/{id}": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}",
+        "summary": "GET /api/v1/templates/{id}",
         "operationId": "get_template",
         "parameters": [
           {
@@ -2651,7 +3553,7 @@
         "tags": [
           "templates"
         ],
-        "summary": "PUT /api/templates/{id}",
+        "summary": "PUT /api/v1/templates/{id}",
         "operationId": "update_template",
         "parameters": [
           {
@@ -2722,7 +3624,7 @@
         "tags": [
           "templates"
         ],
-        "summary": "DELETE /api/templates/{id}\nPer Section 11.7: cascade cleanup for published templates with finished instances.",
+        "summary": "DELETE /api/v1/templates/{id}\nPer Section 11.7: cascade cleanup for published templates with finished instances.",
         "operationId": "delete_template",
         "parameters": [
           {
@@ -2773,12 +3675,12 @@
         }
       }
     },
-    "/api/templates/{id}/air": {
+    "/api/v1/templates/{id}/air": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}/air",
+        "summary": "GET /api/v1/templates/{id}/air",
         "operationId": "get_air",
         "parameters": [
           {
@@ -2834,12 +3736,12 @@
         }
       }
     },
-    "/api/templates/{id}/apply": {
+    "/api/v1/templates/{id}/apply": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/apply",
+        "summary": "POST /api/v1/templates/{id}/apply",
         "description": "GitOps entry point: atomically publish a new version of the chain straight\nfrom a git-authored artifact. The supplied `graph` REPLACES the chain head\nwholesale (no CRDT merge). Either seeds-and-publishes a fresh `mekhan init`\ndraft as v1 in place, or bumps the published head to a new born-published\nversion. The collaborative Y.Doc draft window is collapsed to nothing, so\npublish-freeze itself is the isolation between git- and web-authored\ntemplates.",
         "operationId": "apply_template",
         "parameters": [
@@ -2918,12 +3820,65 @@
         }
       }
     },
-    "/api/templates/{id}/compile": {
+    "/api/v1/templates/{id}/bundle": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/bundle",
+        "operationId": "get_template_bundle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template authoring bundle (graph + per-node inline files)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateBundle"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/compile": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/compile",
+        "summary": "POST /api/v1/templates/{id}/compile",
         "operationId": "compile_preview",
         "parameters": [
           {
@@ -2979,12 +3934,12 @@
         }
       }
     },
-    "/api/templates/{id}/io-stubs": {
+    "/api/v1/templates/{id}/io-stubs": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}/io-stubs\nGenerated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)\nper Python automated step, derived from each node's input scope. An\nauthoring aid: unlike compile it does NOT require the graph to be\npublishable (missing entrypoints / dangling edges are fine) — it only needs\na DAG. The IDE surfaces these read-only so step code gets typed\n`load_input()` before publish. Non-fatal by design: a graph that can't be\nscoped yields an empty map, never an error, so the editor never breaks on\nthis.",
+        "summary": "GET /api/v1/templates/{id}/io-stubs\nGenerated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)\nper Python automated step, derived from each node's input scope. An\nauthoring aid: unlike compile it does NOT require the graph to be\npublishable (missing entrypoints / dangling edges are fine) — it only needs\na DAG. The IDE surfaces these read-only so step code gets typed\n`load_input()` before publish. Non-fatal by design: a graph that can't be\nscoped yields an empty map, never an error, so the editor never breaks on\nthis.",
         "operationId": "io_stubs",
         "parameters": [
           {
@@ -3030,12 +3985,66 @@
         }
       }
     },
-    "/api/templates/{id}/new-version": {
+    "/api/v1/templates/{id}/latest": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/latest",
+        "description": "Resolve any id in a template's version chain to the row currently flagged\n`is_latest`. Accepts the chain root (`base_template_id`) — the stable\nidentifier the CLI's `mekhan.lock.json` pins — or any historical version\nid; both resolve through the same `base_template_id` column.\n\nCLI commands that need \"the chain head right now\" (`run`, `test`, the\npost-pull bundle fetch) call this first, then operate on the returned id.\nThe split keeps `/bundle`, `/instances`, `/tests/...` semantics\nstrictly version-id-scoped (you can still pull a historical version by\npassing its concrete id) — the resolver layer is the only place that\nfollows the chain.",
+        "operationId": "get_latest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Any template id in the version chain (base or a specific version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The latest version in the template's chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/new-version": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/new-version",
+        "summary": "POST /api/v1/templates/{id}/new-version",
         "operationId": "new_version",
         "parameters": [
           {
@@ -3093,12 +4102,12 @@
         }
       }
     },
-    "/api/templates/{id}/publish": {
+    "/api/v1/templates/{id}/publish": {
       "post": {
         "tags": [
           "templates"
         ],
-        "summary": "POST /api/templates/{id}/publish",
+        "summary": "POST /api/v1/templates/{id}/publish",
         "operationId": "publish_template",
         "parameters": [
           {
@@ -3109,6 +4118,15 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Bypass the template-test gate. Failing or stale tests do not block\npublish when `true`; an audit-level log records the override. Use\nonly when a test itself is broken and you need to ship.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -3153,6 +4171,16 @@
               }
             }
           },
+          "412": {
+            "description": "Template tests failing; publish blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishGateBlockedResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Server error",
             "content": {
@@ -3166,12 +4194,246 @@
         }
       }
     },
-    "/api/templates/{id}/triggers": {
+    "/api/v1/templates/{id}/tags": {
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "PUT /api/v1/templates/{id}/tags — full replace.",
+        "operationId": "set_template_tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTagsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Tags applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/tests": {
+      "get": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "GET /api/v1/templates/{id}/tests — list tests for a template family.",
+        "operationId": "list_tests",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateTest"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/v1/templates/{id}/tests — create a new test.",
+        "operationId": "create_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTemplateTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A test with this name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/tests/run-all": {
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/v1/templates/{id}/tests/run-all — run every enabled test for a\ntemplate family. Used by the editor's \"Run all\" button and by the\npublication gate.",
+        "operationId": "run_all",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "include_disabled",
+            "in": "query",
+            "description": "Run only enabled tests (default). `?include_disabled=true` runs every\ntest — used by the editor's \"Run all\" button when authors want a\ntotal picture during debugging.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAllResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "No published version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/triggers": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/templates/{id}/triggers",
+        "summary": "GET /api/v1/templates/{id}/triggers",
         "operationId": "list_template_triggers",
         "parameters": [
           {
@@ -3199,12 +4461,12 @@
         }
       }
     },
-    "/api/templates/{id}/versions": {
+    "/api/v1/templates/{id}/versions": {
       "get": {
         "tags": [
           "templates"
         ],
-        "summary": "GET /api/templates/{id}/versions",
+        "summary": "GET /api/v1/templates/{id}/versions",
         "operationId": "list_versions",
         "parameters": [
           {
@@ -3255,12 +4517,313 @@
         }
       }
     },
-    "/api/triggers": {
+    "/api/v1/templates/{id}/visibility": {
+      "patch": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "PATCH /api/v1/templates/{id}/visibility",
+        "description": "Flipping visibility is a tenancy decision (cross-workspace exposure) so\nit requires admin, not editor — even though it touches a template row.",
+        "operationId": "set_template_visibility",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetVisibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Visibility updated"
+          },
+          "400": {
+            "description": "Invalid visibility value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{template_id}/tests/{test_id}": {
+      "delete": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "DELETE /api/v1/templates/{template_id}/tests/{test_id}",
+        "operationId": "delete_test",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "PATCH /api/v1/templates/{template_id}/tests/{test_id} — partial update.",
+        "operationId": "update_test",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "description": "Test id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplateTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{template_id}/tests/{test_id}/run": {
+      "post": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "POST /api/v1/templates/{template_id}/tests/{test_id}/run — execute one test.",
+        "operationId": "run_one",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateTestRun"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "No published version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{template_id}/tests/{test_id}/runs": {
+      "get": {
+        "tags": [
+          "template_tests"
+        ],
+        "summary": "GET /api/v1/templates/{template_id}/tests/{test_id}/runs — recent run history.",
+        "description": "Returns newest-first. The editor's detail sheet shows the latest one\n(failure_detail + final_scope + instance_id) so authors can diagnose a\nfailure without chasing it through `/instances`.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "test_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Cap on returned rows. Defaults to 10; ignored if non-positive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateTestRun"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/triggers": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers",
+        "summary": "GET /api/v1/triggers",
         "operationId": "list_triggers",
         "responses": {
           "200": {
@@ -3276,12 +4839,12 @@
         }
       }
     },
-    "/api/triggers/metrics": {
+    "/api/v1/triggers/metrics": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers/metrics",
+        "summary": "GET /api/v1/triggers/metrics",
         "description": "Returns aggregate counters per source kind plus the registry size. Useful\nfor /admin dashboards and the editor's trigger landing page.",
         "operationId": "trigger_metrics",
         "responses": {
@@ -3298,12 +4861,12 @@
         }
       }
     },
-    "/api/triggers/preview/cron": {
+    "/api/v1/triggers/preview/cron": {
       "post": {
         "tags": [
           "triggers"
         ],
-        "summary": "POST /api/triggers/preview/cron",
+        "summary": "POST /api/v1/triggers/preview/cron",
         "description": "Returns the next N fire times for a cron schedule. Used by the editor's\ntrigger inspector to show users when their cron will fire next without\nhaving to ship the workflow first.",
         "operationId": "preview_cron",
         "requestBody": {
@@ -3330,12 +4893,12 @@
         }
       }
     },
-    "/api/triggers/source-scope": {
+    "/api/v1/triggers/source-scope": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers/source-scope?kind=cron",
+        "summary": "GET /api/v1/triggers/source-scope?kind=cron",
         "description": "The per-source scope contract, surfaced so the editor can show authors\nexactly which identifiers are in scope under each mapping expression\ninstead of leaving them to guess.",
         "operationId": "trigger_source_scope",
         "parameters": [
@@ -3363,12 +4926,12 @@
         }
       }
     },
-    "/api/triggers/{node_id}/enabled": {
+    "/api/v1/triggers/{node_id}/enabled": {
       "patch": {
         "tags": [
           "triggers"
         ],
-        "summary": "PATCH /api/triggers/{node_id}/enabled",
+        "summary": "PATCH /api/v1/triggers/{node_id}/enabled",
         "description": "Arm or pause a single trigger on its **published** template. This is the\ndeliberate inverse of the rest of the template: a trigger's `source`,\n`payload_mapping` and target are frozen at publish, but whether it is\ncurrently armed is operational state of the live template — so it is\neditable exactly when everything else is locked, and *only* then (drafts\nare armed by editing the graph in the editor).\n\nThe published row's `graph` column is the runtime source of truth that\n`hydrate()` and `fire()` read, so we flip `enabled` on the trigger node\nthere and re-register the template to make the change live immediately;\nit then survives restarts via the normal `hydrate()` path.",
         "operationId": "set_trigger_enabled",
         "parameters": [
@@ -3436,7 +4999,7 @@
         }
       }
     },
-    "/api/triggers/{node_id}/fire": {
+    "/api/v1/triggers/{node_id}/fire": {
       "post": {
         "tags": [
           "triggers"
@@ -3465,7 +5028,7 @@
         },
         "responses": {
           "200": {
-            "description": "Trigger fired (FireAndForget, or WaitForResult resolved)",
+            "description": "Trigger fired (FireAndForget / WaitForResult JSON, or SSE event stream when reply mode is `sse`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3496,19 +5059,16 @@
                 }
               }
             }
-          },
-          "406": {
-            "description": "SSE requested on the fire endpoint — use GET /api/instances/{id}/stream"
           }
         }
       }
     },
-    "/api/triggers/{node_id}/history": {
+    "/api/v1/triggers/{node_id}/history": {
       "get": {
         "tags": [
           "triggers"
         ],
-        "summary": "GET /api/triggers/{node_id}/history",
+        "summary": "GET /api/v1/triggers/{node_id}/history",
         "operationId": "trigger_history",
         "parameters": [
           {
@@ -3535,13 +5095,383 @@
         }
       }
     },
-    "/health": {
+    "/api/v1/workspaces": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "GET /api/v1/workspaces",
+        "description": "Lists every workspace the caller is a member of. Authenticated; no\nper-workspace gate (the caller is implicitly restricted by their\n`workspace_members` rows).",
+        "operationId": "list_workspaces",
+        "responses": {
+          "200": {
+            "description": "Caller's workspaces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceSummary"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}",
+        "operationId": "get_workspace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/members": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/members",
+        "operationId": "list_members",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceMember"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/members",
+        "description": "Adds a member identified by OIDC `subject`. Server derives `user_id`\nvia `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` so this works for\nprincipals that haven't yet logged into mekhan. Upserts so calling\ntwice with a different role flips the role rather than failing.",
+        "operationId": "add_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Member added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMember"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/members/{user_id}": {
+      "delete": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "DELETE /api/v1/workspaces/{id}/members/{user_id}",
+        "description": "Removes a member. Refuses to remove the last `owner` so the workspace\ncan't be orphaned.",
+        "operationId": "remove_member",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "Member user_id (subject_as_uuid)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Would orphan workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/projects",
+        "operationId": "list_projects",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projects in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "POST /api/v1/workspaces/{id}/projects",
+        "operationId": "create_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Project created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
       "get": {
         "tags": [
           "health"
         ],
-        "summary": "GET /health",
-        "description": "Liveness probe — fixed shape, no DB / NATS dependencies.",
+        "summary": "GET /healthz",
+        "description": "Liveness probe — fixed shape, no DB / NATS dependencies. Lives at the\nroot (NOT under `/api/v1`) and OUTSIDE the auth layer so load balancers,\nNomad/k8s probes, and uptime monitors can poll it without a session\ncookie. The path follows k8s convention; spec stays in the OpenAPI doc\nfor completeness but the runtime mount is intentionally separate from\nthe main protected `OpenApiRouter`.",
         "operationId": "liveness",
         "responses": {
           "200": {
@@ -3560,6 +5490,23 @@
   },
   "components": {
     "schemas": {
+      "AddMemberRequest": {
+        "type": "object",
+        "required": [
+          "subject",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "One of: `owner`, `admin`, `editor`, `viewer`."
+          },
+          "subject": {
+            "type": "string",
+            "description": "OIDC `sub` claim — the server derives `user_id` via\n`uuid_v5(SUBJECT_UUID_NAMESPACE, subject)`. Phase B will add an\nemail→subject resolver for the admin UI."
+          }
+        }
+      },
       "AncestryNode": {
         "type": "object",
         "required": [
@@ -3659,7 +5606,7 @@
       },
       "ApplyTemplateRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/templates/{id}/apply` — the GitOps path.\nThe `graph` REPLACES the chain head wholesale (no CRDT merge); binary\nassets are uploaded out-of-band via the files endpoint before this call.",
+        "description": "Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.\nThe `graph` REPLACES the chain head wholesale (no CRDT merge); binary\nassets are uploaded out-of-band via the files endpoint before this call.",
         "required": [
           "graph"
         ],
@@ -3696,7 +5643,7 @@
       },
       "ArtifactsListResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/processes/{process_id}/artifacts/list`.\n\nFrontend reads `body.entries[]` directly — keep the single-field envelope.",
+        "description": "Response shape for `GET /api/v1/processes/{process_id}/artifacts/list`.\n\nFrontend reads `body.entries[]` directly — keep the single-field envelope.",
         "required": [
           "entries"
         ],
@@ -3706,6 +5653,106 @@
             "items": {
               "$ref": "#/components/schemas/CatalogueEntry"
             }
+          }
+        }
+      },
+      "AssertOp": {
+        "type": "string",
+        "enum": [
+          "eq",
+          "neq",
+          "exists",
+          "not_exists",
+          "gt",
+          "gte",
+          "lt",
+          "lte",
+          "matches",
+          "contains"
+        ]
+      },
+      "Assertion": {
+        "type": "object",
+        "description": "A single check evaluated against the runner's synthetic post-instance scope\n(`{ result, steps.<slug>.output }`). `path` is a dot-pathed JSON pointer\ninto that scope (e.g. `\"result.value.invoice_amount\"`,\n`\"steps.review.output.approved\"`). Evaluation is intentionally data-driven —\nno DSL parser. See `handlers::template_tests::runner::eval_assertion`.",
+        "required": [
+          "path",
+          "op"
+        ],
+        "properties": {
+          "op": {
+            "$ref": "#/components/schemas/AssertOp"
+          },
+          "path": {
+            "type": "string"
+          },
+          "value": {
+            "description": "Right-hand side. For `Exists`/`NotExists` this is ignored; for\n`Matches` it must be a string (regex); for `Contains` it can be a\nscalar (substring on string actual / membership on array actual)."
+          }
+        }
+      },
+      "AttachTemplateRequest": {
+        "type": "object",
+        "required": [
+          "template_id"
+        ],
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The *base* template id (the first version's id, which the\n`is_latest`-chained version graph hangs off of). Project membership\nfollows the live version chain so attaching once survives version\nbumps."
+          }
+        }
+      },
+      "BackendDescriptor": {
+        "type": "object",
+        "description": "Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.\n\nThe Svelte component map (`backend-panels.ts`) stays hand-written — TS\ncan't import components dynamically from a JSON tag at runtime without\ndefeating Vite chunking — but every other per-backend constant\n(display name, icon, default config, default output fields, dispatch\nmode, resource channel) flows from here. This is what kills the\n`automated-ports.ts` ↔ `default_output_port()` drift hazard.",
+        "required": [
+          "name",
+          "displayName",
+          "icon",
+          "defaultOutputPort",
+          "defaultEditorConfig",
+          "dispatchMode",
+          "resourceChannel",
+          "schedulable",
+          "consumesDeclaredOutputs",
+          "outputAuthoring"
+        ],
+        "properties": {
+          "consumesDeclaredOutputs": {
+            "type": "boolean",
+            "description": "Whether this backend's declared output port fields drive a Rhai\n`outputs:` constant (mostly informational for the frontend)."
+          },
+          "defaultEditorConfig": {
+            "description": "Seed config inserted into a fresh step when this backend is\nselected. Opaque JSON — the backend's Svelte config panel decodes\nits own structure."
+          },
+          "defaultOutputPort": {
+            "$ref": "#/components/schemas/Port",
+            "description": "Canonical output port shape. Frontend uses this for the \"Reset to\ndefault\" button on the output port editor."
+          },
+          "dispatchMode": {
+            "$ref": "#/components/schemas/DispatchMode"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Snake-case wire tag (`\"smtp\"`, `\"python\"`, …). Matches\n[`ExecutionBackendType`]'s wire encoding and the executor's\n`ExecutionSpec.backend` string."
+          },
+          "outputAuthoring": {
+            "$ref": "#/components/schemas/OutputAuthoring",
+            "description": "Who owns the output port shape — user (free), backend (fixed), or\nderived from config. Drives the editor's port-section rendering."
+          },
+          "resourceChannel": {
+            "$ref": "#/components/schemas/ResourceChannel"
+          },
+          "schedulable": {
+            "type": "boolean",
+            "description": "Whether the editor should show the Scheduled deployment toggle."
           }
         }
       },
@@ -3974,7 +6021,7 @@
       },
       "CompileRequest": {
         "type": "object",
-        "description": "Request body for stateless compilation. Used by `POST /api/compile` and\n`POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map\nof inline contents; the preview compile emits `InputSource::Raw` entries so\nthe AIR matches the StoragePath-keyed shape produced by publish.",
+        "description": "Request body for stateless compilation. Used by `POST /api/v1/compile` and\n`POST /api/v1/templates/{id}/compile`. `files` is a per-node, per-filename map\nof inline contents; the preview compile emits `InputSource::Raw` entries so\nthe AIR matches the StoragePath-keyed shape produced by publish.",
         "required": [
           "name",
           "graph"
@@ -4070,6 +6117,15 @@
           }
         ]
       },
+      "ContextStrategy": {
+        "type": "string",
+        "description": "Context-window management strategy for an [`WorkflowNodeData::Agent`].\nInert in PR 1's degenerate path; declared upfront so the type stays\nstable across the follow-up loop-lowering PR (`docs/12` § 3).",
+        "enum": [
+          "none",
+          "drop_oldest",
+          "summarize_oldest"
+        ]
+      },
       "CreateInstanceRequest": {
         "type": "object",
         "required": [
@@ -4078,6 +6134,13 @@
         "properties": {
           "metadata": {
             "description": "Free-form audit metadata stored on the instance row. Unlike pre-typed-ports\nbehavior, this is NOT merged into initial Petri tokens — token shape is\ndriven solely by `start_tokens`."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`live` (default) | `draft` | `test_run`. `test_run` is reserved for\nthe test runner — callers requesting it directly are rejected."
           },
           "start_tokens": {
             "type": "array",
@@ -4089,6 +6152,61 @@
           "template_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "slug",
+          "display_name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateResourceRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/resources`. Carries every field needed to\nland both a `resources` row and the first `resource_versions` row.",
+        "required": [
+          "path",
+          "resource_type",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "description": "Full config map — both public and secret fields. The handler splits\nit by descriptor lists."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "UI label. Defaults to `path` if empty."
+          },
+          "path": {
+            "type": "string",
+            "description": "Windmill-style path identifier: `^[ufg]/[a-z0-9_-]+/[a-z0-9_-]+$`."
+          },
+          "resource_type": {
+            "type": "string",
+            "description": "Wire identifier from `ResourceTypeDescriptor.name`."
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Optional workspace scoping. No `workspaces` table exists in v1; a\n`None` here resolves to `Uuid::nil()`. When the table lands, this\nwill be set by the auth layer."
           }
         }
       },
@@ -4135,9 +6253,39 @@
           }
         }
       },
+      "CreateTemplateTestRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "start_tokens"
+        ],
+        "properties": {
+          "assertions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Assertion"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "human_answers": {
+            "description": "Map of `<node_slug>` → form data captured by the human-task UI.\nMissing slugs fail the run at the first un-stubbed `human.request`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "start_tokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StartToken"
+            }
+          }
+        }
+      },
       "CreateTokenRequest": {
         "type": "object",
-        "description": "Request body for `POST /api/auth/tokens`.",
+        "description": "Request body for `POST /api/v1/auth/tokens`.",
         "required": [
           "name"
         ],
@@ -4164,7 +6312,7 @@
       },
       "CreatedToken": {
         "type": "object",
-        "description": "Response of `POST /api/auth/tokens`. Identical to [`TokenSummary`] plus the\none-time `secret` — Mekhan never stores or re-serves it.",
+        "description": "Response of `POST /api/v1/auth/tokens`. Identical to [`TokenSummary`] plus the\none-time `secret` — Mekhan never stores or re-serves it.",
         "required": [
           "id",
           "name",
@@ -4400,6 +6548,45 @@
         ],
         "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire:\n`{\"mode\":\"inline\"}` or `{\"mode\":\"scheduled\",\"jobTemplate\":\"...\",\n\"resources\":{...}}`. Keep the `mode` strings in lockstep with the\n`snake_case` derive."
       },
+      "DispatchMode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Standard executor dispatch. The compiler emits an executor job; the\nstep's `DeploymentModel` decides whether it's inline via NATS or\nsubmitted to a scheduler-net.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "executor_job"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Engine builtin effect (e.g. CatalogueQuery → `catalogue_lookup`). The\ncompiler skips executor lowering entirely and emits an effect handler\ninvocation directly into the Petri transition.",
+            "required": [
+              "handler",
+              "kind"
+            ],
+            "properties": {
+              "handler": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "engine_effect"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Lowering mode — intrinsic to the backend, decided at the decl, NOT the\nstep. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a\nper-step author choice on any `ExecutorJob` backend."
+      },
       "DownloadItemConfig": {
         "type": "object",
         "description": "One entry in a `download` task block. Mirrors the frontend `DownloadItem`\n(`app/src/lib/hpi/types.ts`) field-for-field on the wire.",
@@ -4461,11 +6648,17 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "description": "Uniform error body returned by every fallible handler. Replaces the ad-hoc\n`json!({\"error\": ...})` pattern so the spec exposes a single\n`ErrorResponse` schema and the frontend gets one consistent error shape.\n\nOptional `compile_errors` carries structured per-edge / per-node failures\nfrom the workflow compiler so the editor can highlight inline (Phase 2\ntyped-ports). Absent on non-compile errors.",
+        "description": "Uniform error body returned by every fallible handler. The spec exposes a\nsingle `ErrorResponse` schema and the frontend gets one consistent error\nshape: switch on `code` (machine-readable, stable kebab-case) for\nprogrammatic handling; render `error` for humans.\n\n`code` is populated automatically by every `ApiError::*` constructor.\nStable values: `\"bad-request\"`, `\"unauthorized\"`, `\"forbidden\"`,\n`\"not-found\"`, `\"conflict\"`, `\"precondition-failed\"`, `\"internal\"`,\n`\"compile-failed\"`, `\"publish-gate\"`. Absent only on the few\nextractor-level rejections that don't flow through `ApiError`.\n\nOptional `compile_errors` carries structured per-edge / per-node failures\nfrom the workflow compiler so the editor can highlight inline.\nOptional `failing_tests` carries the publish gate's per-test detail.",
         "required": [
           "error"
         ],
         "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "compile_errors": {
             "type": [
               "array",
@@ -4477,6 +6670,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "failing_tests": {
+            "description": "Structured per-test failures returned by the publication gate when a\npublish is blocked. Absent on non-gate errors. The shape mirrors\n`models::template_test::FailingTestInfo`; declared as `Value` here to\navoid pulling the dependency into this module's signature."
           }
         }
       },
@@ -4585,7 +6781,7 @@
       },
       "ExecutionBackendType": {
         "type": "string",
-        "description": "Discriminator selecting which executor backend handles an automated step.\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`.",
+        "description": "Discriminator selecting which executor backend handles an automated step.\n\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`, `\"smtp\"`, `\"catalogue_query\"`.\n\nThis is the canonical OpenAPI discriminator, the Y.Doc-stored string in\nproduction templates, and the executor's `ExecutionSpec.backend` value.\nBoth the mekhan compiler and the executor registry key off it.",
         "enum": [
           "python",
           "process",
@@ -4594,6 +6790,7 @@
           "llm",
           "file_ops",
           "kreuzberg",
+          "smtp",
           "catalogue_query"
         ]
       },
@@ -4614,6 +6811,33 @@
               "null"
             ],
             "description": "Filename of the entrypoint script within the node's staged files.\nBackends that don't run a user script (e.g. `http`) ignore this; the\neditor still surfaces it for python/process/docker."
+          }
+        }
+      },
+      "FailingTestInfo": {
+        "type": "object",
+        "required": [
+          "test_id",
+          "name",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "test_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -4652,7 +6876,7 @@
       },
       "FileUploadResponse": {
         "type": "object",
-        "description": "Response shape for `POST /api/files/upload/{id}/{node_id}`.\n\nThe handler returns S3 metadata after a successful upload.",
+        "description": "Response shape for `POST /api/v1/files/upload/{id}/{node_id}`.\n\nThe handler returns S3 metadata after a successful upload.",
         "required": [
           "key",
           "filename",
@@ -4791,6 +7015,26 @@
               },
               "reason": {
                 "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`SingleActiveCoalesce`: a sibling instance is still running, so this\nfire was *coalesced* — recorded as missed, and the dispatcher will\ndispatch exactly one follow-up fire after the active instance\nterminates. Distinct from `Dropped` because the workflow does see\nthe missed observation (eventually).",
+            "required": [
+              "active_instance_id",
+              "outcome"
+            ],
+            "properties": {
+              "active_instance_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "coalesced"
+                ]
               }
             }
           }
@@ -5142,9 +7386,42 @@
           "gallery"
         ]
       },
+      "InstanceConcurrencyPolicy": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "unlimited"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "single_active_coalesce"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Template-level instance concurrency policy. Read by the trigger\ndispatcher on fire and the lifecycle listener on instance terminal.\n\nTagged on the wire as `{\"mode\": \"unlimited\"}` / `{\"mode\":\n\"single_active_coalesce\"}` so future variants (e.g. queue, locked)\ncan land without breaking the existing wire shape."
+      },
       "InstanceEventsResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/instances/{id}/events`.\n\nMirrors the literal `json!({ \"net_id\": ..., \"events\": [...], \"event_count\": ... })`\nenvelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`\nbecause the petri-lab event shape is heterogeneous (one of many event types).",
+        "description": "Response shape for `GET /api/v1/instances/{id}/events`.\n\nMirrors the literal `json!({ \"net_id\": ..., \"events\": [...], \"event_count\": ... })`\nenvelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`\nbecause the petri-lab event shape is heterogeneous (one of many event types).",
         "required": [
           "net_id",
           "events",
@@ -5176,7 +7453,8 @@
           "created_by",
           "created_at",
           "metadata",
-          "template_name"
+          "template_name",
+          "mode"
         ],
         "properties": {
           "completed_at": {
@@ -5205,6 +7483,9 @@
             "format": "uuid"
           },
           "metadata": {},
+          "mode": {
+            "type": "string"
+          },
           "net_id": {
             "type": "string"
           },
@@ -5228,6 +7509,13 @@
           "template_version": {
             "type": "integer",
             "format": "int32"
+          },
+          "test_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -5279,6 +7567,14 @@
             "type": "string"
           }
         }
+      },
+      "JoinMode": {
+        "type": "string",
+        "description": "Firing rule for a `Join` node. `All` (the default) is the AND-join —\nwaits for every incoming branch. `Any` fires per arriving token — the\ncanonical petri-net XOR-join, dual of `Decision`'s XOR-split.",
+        "enum": [
+          "all",
+          "any"
+        ]
       },
       "LineageResponse": {
         "type": "object",
@@ -5376,7 +7672,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "HPI tag/annotation propagated from the engine's `EffectCompleted`\nevent (`process_step_completed` ∘ `process_step_started`). A label\nfor human-process correlation — NOT a pointer to the\n`step_execution` table. See module-level docs."
           },
           "seq": {
             "type": "integer",
@@ -5531,7 +7828,7 @@
       },
       "LogsTailResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/processes/{process_id}/logs/tail`.\n\nFrontend reads `body.logs[]` directly — keep the single-field envelope.",
+        "description": "Response shape for `GET /api/v1/processes/{process_id}/logs/tail`.\n\nFrontend reads `body.logs[]` directly — keep the single-field envelope.",
         "required": [
           "logs"
         ],
@@ -5558,7 +7855,7 @@
       },
       "MergeStrategy": {
         "type": "string",
-        "description": "How a `ParallelJoin` merges the tokens arriving on its joined branches.\n\n`ShallowLastWins` is the historical behaviour (top-level keys overwrite,\nlast branch to arrive wins on a key collision). `DeepMerge` recursively\nmerges nested object values instead of overwriting them.",
+        "description": "How a `Join { mode: All }` merges the tokens arriving on its joined\nbranches.\n\n`ShallowLastWins` is the historical behaviour (top-level keys overwrite,\nlast branch to arrive wins on a key collision). `DeepMerge` recursively\nmerges nested object values instead of overwriting them.",
         "enum": [
           "shallow_last_wins",
           "deep_merge"
@@ -5604,6 +7901,58 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "ModelRef": {
+        "type": "object",
+        "description": "LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors\nthe subset of `aithericon_executor_backend_configs::llm::LlmConfig` the\neditor authors directly (provider, model, optional creds / sampling\nknobs); the degenerate single-turn lowering reconstructs the full\n`LlmConfig` from these fields plus the Agent's prompts. Wire shape\nmatches the existing `LlmConfig` JSON one-for-one so the equivalence\ntest (PR 1) produces byte-identical `config_ref` blobs.",
+        "required": [
+          "provider",
+          "model"
+        ],
+        "properties": {
+          "apiKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxTokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "description": "Provider-specific model identifier (e.g. `\"gpt-4o\"`,\n`\"claude-sonnet-4-20250514\"`)."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`\"openai\"` | `\"anthropic\"` | `\"ollama\"`. Wire format is lowercase to\nline up with `LlmConfig::Provider`'s `rename_all = \"lowercase\"`."
+          },
+          "resourceAlias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Workspace resource alias the LLM call binds to (e.g. `\"openai_prod\"`).\nSame channel as `LlmConfig::resource_alias` — the compiler emits a\n`ResourceEnvelope` borrow when present."
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -5685,6 +8034,55 @@
           }
         }
       },
+      "NodeDescriptor": {
+        "type": "object",
+        "description": "Frontend-visible metadata for one node type. Returned by\n`GET /api/v1/node-types`.\n\nMirrors [`crate::backends::BackendDescriptor`]'s role for backends. The\nSvelte component map, Lucide icon imports, and per-section property\npanels stay frontend-only (they reference Svelte components that can't\nbe serialized through JSON); everything else flows from here.",
+        "required": [
+          "wireName",
+          "displayLabel",
+          "kind",
+          "lowersToAir",
+          "isJoin",
+          "parksDataEnvelope"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayLabel": {
+            "type": "string"
+          },
+          "isJoin": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Runtime kind as snake_case string. Differs from `wire_name` only for\n`agent` (kind = `automated_step`)."
+          },
+          "lowersToAir": {
+            "type": "boolean"
+          },
+          "parksDataEnvelope": {
+            "type": "boolean"
+          },
+          "wireName": {
+            "type": "string",
+            "description": "Snake-case wire tag — matches the variant's serde rename."
+          }
+        }
+      },
+      "OutputAuthoring": {
+        "type": "string",
+        "description": "Who owns the AutomatedStep's output port shape — the user (free\nauthoring), the backend (fixed canonical shape), or the backend's\nconfig (derived from `response_format` / schema / similar).\n\nFrontend reads this off `BackendDescriptor` and either renders the\ngeneric editable `PortsSection` (Free) or a read-only one whose fields\ncome from the registry (Fixed) or from a per-config server-side derive\ncall (Derived). The compiler still validates the persisted `output`\nagainst the canonical shape on publish — the authoring flag is a UX\ncontract, not a security boundary.",
+        "enum": [
+          "free",
+          "fixed",
+          "derived"
+        ]
+      },
       "PaginatedResponse_InstanceListItem": {
         "type": "object",
         "required": [
@@ -5708,7 +8106,8 @@
                 "created_by",
                 "created_at",
                 "metadata",
-                "template_name"
+                "template_name",
+                "mode"
               ],
               "properties": {
                 "completed_at": {
@@ -5737,6 +8136,9 @@
                   "format": "uuid"
                 },
                 "metadata": {},
+                "mode": {
+                  "type": "string"
+                },
                 "net_id": {
                   "type": "string"
                 },
@@ -5760,6 +8162,169 @@
                 "template_version": {
                   "type": "integer",
                   "format": "int32"
+                },
+                "test_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_ResourceAuditEntry": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.",
+              "required": [
+                "id",
+                "resource_id",
+                "resource_version",
+                "action",
+                "principal_id",
+                "site",
+                "occurred_at"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "instance_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "occurred_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "principal_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "resource_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "resource_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "site": {
+                  "type": "string"
+                },
+                "step_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_ResourceSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row shape. Returned by `GET /api/v1/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
+              "required": [
+                "id",
+                "path",
+                "resource_type",
+                "display_name",
+                "latest_version",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "dynamic_keys": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "User-supplied key names for dynamic-fields resources (`kv`). The\npicker uses this list to emit `<path>.<key>` entries; resolver\nuses it to build the secret-template envelope. `None` for typed\nresources whose fields are static on the descriptor."
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "latest_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "resource_type": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
                 }
               }
             }
@@ -5801,7 +8366,9 @@
                 "graph",
                 "author_id",
                 "created_at",
-                "updated_at"
+                "updated_at",
+                "workspace_id",
+                "visibility"
               ],
               "properties": {
                 "air_json": {},
@@ -5828,6 +8395,7 @@
                   "type": "string",
                   "format": "uuid"
                 },
+                "interface_json": {},
                 "is_latest": {
                   "type": "boolean"
                 },
@@ -5866,6 +8434,13 @@
                 "version": {
                   "type": "integer",
                   "format": "int32"
+                },
+                "visibility": {
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }
@@ -6275,8 +8850,9 @@
               "null"
             ],
             "items": {
-              "type": "string"
-            }
+              "$ref": "#/components/schemas/SelectOption"
+            },
+            "description": "Choice list for `kind = Select`. Same `{value, label}` shape as\n[`TaskFieldConfig::options`]; the deserializer accepts either bare\nstrings or `{value, label}` objects and normalizes to the rich\nform. See [`SelectOption`]."
           },
           "required": {
             "type": "boolean"
@@ -6444,6 +9020,60 @@
           }
         }
       },
+      "Project": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_id",
+          "slug",
+          "display_name",
+          "description",
+          "created_at",
+          "created_by"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "PromoteToTestRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the new test. Must be unique within the template family."
+          },
+          "start_tokens": {
+            "description": "Optional override for the start tokens. When omitted, the runner\nbest-effort-extracts them from the instance's initial TokenCreated\nevents; this override lets the UI pre-fill from a known-good source\n(e.g. the original `CreateInstanceRequest`)."
+          }
+        }
+      },
       "ProvenanceResponse": {
         "type": "object",
         "description": "Full provenance response: ancestry nodes + explicit cross-net edges.",
@@ -6466,13 +9096,91 @@
           }
         }
       },
+      "PublishGateBlockedResponse": {
+        "type": "object",
+        "description": "Failure shape returned by the publication gate when one or more enabled\ntests block publish. Surfaces in the editor's `PublishGateModal`.",
+        "required": [
+          "failing_tests"
+        ],
+        "properties": {
+          "failing_tests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FailingTestInfo"
+            }
+          }
+        }
+      },
       "ReplyMode": {
         "type": "string",
-        "description": "How a `POST /api/triggers/{id}/fire` caller wants the response delivered.\nThe caller selects per-request (query `?reply=`, `Prefer` header, or a\nJSON body field); a Trigger node's optional `replyDefault` is used only\nwhen the caller doesn't specify. `Sse` is never *executed* on the fire\nendpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is\nmodeled so a node can advertise it as the intended consumption mode.",
+        "description": "How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.\nThe caller selects per-request (query `?reply=`, `Prefer` header, or a\nJSON body field); a Trigger node's optional `replyDefault` is used only\nwhen the caller doesn't specify. `Sse` is never *executed* on the fire\nendpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is\nmodeled so a node can advertise it as the intended consumption mode.",
         "enum": [
           "fire_and_forget",
           "wait_for_result",
           "sse"
+        ]
+      },
+      "ResourceAuditEntry": {
+        "type": "object",
+        "description": "One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.",
+        "required": [
+          "id",
+          "resource_id",
+          "resource_version",
+          "action",
+          "principal_id",
+          "site",
+          "occurred_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resource_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "site": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ResourceChannel": {
+        "type": "string",
+        "description": "How a resolved resource envelope reaches the running backend.\n\nThe executor and mekhan compiler both branch on this — the compiler to\ndecide what kind of borrow to emit, the executor to know whether to\nmerge the envelope into the runtime config (`ConfigOverlay`) or stage it\nas a sidecar file (`StagedFile`).",
+        "enum": [
+          "staged_file",
+          "config_overlay",
+          "none"
         ]
       },
       "ResourceConfig": {
@@ -6505,6 +9213,156 @@
           }
         }
       },
+      "ResourceDetail": {
+        "type": "object",
+        "description": "Admin view returned by `GET /api/v1/resources/{id}`. Secret fields appear\nin `redacted_secret_fields` so the picker can render \"<redacted>\"\nplaceholders without ever shipping the real values.",
+        "required": [
+          "id",
+          "path",
+          "resource_type",
+          "display_name",
+          "latest_version",
+          "created_at",
+          "updated_at",
+          "public_config",
+          "redacted_secret_fields"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latest_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "path": {
+            "type": "string"
+          },
+          "public_config": {
+            "description": "Public fields of the latest version, inline. Same shape the resolver\nwould assemble (minus the secret-template refs)."
+          },
+          "redacted_secret_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of fields the type marks as secret. The frontend renders these\nas redacted inputs; the real values live in Vault only."
+          },
+          "resource_type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResourceSummary": {
+        "type": "object",
+        "description": "Compact list-row shape. Returned by `GET /api/v1/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
+        "required": [
+          "id",
+          "path",
+          "resource_type",
+          "display_name",
+          "latest_version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "dynamic_keys": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "User-supplied key names for dynamic-fields resources (`kv`). The\npicker uses this list to emit `<path>.<key>` entries; resolver\nuses it to build the secret-template envelope. `None` for typed\nresources whose fields are static on the descriptor."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latest_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "path": {
+            "type": "string"
+          },
+          "resource_type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResourceTypeInfo": {
+        "type": "object",
+        "description": "One descriptor surfaced by `GET /api/v1/resources/types`. Drives the\npicker's type list and the schema-driven create form. `schema` is the\nschemars JSON Schema of the underlying ResourceType struct; the frontend\nrenders it field-by-field.",
+        "required": [
+          "name",
+          "display_name",
+          "icon",
+          "secret_fields",
+          "public_fields",
+          "schema"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "dynamic_fields": {
+            "type": "boolean",
+            "description": "`true` for the `kv` escape hatch: the field set is per-INSTANCE,\nso `secret_fields` / `public_fields` are empty at the type level\nand the picker drives off `ResourceSummary.dynamic_keys`. Types\nderived via `#[derive(ResourceType)]` always set this to `false`."
+          },
+          "icon": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oauth_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "public_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "schema": {
+            "description": "JSON Schema of the type. Cached at first request, then reused."
+          },
+          "secret_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "RetryPolicy": {
         "type": "object",
         "description": "Retry behaviour for an `AutomatedStep` whose execution fails or times out.\n\nOn failure the compiler re-dispatches the job (a fresh executor submit)\nwhile `retries < max_retries`, optionally after a `backoff` delay, then\nroutes the exhausted token to the node's error output.",
@@ -6527,9 +9385,54 @@
           }
         }
       },
+      "RotateResourceRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps\nversion. The body carries the new config — the type cannot change at\nrotation time (`resource_type` is immutable for a logical resource).",
+        "required": [
+          "config"
+        ],
+        "properties": {
+          "config": {}
+        }
+      },
+      "RunAllResponse": {
+        "type": "object",
+        "description": "Aggregate result for `run-all` (also returned to the publication gate).",
+        "required": [
+          "total",
+          "passed",
+          "failed",
+          "errored",
+          "runs"
+        ],
+        "properties": {
+          "errored": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "passed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateTestRun"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "ScopeEntryDto": {
         "type": "object",
-        "description": "One reachable, producer-attributed reference the guard picker should\noffer at a node. The single source of truth for editor scope —\nreplaces the deleted client-side `computeScopes` reimplementation.",
+        "description": "One reachable, producer-attributed reference the guard picker should\noffer at a node. The single source of truth for editor scope —\nreplaces the deleted client-side `computeScopes` reimplementation.\n\n`ty` is the recursive [`TyDescriptor`] tree so the picker can drill into\nnested objects and array element shapes without additional calls; for\nFile-anchored containers the tree's root carries `selectable: true` so\nthe row is pickable as a whole while its children are individually\npickable too.",
         "required": [
           "path",
           "ty",
@@ -6552,8 +9455,8 @@
             "type": "string"
           },
           "ty": {
-            "type": "string",
-            "description": "Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …)."
+            "$ref": "#/components/schemas/TyDescriptor",
+            "description": "Recursive type descriptor. Single source of truth for the picker's\nnested drill-down and (later) array `[*]` iteration affordance."
           }
         }
       },
@@ -6575,6 +9478,36 @@
           }
         }
       },
+      "SelectOption": {
+        "type": "object",
+        "description": "One choice in a `kind = \"select\"` field. `value` is what the form\nsubmits / what guards downstream compare against; `label` is what the\nUI renders. Authors typically write `{value, label}`; the deserializer\nalso accepts a bare string and stretches it to `{value: s, label: s}`.",
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "SetTagsRequest": {
+        "type": "object",
+        "required": [
+          "tags"
+        ],
+        "properties": {
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "SetTriggerEnabledRequest": {
         "type": "object",
         "required": [
@@ -6583,6 +9516,18 @@
         "properties": {
           "enabled": {
             "type": "boolean"
+          }
+        }
+      },
+      "SetVisibilityRequest": {
+        "type": "object",
+        "required": [
+          "visibility"
+        ],
+        "properties": {
+          "visibility": {
+            "type": "string",
+            "description": "`workspace` (default) or `public`."
           }
         }
       },
@@ -6603,6 +9548,62 @@
           },
           "signal_key": {
             "type": "string"
+          }
+        }
+      },
+      "SilentDropRecord": {
+        "type": "object",
+        "description": "One dead-letter record. Published as a JSON message on\n`mekhan.silent_drops.{kind}`.",
+        "required": [
+          "kind",
+          "error",
+          "recorded_at"
+        ],
+        "properties": {
+          "context": {
+            "description": "Per-site structured context. Free-form JSON object — typically\n`subject`, `net_id`, `key`, `event_seq`, whatever the call site\nknows that would help forensic inspection."
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable failure description — the underlying error\n(deser error, missing field, subject pattern mismatch, …)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Stable identifier of the consumer + reason. Doubles as the NATS\nsubject suffix (`mekhan.silent_drops.{kind}`) so consumers can\nfilter at the broker. Examples: `catalogue_register`,\n`event_envelope`, `lifecycle_subject`,\n`catalogue_subscription_hydrate`."
+          },
+          "payload": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw payload the consumer couldn't parse, captured as a UTF-8\nstring (lossy if the bytes weren't valid UTF-8). All current\ncall sites carry JSON, so lossy is fine in practice; the loss\nonly shows up if a malformed message contained binary noise.\n`None` for sites that drop on subject-only checks (no payload\nto capture)."
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp the drop was recorded at."
+          }
+        }
+      },
+      "SilentDropsResponse": {
+        "type": "object",
+        "required": [
+          "total_since_boot",
+          "records"
+        ],
+        "properties": {
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SilentDropRecord"
+            },
+            "description": "Captured records, newest first. May be empty if the stream is\nempty or the filter excludes everything."
+          },
+          "total_since_boot": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Process-wide counter — total drops since boot. Independent of\nthe stream contents (which may have rolled off via retention).",
+            "minimum": 0
           }
         }
       },
@@ -6665,6 +9666,69 @@
           },
           "token": {
             "description": "JSON object whose keys match the Start's `initial` port field names."
+          }
+        }
+      },
+      "StepExecutionResponse": {
+        "type": "object",
+        "description": "Response shape for `GET /api/v1/instances/{id}/step-executions`.\n\nOne row per `(workflow node, execution iteration)` for an instance.\nMaterialized by the step-executions projection consumer\n(`service/src/projections/step_executions/`). The frontend keys on\n`node_id` to overlay runtime info onto each node card on the canvas.",
+        "required": [
+          "node_id",
+          "iteration_index",
+          "node_kind",
+          "status"
+        ],
+        "properties": {
+          "branch_taken": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Decision branch identifier: `\"edge:<edge_id>\"` for the output that\nreceived the token. `None` for non-branching nodes."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "error": {
+            "description": "`EffectFailed` payload (error_message, retryable, ...) for failed steps."
+          },
+          "inputs": {
+            "description": "`{ \"<producer_node_id>\": <envelope> }` grouped by upstream owner of\neach read-arc place this step consumed."
+          },
+          "iteration_index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_kind": {
+            "type": "string"
+          },
+          "outputs": {
+            "description": "The envelope deposited at the node's `data_port` (parking nodes) or\n`workflow_terminals[*]` (End nodes)."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"pending\" | \"running\" | \"completed\" | \"failed\" | \"skipped\"`."
           }
         }
       },
@@ -6750,7 +9814,7 @@
           },
           {
             "type": "object",
-            "description": "`filenames` references compile-time staged assets; `url` is a direct\n(often `{{ token.path }}`-interpolated) source resolved at instance\ntime. When `url` is set the human-task UI renders it as the image\nsource (matching the frontend `{type:\"image\",url,alt?,caption?}`).",
+            "description": "`filenames` references compile-time staged assets; `url` is a direct\n(often `{{ <slug>.<field> }}`-interpolated) source resolved at instance\ntime. When `url` is set the human-task UI renders it as the image\nsource (matching the frontend `{type:\"image\",url,alt?,caption?}`).",
             "required": [
               "type"
             ],
@@ -6810,7 +9874,7 @@
           },
           {
             "type": "object",
-            "description": "Embedded PDF viewer (rendered inline in the task UI). `height` is a\nCSS length string, default ~\"400px\"; `caption` is rendered above the\nviewer. `url`, when set (typically via `{{ token.path }}`\ninterpolation), is the direct PDF source.",
+            "description": "Embedded PDF viewer (rendered inline in the task UI). `height` is a\nCSS length string, default ~\"400px\"; `caption` is rendered above the\nviewer. `url`, when set (typically via `{{ <slug>.<field> }}`\ninterpolation), is the direct PDF source.",
             "required": [
               "type"
             ],
@@ -6849,7 +9913,7 @@
           },
           {
             "type": "object",
-            "description": "Downloadable artifact list. Serializes to the frontend\n`{type:\"download\",downloads:[{url,filename,...}]}` shape. `url` is\ntypically `{{ token.path }}`-interpolated to an uploaded file.",
+            "description": "Downloadable artifact list. Serializes to the frontend\n`{type:\"download\",downloads:[{url,filename,...}]}` shape. `url` is\ntypically `{{ <slug>.<field> }}`-interpolated to an uploaded file.",
             "required": [
               "downloads",
               "type"
@@ -6868,6 +9932,46 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Feature B — render N copies of a sub-task body, one per element of an\nupstream array. `items_ref` is a Feature-B `<slug>.<field>[*]`\nreference; the compiler synthesizes a read-arc on the parked array\nand the frontend renderer iterates `task.data[<items_ref>]`,\ninstantiating the sub-`blocks` per element. The block's typed\noutput is `<output_slug>.results: array<{<inputs>}>`, where\n`<inputs>` is the union of every `Input` child block's field —\nvisible to downstream pickers via the standard `TyDescriptor::Array`\nmachinery. Non-Input children (Mdsvex, Callout, Divider, Image,\nPdf, File, Download) are render-only and contribute nothing to the\nper-row schema.\n\n`item_label_ref`, when set, names a `<slug>.<field>[*].<label>`\nref whose per-element string is used as the row header (e.g. the\ntask title from an LLM-extracted task list). Static-only: B v1\nrejects `[*]` chained twice (`NestedIterationUnsupported`) and\nrejects a Repeater nested inside another Repeater.",
+            "required": [
+              "items_ref",
+              "blocks",
+              "output_slug",
+              "type"
+            ],
+            "properties": {
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TaskBlockConfig"
+                },
+                "description": "The sub-task body rendered per element. Any TaskBlockConfig\nvariant except a nested Repeater. `Input` children declare the\nper-row form schema and contribute to `<output_slug>.results`\nelement shape; display blocks (Mdsvex/Callout/Image/Pdf/File/\nDownload/Divider) are rendered per row with placeholders\nresolved against the current row's element.\n\n`no_recursion` breaks the recursive schema cycle for\nutoipa — the wire schema still references `TaskBlockConfig`\nvia `$ref`, but the generator stops descending here."
+              },
+              "item_label_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional per-element row label ref, e.g.\n`extract.tasks[*].title`. Must share the same iteration prefix\nas `items_ref`."
+              },
+              "items_ref": {
+                "type": "string",
+                "description": "Producer-namespaced ref carrying exactly one `[*]` boundary,\ne.g. `extract.tasks[*]`. The pre-`[*]` segments address an\nupstream parked array; iteration happens consumer-side."
+              },
+              "output_slug": {
+                "type": "string",
+                "description": "Rhai-safe slug under which the Repeater's typed output is\naddressable downstream as `<output_slug>.results`. Defaults to\nthe parent HumanTask's slug when empty; must be unique within\nthe graph (the compiler's existing slug-collision check\ncovers it)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "repeater"
+                ]
+              }
+            }
           }
         ]
       },
@@ -6879,11 +9983,75 @@
           "kind"
         ],
         "properties": {
+          "accept": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `File` kind: accepted file types as an HTML input `accept`\nattribute (e.g. `\"image/png,image/jpeg,.pdf\"`). Ignored for\nnon-file kinds."
+          },
+          "description_mdsvex": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Per-field helper text shown under the input. Mdsvex source."
+          },
+          "include_time": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For `Date` kind: when true, capture date + time (`YYYY-MM-DDTHH:MM`);\notherwise capture date only (`YYYY-MM-DD`)."
+          },
           "kind": {
             "$ref": "#/components/schemas/TaskFieldKind"
           },
           "label": {
             "type": "string"
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For `Number` / `Range` kinds: maximum allowed value (inclusive)."
+          },
+          "max_file_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "For `File` kind: maximum file size in bytes.",
+            "minimum": 0
+          },
+          "max_files": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For `File` kind: maximum number of files (defaults to 1).",
+            "minimum": 0
+          },
+          "max_rating": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For `Rating` kind: number of stars (defaults to 5).",
+            "minimum": 0
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For `Number` / `Range` kinds: minimum allowed value (inclusive)."
           },
           "name": {
             "type": "string"
@@ -6894,8 +10062,16 @@
               "null"
             ],
             "items": {
-              "type": "string"
-            }
+              "$ref": "#/components/schemas/SelectOption"
+            },
+            "description": "Choice list for `kind = \"select\"` / `\"radio\"`. Authored as\n`[{\"value\": \"approve\", \"label\": \"Approve\"}, …]` — `value` is the\ncanonical wire value submitted by the form, `label` is the\nhuman-facing display string. A bare string shorthand\n(`[\"approve\", \"reject\"]`) is accepted at deserialize time and\nnormalized to `{value, label}` where `label = value` — convenient\nfor trivial sets while keeping the runtime representation uniform."
+          },
+          "pen_color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `Signature` kind: ink color (CSS color string)."
           },
           "placeholder": {
             "type": [
@@ -6908,12 +10084,27 @@
               "boolean",
               "null"
             ]
+          },
+          "signature_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `Signature` kind: capture mode (currently only `\"draw\"` is\nimplemented)."
+          },
+          "step": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "For `Number` / `Range` kinds: step increment (defaults to 1)."
           }
         }
       },
       "TaskFieldKind": {
         "type": "string",
-        "description": "Form-field control kind for `input` task blocks. Snake-case wire values\nsuch as `\"text\"`, `\"textarea\"`, `\"number\"`, `\"select\"`, `\"checkbox\"`,\n`\"file\"`, `\"signature\"`.",
+        "description": "Form-field control kind for `input` task blocks. Snake-case wire values\nsuch as `\"text\"`, `\"textarea\"`, `\"number\"`, `\"select\"`, `\"checkbox\"`,\n`\"file\"`, `\"signature\"`, `\"radio\"`, `\"date\"`, `\"range\"`, `\"rating\"`.\nMust stay in sync with the engine's `TaskFieldKind` in\n`engine/core-engine/crates/domain/src/human.rs` and the frontend's\n`TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the\ncompiler accepts an author's choice that the engine rejects (or\nvice-versa).",
         "enum": [
           "text",
           "textarea",
@@ -6921,12 +10112,16 @@
           "select",
           "checkbox",
           "file",
-          "signature"
+          "signature",
+          "radio",
+          "date",
+          "range",
+          "rating"
         ]
       },
       "TaskListResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/tasks`.\n\n`tasks` is `Vec<serde_json::Value>` because each task is a\n`HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB\nrows — the right level of typing for this endpoint.",
+        "description": "Response shape for `GET /api/v1/tasks`.\n\n`tasks` is `Vec<serde_json::Value>` because each task is a\n`HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB\nrows — the right level of typing for this endpoint.",
         "required": [
           "tasks",
           "total",
@@ -6993,6 +10188,156 @@
           }
         }
       },
+      "TemplateBundle": {
+        "type": "object",
+        "description": "Authoring bundle for a template — graph plus inline per-node files. This\nis the same `(graph, files)` pair the publish/new-version paths feed into\nthe compiler, served as plain JSON so non-collaborative clients (the CLI,\nCI jobs) don't need a Yjs/WSS channel just to read a published template.",
+        "required": [
+          "graph",
+          "files"
+        ],
+        "properties": {
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraph"
+          }
+        }
+      },
+      "TemplateTest": {
+        "type": "object",
+        "description": "A test attached to a logical template family. `template_id` is the family\nroot (the row's `id` when `base_template_id` is NULL, else the\n`base_template_id`), resolved by `handlers::template_tests::family_root`.",
+        "required": [
+          "id",
+          "template_id",
+          "name",
+          "enabled",
+          "start_tokens",
+          "human_answers",
+          "assertions",
+          "created_at",
+          "updated_at",
+          "created_by"
+        ],
+        "properties": {
+          "assertions": {},
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "human_answers": {},
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_run_against_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_run_passed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reference_scope": {
+            "description": "Snapshot of the synthetic scope the assertion DSL walks\n(`{ result, steps.<slug>.output }`). Captured at promote-time from the\nsource instance, refreshed after each successful run. `NULL` for tests\nauthored from scratch that have never had a passing run."
+          },
+          "start_tokens": {},
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TemplateTestRun": {
+        "type": "object",
+        "required": [
+          "id",
+          "test_id",
+          "instance_id",
+          "template_version",
+          "status",
+          "started_at"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "failure_detail": {},
+          "final_scope": {},
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "instance_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "test_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "TerminalOutcome": {
         "type": "object",
         "description": "The terminal disposition handed back to a WaitForResult caller.",
@@ -7039,7 +10384,7 @@
       },
       "TokenSummary": {
         "type": "object",
-        "description": "One token row in `GET /api/auth/tokens`. Never carries the secret.",
+        "description": "One token row in `GET /api/v1/auth/tokens`. Never carries the secret.",
         "required": [
           "id",
           "name"
@@ -7067,12 +10412,20 @@
           },
           "id": {
             "type": "string",
-            "description": "Opaque token id (the backing Zitadel machine-user id). Pass back to\n`DELETE /api/auth/tokens/{id}` to revoke."
+            "description": "Opaque token id (the backing Zitadel machine-user id). Pass back to\n`DELETE /api/v1/auth/tokens/{id}` to revoke."
           },
           "name": {
             "type": "string"
           }
         }
+      },
+      "ToolErrorPolicy": {
+        "type": "string",
+        "description": "What happens when a tool call inside an [`WorkflowNodeData::Agent`]\nfails after the tool's own retry budget is exhausted. Default `Feedback`\n— append a synthetic `role: tool, content: \"Tool '<name>' failed: …\"`\nmessage to the conversation and re-enter the LLM call. `Bubble` routes\nthe failure straight to the agent's `error` output. Inert in PR 1.",
+        "enum": [
+          "feedback",
+          "bubble"
+        ]
       },
       "TriggerHistoryResponse": {
         "type": "object",
@@ -7302,6 +10655,107 @@
           }
         }
       },
+      "TyDescriptor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "scalar"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "fields",
+              "selectable",
+              "kind"
+            ],
+            "properties": {
+              "fields": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/TyDescriptor"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "object"
+                ]
+              },
+              "selectable": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "element",
+              "kind"
+            ],
+            "properties": {
+              "element": {
+                "$ref": "#/components/schemas/TyDescriptor"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "array"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "any"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "opaque"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Wire-shaped recursive descriptor of a producer field's type — the picker\nwalks this to render nested fields and array element shapes. Mirrors\n[`TokenShape`] but flattened to a serializable form. Plain (non-anchored)\nObject containers carry `selectable: false`: the picker may expand them\nbut the row body acts as a toggle, not an emit (the user must drill into\nscalar / file / array leaves). File-anchored containers carry\n`selectable: true`, preserving the existing precedent that `document` is\npickable as a whole **and** `document.url` etc. are individually pickable."
+      },
       "TypeSurfaceResponse": {
         "type": "object",
         "description": "Shape-aware analysis surface — per-node scope + diagnostics. Pure and\ngraph-only: works on drafts that can't compile/publish yet.",
@@ -7334,6 +10788,19 @@
           }
         }
       },
+      "UpdateResourceRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or\n`config` (or both) may be set; if `config` is set the call bumps\n`latest_version` and writes a new vault_path. `display_name`-only\nupdates do **not** bump version.",
+        "properties": {
+          "config": {},
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UpdateTemplateRequest": {
         "type": "object",
         "properties": {
@@ -7358,6 +10825,42 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "UpdateTemplateTestRequest": {
+        "type": "object",
+        "properties": {
+          "assertions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Assertion"
+            }
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "human_answers": {},
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_tokens": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/StartToken"
+            }
           }
         }
       },
@@ -7563,11 +11066,23 @@
           "edges"
         ],
         "properties": {
+          "definitions": {
+            "type": "object",
+            "description": "Workflow-scoped reusable JSON-Schema fragments. Referenced from\n`executionSpec.config` (today: LLM `response_format.schema`) as\n`{\"$ref\": \"#/definitions/<name>\"}` and inlined at compile time by\n`compiler::schema_refs::inline_refs`. Local pointers only; external\n`$ref`s and JSON-Schema 2020-12 sibling-key merge semantics are\nrejected at validation. BTreeMap for byte-stable compile output.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "edges": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/WorkflowEdge"
             }
+          },
+          "instance_concurrency": {
+            "$ref": "#/components/schemas/InstanceConcurrencyPolicy",
+            "description": "How concurrent fires (from triggers / manual / API) interact with\nalready-running instances of this template. Defaults to `Unlimited`\nso existing templates load unchanged.\n\nDistinct from the per-`Trigger`-node `ConcurrencyPolicy` (which\ngates *fires* by Skip/Queue/DedupKey before they reach this\ntemplate-level check). `InstanceConcurrencyPolicy` operates at the\ninstance lifecycle layer — it sees a fire that already passed the\nper-trigger gate and decides whether to spawn now or coalesce."
           },
           "nodes": {
             "type": "array",
@@ -7597,7 +11112,8 @@
           "status",
           "created_by",
           "created_at",
-          "metadata"
+          "metadata",
+          "mode"
         ],
         "properties": {
           "completed_at": {
@@ -7626,11 +11142,23 @@
             "format": "uuid"
           },
           "metadata": {},
+          "mode": {
+            "type": "string",
+            "description": "Categorizes the instance. `live` (default) is a production run.\n`draft` is a user-initiated experimental run hidden from default\nlist views. `test_run` is spawned by the template-test runner."
+          },
           "net_id": {
             "type": "string"
           },
           "result": {
             "description": "Structured result envelope (`{ ok: true, value }` /\n`{ ok: false, error: { reason, value } }`) declared by the workflow's\nEnd/Failure result binding. NULL until the instance reaches a terminal\nstate, and stays NULL for workflows with no result binding."
+          },
+          "source_instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Set when a test was promoted from this instance — points back at the\ninstance whose event log seeded the test's fixture. Audit-only."
           },
           "started_at": {
             "type": [
@@ -7649,6 +11177,14 @@
           "template_version": {
             "type": "integer",
             "format": "int32"
+          },
+          "test_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Set when `mode = 'test_run'`: the test this instance is running."
           }
         }
       },
@@ -7828,7 +11364,7 @@
             "properties": {
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how the job is dispatched. `Inline` (default) = the current\ndirect executor-lifecycle path. `Scheduled` = submit through the\nlong-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,\noptionally pinning a job template + resources. `#[serde(default)]`\n+ `Inline` default ⇒ every existing template round-trips unchanged\n(same precedent as `retry_policy`)."
+                "description": "Where/how the job is dispatched. `Inline` (default) = the current\ndirect executor-lifecycle path. `Scheduled` = submit through the\nlong-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,\noptionally pinning a job template + resources. `#[serde(default)]`\ntogether with the `Inline` default ⇒ every existing template\nround-trips unchanged (same precedent as `retry_policy`)."
               },
               "description": {
                 "type": [
@@ -7880,7 +11416,8 @@
                 "type": [
                   "string",
                   "null"
-                ]
+                ],
+                "description": "Otherwise/else branch handle id. The wire shape is `Option<String>`\nfor forward-compat with future multi-default-branch decisions, but\ntoday the only accepted value is `DEFAULT_BRANCH_HANDLE_ID`\n(`\"default\"`) — both the editor's xyflow Handle id and the\ncompiler's default output place use that literal, so any other\nvalue would render as a floating edge in the editor and is\nrejected at compile time (see `compiler::validate`)."
               },
               "description": {
                 "type": [
@@ -7925,6 +11462,7 @@
           },
           {
             "type": "object",
+            "description": "Unified converge primitive. `mode == All` is the AND-join: waits for\nevery incoming branch and merges payloads per `merge_strategy`.\n`mode == Any` is the canonical petri-net XOR-join (dual of `Decision`'s\nXOR-split) — fires per arriving token. Both modes park each branch's\ninbound token in `p_<id>_data` so downstream `<slug>.<field>` borrows\nresolve through the standard read-arc pipeline (the `output` Port\ndeclares the addressable shape).",
             "required": [
               "label",
               "type"
@@ -7940,13 +11478,28 @@
                 "type": "string"
               },
               "mergeStrategy": {
-                "$ref": "#/components/schemas/MergeStrategy",
-                "description": "How tokens arriving on the joined branches are merged into the\nsingle output token. `ShallowLastWins` (default) preserves the\nhistorical behaviour; `DeepMerge` recursively merges nested maps."
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MergeStrategy",
+                    "description": "Honoured only when `mode == All`. For `Any` only one payload ever\narrives per firing, so there is nothing to merge."
+                  }
+                ]
+              },
+              "mode": {
+                "$ref": "#/components/schemas/JoinMode",
+                "description": "`All` (AND-join) waits for every incoming branch. `Any` (XOR-join)\nfires per arriving token."
+              },
+              "output": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Declared output shape. Each branch's inbound payload is parked at\n`p_<id>_data`; the declared fields here describe what downstream\n`<slug>.<field>` borrows can read."
               },
               "type": {
                 "type": "string",
                 "enum": [
-                  "parallel_join"
+                  "join"
                 ]
               }
             }
@@ -8142,6 +11695,66 @@
           },
           {
             "type": "object",
+            "description": "Fire-and-forget delay. Waits `durationMsExpr` milliseconds then\nforwards the input token on its single output. Compiles to the engine's\n`timer_schedule` effect (see `ctx.delay()` in\n`engine/sdk/src/context.rs`). `durationMsExpr` is a Rhai expression so\nthe delay can be data-driven from upstream refs (`<slug>.<field>`).",
+            "required": [
+              "label",
+              "durationMsExpr",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "durationMsExpr": {
+                "type": "string",
+                "description": "Rhai expression evaluated against the inbound token at runtime.\nMust return an integer number of milliseconds. Examples:\n`\"5000\"`, `\"order.sla_ms\"`, `\"input.timeout * 1000\"`."
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "delay"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Body-container that races a wrapped subgraph against a deadline.\nBody work flows out the `body_in` source handle; the body's terminal\nedge targets `body_out`. Two outputs: `default` (the \"done\" path —\nbody completed in time, timer cancelled) and `timeout` (timer fired\nfirst; in-flight body work in cancellable children is also drained\nvia per-kind cancel effects).",
+            "required": [
+              "label",
+              "durationMsExpr",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "durationMsExpr": {
+                "type": "string",
+                "description": "Rhai expression evaluated against the inbound token at runtime.\nMust return an integer number of milliseconds. Same shape as\n`Delay.duration_ms_expr`."
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "timeout"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Trigger node (Phase 5). Lives at the template level and connects to a\ntarget input port via a single outgoing edge. Triggers are never edge\ntargets; they are *inputs to the workflow*, not part of it. AIR\ncompilation skips trigger nodes — they are a pre-compile concern owned\nby the dispatcher (`service::triggers`).",
             "required": [
               "label",
@@ -8205,6 +11818,72 @@
           },
           {
             "type": "object",
+            "description": "Agent block — one LLM call, optionally extended with tool children\nand a multi-turn loop. PR 1 only models the type; the degenerate\nsingle-turn path lowers byte-identically to `AutomatedStep(Llm)`. The\nfull agent-loop lowering (parked state place + dispatch/collect per\ntool + turn counter) lands in a follow-up PR (see\n`docs/12-agent-node-design.md` § 3).\n\nTools are child nodes of this container in a future PR (tagged via a\n`tool_meta` field on `WorkflowNodeData`); PR 1 ignores children\nstructurally and rejects non-degenerate shapes with\n`CompileError::Compilation`.",
+            "required": [
+              "label",
+              "model",
+              "userPrompt",
+              "type"
+            ],
+            "properties": {
+              "contextStrategy": {
+                "$ref": "#/components/schemas/ContextStrategy",
+                "description": "Context-window management strategy. Defaults to `None` (no\ncompaction). Inert in the degenerate path."
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "maxTurns": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Hard cap on agent turns. `1` (default) is the single-shot LLM\ncall indistinguishable from `AutomatedStep(Llm)` — the degenerate\npath the equivalence test pins down.",
+                "minimum": 0
+              },
+              "model": {
+                "$ref": "#/components/schemas/ModelRef",
+                "description": "LLM model + provider selection. Same shape the existing\n`LlmConfig` carries in `executionSpec.config`; the degenerate\npath uses these fields verbatim when constructing the equivalent\n`LlmConfig` payload."
+              },
+              "onToolError": {
+                "$ref": "#/components/schemas/ToolErrorPolicy",
+                "description": "What happens when a tool call fails. Defaults to `Feedback`.\nInert in PR 1 (no tools)."
+              },
+              "responseFormat": {
+                "description": "Optional response-format constraint (`{\"type\": \"text\"}` or\n`{\"type\": \"json_schema\", \"schema\": {...}}`). Opaque JSON in the\nmodel layer — the executor LLM backend validates it."
+              },
+              "stopWhen": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional terminal Rhai guard. When `Some`, the agent loop exits\nonce this expression evaluates true on the parked agent state.\nInert in the degenerate (single-turn) path."
+              },
+              "systemPrompt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional system prompt template (supports `{{<slug>.<field>}}`\nplaceholders, same as the LLM `system_prompt` config field)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "agent"
+                ]
+              },
+              "userPrompt": {
+                "type": "string",
+                "description": "Initial user prompt template (supports `{{<slug>.<field>}}`\nplaceholders, corresponds to `LlmConfig::prompt`)."
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Calls another published template as a child net and returns its\nterminal result, correlated per invocation. Compiles (via\n`Context::spawn`) to: a parent-side request/spawn effect, a\n`bridge_out` carrying the mapped initial token to a freshly spawned\nchild instance, and `bridge_in` reply/failure places joined back on a\nsynthesized correlation key. The child template is resolved and its\ncompiled AIR is embedded at the *parent's* publish time (see\n`version_pin`) so a later change to the child does not alter\nalready-published parents.",
             "required": [
               "label",
@@ -8263,7 +11942,9 @@
           "graph",
           "author_id",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "workspace_id",
+          "visibility"
         ],
         "properties": {
           "air_json": {},
@@ -8290,6 +11971,7 @@
             "type": "string",
             "format": "uuid"
           },
+          "interface_json": {},
           "is_latest": {
             "type": "boolean"
           },
@@ -8328,6 +12010,70 @@
           "version": {
             "type": "integer",
             "format": "int32"
+          },
+          "visibility": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkspaceMember": {
+        "type": "object",
+        "description": "A single `workspace_members` row. `user_id` is derived from the OIDC\nsubject via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` — the same\nderivation the resolver uses.",
+        "required": [
+          "workspace_id",
+          "user_id",
+          "role",
+          "added_at"
+        ],
+        "properties": {
+          "added_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkspaceSummary": {
+        "type": "object",
+        "description": "Summary view returned by `GET /workspaces` and embedded in\n`WorkspaceMember` responses.",
+        "required": [
+          "id",
+          "slug",
+          "display_name",
+          "is_system",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_system": {
+            "type": "boolean"
+          },
+          "slug": {
+            "type": "string"
           }
         }
       }
@@ -8373,6 +12119,18 @@
     {
       "name": "auth-tokens",
       "description": "Embedded per-user automation tokens (Zitadel-backed PATs)."
+    },
+    {
+      "name": "resources",
+      "description": "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."
+    },
+    {
+      "name": "backends",
+      "description": "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."
+    },
+    {
+      "name": "node-types",
+      "description": "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."
     },
     {
       "name": "health",

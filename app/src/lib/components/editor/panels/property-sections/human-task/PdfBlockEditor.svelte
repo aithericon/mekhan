@@ -1,10 +1,12 @@
 <script lang="ts">
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import FileText from '@lucide/svelte/icons/file-text';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import InterpolationHint from './InterpolationHint.svelte';
+	import InsertRefButton from '../InsertRefButton.svelte';
 
 	type Props = {
 		filename?: string;
@@ -14,6 +16,7 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		readonly?: boolean;
+		scope?: ScopeEntry[];
 		onchange: (filename: string, caption?: string, height?: string, url?: string) => void;
 		onremove: () => void;
 	};
@@ -26,6 +29,7 @@
 		binding,
 		nodeId,
 		readonly = false,
+		scope = [],
 		onchange,
 		onremove
 	}: Props = $props();
@@ -38,10 +42,14 @@
 		return [...files.keys()].filter((name) => name.toLowerCase().endsWith('.pdf'));
 	});
 
-	const previewUrl = $derived(filename ? `/api/files/${filename}` : '');
+	const previewUrl = $derived(filename ? `/api/v1/files/${filename}` : '');
 
 	function setUrl(value: string) {
 		onchange(filename, caption, height, value || undefined);
+	}
+
+	function setCaption(value: string) {
+		onchange(filename, value || undefined, height, url);
 	}
 </script>
 
@@ -73,7 +81,15 @@
 			oninput={(e) => setUrl((e.currentTarget as HTMLInputElement).value)}
 			class="font-mono text-sm"
 		/>
-		<InterpolationHint example="invoice_file.url" />
+		{#if scope.length > 0}
+			<InsertRefButton
+				{scope}
+				disabled={readonly}
+				oninsert={(snippet) => setUrl(url ? `${url} ${snippet}` : snippet)}
+			/>
+		{:else}
+			<InterpolationHint example="invoice_file.url" />
+		{/if}
 		{#if url}
 			<p class="text-sm text-muted-foreground">
 				A dynamic source is set — it takes precedence over an uploaded file when the task renders.
@@ -121,13 +137,23 @@
 			{/if}
 
 			<div class="grid grid-cols-2 gap-2">
-				<Input
-					type="text"
-					value={caption ?? ''}
-					placeholder="Caption (optional)"
-					disabled={readonly}
-					oninput={(e) => onchange(filename, (e.currentTarget as HTMLInputElement).value || undefined, height, url)}
-				/>
+				<div class="space-y-1">
+					<Input
+						type="text"
+						value={caption ?? ''}
+						placeholder="Caption (optional)"
+						disabled={readonly}
+						oninput={(e) => setCaption((e.currentTarget as HTMLInputElement).value)}
+					/>
+					{#if scope.length > 0}
+						<InsertRefButton
+							{scope}
+							disabled={readonly}
+							oninsert={(snippet) =>
+								setCaption(caption ? `${caption} ${snippet}` : snippet)}
+						/>
+					{/if}
+				</div>
 				<Input
 					type="text"
 					value={height ?? '400px'}

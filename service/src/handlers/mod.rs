@@ -1,10 +1,17 @@
 pub mod auth_tokens;
+pub mod backends;
 pub mod cloud_layer_proxy;
 pub mod files;
 pub mod health;
 pub mod instances;
+pub mod node_types;
+pub mod observability;
 pub mod process_live;
+pub mod projects;
+pub mod resources;
 pub mod task_stream;
+pub mod template_tests;
 pub mod templates;
 pub mod triggers;
+pub mod workspaces;
 pub mod yjs_sync;

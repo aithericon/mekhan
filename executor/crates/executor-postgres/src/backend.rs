@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use uuid::Uuid;
 
+use aithericon_executor_backend::outputs::{fill_missing_declared, MissingOutputFallback};
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError,
@@ -155,6 +156,7 @@ impl ExecutionBackend for PostgresBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let start = Instant::now();
@@ -384,19 +386,17 @@ fn make_success(run_context: &RunContext, start: Instant, rows: Vec<PgRow>) -> E
                 ]),
             });
             let mut outputs: HashMap<String, Value> = HashMap::new();
-            outputs.insert("rows".into(), Value::Array(json_rows));
+            let rows_value = Value::Array(json_rows);
+            outputs.insert("rows".into(), rows_value.clone());
             outputs.insert("row_count".into(), Value::Number(row_count.into()));
 
             // Map spec-declared output names (defensive — most consumers will
             // just look up "rows" / "row_count" directly).
-            for decl in &run_context.spec.outputs {
-                if !outputs.contains_key(&decl.name) {
-                    outputs.insert(
-                        decl.name.clone(),
-                        outputs.get("rows").cloned().unwrap_or(Value::Null),
-                    );
-                }
-            }
+            fill_missing_declared(
+                &mut outputs,
+                &run_context.spec.outputs,
+                MissingOutputFallback::Uniform(&rows_value),
+            );
 
             ExecutionResult {
                 outcome: ExecutionOutcome::Success,
@@ -795,6 +795,7 @@ mod tests {
                 "query": "SELECT id FROM things",
                 "projection": ["id"],
             }),
+                config_ref: None,
         };
         let job = ExecutionJob {
             execution_id: "test-no-tenant".into(),
@@ -811,6 +812,11 @@ mod tests {
             run_dir: RunDirectory::new(&PathBuf::from("/tmp"), "test-no-tenant"),
             timeout: Duration::from_secs(10),
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(), // <-- tenant_id deliberately absent
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -842,6 +848,7 @@ mod tests {
                 "projection": ["id"],
                 "read_only": false,
             }),
+                config_ref: None,
         };
         let job = ExecutionJob {
             execution_id: "test-no-rw".into(),
@@ -858,6 +865,11 @@ mod tests {
             run_dir: RunDirectory::new(&PathBuf::from("/tmp"), "test-no-rw"),
             timeout: Duration::from_secs(10),
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::from([(TENANT_ID_METADATA_KEY.into(), Uuid::new_v4().to_string())]),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -887,6 +899,7 @@ mod tests {
                 "query": "SELECT 1",
                 "projection": [],
             }),
+                config_ref: None,
         };
         let job = ExecutionJob {
             execution_id: "test-empty-proj".into(),
@@ -903,6 +916,11 @@ mod tests {
             run_dir: RunDirectory::new(&PathBuf::from("/tmp"), "test-empty-proj"),
             timeout: Duration::from_secs(10),
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::from([(TENANT_ID_METADATA_KEY.into(), Uuid::new_v4().to_string())]),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -924,6 +942,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: Value::Null,
+            config_ref: None,
         };
         assert!(backend.supports(&spec));
 
@@ -932,6 +951,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: Value::Null,
+            config_ref: None,
         };
         assert!(!backend.supports(&spec_other));
     }

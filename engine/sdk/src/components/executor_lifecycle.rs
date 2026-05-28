@@ -133,7 +133,7 @@ pub fn executor_lifecycle(
 
     // ── Status Tracking ───────────────────────────────────────────────────
 
-    let running = ctx.scope("Status Tracking", |ctx| {
+    let (accepted, running) = ctx.scope("Status Tracking", |ctx| {
         let accepted = ctx.state::<DynamicToken>("accepted", "Accepted");
         let running = ctx.state::<DynamicToken>("running", "Running");
 
@@ -171,7 +171,7 @@ pub fn executor_lifecycle(
                 }"#,
             );
 
-        running
+        (accepted, running)
     });
 
     // ── Failure & Timeout ─────────────────────────────────────────────────
@@ -185,6 +185,17 @@ pub fn executor_lifecycle(
     //
     // The `dead_letter` terminal place is kept (unreachable) so callers
     // holding `ExecutorLifecycleHandles.dead_letter` still compile.
+    //
+    // Pre-Running failures (`Accepted → Failed/TimedOut/Cancelled`, e.g.
+    // staging errors, unsupported backend, immediate executor crashes) are
+    // handled by the `_pre_run` sibling transitions: the executor's
+    // StatusReporter always publishes `accepted` first (executor.rs:60)
+    // then publishes the terminal status; the watcher routes both onto
+    // their respective signal places. Without the `_pre_run` siblings the
+    // signal lands at the lifecycle but no transition is enabled — the
+    // accepted token sits there and the net hangs at `accepted` forever,
+    // never triggering retry / log / node-error wiring. See
+    // `executor-worker::executor::execute` for the publish sequence.
 
     let (failed, timed_out) = ctx.scope("Failure & Timeout", |ctx| {
         let failed = ctx.state::<DynamicToken>("failed", "Failed");
@@ -209,8 +220,49 @@ pub fn executor_lifecycle(
                 }"#,
             );
 
+        // Pre-Running failure: staging or backend-resolution error fired
+        // before the executor sent Running. Same output shape as t_failed
+        // so the downstream retry/log topology doesn't care which path
+        // produced the token.
+        ctx.transition("t_failed_pre_run", "Execution Failed (pre-Running)")
+            .auto_input("job", &accepted)
+            .auto_input("sig", &sig_failed)
+            .correlate("sig", "job", "execution_id")
+            .auto_output("err", &failed)
+            .logic(
+                r#"#{
+                    err: #{
+                        job_id: job.job_id,
+                        execution_id: job.execution_id,
+                        detail: sig.detail,
+                        retries: job.retries,
+                        max_retries: job.max_retries,
+                        run: job.run,
+                        spec: job.spec
+                    }
+                }"#,
+            );
+
         ctx.transition("t_timeout", "Execution Timed Out")
             .auto_input("job", &running)
+            .auto_input("sig", &sig_timed_out)
+            .correlate("sig", "job", "execution_id")
+            .auto_output("out", &timed_out)
+            .logic(
+                r#"#{
+                    out: #{
+                        job_id: job.job_id,
+                        execution_id: job.execution_id,
+                        retries: job.retries,
+                        max_retries: job.max_retries,
+                        run: job.run,
+                        spec: job.spec
+                    }
+                }"#,
+            );
+
+        ctx.transition("t_timeout_pre_run", "Execution Timed Out (pre-Running)")
+            .auto_input("job", &accepted)
             .auto_input("sig", &sig_timed_out)
             .correlate("sig", "job", "execution_id")
             .auto_output("out", &timed_out)

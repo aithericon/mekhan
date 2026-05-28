@@ -24,11 +24,17 @@
 	type Props = {
 		guard: string;
 		scope: ScopeEntry[];
+		/** Optional workflow-level resource refs surfaced as a second tab
+		 *  in the embedded RefPicker. The Rhai compiler resolves
+		 *  `<alias>.<field>` the same way it resolves producer refs, so
+		 *  the row builder accepts them as LHS without any special
+		 *  casing. */
+		resourceScope?: ScopeEntry[];
 		readonly?: boolean;
 		onchange: (guard: string) => void;
 	};
 
-	let { guard, scope, readonly = false, onchange }: Props = $props();
+	let { guard, scope, resourceScope = [], readonly = false, onchange }: Props = $props();
 
 	// Possible operators. Restricted to a Rhai-safe subset so the simple
 	// builder never round-trips broken syntax.
@@ -154,10 +160,11 @@
 			maxHeight="100px"
 			onchange={(val) => onchange(val)}
 		/>
-		{#if scope.length > 0}
+		{#if scope.length > 0 || resourceScope.length > 0}
 			<div class="pt-1">
 				<RefPicker
 					{scope}
+					{resourceScope}
 					disabled={readonly}
 					placeholder="Insert reference…"
 					onpick={(e) => onchange((guard ? guard + ' ' : '') + e.qualified)}
@@ -175,7 +182,8 @@
 			<div class="min-w-0 flex-1">
 				<RefPicker
 					{scope}
-					disabled={readonly || scope.length === 0}
+					{resourceScope}
+					disabled={readonly || (scope.length === 0 && resourceScope.length === 0)}
 					selected={parsed?.lhs}
 					placeholder="Pick field…"
 					onpick={(e) => setLhs(e.qualified)}

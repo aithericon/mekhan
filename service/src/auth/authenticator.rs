@@ -135,6 +135,12 @@ impl Default for NoopAuthenticator {
                 display_name: Some("Dev User".to_string()),
                 roles: Vec::new(),
                 org_id: None,
+                // The dev user is seeded as `owner` of the default workspace
+                // (id = Uuid::nil()) by migration 20240123. Hard-coding here
+                // matches what `DbPrincipalResolver::membership_workspace`
+                // would return for this subject; we shortcut the lookup since
+                // NoopAuthenticator bypasses the resolver path entirely.
+                workspace_id: Some(uuid::Uuid::nil()),
             },
         }
     }

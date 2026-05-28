@@ -1,0 +1,63 @@
+[
+  {
+    "id": "step-verify",
+    "title": "Verify Details",
+    "blocks": [
+      {
+        "type": "callout",
+        "severity": "info",
+        "title": "Invoice {{ invoice_id }}",
+        "content": "Please verify the details captured at intake. The invoice id was provided when this process was started."
+      },
+      {
+        "type": "image",
+        "url": "/api/v1/files/{{ invoice_file.key }}",
+        "alt": "Uploaded invoice {{ invoice_id }}",
+        "caption": "Original document for invoice {{ invoice_id }} (uploaded at instance start)"
+      },
+      {
+        "type": "download",
+        "downloads": [
+          {
+            "url": "/api/v1/files/{{ invoice_file.key }}",
+            "filename": "{{ invoice_file.filename }}",
+            "mime_type": "{{ invoice_file.content_type }}",
+            "description": "Original uploaded invoice ({{ invoice_id }})"
+          }
+        ]
+      },
+      {
+        "type": "divider"
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "vendor_name",
+          "label": "Vendor Name",
+          "kind": "text",
+          "required": true,
+          "placeholder": "Enter vendor name"
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "invoice_amount",
+          "label": "Invoice Amount ($)",
+          "kind": "number",
+          "required": true
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "description",
+          "label": "Line Item Description",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Describe the goods or services"
+        }
+      }
+    ]
+  }
+]

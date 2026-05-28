@@ -92,6 +92,14 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 	// only source and must be kept.
 	let metricsBackfillMax: Record<string, number> = {};
 
+	// Epoch-ms high-water mark from the most recent logs backfill. Same
+	// overlap problem as metrics: the SSE stream's ring snapshot replays
+	// rows the DB backfill already returned. The DB id and the live ring
+	// seq are independent sequences, so we can't resume the stream from
+	// the backfill's last id — dedupe by timestamp instead. 0 means
+	// "backfill was empty; keep everything streamed".
+	let logsBackfillMaxTs = 0;
+
 	// Highest metric/log/artifact seq observed (drives reconnect resume).
 	let lastMetricSeq = 0;
 	let lastLogSeq = 0;
@@ -156,6 +164,13 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 		if (signalKey && e.signal_key !== signalKey) return;
 		if (logLevel && e.level !== logLevel) return;
 		if (logQuery && !e.message.toLowerCase().includes(logQuery.toLowerCase())) return;
+		// Already represented by the DB backfill — the SSE handler's ring
+		// snapshot starts at the buffer head (since_seq is the live ring's
+		// counter, not hpi_logs.id, so we can't resume from the backfill),
+		// which overlaps every backfilled row.
+		if (logsBackfillMaxTs > 0 && new Date(e.timestamp).getTime() <= logsBackfillMaxTs) {
+			return;
+		}
 		lastEventTime = Date.now();
 		lastLogSeq = Math.max(lastLogSeq, e.seq);
 		const row: LogTailRow = {
@@ -228,6 +243,14 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 				signal_key: r.signal_key ?? null,
 				detail: (r.detail as Record<string, unknown> | null) ?? null
 			}));
+			// Newest backfilled timestamp ⇒ drop streamed rows ≤ this as the
+			// SSE ring snapshot replays them.
+			let m = 0;
+			for (const r of resp.logs) {
+				const t = new Date(r.timestamp).getTime();
+				if (t > m) m = t;
+			}
+			logsBackfillMaxTs = m;
 			errorMessage = null;
 		} catch (e) {
 			errorMessage = e instanceof Error ? e.message : String(e);
@@ -412,6 +435,7 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 		signalKey = next;
 		lastMetricSeq = 0;
 		lastLogSeq = 0;
+		logsBackfillMaxTs = 0;
 		metrics = { bucketSeconds: 0, series: {} };
 		logs = [];
 		init();
@@ -421,6 +445,7 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 		logLevel = next.level;
 		logQuery = next.query;
 		lastLogSeq = 0;
+		logsBackfillMaxTs = 0;
 		logs = [];
 		backfillLogs()
 			.then(() => connectLogs())
@@ -431,6 +456,7 @@ export function createProcessLiveStore(processId: string, opts: ProcessLiveOptio
 		windowSeconds = sec;
 		lastMetricSeq = 0;
 		lastLogSeq = 0;
+		logsBackfillMaxTs = 0;
 		metrics = { bucketSeconds: 0, series: {} };
 		logs = [];
 		init();

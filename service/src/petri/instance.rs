@@ -362,7 +362,7 @@ mod tests {
                 label: None,
                 edge_type: "sequence".to_string(),
             }],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         }
     }
 

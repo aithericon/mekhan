@@ -669,7 +669,7 @@ mod tests {
 
     #[tokio::test]
     async fn hook_is_noop_without_nix_key() {
-        use aithericon_executor_backend::ProcessConfig;
+        use aithericon_executor_process::ProcessConfig;
         use aithericon_executor_domain::{JobPriority, RunDirectory};
         use std::collections::HashMap;
         use std::time::Duration;
@@ -697,6 +697,11 @@ mod tests {
             run_dir: RunDirectory::new(&PathBuf::from("/tmp"), "test-nix-noop"),
             timeout: Duration::from_secs(60),
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),

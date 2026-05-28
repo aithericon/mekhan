@@ -49,11 +49,23 @@ Distributed task executor: receives jobs via NATS JetStream (apalis job queue), 
 
 3. **executor-storage** — `ArtifactStore` trait with `LocalArtifactStore` (filesystem) and optional `OpenDalArtifactStore` (S3/GCS/Azure, feature-gated). Handles artifact upload/download and metadata.
 
-4. **executor-backend** — `ExecutionBackend` trait and `ProcessBackend` implementation. Spawns local processes with piped I/O, timeout handling (SIGTERM → 5s grace → SIGKILL), cancellation via `CancellationToken`, bounded output capture via `TailBuffer` ring buffer.
+4. **executor-backend** — Core `ExecutionBackend` / `EventStream` traits, `StatusCallback` alias, and shared helpers: `TailBuffer` ring buffer (`tail`), output unpacking (`outputs`), input interpolation (`resolve`). No concrete backends — each backend lives in its own sibling crate that depends on this one.
 
-5. **executor-metrics** — `MetricSink` trait with in-memory, NATS, and composite sink implementations. Publishes to `EXECUTOR_METRICS` stream when NATS sink is enabled.
+5. **executor-backend-configs** — Pure wire-format DTOs for every backend's `spec.config` shape (`docker`, `http`, `process`, `python`, `llm`, `kreuzberg`, `postgres`, `file_ops`). Light deps; importable wherever you need to compile-time-validate a `spec.config` payload.
 
-6. **executor-worker** — Orchestration layer:
+6. **Backend crates** (one per `ExecutionSpec` variant; consumer opts in via feature on `executor-service`):
+   - **executor-process** — `ProcessBackend` + `run_process` (SIGTERM → 5s grace → SIGKILL, bounded output via `TailBuffer`). Always-on.
+   - **executor-docker** — `DockerBackend` + bollard wiring (`docker` feature).
+   - **executor-http** — `HttpBackend` + reqwest wiring, response-shape selectors (`http` feature).
+   - **executor-python** — `PythonBackend` + content-addressed `VenvCache` + script runner. Depends on `executor-process` for child-spawn (`python` feature).
+   - **executor-llm** — In-process LLM backend, register-as-pool bin (`aithericon-executor-pool`). NATS-driven inference (`llm` feature).
+   - **executor-kreuzberg** — 75+ format text extraction. Single + batch (`kreuzberg` feature).
+   - **executor-postgres** — Tenant-isolated SQL backend (`postgres` feature).
+   - **executor-file-ops** — S3/GCS/Azure ops via OpenDAL (`file-ops` feature).
+
+7. **executor-metrics** — `MetricSink` trait with in-memory, NATS, and composite sink implementations. Publishes to `EXECUTOR_METRICS` stream when NATS sink is enabled.
+
+8. **executor-worker** — Orchestration layer:
    - `ExecutorConfig` — Layered config via config-rs (defaults → `executor.toml` → `EXECUTOR_*` env vars)
    - `BackendRegistry` — Dispatches `ExecutionSpec` variants to the appropriate backend
    - `StatusReporter` — Publishes `StatusUpdate` to NATS JetStream with idempotent `Nats-Msg-Id` headers
@@ -62,16 +74,14 @@ Distributed task executor: receives jobs via NATS JetStream (apalis job queue), 
    - IPC sidecar — Listens on `{run_dir}/ipc.sock` for child process messages (artifacts, progress, logs)
    - Cancellation — `CancellationRegistry` with `NatsCancelListener` on `executor.cancel.*`
 
-7. **executor-service** — Binary entry point. Three operating modes controlled by orthogonal config axes (`JobSource` × `Lifetime`):
+9. **executor-service** — Binary entry point. Three operating modes controlled by orthogonal config axes (`JobSource` × `Lifetime`):
    - `nats_queue` + `daemon` — Long-running apalis worker pulling from NATS (default)
    - `nats_queue` + `run_to_completion` — **Drain mode**: pull from NATS queue, process up to `max_jobs`, exit on limit or idle timeout
    - `manifest` + `run_to_completion` — Push manifest jobs through the same apalis pipeline, collect results, exit
 
    All paths use the same apalis worker (`build_worker!` macro), so jobs get ack timeout, heartbeats, and the full handler lifecycle. Drain mode uses `CompletionTracker` (atomic counter + watch channel) to signal shutdown via `drain_signal()`. `BatchRunner` pushes manifest jobs into NatsStorage and monitors the JetStream status stream for terminal results.
 
-8. **executor-kreuzberg** — Document text extraction backend via the kreuzberg Rust library. Extracts text, metadata, and tables from 75+ file formats (PDF, Office, images w/ OCR, email, archives). Supports single-file and batch extraction modes with per-file progress. Feature-gated: `kreuzberg`.
-
-9. **executor-test-harness** — Integration test utilities. `ExecutorTestContext` provides per-test NATS stream isolation via UUID prefixes, testcontainers NATS setup, and helpers (`echo_job()`, `failing_job()`, `sleep_job()`, etc.).
+10. **executor-test-harness** — Integration test utilities. `ExecutorTestContext` provides per-test NATS stream isolation via UUID prefixes, testcontainers NATS setup, and helpers (`echo_job()`, `failing_job()`, `sleep_job()`, etc.). Conformance kits + reusable test sets per backend.
 
 ### Key Design Decisions
 

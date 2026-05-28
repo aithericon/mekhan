@@ -1,0 +1,195 @@
+{
+  "nodes": [
+    {
+      "id": "trigger-intake",
+      "type": "trigger",
+      "position": { "x": 52, "y": 60 },
+      "data": {
+        "type": "trigger",
+        "label": "Intake API",
+        "source": {
+          "kind": "manual",
+          "form": []
+        },
+        "concurrency": "allow",
+        "payloadMapping": [
+          { "targetField": "document_file", "expression": "document_file" },
+          { "targetField": "patient_id", "expression": "patient_id" }
+        ],
+        "enabled": true
+      }
+    },
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 52, "y": 330 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Classify & group — patient {{ patient_id }}",
+        "initial": {
+          "id": "in",
+          "label": "Document Intake",
+          "fields": [
+            {
+              "name": "document_file",
+              "label": "Document (PDF, PNG, JPG)",
+              "kind": "file",
+              "required": true,
+              "accept": "application/pdf,image/png,image/jpeg,image/webp"
+            },
+            {
+              "name": "patient_id",
+              "label": "Patient ID",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ocr",
+      "type": "automated_step",
+      "position": { "x": 364, "y": 330 },
+      "data": {
+        "type": "automated_step",
+        "label": "OCR (kreuzberg)",
+        "description": "Rasterizes the PDF (if needed) and runs Tesseract with German+English models and table detection. Outputs kreuzberg's native ExtractionResult shape 1:1.",
+        "executionSpec": {
+          "backendType": "kreuzberg",
+          "config": {
+            "mode": "single",
+            "file": "{{ start.document_file }}",
+            "force_ocr": false,
+            "ocr": {
+              "backend": "tesseract",
+              "language": "deu+eng",
+              "enable_table_detection": true
+            },
+            "pdf": {
+              "passwords": []
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "OCR result",
+          "fields": [
+            { "name": "content", "label": "Content", "kind": "text", "required": true },
+            { "name": "tables", "label": "Tables", "kind": "json", "required": false },
+            { "name": "metadata", "label": "Metadata", "kind": "json", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "classify",
+      "type": "automated_step",
+      "position": { "x": 702, "y": 330 },
+      "data": {
+        "type": "automated_step",
+        "label": "Group & classify (vision LLM)",
+        "description": "Vision MoE looks at the document image and the OCR text together. Groups pages into logical documents and assigns each group one of the canonical document classes. Single LLM call — the model owns both the grouping decision and the per-group classification (mirrors online-clinic's `assemble_and_classify`).",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "llama3.2-vision:11b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "max_tokens": 1024,
+            "system_prompt": "Du bist ein Klassifizierungsassistent fuer medizinische Dokumente. Eine Sammlung von Seitenbildern wird dir gegeben; gruppiere Seiten in logische Dokumente und klassifiziere jede Gruppe. Jede Seite gehoert genau zu einer Gruppe; die Reihenfolge innerhalb einer Gruppe spiegelt die Lesereihenfolge wider.",
+            "prompt": "Analyze this document and group its pages into logical sub-documents. For each group, classify the document type into ONE of: lab_result, referral_letter, prescription, insurance_form, imaging_report, discharge_summary, consultation_note, invoice, consent_form, other.\n\nOCR text (supplementary, may be truncated):\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {groups: [{doc_id, class, page_ids, order, confidence, reasoning}]}.\n- doc_id: short stable id like \"g1\", \"g2\", …\n- page_ids: list of 1-indexed page numbers belonging to this group\n- order: same page_ids in reading order\n- confidence: 0..1\n- reasoning: one short sentence explaining the classification",
+            "images": [
+              { "path": "{{ start.document_file }}" }
+            ],
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "$ref": "#/definitions/GroupedClassification"
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Groups",
+          "fields": [
+            { "name": "groups", "label": "Groups", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end-ok",
+      "type": "end",
+      "position": { "x": 1066, "y": 330 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "patient_id", "expression": "start.patient_id" },
+          { "targetField": "groups", "expression": "classify.groups" },
+          { "targetField": "ocr_chars", "expression": "ocr.content" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e-trigger-start", "source": "trigger-intake", "target": "start", "targetHandle": "in", "type": "sequence" },
+    { "id": "e-start-ocr", "source": "start", "target": "ocr", "targetHandle": "in", "type": "sequence" },
+    { "id": "e-ocr-classify", "source": "ocr", "target": "classify", "targetHandle": "in", "type": "sequence" },
+    { "id": "e-classify-end", "source": "classify", "target": "end-ok", "targetHandle": "in", "type": "sequence" }
+  ],
+  "definitions": {
+    "GroupedClassification": {
+      "type": "object",
+      "required": ["groups"],
+      "properties": {
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["doc_id", "class", "page_ids", "order", "confidence"],
+            "properties": {
+              "doc_id": { "type": "string" },
+              "class": {
+                "type": "string",
+                "enum": [
+                  "lab_result",
+                  "prescription",
+                  "referral_letter",
+                  "imaging_report",
+                  "discharge_summary",
+                  "consultation_note",
+                  "insurance_form",
+                  "invoice",
+                  "consent_form",
+                  "other"
+                ]
+              },
+              "page_ids": {
+                "type": "array",
+                "items": { "type": "integer", "minimum": 1 }
+              },
+              "order": {
+                "type": "array",
+                "items": { "type": "integer", "minimum": 1 }
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "reasoning": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

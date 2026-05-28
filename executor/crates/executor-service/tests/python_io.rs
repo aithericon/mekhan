@@ -4,7 +4,7 @@ mod python_io_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use aithericon_executor_backend::{PythonBackend, PythonConfig};
+    use aithericon_executor_python::{PythonBackend, PythonConfig};
     use aithericon_executor_domain::{
         ExecutionJob, ExecutionStatus, InputDeclaration, InputSource, JobPriority,
         OutputDeclaration,
@@ -160,6 +160,7 @@ mod python_io_tests {
             name: "result".into(),
             path: Some("result.json".into()),
             required: true,
+            kind: None,
             upload_to: None,
         }];
 
@@ -219,6 +220,7 @@ mod python_io_tests {
             name: "sum".into(),
             path: Some("sum.json".into()),
             required: true,
+            kind: None,
             upload_to: None,
         }];
 
@@ -298,10 +300,11 @@ set_output("result", {"answer": result})
             name: "result".into(),
             path: None,
             required: true,
+            kind: None,
             upload_to: None,
         }];
 
-        let spec = aithericon_executor_backend::PythonConfig {
+        let spec = aithericon_executor_python::PythonConfig {
             script: "compute.py".into(),
             python: "python3".into(),
             requirements: vec![],

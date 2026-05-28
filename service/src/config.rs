@@ -33,6 +33,27 @@ pub struct AppConfig {
     pub frontend_dir: Option<String>,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub demos: DemosConfig,
+}
+
+/// Built-in-demo seeder controls. The seeder runs at service startup,
+/// idempotent by stable template id (see `service/src/demos.rs`).
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DemosConfig {
+    /// Master switch. Default off — production deployments must opt in;
+    /// `just dev::up` flips it on via `MEKHAN__DEMOS__SEED=true`.
+    #[serde(default)]
+    pub seed: bool,
+    /// Where to look for `<name>/demo.json` directories. Default
+    /// `./demos` — relative to the service binary's cwd, which `just dev`
+    /// sets to the repo root.
+    #[serde(default = "default_demos_dir")]
+    pub dir: String,
+}
+
+fn default_demos_dir() -> String {
+    "demos".to_string()
 }
 
 /// Identity-provider configuration. The hexagonal seam lets `mode` pick
@@ -104,7 +125,7 @@ pub struct AuthConfig {
     pub introspection_client_secret: Option<String>,
     /// Personal Access Token of the dedicated `mekhan-token-broker` Zitadel
     /// service user. Mekhan presents this as a Bearer when brokering the
-    /// embedded `/api/auth/tokens` feature (creating the per-token machine
+    /// embedded `/api/v1/auth/tokens` feature (creating the per-token machine
     /// users + their PATs via the Management API). Provisioned by
     /// `deploy/zitadel/bootstrap.sh`. Unset ⇒ token management is disabled
     /// (the endpoints 503 and the UI hides the section).

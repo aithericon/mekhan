@@ -20,6 +20,11 @@
 	const progressPercent = $derived(
 		totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0
 	);
+	// Hide the progress bar + step counter when there's no timeline data
+	// — the upstream `ProcessDetail` shape doesn't always carry `timeline`
+	// and a "Step 0 of 0" badge with an empty bar is worse than nothing.
+	// We still render the banner row so the process name stays clickable.
+	const hasProgress = $derived(totalSteps > 0);
 </script>
 
 {#snippet bannerContent()}
@@ -42,14 +47,16 @@
 				<span class="shrink-0 text-sm text-muted-foreground">· {task.process_step}</span>
 			{/if}
 		</div>
-		<div class="mt-1 flex items-center gap-2">
-			<div class="h-1 w-24 overflow-hidden rounded-full bg-cyan-200/50">
-				<div class="h-full rounded-full bg-cyan-500" style={`width: ${progressPercent}%`}></div>
+		{#if hasProgress}
+			<div class="mt-1 flex items-center gap-2">
+				<div class="h-1 w-24 overflow-hidden rounded-full bg-cyan-200/50">
+					<div class="h-full rounded-full bg-cyan-500" style={`width: ${progressPercent}%`}></div>
+				</div>
+				<span class="text-sm text-muted-foreground">
+					Step {completedSteps} of {totalSteps}
+				</span>
 			</div>
-			<span class="text-sm text-muted-foreground">
-				Step {completedSteps} of {totalSteps}
-			</span>
-		</div>
+		{/if}
 	</div>
 	{#if processHref}
 		<ArrowRight class="size-4 shrink-0 text-muted-foreground/60" />

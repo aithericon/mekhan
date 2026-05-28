@@ -240,6 +240,32 @@ describe('YjsGraphBinding', () => {
 		expect(binding.graph.nodes[0].position).toEqual({ x: 500, y: 600 });
 	});
 
+	it('resizeNode persists width/height (and optional position)', () => {
+		const data = createDefaultNodeData('scope');
+		binding.addNode('s1', 'scope', { x: 10, y: 20 }, data, {
+			width: 400,
+			height: 200
+		});
+
+		// Bottom-right resize: size only.
+		binding.resizeNode('s1', { width: 520, height: 260 });
+		let node = binding.graph.nodes[0];
+		expect(node.width).toBe(520);
+		expect(node.height).toBe(260);
+		expect(node.position).toEqual({ x: 10, y: 20 });
+
+		// Top-left resize: position shifts with size.
+		binding.resizeNode('s1', {
+			position: { x: 5, y: 15 },
+			width: 600,
+			height: 300
+		});
+		node = binding.graph.nodes[0];
+		expect(node.position).toEqual({ x: 5, y: 15 });
+		expect(node.width).toBe(600);
+		expect(node.height).toBe(300);
+	});
+
 	it('addEdge appends to edges', () => {
 		const edge: WorkflowEdge = {
 			id: 'e1',
@@ -274,7 +300,7 @@ describe('YjsGraphBinding', () => {
 			'automated_step',
 			'decision',
 			'parallel_split',
-			'parallel_join',
+			'join',
 			'loop',
 			'scope',
 			'phase_update',

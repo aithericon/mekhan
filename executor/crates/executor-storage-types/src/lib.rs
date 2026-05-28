@@ -141,6 +141,14 @@ pub struct StorageConfig {
     /// `RetryLayer`, so only errors with `is_temporary() == true` are retried.
     #[serde(default)]
     pub retry: RetryConfig,
+
+    /// Optional workspace resource binding (e.g. an `s3` resource). When
+    /// set, the executor's file-ops backend overlays `endpoint`, `region`,
+    /// `bucket`, and credentials from the resource envelope at run time —
+    /// per-step inline values still win on a field-by-field basis. Empty
+    /// or absent means "use the inline fields directly".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_alias: Option<String>,
 }
 
 fn default_prefix() -> String {
@@ -164,6 +172,7 @@ mod tests {
                 secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into(),
             },
             retry: RetryConfig::default(),
+            resource_alias: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: StorageConfig = serde_json::from_str(&json).unwrap();

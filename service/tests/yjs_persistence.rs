@@ -468,11 +468,6 @@ async fn ytext_content_roundtrips_via_diff_updates() {
                 let txn = client_doc.transact();
                 txn.encode_state_as_update_v1(&sv_before)
             };
-            let sv_after_create = {
-                let txn = client_doc.transact();
-                txn.state_vector()
-            };
-
             // Store diff update 1
             tokio::runtime::Handle::current()
                 .block_on(persistence.store_update(template_id, &diff1))

@@ -4,9 +4,16 @@
 
 	type Props = {
 		onadd: (block: TaskBlockConfig) => void;
+		/**
+		 * Hide the Repeater option. Used by the inner picker inside a
+		 * Repeater body — nested Repeaters are a hard compile error
+		 * (`CompileError::RepeaterNested`), so the editor never offers
+		 * the option in that scope.
+		 */
+		excludeRepeater?: boolean;
 	};
 
-	let { onadd }: Props = $props();
+	let { onadd, excludeRepeater = false }: Props = $props();
 
 	let open = $state(false);
 
@@ -55,6 +62,16 @@
 
 	function addDownload() {
 		onadd({ type: 'download', downloads: [{ url: '', filename: '' }] });
+		open = false;
+	}
+
+	function addRepeater() {
+		onadd({
+			type: 'repeater',
+			items_ref: '',
+			blocks: [],
+			output_slug: `repeater_${Date.now().toString(36)}`
+		});
 		open = false;
 	}
 </script>
@@ -151,6 +168,17 @@
 				<span class="size-2.5 rounded-sm bg-indigo-400"></span>
 				Download
 			</button>
+			{#if !excludeRepeater}
+				<button
+					type="button"
+					class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+					onclick={addRepeater}
+				>
+					<!-- ui-allow: block-type swatch — repeater identity uses violet -->
+					<span class="size-2.5 rounded-sm bg-violet-400"></span>
+					Repeater
+				</button>
+			{/if}
 		</div>
 	{/if}
 </div>

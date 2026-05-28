@@ -14,7 +14,7 @@ use aithericon_executor_domain::{
     MetricSummary, MetricType, Phase, PhaseStatus, Progress, StatusDetail,
 };
 
-use crate::event_emitter::StreamContext;
+use crate::event_emitter::{enrich_log_fields, StreamContext};
 use aithericon_executor_ipc::proto;
 use aithericon_executor_ipc::{ExecutorSidecar, ExecutorSidecarServer};
 use aithericon_executor_logs::LogSink;
@@ -887,17 +887,14 @@ async fn handle_log_message(
 
         let level = convert_log_level(req.level());
         let message = req.message.clone();
-        // Auto-enrich every log event with the execution context the sidecar
-        // already owns — producers shouldn't have to restate execution_id /
-        // job_id / signal_key / petri routing keys on every call.
-        // User-supplied kwargs take precedence on conflict (or_insert_with).
+        // Auto-enrich every log event with the execution context the
+        // sidecar already owns — producers shouldn't have to restate
+        // execution_id / petri routing keys on every call. Same helper
+        // the in-process `EventStream::log` impl uses, so both paths
+        // stamp the same surface (see `event_emitter::enrich_log_fields`).
         let fields = {
             let mut f = req.fields.clone();
-            f.entry("execution_id".to_string())
-                .or_insert_with(|| state.execution_id.clone());
-            for (k, v) in &state.metadata {
-                f.entry(k.clone()).or_insert_with(|| v.clone());
-            }
+            enrich_log_fields(&state.execution_id, &state.metadata, &mut f);
             f
         };
 

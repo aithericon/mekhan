@@ -6,12 +6,15 @@
 	// No-op outside a named process.
 	import type { FailureNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { FormField } from '$lib/components/ui/form-field';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import InsertRefButton from './InsertRefButton.svelte';
+	import RefPicker from './RefPicker.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 
@@ -19,11 +22,17 @@
 		data: FailureNodeData;
 		readonly?: boolean;
 		onchange: (data: FailureNodeData) => void;
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, scope = [] }: Props = $props();
 
 	const errorMappings = $derived(data.errorResultMapping ?? []);
+
+	function appendToFailureMessage(snippet: string) {
+		const curr = data.failureMessage ?? '';
+		onchange({ ...data, failureMessage: curr ? `${curr} ${snippet}` : snippet });
+	}
 
 	function setErrorMappings(next: FieldMapping[]) {
 		onchange({ ...data, errorResultMapping: next });
@@ -52,8 +61,14 @@
 			onchange({ ...data, failureMessage: v === '' ? undefined : v });
 		}}
 	/>
+	{#if scope.length > 0}
+		<div class="mt-1.5">
+			<InsertRefButton {scope} disabled={readonly} oninsert={appendToFailureMessage} />
+		</div>
+	{/if}
 	<p class="mt-1 text-sm text-muted-foreground">
-		Supports <code>{'{{ field }}'}</code> placeholders resolved against the inbound token.
+		<code>{'{{ ref }}'}</code> placeholders interpolate fields from this node's input scope —
+		use the picker above for the in-scope set.
 	</p>
 </FormField>
 
@@ -115,6 +130,19 @@
 							expression: (e.currentTarget as HTMLTextAreaElement).value
 						})}
 				/>
+				{#if scope.length > 0}
+					<RefPicker
+						{scope}
+						disabled={readonly}
+						placeholder="Insert ref…"
+						onpick={(e) => {
+							const curr = mapping.expression ?? '';
+							updateErrorMapping(i, {
+								expression: curr ? `${curr} ${e.qualified}` : e.qualified
+							});
+						}}
+					/>
+				{/if}
 			</div>
 		{/each}
 	{/if}

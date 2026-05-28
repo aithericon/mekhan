@@ -60,6 +60,15 @@ impl Default for StagingPipeline {
 }
 
 /// Build a default staging pipeline with all built-in hooks.
+///
+/// Pipeline order (Gap #1 fix):
+/// 1. `CreateRunDirectoryHook`   — mkdir run dir tree, `chmod 0700` on root
+/// 2. `InjectEnvironmentHook`    — `AITHERICON_*` env (non-secret)
+/// 3. `PlanSecretsHook`          — populate `resolved_*` side-channel only
+/// 4. `StageInputsHook`          — uses `resolved_input_storage` when present
+/// 5. `NixEnvironmentHook`       — optional
+/// 6. `WriteContextHook`         — serialize context.json (`#[serde(skip)]`
+///                                  drops the resolved fields), `chmod 0600`
 pub fn default_pipeline(
     base_dir: PathBuf,
     store: Option<Arc<dyn ArtifactStore>>,
@@ -71,9 +80,21 @@ pub fn default_pipeline(
         .add_hook(CreateRunDirectoryHook)
         .add_hook(InjectEnvironmentHook);
 
-    // Secrets AFTER environment injection, BEFORE inputs staging
+    // FetchConfigHook MUST run before PlanSecretsHook: secret resolution
+    // scans `spec.config` for `{{secret:KEY}}` refs, and the config isn't
+    // present yet on `config_ref`-shaped jobs (compiler offloads large
+    // configs to S3 and ships a pointer). Inline-spec jobs pass through.
+    if let Some(s) = store.clone() {
+        pipeline = pipeline.add_hook(FetchConfigHook { store: s });
+    }
+
+    // Plan secrets AFTER environment injection + config fetch, BEFORE
+    // inputs staging. PlanSecretsHook writes ONLY to `resolved_*`
+    // side-channel fields. Plaintext never lands in `env`/`spec.config`/
+    // `spec.inputs[*].source.storage`, so the subsequent WriteContextHook
+    // serializes the unresolved templates only (Gap #1 fix).
     if let Some(secrets) = secret_store {
-        pipeline = pipeline.add_hook(InjectSecretsHook {
+        pipeline = pipeline.add_hook(PlanSecretsHook {
             store: secrets,
             vault_addr,
         });
@@ -95,6 +116,11 @@ pub fn default_pipeline(
 // ─── Built-in hooks ──────────────────────────────────────────────────────────
 
 /// Creates the run directory tree (mkdir -p for all subdirs).
+///
+/// On Unix the root directory is chmod'd to `0700` so that the future
+/// `context.json` (containing unresolved `{{secret:KEY}}` patterns but
+/// potentially nsjail-mounted alongside resolved values) is not world-readable
+/// even before `WriteContextHook` tightens `context.json` itself.
 pub struct CreateRunDirectoryHook;
 
 #[async_trait]
@@ -113,6 +139,33 @@ impl StagingHook for CreateRunDirectoryHook {
                 ExecutorError::RunDirectory(format!("mkdir {}: {e}", dir.display()))
             })?;
         }
+
+        // Tighten the run-dir root to owner-only. Sub-directories inherit
+        // O_NONE traversal protection — children write only-readable files
+        // anyway, but the umask on a shared host may be permissive.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&ctx.run_dir.root)
+                .await
+                .map_err(|e| {
+                    ExecutorError::RunDirectory(format!(
+                        "stat {}: {e}",
+                        ctx.run_dir.root.display()
+                    ))
+                })?
+                .permissions();
+            perms.set_mode(0o700);
+            tokio::fs::set_permissions(&ctx.run_dir.root, perms)
+                .await
+                .map_err(|e| {
+                    ExecutorError::RunDirectory(format!(
+                        "chmod 0700 {}: {e}",
+                        ctx.run_dir.root.display()
+                    ))
+                })?;
+        }
+
         info!(root = %ctx.run_dir.root.display(), "run directory created");
         Ok(ctx)
     }
@@ -160,6 +213,75 @@ impl StagingHook for InjectEnvironmentHook {
     }
 }
 
+/// Fetches the static config blob referenced by `ExecutionSpec.config_ref`
+/// and writes it into `spec.config` so downstream hooks + backends see the
+/// resolved config exactly as if it had travelled inline.
+///
+/// The compiler-emitted prepare-transition keeps the per-job NATS token
+/// small (just a `config_ref { storage_path }`) — this hook is the
+/// counterparty that materialises the config at execution time. Inline-spec
+/// jobs (tests, programmatic) pass through unchanged when `config_ref` is
+/// `None`.
+pub struct FetchConfigHook {
+    pub store: Arc<dyn ArtifactStore>,
+}
+
+#[async_trait]
+impl StagingHook for FetchConfigHook {
+    fn name(&self) -> &'static str {
+        "fetch_config"
+    }
+
+    async fn stage(
+        &self,
+        _job: &ExecutionJob,
+        mut ctx: RunContext,
+    ) -> Result<RunContext, ExecutorError> {
+        let Some(ref config_ref) = ctx.spec.config_ref else {
+            return Ok(ctx);
+        };
+
+        // Download to a transient path inside the run_dir root (created by
+        // `CreateRunDirectoryHook` ahead of this hook). Deliberately NOT under
+        // `inputs_dir` so the backend's input-staging logic doesn't pick it
+        // up; deleted right after read so it never bleeds into artifacts.
+        let blob_path = ctx.run_dir.root.join("__node_config.json");
+        let storage_path = StoragePath(config_ref.storage_path.clone());
+        self.store
+            .download(&storage_path, &blob_path)
+            .await
+            .map_err(|e| {
+                ExecutorError::StagingFailed(format!(
+                    "fetch_config: download config blob '{}': {e}",
+                    config_ref.storage_path
+                ))
+            })?;
+        let bytes: Vec<u8> = tokio::fs::read(&blob_path).await.map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "fetch_config: read downloaded config blob '{}': {e}",
+                config_ref.storage_path
+            ))
+        })?;
+        let resolved: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "fetch_config: parse JSON config blob '{}': {e}",
+                config_ref.storage_path
+            ))
+        })?;
+        // Best-effort cleanup; the run-dir is the right place even if this
+        // fails (whole tree is removed by the cleanup policy).
+        let _ = tokio::fs::remove_file(&blob_path).await;
+
+        debug!(
+            storage_path = %config_ref.storage_path,
+            bytes = bytes.len(),
+            "fetched static node config",
+        );
+        ctx.spec.config = resolved;
+        Ok(ctx)
+    }
+}
+
 /// Stages input files from storage into the inputs/ directory.
 pub struct StageInputsHook {
     pub base_dir: PathBuf,
@@ -195,8 +317,18 @@ impl StagingHook for StageInputsHook {
         for input in inputs {
             match &input.source {
                 aithericon_executor_domain::InputSource::Inline { value } => {
+                    // Prefer the resolved value from PlanSecretsHook's
+                    // side-channel — `value` itself still carries
+                    // `{{secret:KEY}}` templates, so writing it verbatim
+                    // would land the unresolved placeholder in the input
+                    // file the child reads (e.g. Python's AccessibleDict
+                    // would surface the literal "{{secret:...}}" string).
+                    let effective_value = ctx
+                        .resolved_inline_inputs
+                        .get(&input.name)
+                        .unwrap_or(value);
                     let dest = ctx.run_dir.inputs_dir.join(&input.name);
-                    let data = serde_json::to_vec_pretty(value).map_err(|e| {
+                    let data = serde_json::to_vec_pretty(effective_value).map_err(|e| {
                         ExecutorError::StagingFailed(format!(
                             "failed to serialize inline input '{}': {e}",
                             input.name
@@ -224,16 +356,41 @@ impl StagingHook for StageInputsHook {
                     match storage {
                         #[cfg(feature = "opendal")]
                         Some(config) => {
+                            // Prefer the resolved storage config from the
+                            // PlanSecretsHook side-channel — `config` itself
+                            // still carries `{{secret:KEY}}` templates so we
+                            // can't authenticate to the storage backend with
+                            // the raw spec view when secrets are involved.
+                            let resolved_owned: Option<
+                                aithericon_executor_storage::StorageConfig,
+                            > = if let Some(resolved_json) =
+                                ctx.resolved_input_storage.get(&input.name)
+                            {
+                                Some(serde_json::from_value(resolved_json.clone()).map_err(
+                                    |e| {
+                                        ExecutorError::StagingFailed(format!(
+                                            "deserialize resolved storage config for input '{}': {e}",
+                                            input.name
+                                        ))
+                                    },
+                                )?)
+                            } else {
+                                None
+                            };
+                            let effective_config = resolved_owned.as_ref().unwrap_or(config);
+
                             let final_name = name_with_extension(&input.name, path);
                             let dest = ctx.run_dir.inputs_dir.join(&final_name);
                             let (operator, prefix) =
-                                aithericon_executor_storage::build_operator_with_prefix(config)
-                                    .map_err(|e| {
-                                        ExecutorError::StagingFailed(format!(
-                                            "storage operator for input '{}': {e}",
-                                            input.name
-                                        ))
-                                    })?;
+                                aithericon_executor_storage::build_operator_with_prefix(
+                                    effective_config,
+                                )
+                                .map_err(|e| {
+                                    ExecutorError::StagingFailed(format!(
+                                        "storage operator for input '{}': {e}",
+                                        input.name
+                                    ))
+                                })?;
                             let remote_path = format!("{}{}", prefix, path);
                             let data = operator.read(&remote_path).await.map_err(|e| {
                                 ExecutorError::StagingFailed(format!(
@@ -395,7 +552,14 @@ impl StagingHook for StageInputsHook {
     }
 }
 
-/// Serializes the RunContext to context.json in the run directory.
+/// Serializes the RunContext to `context.json` in the run directory.
+///
+/// `RunContext`'s `resolved_*` fields are `#[serde(skip)]`, so the on-disk
+/// shape carries only the unresolved `{{secret:KEY}}` templates — plaintext
+/// secrets never round-trip through this file (Gap #1 fix).
+///
+/// On Unix the file is chmod'd to `0600` immediately after the write so that
+/// even with a permissive umask the file is owner-only.
 pub struct WriteContextHook;
 
 #[async_trait]
@@ -417,12 +581,58 @@ impl StagingHook for WriteContextHook {
             .map_err(|e| {
                 ExecutorError::StagingFailed(format!("failed to write context.json: {e}"))
             })?;
+
+        // Tighten context.json to owner-only. Defense in depth even though
+        // the file no longer contains plaintext secrets — the unresolved
+        // template strings themselves enumerate which secret keys this
+        // execution needs and that itself is sensitive.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&ctx.run_dir.context_file)
+                .await
+                .map_err(|e| {
+                    ExecutorError::StagingFailed(format!(
+                        "stat {}: {e}",
+                        ctx.run_dir.context_file.display()
+                    ))
+                })?
+                .permissions();
+            perms.set_mode(0o600);
+            tokio::fs::set_permissions(&ctx.run_dir.context_file, perms)
+                .await
+                .map_err(|e| {
+                    ExecutorError::StagingFailed(format!(
+                        "chmod 0600 {}: {e}",
+                        ctx.run_dir.context_file.display()
+                    ))
+                })?;
+        }
+
         debug!(path = %ctx.run_dir.context_file.display(), "context.json written");
         Ok(ctx)
     }
 }
 
-/// Resolves `{{secret:KEY}}` patterns in `RunContext.env` values and `spec.config`.
+/// Plans resolved secret values for `{{secret:KEY}}` patterns *without*
+/// mutating the on-disk-serialized fields of `RunContext`.
+///
+/// Gap #1 fix: this hook used to be `InjectSecretsHook`, which substituted
+/// plaintext directly into `ctx.env`, `ctx.spec.config`,
+/// `ctx.spec.inputs[].source.storage`, and `ctx.spec.outputs[].upload_to.storage`.
+/// The downstream `WriteContextHook` then serialized the whole context to
+/// `context.json` — leaking plaintext to disk at default `0644` permissions.
+///
+/// `PlanSecretsHook` writes only to `RunContext`'s `#[serde(skip)]`
+/// side-channel fields:
+/// * `resolved_env`              — env keys that contained `{{secret:KEY}}`
+/// * `resolved_config`           — fully-resolved `spec.config` overlay (`Option<Value>`)
+/// * `resolved_input_storage`    — per-input storage config, by input name
+/// * `resolved_output_storage`   — per-output storage config, by output name
+///
+/// Backends spawning child processes feed `resolved_env` into
+/// `tokio::process::Command::env(k, v)`. The HTTP backend (no child) consumes
+/// `resolved_config` at request-build time. Plaintext never lands on disk.
 ///
 /// When the job carries a `wrapped_secrets` token and `vault_addr` is configured,
 /// the hook unwraps the Vault wrapping token to obtain resolved secrets, then
@@ -430,7 +640,7 @@ impl StagingHook for WriteContextHook {
 /// need broad secret store access — it only unwraps what was explicitly wrapped.
 ///
 /// Falls back to `self.store` for direct resolution when no wrapping token is present.
-pub struct InjectSecretsHook {
+pub struct PlanSecretsHook {
     pub store: Arc<dyn SecretStore>,
     /// Vault address for unwrapping wrapped secrets. Only `VAULT_ADDR` is needed,
     /// not `VAULT_TOKEN` — the wrapping token itself is used as auth.
@@ -438,9 +648,9 @@ pub struct InjectSecretsHook {
 }
 
 #[async_trait]
-impl StagingHook for InjectSecretsHook {
+impl StagingHook for PlanSecretsHook {
     fn name(&self) -> &'static str {
-        "inject_secrets"
+        "plan_secrets"
     }
 
     async fn stage(
@@ -469,81 +679,138 @@ impl StagingHook for InjectSecretsHook {
                 _ => self.store.clone(),
             };
 
-        // 1. Resolve {{secret:KEY}} patterns in env values
-        for value in ctx.env.values_mut() {
-            if value.contains("{{secret:") {
-                let json_val = serde_json::Value::String(value.clone());
+        // 1. Plan resolved env values WITHOUT mutating ctx.env.
+        //    The on-disk `env` keeps the {{secret:KEY}} templates so that
+        //    context.json never carries plaintext. Backends spawning children
+        //    feed `resolved_env` (merged with `env` at the call site) into
+        //    Command::env(k, v).
+        for (k, v) in ctx.env.iter() {
+            if v.contains("{{secret:") {
+                let json_val = serde_json::Value::String(v.clone());
                 let resolved =
                     aithericon_secrets::resolve_secrets(&json_val, effective_store.as_ref())
                         .await
                         .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?;
                 if let serde_json::Value::String(s) = resolved {
-                    *value = s;
+                    ctx.resolved_env.insert(k.clone(), s);
                 }
             }
         }
 
-        // 2. Resolve {{secret:KEY}} patterns in spec.config
-        ctx.spec.config =
-            aithericon_secrets::resolve_secrets(&ctx.spec.config, effective_store.as_ref())
-                .await
-                .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?;
+        // 2. Plan resolved spec.config WITHOUT mutating ctx.spec.config.
+        //    Only the HTTP backend reads this. If the config has no secret
+        //    templates we leave `resolved_config = None` so the HTTP backend
+        //    falls through to `ctx.spec.config` (preserves the no-vault path).
+        if json_contains_secret_template(&ctx.spec.config) {
+            ctx.resolved_config = Some(
+                aithericon_secrets::resolve_secrets(&ctx.spec.config, effective_store.as_ref())
+                    .await
+                    .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?,
+            );
+        }
 
-        // 3. Resolve {{secret:KEY}} in per-input storage configs
-        for input in ctx.spec.inputs.iter_mut() {
+        // 3. Plan resolved per-input storage configs WITHOUT mutating
+        //    spec.inputs[].source.storage. `StageInputsHook` reads
+        //    `resolved_input_storage` first, falling back to spec.inputs.
+        for input in ctx.spec.inputs.iter() {
             if let aithericon_executor_domain::InputSource::StoragePath {
-                storage: Some(ref mut config),
+                storage: Some(ref config),
                 ..
-            } = &mut input.source
+            } = &input.source
             {
-                let mut val = serde_json::to_value(&*config).map_err(|e| {
+                let val = serde_json::to_value(config).map_err(|e| {
                     ExecutorError::SecretResolutionFailed(format!(
                         "failed to serialize storage config for input '{}': {e}",
                         input.name
                     ))
                 })?;
-                val = aithericon_secrets::resolve_secrets(&val, effective_store.as_ref())
-                    .await
-                    .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?;
-                *config = serde_json::from_value(val).map_err(|e| {
-                    ExecutorError::SecretResolutionFailed(format!(
-                        "failed to deserialize resolved storage config for input '{}': {e}",
-                        input.name
-                    ))
-                })?;
+                if json_contains_secret_template(&val) {
+                    let resolved =
+                        aithericon_secrets::resolve_secrets(&val, effective_store.as_ref())
+                            .await
+                            .map_err(|e| {
+                                ExecutorError::SecretResolutionFailed(e.to_string())
+                            })?;
+                    ctx.resolved_input_storage
+                        .insert(input.name.clone(), resolved);
+                }
             }
         }
 
-        // 4. Resolve {{secret:KEY}} in per-output upload configs
-        for output in ctx.spec.outputs.iter_mut() {
-            if let Some(ref mut upload) = output.upload_to {
-                let mut val = serde_json::to_value(&upload.storage).map_err(|e| {
+        // 4. Plan resolved per-output upload configs.
+        for output in ctx.spec.outputs.iter() {
+            if let Some(ref upload) = output.upload_to {
+                let val = serde_json::to_value(&upload.storage).map_err(|e| {
                     ExecutorError::SecretResolutionFailed(format!(
                         "failed to serialize storage config for output '{}': {e}",
                         output.name
                     ))
                 })?;
-                val = aithericon_secrets::resolve_secrets(&val, effective_store.as_ref())
-                    .await
-                    .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?;
-                upload.storage = serde_json::from_value(val).map_err(|e| {
-                    ExecutorError::SecretResolutionFailed(format!(
-                        "failed to deserialize resolved storage config for output '{}': {e}",
-                        output.name
-                    ))
-                })?;
+                if json_contains_secret_template(&val) {
+                    let resolved =
+                        aithericon_secrets::resolve_secrets(&val, effective_store.as_ref())
+                            .await
+                            .map_err(|e| {
+                                ExecutorError::SecretResolutionFailed(e.to_string())
+                            })?;
+                    ctx.resolved_output_storage
+                        .insert(output.name.clone(), resolved);
+                }
             }
         }
 
-        debug!("resolved secrets in RunContext");
+        // 5. Plan resolved inline input JSON values WITHOUT mutating
+        //    spec.inputs[].source.value. `StageInputsHook` reads
+        //    `resolved_inline_inputs` first, falling back to `value`.
+        //
+        //    This is the path the compiler-emitted `__resources["<slug>"]`
+        //    envelope flows through — secret fields are spliced into the AIR
+        //    as `{{secret:KEY}}` strings, ride into the prepare transition's
+        //    `job_inputs[].source.value`, and need to be resolved before
+        //    `StageInputsHook` writes `<slug>.json` to the inputs dir (which
+        //    the Python runner loads as an `AccessibleDict` global).
+        for input in ctx.spec.inputs.iter() {
+            if let aithericon_executor_domain::InputSource::Inline { value } = &input.source {
+                if json_contains_secret_template(value) {
+                    let resolved =
+                        aithericon_secrets::resolve_secrets(value, effective_store.as_ref())
+                            .await
+                            .map_err(|e| {
+                                ExecutorError::SecretResolutionFailed(e.to_string())
+                            })?;
+                    ctx.resolved_inline_inputs
+                        .insert(input.name.clone(), resolved);
+                }
+            }
+        }
+
+        debug!(
+            resolved_env_count = ctx.resolved_env.len(),
+            resolved_config = ctx.resolved_config.is_some(),
+            resolved_inline_input_count = ctx.resolved_inline_inputs.len(),
+            "planned secrets into RunContext side-channel"
+        );
         Ok(ctx)
+    }
+}
+
+/// Cheap structural check: does any string leaf in this JSON value contain
+/// `{{secret:`? Used to short-circuit secret resolution when nothing references
+/// secrets, so the no-vault tests (and any vanilla config) don't synthesize
+/// `resolved_config = Some(...)` and divert the HTTP backend off `spec.config`.
+fn json_contains_secret_template(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::String(s) => s.contains("{{secret:"),
+        serde_json::Value::Array(a) => a.iter().any(json_contains_secret_template),
+        serde_json::Value::Object(o) => o.values().any(json_contains_secret_template),
+        _ => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aithericon_executor_backend::ProcessConfig;
+    use aithericon_executor_process::ProcessConfig;
     use aithericon_executor_domain::RunDirectory;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -581,6 +848,11 @@ mod tests {
             run_dir: RunDirectory::new(base_dir, "test-staging"),
             timeout: Duration::from_secs(60),
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -649,7 +921,7 @@ mod tests {
     }
 
     // ========================================================================
-    // InjectSecretsHook tests
+    // PlanSecretsHook tests
     // ========================================================================
 
     struct MockSecretStore(HashMap<String, String>);
@@ -667,53 +939,189 @@ mod tests {
         }
     }
 
+    /// `PlanSecretsHook` MUST NOT mutate `ctx.env` — that would land plaintext
+    /// in the serialized context.json. It writes only to `resolved_env`, and
+    /// only for keys whose templates were resolved.
     #[tokio::test]
-    async fn test_inject_secrets_resolves_env_values() {
+    async fn test_plan_secrets_does_not_mutate_env() {
         let store = Arc::new(MockSecretStore(HashMap::from([(
             "MY_SECRET".into(),
             "resolved_value".into(),
         )])));
-        let hook = InjectSecretsHook { store, vault_addr: None };
+        let hook = PlanSecretsHook {
+            store,
+            vault_addr: None,
+        };
 
-        let tmp = PathBuf::from("/tmp/staging-secrets-env-test");
+        let tmp = PathBuf::from("/tmp/staging-plan-env-test");
         let mut ctx = test_context(&tmp);
         ctx.env
             .insert("API_KEY".into(), "{{secret:MY_SECRET}}".into());
-        ctx.env
-            .insert("PLAIN".into(), "no_secrets_here".into());
+        ctx.env.insert("PLAIN".into(), "no_secrets_here".into());
 
         let result = hook.stage(&test_job(), ctx).await.unwrap();
 
-        assert_eq!(result.env["API_KEY"], "resolved_value");
+        // env keeps the unresolved template
+        assert_eq!(result.env["API_KEY"], "{{secret:MY_SECRET}}");
         assert_eq!(result.env["PLAIN"], "no_secrets_here");
+        // resolved_env carries the plaintext, keyed by env name
+        assert_eq!(result.resolved_env["API_KEY"], "resolved_value");
+        // PLAIN has no secret pattern → not populated in resolved_env
+        assert!(
+            !result.resolved_env.contains_key("PLAIN"),
+            "PLAIN had no secret template, must not appear in resolved_env"
+        );
+        // spec.config carried no secret → resolved_config stays None
+        assert!(result.resolved_config.is_none());
     }
 
+    /// `WriteContextHook` must preserve the `{{secret:KEY}}` template in the
+    /// serialized context.json — and absolutely not include the resolved
+    /// plaintext.
     #[tokio::test]
-    async fn test_inject_secrets_resolves_spec_config() {
+    async fn test_write_context_preserves_secret_template() {
         let store = Arc::new(MockSecretStore(HashMap::from([(
             "API_TOKEN".into(),
-            "sk-abc123".into(),
+            "PLAINTEXT-TOKEN-XYZ".into(),
         )])));
-        let hook = InjectSecretsHook { store, vault_addr: None };
 
-        let tmp = PathBuf::from("/tmp/staging-secrets-config-test");
+        let tmp = std::env::temp_dir().join(format!(
+            "staging-write-template-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
         let mut ctx = test_context(&tmp);
-        ctx.spec.config = serde_json::json!({"token": "{{secret:API_TOKEN}}", "url": "https://api.example.com"});
+        ctx.env
+            .insert("API_KEY".into(), "{{secret:API_TOKEN}}".into());
+        ctx.spec.config =
+            serde_json::json!({"token": "{{secret:API_TOKEN}}", "url": "https://api.example.com"});
 
-        let result = hook.stage(&test_job(), ctx).await.unwrap();
+        // Run create → plan → write.
+        let ctx = CreateRunDirectoryHook
+            .stage(&test_job(), ctx)
+            .await
+            .unwrap();
+        let ctx = PlanSecretsHook {
+            store,
+            vault_addr: None,
+        }
+        .stage(&test_job(), ctx)
+        .await
+        .unwrap();
 
-        assert_eq!(
-            result.spec.config,
-            serde_json::json!({"token": "sk-abc123", "url": "https://api.example.com"})
+        // Sanity: plaintext is in the side-channel only.
+        assert_eq!(ctx.resolved_env["API_KEY"], "PLAINTEXT-TOKEN-XYZ");
+
+        let ctx = WriteContextHook.stage(&test_job(), ctx).await.unwrap();
+
+        let on_disk = std::fs::read_to_string(&ctx.run_dir.context_file).unwrap();
+        assert!(
+            on_disk.contains("{{secret:API_TOKEN}}"),
+            "context.json should preserve the unresolved template: {on_disk}"
         );
+        assert!(
+            !on_disk.contains("PLAINTEXT-TOKEN-XYZ"),
+            "context.json must NOT contain plaintext secret: {on_disk}"
+        );
+        // The resolved_* fields are #[serde(skip)] so their names must not appear.
+        assert!(
+            !on_disk.contains("resolved_env"),
+            "context.json should not include resolved_env field: {on_disk}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// On Unix, `WriteContextHook` must chmod `context.json` to `0600`.
+    #[cfg(unix)]
     #[tokio::test]
-    async fn test_inject_secrets_missing_key_returns_error() {
-        let store = Arc::new(MockSecretStore(HashMap::new())); // empty — all lookups fail
-        let hook = InjectSecretsHook { store, vault_addr: None };
+    async fn test_write_context_is_0600_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
 
-        let tmp = PathBuf::from("/tmp/staging-secrets-fail-test");
+        let tmp = std::env::temp_dir().join(format!(
+            "staging-write-perm-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
+        let ctx = test_context(&tmp);
+        let ctx = CreateRunDirectoryHook
+            .stage(&test_job(), ctx)
+            .await
+            .unwrap();
+
+        // Verify run-dir root is 0700.
+        let root_mode = std::fs::metadata(&ctx.run_dir.root)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            root_mode, 0o700,
+            "run dir root should be 0700, got {root_mode:o}"
+        );
+
+        let ctx = WriteContextHook.stage(&test_job(), ctx).await.unwrap();
+        let ctx_mode = std::fs::metadata(&ctx.run_dir.context_file)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            ctx_mode, 0o600,
+            "context.json should be 0600, got {ctx_mode:o}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Round-tripping a context with populated `resolved_*` fields through
+    /// JSON must drop those fields (defense in depth).
+    #[tokio::test]
+    async fn test_resolved_config_does_not_round_trip() {
+        let tmp = PathBuf::from("/tmp/staging-rt-test");
+        let mut ctx = test_context(&tmp);
+        ctx.resolved_env
+            .insert("API_KEY".into(), "ROUNDTRIP-PLAINTEXT".into());
+        ctx.resolved_config = Some(serde_json::json!({"token": "ROUNDTRIP-PLAINTEXT"}));
+        ctx.resolved_input_storage
+            .insert("i1".into(), serde_json::json!({"k": "ROUNDTRIP-PLAINTEXT"}));
+        ctx.resolved_output_storage
+            .insert("o1".into(), serde_json::json!({"k": "ROUNDTRIP-PLAINTEXT"}));
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(
+            !json.contains("ROUNDTRIP-PLAINTEXT"),
+            "resolved_* plaintext leaked to JSON: {json}"
+        );
+
+        let back: RunContext = serde_json::from_str(&json).unwrap();
+        assert!(back.resolved_env.is_empty());
+        assert!(back.resolved_config.is_none());
+        assert!(back.resolved_input_storage.is_empty());
+        assert!(back.resolved_output_storage.is_empty());
+    }
+
+    /// Cheap unique suffix without a uuid dependency from tests.
+    fn uuid_like() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("{n:x}")
+    }
+
+    /// Missing-key resolution still fails closed — same contract as the old
+    /// `InjectSecretsHook`, just routed through `resolved_env`.
+    #[tokio::test]
+    async fn test_plan_secrets_missing_key_returns_error() {
+        let store = Arc::new(MockSecretStore(HashMap::new())); // empty — all lookups fail
+        let hook = PlanSecretsHook {
+            store,
+            vault_addr: None,
+        };
+
+        let tmp = PathBuf::from("/tmp/staging-plan-fail-test");
         let mut ctx = test_context(&tmp);
         ctx.env
             .insert("TOKEN".into(), "{{secret:MISSING}}".into());
@@ -726,6 +1134,30 @@ mod tests {
             }
             other => panic!("Expected SecretResolutionFailed, got {:?}", other),
         }
+    }
+
+    /// `resolved_config` stays `None` when nothing in `spec.config` references
+    /// a secret. The HTTP backend relies on this fallback path.
+    #[tokio::test]
+    async fn test_plan_secrets_no_pattern_leaves_resolved_config_none() {
+        let store = Arc::new(MockSecretStore(HashMap::from([(
+            "UNUSED".into(),
+            "value".into(),
+        )])));
+        let hook = PlanSecretsHook {
+            store,
+            vault_addr: None,
+        };
+
+        let tmp = PathBuf::from("/tmp/staging-plan-no-pattern");
+        let mut ctx = test_context(&tmp);
+        ctx.spec.config = serde_json::json!({"url": "https://api.example.com"});
+
+        let result = hook.stage(&test_job(), ctx).await.unwrap();
+        assert!(
+            result.resolved_config.is_none(),
+            "no secret template → resolved_config should remain None to preserve HTTP fallback path"
+        );
     }
 
     // ========================================================================

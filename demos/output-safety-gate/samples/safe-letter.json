@@ -1,0 +1,6 @@
+{
+  "_comment": "Realistic 'pass' case. Every claim in the subject is directly grounded in the evidence. Feed these three fields as the Start-node payload when manually exercising the safety gate.",
+  "subject_kind": "letter",
+  "subject_text": "Sehr geehrter Herr Kollege, wir berichten ueber Frau Maria Huber (geb. 1965-04-12). Diagnose: arterielle Hypertonie (ICD-10 I10). Empfehlung: Therapie mit Ramipril 5 mg, 1-0-0, taeglich. Blutdruckkontrolle in 4 Wochen.",
+  "evidence_text": "Patientin: Maria Huber, geboren am 12.04.1965. Anamnese: seit 6 Monaten erhoehte Blutdruckwerte. Diagnose: arterielle Hypertonie ICD-10 I10. Therapieplan: Ramipril 5 mg, Einnahme morgens. Kontrolltermin in 4 Wochen."
+}

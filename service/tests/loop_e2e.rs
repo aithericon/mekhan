@@ -1,5 +1,5 @@
 //! End-to-end coverage for the Loop node — live engine iterates a real body
-//! node N times then exits, capturing `_loop_<id>_count` into the End result.
+//! node N times then exits, capturing `lp.iteration` into the End result.
 //!
 //! The body is a 1-step HumanTask that gets auto-completed each iteration —
 //! proves the token actually flows through user code each pass (not just that
@@ -103,14 +103,15 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     }
 }
 
-/// `Start → Loop(max=3, "input._loop_lp_count < 3", body=PhaseUpdate) → End`.
+/// `Start → Loop(max=3, "lp.iteration < 3", body=PhaseUpdate) → End`.
 ///
 /// The PhaseUpdate body sits inside the loop (`parent_id == "lp"`) and is
 /// wired via the `body_in`/`body_out` handles so each iteration routes
-/// through it. PhaseUpdate is a pass-through for the data token (the
-/// `_loop_lp_count` control leaf is preserved); its phase signal is a no-op
-/// outside a registered process, so the test doesn't need a process to be
-/// running — just proves the loop iterates user code three times then exits.
+/// through it. PhaseUpdate is a pass-through for the data token (the `lp`
+/// namespace declared on the control token is preserved); its phase signal
+/// is a no-op outside a registered process, so the test doesn't need a
+/// process to be running — just proves the loop iterates user code three
+/// times then exits.
 ///
 /// Topology per iteration: enter → body → continue/exit, where body =
 /// PhaseUpdate. Counter increments at `t_lp_continue`; after the 3rd pass
@@ -126,9 +127,13 @@ fn loop_graph() -> Value {
             { "id": "lp", "type": "loop", "position": { "x": 240, "y": 0 },
               "data": { "type": "loop", "label": "Retry",
                         "maxIterations": 3,
-                        // Control-token leaf injected by lower_loop: `_loop_<id>_count`
-                        // rides the slim control token so it resolves without a read-arc.
-                        "loopCondition": "input._loop_lp_count < 3" } },
+                        // Loop declares `iteration: number` as a producer field
+                        // (see service/src/compiler/validate.rs::node_output_fields).
+                        // The counter is parked in `p_lp_data` by `lower_loop`;
+                        // the standard read-arc synthesis pass rewrites
+                        // `lp.iteration` to `d_lp.iteration` on the loop's own
+                        // pre-wired continue/exit transitions.
+                        "loopCondition": "lp.iteration < 3" } },
             // Loop body — a PhaseUpdate passthrough. `parent_id == "lp"`
             // satisfies the LoopEmpty check; the body_in/body_out handle
             // edges route the iteration through it. PhaseUpdate's `out` is
@@ -143,7 +148,7 @@ fn loop_graph() -> Value {
               "data": { "type": "end", "label": "Done",
                         "resultMapping": [
                             { "targetField": "final_count",
-                              "expression": "input._loop_lp_count" }
+                              "expression": "lp.iteration" }
                         ] } }
         ],
         "edges": [
@@ -180,7 +185,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> Uuid {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -205,7 +210,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> Uuid {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -220,7 +225,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> Uuid {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({

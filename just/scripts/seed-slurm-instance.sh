@@ -120,21 +120,21 @@ print(json.dumps(body))
 PY
 )
 
-echo "▶ POST $MEKHAN_URL/api/templates …"
-template_resp=$(curl -sf -X POST "$MEKHAN_URL/api/templates" \
+echo "▶ POST $MEKHAN_URL/api/v1/templates …"
+template_resp=$(curl -sf -X POST "$MEKHAN_URL/api/v1/templates" \
     -H 'content-type: application/json' \
     -d "$template_body")
 template_id=$(echo "$template_resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
 echo "  ✓ template $template_id"
 
-echo "▶ POST $MEKHAN_URL/api/templates/$template_id/publish …"
-publish_resp=$(curl -sf -X POST "$MEKHAN_URL/api/templates/$template_id/publish")
+echo "▶ POST $MEKHAN_URL/api/v1/templates/$template_id/publish …"
+publish_resp=$(curl -sf -X POST "$MEKHAN_URL/api/v1/templates/$template_id/publish")
 version=$(echo "$publish_resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('version','?'))")
 echo "  ✓ published v$version"
 
-echo "▶ POST $MEKHAN_URL/api/instances …"
+echo "▶ POST $MEKHAN_URL/api/v1/instances …"
 instance_body=$(python3 -c "import json; print(json.dumps({'template_id': '$template_id', 'metadata': {'source': 'seed-slurm-instance.sh'}}))")
-instance_resp=$(curl -sf -X POST "$MEKHAN_URL/api/instances" \
+instance_resp=$(curl -sf -X POST "$MEKHAN_URL/api/v1/instances" \
     -H 'content-type: application/json' \
     -d "$instance_body")
 instance_id=$(echo "$instance_resp" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
@@ -148,5 +148,5 @@ Open in UI:
   http://localhost:5173/templates/$template_id
 
 Poll status:
-  curl -sf $MEKHAN_URL/api/instances/$instance_id | python3 -m json.tool
+  curl -sf $MEKHAN_URL/api/v1/instances/$instance_id | python3 -m json.tool
 EOF

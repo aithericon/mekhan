@@ -4,17 +4,25 @@
 	// emitting a canonical `StatusDetail::ProgressUpdated`, projected into
 	// `config.progress`. No-op outside a named process.
 	import type { ProgressUpdateNodeData } from '$lib/types/editor';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { FormField } from '$lib/components/ui/form-field';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import InsertRefButton from './InsertRefButton.svelte';
 
 	type Props = {
 		data: ProgressUpdateNodeData;
 		readonly?: boolean;
 		onchange: (data: ProgressUpdateNodeData) => void;
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, scope = [] }: Props = $props();
+
+	function appendToMessage(snippet: string) {
+		const curr = data.message ?? '';
+		onchange({ ...data, message: curr ? `${curr} ${snippet}` : snippet });
+	}
 
 	const pct = $derived(Math.round((data.fraction ?? 0) * 100));
 
@@ -83,8 +91,14 @@
 			onchange({ ...data, message: v === '' ? undefined : v });
 		}}
 	/>
+	{#if scope.length > 0}
+		<div class="mt-1.5">
+			<InsertRefButton {scope} disabled={readonly} oninsert={appendToMessage} />
+		</div>
+	{/if}
 	<p class="mt-1 text-sm text-muted-foreground">
-		Supports <code>{'{{ field }}'}</code> placeholders resolved against the inbound token.
+		<code>{'{{ ref }}'}</code> placeholders interpolate fields from this node's input scope —
+		use the picker above for the in-scope set.
 	</p>
 </FormField>
 

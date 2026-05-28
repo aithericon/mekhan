@@ -69,7 +69,7 @@ impl<'a> WorkflowDiGraph<'a> {
     }
 
     pub(crate) fn node(&self, id: &str) -> &'a WorkflowNode {
-        *self.full.node_weight(self.indices[id]).unwrap()
+        self.full.node_weight(self.indices[id]).unwrap()
     }
 
     /// Outgoing edges in original insertion order.

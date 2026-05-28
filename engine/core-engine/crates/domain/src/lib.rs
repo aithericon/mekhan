@@ -5,7 +5,6 @@ pub mod dispatch;
 pub mod effects;
 pub mod events;
 pub mod executor;
-#[cfg(feature = "human")]
 pub mod human;
 pub mod ids;
 pub mod net;
@@ -13,6 +12,7 @@ pub mod place;
 pub mod port;
 pub mod projection;
 pub mod scheduler;
+pub mod subworkflow;
 pub mod timer;
 pub mod token;
 pub mod transition;

@@ -4,9 +4,10 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    BranchCondition, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig,
-    PhaseUpdateStatus, Port, Position, TaskBlockConfig, TaskFieldConfig, TaskFieldKind,
-    TaskStepConfig, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    default_join_output_port, BranchCondition, DeploymentModel, ExecutionBackendType,
+    ExecutionSpecConfig, JoinMode, MergeStrategy, PhaseUpdateStatus, Port, Position,
+    TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -126,23 +127,28 @@ fn start_to_end_produces_terminal_place() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), end_node("e")],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new()).expect("should compile");
 
     // Start forks (`park_outputs`): p_s_ready (seed) + p_s_data (write-once
-    // parked copy) + p_s_main (forwarded; End merges into it) = 3 places,
-    // 1 t_s_park transition.
+    // parked copy) + p_s_main (forwarded; End merges into it) plus End's
+    // own anchored terminal place p_e_terminal = 4 places, 2 transitions
+    // (t_s_park + t_e_complete forwarder).
     assert!(
         has_place_of_type(&air, "terminal"),
         "expected a terminal place"
     );
-    assert_eq!(places(&air).len(), 3, "expected 3 places (ready/data/main)");
+    assert_eq!(
+        places(&air).len(),
+        4,
+        "expected 4 places (ready/data/main + End's p_e_terminal)"
+    );
     assert_eq!(
         transitions(&air).len(),
-        1,
-        "expected the t_s_park transition"
+        2,
+        "expected t_s_park + t_e_complete"
     );
 }
 
@@ -156,7 +162,7 @@ fn start_place_initial_tokens_empty_after_compile() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), end_node("e")],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new()).expect("should compile");
@@ -185,7 +191,7 @@ fn start_to_end_has_correct_structure() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("start"), end_node("end")],
         edges: vec![edge("e1", "start", "end")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "my_workflow", "a test workflow", &std::collections::HashMap::new()).expect("should compile");
@@ -193,15 +199,19 @@ fn start_to_end_has_correct_structure() {
     assert_eq!(air["name"], "my_workflow");
     assert_eq!(air["description"], "a test workflow");
 
-    // After merge: the forwarded place absorbs End's terminal type (End
-    // merges into p_start_main, not the seed place). The Start no longer
-    // carries initial_tokens at compile time (parameterize_air seeds them
-    // at instance creation).
-    let main_place = places(&air)
+    // After b25ca8c: bare End anchors the workflow terminal on its own
+    // `p_<end>_terminal` place (fed by `t_<end>_complete` forwarder), not
+    // on the post-merge survivor of the inbound `p_<end>_done` collapse.
+    // The Start's forwarded `p_start_main` survives the merge but is now
+    // a plain intermediate `state` place, not the terminal.
+    let terminal_place = places(&air)
         .iter()
-        .find(|p| p["id"] == "p_start_main")
-        .expect("missing start main place");
-    assert_eq!(main_place["type"], "terminal", "forwarded place should be terminal after merge");
+        .find(|p| p["id"] == "p_end_terminal")
+        .expect("missing End's anchored terminal place");
+    assert_eq!(
+        terminal_place["type"], "terminal",
+        "End-owned p_end_terminal should be the workflow terminal"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +245,7 @@ fn human_task_produces_group_signal_and_transitions() {
                                 required: Some(true),
                                 placeholder: None,
                                 options: None,
+                                ..Default::default()
                             },
                         }],
                     }],
@@ -246,7 +257,7 @@ fn human_task_produces_group_signal_and_transitions() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "ht_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -316,7 +327,7 @@ fn automated_step_produces_executor_lifecycle() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "auto_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -416,7 +427,7 @@ fn decision_produces_guard_transitions() {
             edge_with_handle("e_a", "dec", "ea", "cond_a"),
             edge_with_handle("e_b", "dec", "eb", "cond_b"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     // Fix: end nodes need distinct IDs
@@ -467,7 +478,7 @@ fn decision_produces_guard_transitions() {
 }
 
 // ---------------------------------------------------------------------------
-// Start -> ParallelSplit -> (A, B) -> ParallelJoin -> End
+// Start -> ParallelSplit -> (A, B) -> Join (mode: all) -> End
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -522,13 +533,15 @@ fn parallel_split_join_produces_fork_and_join() {
             },
             WorkflowNode {
                 id: "join".to_string(),
-                node_type: "parallel_join".to_string(),
+                node_type: "join".to_string(),
                 slug: None,
                 position: pos(),
-                data: WorkflowNodeData::ParallelJoin {
+                data: WorkflowNodeData::Join {
                     label: "Join".to_string(),
                     description: None,
-                    merge_strategy: Default::default(),
+                    mode: JoinMode::All,
+                    merge_strategy: Some(MergeStrategy::default()),
+                    output: default_join_output_port(),
                 },
                 parent_id: None,
                 width: None,
@@ -544,7 +557,7 @@ fn parallel_split_join_produces_fork_and_join() {
             edge("e_join_b", "task_b", "join"),
             edge("e_out", "join", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "par_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -612,12 +625,13 @@ fn loop_produces_enter_continue_exit() {
                     label: "Retry Loop".to_string(),
                     description: None,
                     max_iterations: 5,
-                    // Reference the loop's own iteration counter. The
-                    // control/data foundation injects it as the control-token
-                    // leaf `_loop_<id>_count` (lower.rs `lower_loop` /
-                    // out_shape(Loop)); a `_`-prefixed head is a control leaf
-                    // so the guard SSOT threads it without a read-arc.
-                    loop_condition: "input._loop_lp_count < 5".to_string(),
+                    // Reference the loop's own iteration counter via the
+                    // declared `<slug>.iteration` producer field. The counter
+                    // is parked in `p_lp_data`; the standard read-arc synthesis
+                    // pass rewrites this to `d_lp.iteration` and adds a
+                    // read-arc on `p_lp_data` for the continue/exit transitions
+                    // (pre-wired by `lower_loop`).
+                    loop_condition: "lp.iteration < 5".to_string(),
                 },
                 parent_id: None,
                 width: None,
@@ -647,7 +661,7 @@ fn loop_produces_enter_continue_exit() {
             body_out_edge,
             edge("e2", "lp", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "loop_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -687,7 +701,7 @@ fn no_start_node_fails() {
     let graph = WorkflowGraph {
         nodes: vec![end_node("e")],
         edges: vec![],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail without start node");
@@ -703,7 +717,7 @@ fn no_end_node_fails() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s")],
         edges: vec![],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail without end node");
@@ -738,7 +752,7 @@ fn unreachable_node_fails() {
             },
         ],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with unreachable node");
@@ -772,7 +786,7 @@ fn loop_with_zero_iterations_fails() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "lp"), edge("e2", "lp", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with max_iterations=0");
@@ -806,7 +820,7 @@ fn loop_with_empty_condition_fails() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "lp"), edge("e2", "lp", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let err =
@@ -840,7 +854,7 @@ fn decision_with_default_branch() {
                         label: "Yes".to_string(),
                         guard: "true".to_string(),
                     }],
-                    default_branch: Some("cond_no".to_string()),
+                    default_branch: Some("default".to_string()),
                 },
                 parent_id: None,
                 width: None,
@@ -852,9 +866,9 @@ fn decision_with_default_branch() {
         edges: vec![
             edge("e_in", "s", "dec"),
             edge_with_handle("e_yes_out", "dec", "e_yes", "cond_yes"),
-            edge_with_handle("e_no_out", "dec", "e_no", "cond_no"),
+            edge_with_handle("e_no_out", "dec", "e_no", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "dec_default_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -924,7 +938,7 @@ fn decision_lowers_as_switch_cascade() {
                             guard: "5 < 6".to_string(),
                         },
                     ],
-                    default_branch: Some("cd".to_string()),
+                    default_branch: Some("default".to_string()),
                 },
                 parent_id: None,
                 width: None,
@@ -940,9 +954,9 @@ fn decision_lowers_as_switch_cascade() {
             edge_with_handle("e0", "dec", "ea", "c0"),
             edge_with_handle("e1", "dec", "eb", "c1"),
             edge_with_handle("e2", "dec", "ec", "c2"),
-            edge_with_handle("e3", "dec", "ed", "cd"),
+            edge_with_handle("e3", "dec", "ed", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "dec_cascade", "", &std::collections::HashMap::new())
@@ -1028,7 +1042,7 @@ fn cycle_in_non_loop_edges_fails() {
             edge("e3", "b", "a"), // cycle (sequence edge, not loop_back)
             edge("e4", "b", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with cycle");
@@ -1067,7 +1081,7 @@ fn parallel_split_with_one_branch_fails() {
             edge("e1", "s", "split"),
             edge("e2", "split", "e"), // only 1 outgoing edge
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let err = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect_err("should fail with 1 branch");
@@ -1114,7 +1128,7 @@ fn automated_step_has_scoped_effect_errors() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -1177,7 +1191,7 @@ fn chain_merges_intermediate_pass_through_places() {
             edge("e3", "b", "c"),
             edge("e4", "c", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "chain_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -1253,7 +1267,7 @@ fn transitive_merge_chain_resolves_correctly() {
             edge("e2", "a", "b"),
             edge("e3", "b", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "transitive_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -1310,20 +1324,31 @@ fn transitive_merge_chain_resolves_correctly() {
         "t_b_yield should consume p_b_output, got: {yield_inputs:?}"
     );
 
-    // The End's terminal designation resolves through the merge alias chain
-    // (p_e_done -> p_b_ctrl) onto the foundation's surviving control place.
+    // Post-b25ca8c: the bare End anchors the workflow terminal on its own
+    // `p_e_terminal` place (fed by `t_e_complete` forwarder), not on
+    // `p_b_ctrl`. `p_b_ctrl` is now a plain intermediate `state` place
+    // that feeds `t_e_complete` (via the still-valid merge alias chain
+    // p_e_done -> p_b_ctrl on the input side).
     let b_ctrl = places(&air)
         .iter()
         .find(|p| p["id"] == "p_b_ctrl")
-        .expect("p_b_ctrl should be the surviving terminal place after alias resolution");
+        .expect("p_b_ctrl should survive as an intermediate state place");
     assert_eq!(
-        b_ctrl["type"], "terminal",
-        "p_b_ctrl should be terminal after p_e_done merges into it"
+        b_ctrl["type"], "state",
+        "p_b_ctrl is now intermediate; End's terminal is anchored on p_e_terminal"
+    );
+    let e_terminal = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_e_terminal")
+        .expect("End-owned p_e_terminal should be the workflow terminal");
+    assert_eq!(
+        e_terminal["type"], "terminal",
+        "p_e_terminal should be terminal after b25ca8c's End-anchor change"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Merge optimization: ParallelJoin per-edge input places merge
+// Merge optimization: Join per-edge input places merge
 // ---------------------------------------------------------------------------
 
 /// S -> Split -> (AutoA, AutoB) -> Join -> E
@@ -1333,7 +1358,7 @@ fn transitive_merge_chain_resolves_correctly() {
 /// forwarded control token (`p_aa_ctrl` / `p_ab_ctrl`) — `split_outputs`
 /// parks the executor envelope in `p_*_data` and threads only `p_*_ctrl`.
 #[test]
-fn parallel_join_merges_per_edge_input_places() {
+fn join_merges_per_edge_input_places() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -1354,13 +1379,15 @@ fn parallel_join_merges_per_edge_input_places() {
             auto_node("ab", "Auto B"),
             WorkflowNode {
                 id: "join".to_string(),
-                node_type: "parallel_join".to_string(),
+                node_type: "join".to_string(),
                 slug: None,
                 position: pos(),
-                data: WorkflowNodeData::ParallelJoin {
+                data: WorkflowNodeData::Join {
                     label: "Join".to_string(),
                     description: None,
-                    merge_strategy: Default::default(),
+                    mode: JoinMode::All,
+                    merge_strategy: Some(MergeStrategy::default()),
+                    output: default_join_output_port(),
                 },
                 parent_id: None,
                 width: None,
@@ -1376,7 +1403,7 @@ fn parallel_join_merges_per_edge_input_places() {
             edge("e_join_b", "ab", "join"),
             edge("e_out", "join", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "join_merge_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -1437,12 +1464,12 @@ fn parallel_join_merges_per_edge_input_places() {
 // ---------------------------------------------------------------------------
 
 /// Two edges converge on the same non-join node (Decision). Since it has
-/// multiple incoming edges and is not a ParallelJoin, the pass-through
-/// transitions must be RETAINED (not merged).
+/// multiple incoming edges and is not a Join, the pass-through transitions
+/// must be RETAINED (not merged).
 #[test]
 fn multi_input_non_join_retains_pass_through_transitions() {
     // S -> Split -> (A, B) with both A and B targeting the same Decision node.
-    // Decision has 2 incoming edges and is not a ParallelJoin, so pass-throughs stay.
+    // Decision has 2 incoming edges and is not a Join, so pass-throughs stay.
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
@@ -1474,7 +1501,7 @@ fn multi_input_non_join_retains_pass_through_transitions() {
                         label: "Yes".to_string(),
                         guard: "true".to_string(),
                     }],
-                    default_branch: Some("cond_no".to_string()),
+                    default_branch: Some("default".to_string()),
                 },
                 parent_id: None,
                 width: None,
@@ -1490,9 +1517,9 @@ fn multi_input_non_join_retains_pass_through_transitions() {
             edge("e_to_dec_a", "a", "dec"),
             edge("e_to_dec_b", "b", "dec"),
             edge_with_handle("e_yes", "dec", "ey", "cond_yes"),
-            edge_with_handle("e_no", "dec", "en", "cond_no"),
+            edge_with_handle("e_no", "dec", "en", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let mut graph = graph;
@@ -1563,7 +1590,7 @@ fn scope_creates_group_in_air() {
             edge("e1", "s", "ht"),
             edge("e2", "ht", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "scope_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -1620,7 +1647,7 @@ fn scope_without_children_compiles() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     let air = compile_to_air(&graph, "empty_scope_test", "", &std::collections::HashMap::new()).expect("should compile");
@@ -1651,7 +1678,7 @@ fn edge_missing_target_handle_fails() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), end_node("e")],
         edges: vec![bad_edge],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "missing-th", "", &std::collections::HashMap::new())
         .expect_err("should reject edge missing target_handle");
@@ -1701,7 +1728,7 @@ fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), typed_end],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "type-mismatch", "", &std::collections::HashMap::new())
         .expect_err("should reject edge with field-set mismatch");
@@ -1750,7 +1777,7 @@ fn edge_empty_target_port_accepts_anything() {
     let graph = WorkflowGraph {
         nodes: vec![typed_start, end_node("e")],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let result = compile_to_air(&graph, "passthrough", "", &std::collections::HashMap::new());
     assert!(
@@ -1823,7 +1850,7 @@ fn decision_with_guard(id: &str, guard: &str) -> WorkflowNode {
                 label: "Yes".to_string(),
                 guard: guard.to_string(),
             }],
-            default_branch: Some("cond_no".to_string()),
+            default_branch: Some("default".to_string()),
         },
         parent_id: None,
         width: None,
@@ -1845,9 +1872,9 @@ fn guard_qualified_reference_resolves() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let result = compile_to_air(&graph, "phase3-resolves", "", &std::collections::HashMap::new());
     assert!(result.is_ok(), "compile should succeed: {:?}", result.err());
@@ -1865,9 +1892,9 @@ fn guard_syntax_error_is_reported() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "phase3-syntax", "", &std::collections::HashMap::new())
         .expect_err("malformed Rhai should produce GuardSyntax");
@@ -1895,9 +1922,9 @@ fn guard_unresolved_identifier_is_reported() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "phase3-unresolved", "", &std::collections::HashMap::new())
         .expect_err("unknown identifier should produce GuardUnresolved");
@@ -1938,9 +1965,9 @@ fn guard_input_unknown_field_is_rejected() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "phase-d-unknown", "", &std::collections::HashMap::new())
         .expect_err("unknown input field should be unresolved");
@@ -2031,9 +2058,9 @@ fn guard_multi_hop_scope_walk() {
             edge("e_sa", "s", "a"),
             edge("e_ad", "a", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let result = compile_to_air(&graph, "phase3-multihop", "", &std::collections::HashMap::new());
     assert!(
@@ -2046,8 +2073,10 @@ fn guard_multi_hop_scope_walk() {
 #[test]
 fn loop_condition_can_reference_iteration_local() {
     // Loop body's `loop_condition` should be able to reference the loop's own
-    // iteration counter — the foundation injects it as the control-token leaf
-    // `_loop_<id>_count` — without the upstream Start declaring it.
+    // declared `<slug>.iteration` producer field — the standard read-arc
+    // synthesis pass binds it to the loop's own parked `p_<id>_data` (the
+    // continue/exit transitions are pre-wired in `lower_loop`), so no upstream
+    // Start needs to declare it.
     use mekhan_service::models::template::{FieldKind, Port, PortField};
 
     let loop_node = WorkflowNode {
@@ -2059,7 +2088,7 @@ fn loop_condition_can_reference_iteration_local() {
             label: "Retry".to_string(),
             description: None,
             max_iterations: 5,
-            loop_condition: "input._loop_lp_count < 3".to_string(),
+            loop_condition: "lp.iteration < 3".to_string(),
         },
         parent_id: None,
         width: None,
@@ -2141,7 +2170,7 @@ fn loop_condition_can_reference_iteration_local() {
             body_out_edge,
             edge("e_out", "lp", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let result = compile_to_air(&graph, "phase3-loop-iter", "", &std::collections::HashMap::new());
     assert!(
@@ -2165,9 +2194,9 @@ fn empty_guard_is_skipped() {
         edges: vec![
             edge("e_in", "s", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let result = compile_to_air(&graph, "phase3-empty", "", &std::collections::HashMap::new());
     assert!(result.is_ok(), "empty guard should compile: {:?}", result.err());
@@ -2214,6 +2243,7 @@ fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -
                         required: Some(true),
                         placeholder: None,
                         options: None,
+                        ..Default::default()
                     },
                 }],
             }],
@@ -2253,6 +2283,7 @@ fn human_task_output_dedupes_duplicate_field_names() {
                 required: Some(false),
                 placeholder: None,
                 options: None,
+                ..Default::default()
             },
         });
     }
@@ -2303,7 +2334,7 @@ fn decision_output_ports_one_per_branch_plus_default() {
                     guard: "false".to_string(),
                 },
             ],
-            default_branch: Some("default1".to_string()),
+            default_branch: Some("default".to_string()),
         },
         parent_id: None,
         width: None,
@@ -2315,7 +2346,7 @@ fn decision_output_ports_one_per_branch_plus_default() {
     let ids: Vec<&str> = ports.iter().map(|p| p.id.as_str()).collect();
     assert!(ids.contains(&"high"));
     assert!(ids.contains(&"low"));
-    assert!(ids.contains(&"default1"));
+    assert!(ids.contains(&"default"));
     // Phase 4 stub: branches are pass-through.
     assert!(ports.iter().all(|p| p.fields.is_empty()));
 }
@@ -2326,7 +2357,6 @@ fn parallel_split_join_scope_have_single_pass_through_output() {
 
     for data in [
         WorkflowNodeData::ParallelSplit { label: "x".into(), description: None },
-        WorkflowNodeData::ParallelJoin { label: "x".into(), description: None, merge_strategy: Default::default() },
         WorkflowNodeData::Scope { label: "x".into(), description: None },
     ] {
         let ports = data.output_ports();
@@ -2388,7 +2418,7 @@ fn empty_loop_fails_with_loop_empty_error() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "lp"), edge("e2", "lp", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "empty-loop", "", &std::collections::HashMap::new())
         .expect_err("empty Loop should fail");
@@ -2417,9 +2447,9 @@ fn guard_can_reference_human_task_derived_field() {
             edge("e_si", "s", "ht"),
             edge("e_id", "ht", "d"),
             edge_with_handle("e_yes", "d", "ea", "cond_yes"),
-            edge_with_handle("e_no", "d", "eb", "cond_no"),
+            edge_with_handle("e_no", "d", "eb", "default"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let result = compile_to_air(&graph, "phase4-ht-scope", "", &std::collections::HashMap::new());
     assert!(
@@ -2513,7 +2543,7 @@ fn trigger_node_is_skipped_during_compile() {
             edge("e1", "s", "e"),
             edge_with_handle("t_edge", "t", "s", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "Trigger Compile", "", &Default::default())
         .expect("trigger-attached graph should compile");
@@ -2533,7 +2563,7 @@ fn trigger_must_have_exactly_one_outgoing_edge() {
     let graph_zero = WorkflowGraph {
         nodes: vec![start_node("s"), end_node("e"), trigger_node("t", manual_source())],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph_zero, "", "", &Default::default()).expect_err("zero outgoing should fail");
     assert!(err.to_string().contains("trigger 't'"));
@@ -2550,7 +2580,7 @@ fn trigger_must_have_exactly_one_outgoing_edge() {
             edge_with_handle("te1", "t", "s", "in"),
             edge_with_handle("te2", "t", "e", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph_two, "", "", &Default::default()).expect_err("two outgoing should fail");
     assert!(err.to_string().contains("trigger 't'"));
@@ -2578,7 +2608,7 @@ fn trigger_cannot_be_edge_target() {
             },
             edge_with_handle("te", "t", "e", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "", "", &Default::default())
         .expect_err("trigger as target should fail");
@@ -2612,7 +2642,7 @@ fn trigger_payload_mapping_references_known_fields() {
             edge("e1", "s", "e"),
             edge_with_handle("te", "t", "s", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     compile_to_air(&graph, "", "", &Default::default())
         .expect("valid payload_mapping should compile");
@@ -2638,7 +2668,7 @@ fn trigger_payload_mapping_resolves_in_scope_qualified_ref() {
     let graph = WorkflowGraph {
         nodes: vec![start, end_node("e"), trig],
         edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     compile_to_air(&graph, "", "", &Default::default())
         .expect("qualified ref resolving in the source scope should compile");
@@ -2665,7 +2695,7 @@ fn trigger_payload_mapping_rejects_out_of_scope_identifier() {
     let graph = WorkflowGraph {
         nodes: vec![start, end_node("e"), trig],
         edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "", "", &Default::default())
         .expect_err("out-of-scope identifier should fail");
@@ -2684,7 +2714,7 @@ fn trigger_empty_mapping_into_required_port_fails() {
     let graph = WorkflowGraph {
         nodes: vec![start, end_node("e"), trig],
         edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "", "", &Default::default())
         .expect_err("empty mapping into required port should fail");
@@ -2703,7 +2733,7 @@ fn trigger_empty_mapping_into_optional_port_compiles() {
     let graph = WorkflowGraph {
         nodes: vec![start, end_node("e"), trig],
         edges: vec![edge("e1", "s", "e"), edge_with_handle("te", "t", "s", "in")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     compile_to_air(&graph, "", "", &Default::default())
         .expect("empty mapping into an all-optional port should compile");
@@ -2746,7 +2776,7 @@ fn trigger_payload_mapping_rejects_unknown_field() {
             edge("e1", "s", "e"),
             edge_with_handle("te", "t", "s", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "", "", &Default::default())
         .expect_err("unknown target_field should fail");
@@ -2778,7 +2808,7 @@ fn trigger_payload_mapping_rejects_invalid_rhai() {
             edge("e1", "s", "e"),
             edge_with_handle("te", "t", "s", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "", "", &Default::default())
         .expect_err("bad rhai should fail");
@@ -2813,7 +2843,7 @@ fn trigger_cron_invalid_schedule_fails() {
             edge("e1", "s", "e"),
             edge_with_handle("te", "t", "s", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "", "", &Default::default())
         .expect_err("bad cron should fail");
@@ -2841,7 +2871,7 @@ fn trigger_cron_invalid_timezone_fails() {
             edge("e1", "s", "e"),
             edge_with_handle("te", "t", "s", "in"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let err = compile_to_air(&graph, "", "", &Default::default())
         .expect_err("bad timezone should fail");
@@ -2904,7 +2934,7 @@ fn start_file_field_emits_catalogue_chain() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "cat", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -2986,7 +3016,7 @@ fn start_multiple_file_fields_chain_in_order() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "cat2", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3019,7 +3049,7 @@ fn start_file_field_with_process_name_chains_after_process_start() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "catpn", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3050,15 +3080,25 @@ fn start_no_file_fields_leaves_compiled_output_unchanged() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "nofile", "", &std::collections::HashMap::new())
         .expect("should compile");
 
     assert!(!has_transition(&air, "t_s_cat_shape_0"), "unexpected catalogue chain");
     assert!(!has_place(&air, "p_s_cat_art_0"), "unexpected artifact place");
-    assert_eq!(places(&air).len(), 3, "ready/data/main only — no catalogue places");
-    assert_eq!(transitions(&air).len(), 1, "only the t_s_park transition");
+    // Post-b25ca8c: ready/data/main + End's anchored p_e_terminal = 4 places;
+    // t_s_park + t_e_complete = 2 transitions.
+    assert_eq!(
+        places(&air).len(),
+        4,
+        "ready/data/main + End's p_e_terminal — no catalogue places"
+    );
+    assert_eq!(
+        transitions(&air).len(),
+        2,
+        "t_s_park + t_e_complete"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3124,7 +3164,7 @@ fn phase_update_emits_typed_status_detail_phase_changed() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "pu_test", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3163,7 +3203,7 @@ fn progress_update_emits_typed_status_detail_progress_updated() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "pg_test", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3202,7 +3242,7 @@ fn phase_update_interpolates_message_null_safe() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "pu_interp", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3239,7 +3279,7 @@ fn process_control_nodes_pass_token_through_to_end() {
             edge("e2", "pu", "pg"),
             edge("e3", "pg", "e"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "chain", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3275,7 +3315,7 @@ fn phase_update_status_failed_and_skipped_literals() {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
         let air = compile_to_air(&graph, "pu_status", "", &std::collections::HashMap::new())
             .expect("should compile");
@@ -3304,7 +3344,7 @@ fn phase_update_omits_message_field_when_unset() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "pu"), edge("e2", "pu", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "pu_nomsg", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3328,7 +3368,7 @@ fn progress_update_interpolates_message_typed_field() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "pg_interp", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3362,7 +3402,7 @@ fn progress_update_defaults_steps_to_zero() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "pg"), edge("e2", "pg", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "pg_defaults", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3401,7 +3441,7 @@ fn failure_emits_process_fail_passthrough() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "fail_test", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3448,7 +3488,7 @@ fn end_result_mapping_stamps_success_envelope() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), end],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "end_res", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3476,7 +3516,7 @@ fn bare_end_has_no_result_shape() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), end_node("e")],
         edges: vec![edge("e1", "s", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "bare_end", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3511,7 +3551,7 @@ fn failure_error_mapping_in_envelope() {
     let graph = WorkflowGraph {
         nodes: vec![start_node("s"), fail, end_node("e")],
         edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "fail_res", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3530,7 +3570,7 @@ fn failure_interpolates_message_null_safe() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "fail_interp", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3554,7 +3594,7 @@ fn failure_omits_reason_when_unset() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "fail_nomsg", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3576,7 +3616,7 @@ fn failure_passes_token_through_to_end() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "f"), edge("e2", "f", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "fail_chain", "", &std::collections::HashMap::new())
         .expect("should compile");
@@ -3627,7 +3667,7 @@ fn automated_step_inline_unchanged_emits_lifecycle_no_bridge() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect("inline should compile");
@@ -3658,7 +3698,7 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect("scheduled should compile");
@@ -3734,7 +3774,7 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "cat"), edge("e2", "cat", "e")],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect("catalogue_query should compile");
@@ -3768,4 +3808,231 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
         qlogic.contains("category") && qlogic.contains("model"),
         "query token must carry the configured filters: {qlogic}"
     );
+}
+
+// ─── Delay / Timeout coverage ──────────────────────────────────────────────
+
+fn delay_node(id: &str, expr: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "delay".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Delay {
+            label: "Delay".to_string(),
+            description: None,
+            duration_ms_expr: expr.to_string(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+fn timeout_node(id: &str, expr: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "timeout".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Timeout {
+            label: "Timeout".to_string(),
+            description: None,
+            duration_ms_expr: expr.to_string(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+#[test]
+fn delay_node_compiles_to_prep_schedule_forward_shape() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            delay_node("d", "5000"),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "d"), edge("e2", "d", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let air = compile_to_air(&graph, "delay_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // All three transitions emitted in the canonical order.
+    assert!(has_transition(&air, "t_d_prep"), "missing prep transition");
+    assert!(
+        has_transition(&air, "t_d_schedule"),
+        "missing schedule effect transition"
+    );
+    assert!(has_transition(&air, "t_d_forward"), "missing forward transition");
+
+    // Places: input is folded into Start's output by the merge pass (same
+    // as every other pass-through node), but the timer-internal places +
+    // output survive.
+    assert!(has_place(&air, "p_d_timer_data"));
+    assert!(has_place(&air, "p_d_scheduled"));
+    assert!(has_place(&air, "p_d_sig"));
+    assert!(has_place(&air, "p_d_output"));
+
+    // The schedule transition fires the timer_schedule effect.
+    let sched = get_transition(&air, "t_d_schedule").unwrap();
+    assert_eq!(sched["logic"]["handler_id"], "timer_schedule");
+
+    // The prep transition embeds the duration expression literally so it's
+    // Rhai-evaluated at firing time (not the static AIR-build literal).
+    let prep = get_transition(&air, "t_d_prep").unwrap();
+    let src = prep["logic"]["source"].as_str().unwrap();
+    assert!(src.contains("delay_ms: (5000)"), "embedded literal: {src}");
+    assert!(src.contains("target_place_id"), "embeds signal target: {src}");
+
+    // The signal place is kind=signal so the timer can inject into it.
+    let sig = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_d_sig")
+        .expect("signal place");
+    assert_eq!(sig["type"], "signal", "delay signal place is kind=signal");
+}
+
+#[test]
+fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
+    let mut human = WorkflowNode {
+        id: "h".to_string(),
+        node_type: "human_task".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::HumanTask {
+            label: "Approve".to_string(),
+            description: None,
+            task_title: "Approve".to_string(),
+            instructions_mdsvex: None,
+            steps: vec![],
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+    human.parent_id = Some("t".to_string());
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            timeout_node("t", "10000"),
+            human,
+            end_node("e_done"),
+            end_node("e_to"),
+        ],
+        edges: vec![
+            edge("e_in", "s", "t"),
+            // Body wiring: timeout body_in → human, human → timeout body_out.
+            edge_with_handle("e_body_in", "t", "h", "body_in"),
+            WorkflowEdge {
+                id: "e_body_out".to_string(),
+                source: "h".to_string(),
+                target: "t".to_string(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                // loop_back so the DAG cycle check excludes this edge,
+                // matching Loop's convention for body completion edges.
+                edge_type: "loop_back".to_string(),
+            },
+            // Outer outputs: done + timeout.
+            edge("e_done", "t", "e_done"),
+            edge_with_handle("e_to", "t", "e_to", "timeout"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "timeout_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Body container + race transitions all present.
+    for t in [
+        "t_t_prep",
+        "t_t_schedule",
+        "t_t_body_done",
+        "t_t_cancel",
+        "t_t_timeout",
+    ] {
+        assert!(has_transition(&air, t), "missing transition: {t}");
+    }
+
+    // The schedule effect is timer_schedule; cancel is timer_cancel.
+    let sched = get_transition(&air, "t_t_schedule").unwrap();
+    assert_eq!(sched["logic"]["handler_id"], "timer_schedule");
+    let cancel = get_transition(&air, "t_t_cancel").unwrap();
+    assert_eq!(cancel["logic"]["handler_id"], "timer_cancel");
+
+    // The Timeout post-pass synthesizes a human_cancel drain for the
+    // HumanTask body child (its NodeInterface.cancellable is populated).
+    assert!(
+        has_transition(&air, "t_t_drain_h"),
+        "missing drain transition for cancellable body child"
+    );
+    let drain_effect = get_transition(&air, "t_t_drain_h_effect").unwrap();
+    assert_eq!(
+        drain_effect["logic"]["handler_id"], "human_cancel",
+        "drain fires human_cancel for HumanTask body children"
+    );
+
+    // The cancel_pulse signal place is minted (Timeout's fan-out gate).
+    assert!(has_place(&air, "p_t_cancel_pulse"));
+    let pulse = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_t_cancel_pulse")
+        .expect("cancel_pulse place");
+    assert_eq!(pulse["type"], "signal", "cancel_pulse is a Signal place");
+
+    // The timer signal target is the timeout's sig_timeout place.
+    let prep = get_transition(&air, "t_t_prep").unwrap();
+    let src = prep["logic"]["source"].as_str().unwrap();
+    assert!(
+        src.contains("p_t_sig_timeout"),
+        "prep wires timer to the timeout's signal place: {src}"
+    );
+    assert!(src.contains("delay_ms: (10000)"));
+}
+
+#[test]
+fn timeout_without_body_is_rejected_at_validate() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            timeout_node("t", "1000"),
+            end_node("e"),
+        ],
+        // No body_in / body_out edges — should fail validate.
+        edges: vec![edge("e1", "s", "t"), edge("e2", "t", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "no_body", "", &std::collections::HashMap::new())
+        .expect_err("must reject body-less timeout");
+    let msg = format!("{err}");
+    assert!(msg.contains("body"), "validate error mentions body: {msg}");
+}
+
+#[test]
+fn delay_with_empty_duration_expr_is_rejected() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            delay_node("d", ""),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "d"), edge("e2", "d", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "empty_dur", "", &std::collections::HashMap::new())
+        .expect_err("must reject empty durationMsExpr");
+    assert!(format!("{err}").contains("durationMsExpr"));
 }

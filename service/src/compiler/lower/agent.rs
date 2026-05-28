@@ -1,0 +1,681 @@
+//! `WorkflowNodeData::Agent` lowering — `docs/12-agent-node-design.md`.
+//!
+//! - Degenerate path (`max_turns == 1` + no `stop_when` + no tool children)
+//!   synthesizes the equivalent `AutomatedStep(Llm)` and delegates so the
+//!   compiled net is byte-identical to a hand-authored single-shot LLM step.
+//! - Full agent loop emits the parked-state + LLM call + multi-transition
+//!   route topology described in `docs/12` § 3. State migrates through
+//!   discrete "phase" places (`p_state` between turns, `p_state_in_flight`
+//!   during the LLM call, `p_state_in_tool` during a tool dispatch) so
+//!   exactly one transition is enabled at any cycle point — no double-fire
+//!   races and no need for the engine to enforce mutual exclusion.
+
+use super::*;
+
+pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let WorkflowNodeData::Agent {
+        max_turns,
+        stop_when,
+        context_strategy,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_agent on non-Agent node")
+    };
+
+    // Tool detection: nodes the agent reaches via outgoing edges keyed by
+    // `source_handle == "tools"` (orchestrator pre-indexes these into
+    // `cx.agent_tools`). The LLM-facing `tool_name` is derived from the
+    // target node's own `data.label()` (slugified to Rhai-identifier-safe
+    // via `sanitize_slug`) and `tool_description` from `data.description()`
+    // — single source of truth, no separate `tool_meta` field. A tools
+    // edge to a node whose label slugifies to "node" (the empty/junk
+    // fallback in `sanitize_slug`) is a hard compile error so authoring
+    // mistakes surface at publish, not silently at the first tool-use
+    // turn.
+    let mut tool_children: Vec<&WorkflowNode> = Vec::with_capacity(cx.agent_tools.len());
+    for &child in cx.agent_tools.iter() {
+        let raw_label = child.data.label();
+        if raw_label.trim().is_empty() {
+            return Err(CompileError::Compilation(format!(
+                "agent node '{}': tool edge targets node '{}' which has an \
+                 empty label — the LLM addresses tools by name. Set a label \
+                 on the target node (it becomes the tool's name after \
+                 slugification).",
+                cx.node.id, child.id
+            )));
+        }
+        tool_children.push(child);
+    }
+    let has_tool_children = !tool_children.is_empty();
+
+    // Degenerate fast path: when the agent has zero tool children AND
+    // `max_turns == 1` AND `stop_when.is_none()`, lower byte-identically
+    // to the equivalent single-shot `AutomatedStep(Llm)`. The
+    // `agent_degenerate_lowers_byte_identical_to_llm_automated_step`
+    // contract test (service/tests/agent_lowering.rs § 7) pins this.
+    if *max_turns == 1 && stop_when.is_none() && !has_tool_children {
+        return lower_agent_degenerate(cx);
+    }
+
+    // Context strategy gate: only `None` runs end-to-end in v1.
+    // `DropOldest` requires a context-budget bookkeeping pass and
+    // `SummarizeOldest` requires a summarisation sub-LLM call — both
+    // deferred to a follow-up PR (docs/12 § 9). Compile-time reject so
+    // mis-authored templates fail at publish, not at the first turn.
+    if !matches!(context_strategy, ContextStrategy::None) {
+        return Err(CompileError::Compilation(format!(
+            "agent node '{}': context_strategy {:?} is not yet implemented \
+             (v1 supports ContextStrategy::None only)",
+            cx.node.id, context_strategy
+        )));
+    }
+
+    lower_agent_loop(cx, &tool_children)
+}
+
+/// Byte-identical fall-through for the trivial agent shape. Synthesises the
+/// equivalent `AutomatedStep(Llm)` and delegates, reusing the existing
+/// lifecycle/retry/foundation plumbing. Keeps the same `id` / `slug` /
+/// `parent_id` so every minted place/transition id lines up with what a
+/// hand-authored single-shot LLM step would emit.
+fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let WorkflowNodeData::Agent {
+        label,
+        description,
+        model,
+        system_prompt,
+        user_prompt,
+        response_format,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_agent_degenerate on non-Agent node")
+    };
+
+    let llm_config = crate::models::template::agent_to_llm_config(
+        model,
+        system_prompt.as_deref(),
+        user_prompt,
+        response_format.as_ref(),
+        &[],
+    );
+
+    let virtual_node = WorkflowNode {
+        id: cx.node.id.clone(),
+        node_type: "automated_step".to_string(),
+        slug: cx.node.slug.clone(),
+        position: cx.node.position.clone(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: label.clone(),
+            description: description.clone(),
+            execution_spec: crate::models::template::ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Llm,
+                entrypoint: None,
+                config: llm_config,
+            },
+            input: crate::models::template::Port::empty_input(),
+            output: crate::models::template::default_output_port(ExecutionBackendType::Llm),
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+        },
+        parent_id: cx.node.parent_id.clone(),
+        width: cx.node.width,
+        height: cx.node.height,
+    };
+
+    let mut virtual_cx = LoweringCtx {
+        node: &virtual_node,
+        outgoing_edges: cx.outgoing_edges,
+        incoming_edges: cx.incoming_edges,
+        children: cx.children,
+        agent_tools: cx.agent_tools,
+        ctx: &mut *cx.ctx,
+        ports: &mut *cx.ports,
+        fixups: &mut *cx.fixups,
+        node_files: cx.node_files,
+        sub_air: cx.sub_air,
+        interfaces: &mut *cx.interfaces,
+        definitions: cx.definitions,
+        node_configs: &mut *cx.node_configs,
+        config_storage: cx.config_storage,
+    };
+
+    super::automated_step::lower_automated_step(&mut virtual_cx)
+}
+
+// LLM config projection lives in `models::template::agent_to_llm_config`
+// — single source of truth shared with the resource borrow planner, the
+// publish-time resource scan, and the `output_ports` deriver.
+
+/// Full agent-loop lowering (docs/12 § 3). State is the single token
+/// migrating through phase-named places — exactly one of {p_state,
+/// p_state_in_flight, p_state_in_tool} holds it at any cycle point:
+///
+/// ```text
+///   p_input ─► t_enter ─► p_state
+///                            │
+///                t_prepare_call (consume p_state)
+///                            ├─► exec_inbox
+///                            └─► p_state_in_flight
+///                                  │
+///                       (LLM call via executor lifecycle)
+///                                  ▼
+///                          t_to_response (lc.completed + p_state_in_flight)
+///                                  │
+///                                  ▼
+///                              p_response
+///                                  │
+///                                  ├── t_route_final ──► p_final ─► t_exit ─► p_output
+///                                  │     (tool_calls empty OR turn+1>=max OR stop_when)
+///                                  │
+///                                  ├── t_route_dispatch_<tn>  (per tool)
+///                                  │     ├─► p_dispatch_<tn>  ─► t_invoke_<tn> ─► child input
+///                                  │     │                                          (child runs)
+///                                  │     │                                          child output
+///                                  │     │                                              ▼
+///                                  │     │                                       t_collect_<tn>
+///                                  │     └─► p_state_in_tool ──────────────────────────┘
+///                                  │                                                    │
+///                                  │                                                    ▼
+///                                  │                                                p_state (loop)
+///                                  │
+///                                  └── t_route_unknown ─► p_state (Feedback only;
+///                                                        Bubble pre-rejected at
+///                                                        compile via tool-name set)
+/// ```
+///
+/// v1 scope: serial tool calls only (`tool_calls[0]`); both ToolErrorPolicy
+/// variants; `ContextStrategy::None` only; history kept in-token (Vec<Map>),
+/// S3-backed history deferred.
+fn lower_agent_loop(
+    cx: &mut LoweringCtx,
+    tool_children: &[&WorkflowNode],
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Agent {
+        label,
+        model,
+        system_prompt,
+        user_prompt,
+        response_format,
+        max_turns,
+        stop_when,
+        on_tool_error,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_agent_loop on non-Agent node")
+    };
+    let id = cx.node.id.clone();
+    let max_turns = *max_turns;
+    let on_tool_error = *on_tool_error;
+
+    // Per-tool derived metadata: tool_name = slugified node label,
+    // tool_description = node description (verbatim). Single source of
+    // truth — the canvas label IS what the LLM sees (after sanitisation).
+    // Pre-computed so the uniqueness check, schema build, and per-tool
+    // route emission all share the same name/description strings.
+    let tool_meta: Vec<(String, String)> = tool_children
+        .iter()
+        .map(|c| {
+            (
+                crate::models::template::sanitize_slug(c.data.label()),
+                c.data.description().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+
+    // Tool-name uniqueness — analog of `SlugConflict`. A duplicate would
+    // make the per-tool dispatch route guards ambiguous; reject at
+    // compile so the editor can ring the offending children. Names
+    // collide post-slugification (e.g. "Order Lookup" and "order_lookup"
+    // both slugify to the same identifier), so check on the derived form.
+    let mut seen_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (name, _) in &tool_meta {
+        if !seen_names.insert(name.as_str()) {
+            return Err(CompileError::Compilation(format!(
+                "agent node '{id}': duplicate tool name '{name}' — two tool \
+                 children have labels that slugify to the same identifier. \
+                 Rename one of the tool nodes."
+            )));
+        }
+    }
+
+    // Build the tool schemas. Each tool node's declared input port becomes
+    // the LLM-facing `input_schema` — the LLM addresses tool args by the
+    // exact field names the node declares (e.g. `order_id`), and the
+    // runner promotes those args to Python globals via `_AccessibleDict`,
+    // so a mismatch surfaces as `AttributeError: '_AccessibleDict' object
+    // has no attribute 'X'` at the first tool-call turn. With no declared
+    // fields, the LLM gets a permissive `{type: object}` so it can call
+    // but the platform doesn't pretend to validate.
+    let tool_schemas: Vec<serde_json::Value> = tool_meta
+        .iter()
+        .zip(tool_children.iter())
+        .map(|((name, description), child)| {
+            let input_port = child.data.input_ports().into_iter().next();
+            let input_schema = match input_port {
+                Some(port) if !port.fields.is_empty() => port_to_input_schema(&port),
+                _ => serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": true,
+                }),
+            };
+            serde_json::json!({
+                "name": name,
+                "description": description,
+                "input_schema": input_schema,
+            })
+        })
+        .collect();
+
+    let llm_config = crate::models::template::agent_to_llm_config(
+        model,
+        system_prompt.as_deref(),
+        user_prompt,
+        response_format.as_ref(),
+        &tool_schemas,
+    );
+
+    // Side-channel the static config via `config_ref`. The Petri token
+    // stays slim; the executor's `FetchConfigHook` materialises it.
+    let storage_key = cx.config_storage.key(&id);
+    cx.node_configs.insert(id.clone(), llm_config);
+    let config_ref_rhai = format!(
+        "#{{ \"storage_path\": \"{}\" }}",
+        rhai_str_escape(&storage_key)
+    );
+
+    // Quote the optional stop_when as a Rhai sub-expression. Empty/None
+    // canonicalises to `false` so the route guards can blindly OR it in
+    // without a branch in the codegen.
+    let stop_when_expr: String = stop_when
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("({s})"))
+        .unwrap_or_else(|| "false".to_string());
+
+    // Known tool names — baked into the route_unknown guard so the
+    // compiler decides at publish what counts as "known" rather than
+    // shipping the set to runtime. List literal in Rhai map-key form.
+    let known_names_rhai: String = if tool_meta.is_empty() {
+        "[]".to_string()
+    } else {
+        let inner: Vec<String> = tool_meta
+            .iter()
+            .map(|(name, _)| format!("\"{}\"", rhai_str_escape(name)))
+            .collect();
+        format!("[{}]", inner.join(", "))
+    };
+
+    let ctx = &mut *cx.ctx;
+
+    // ----- Places -----
+    let p_input: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+    let p_state: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_state"),
+        format!("{label} - Agent State (between turns)"),
+    );
+    let p_state_in_flight: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_state_in_flight"),
+        format!("{label} - State (parked during LLM call)"),
+    );
+    let p_state_in_tool: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_state_in_tool"),
+        format!("{label} - State (parked during tool call)"),
+    );
+    let p_response: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_response"),
+        format!("{label} - LLM Response (state + turn_result merged)"),
+    );
+    let p_final: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_final"), format!("{label} - Final"));
+    let p_output: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+    let p_error: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+
+    // One dispatch place per declared tool. Stage the tool wiring data
+    // here; the post-traversal `apply_agent_tool_wirings` fixup mints
+    // the invoke + collect transitions once each child's NodePorts is in
+    // node_ports.
+    let mut dispatch_places: Vec<(String, PlaceHandle<DynamicToken>)> = Vec::new();
+    let mut tool_entries: Vec<AgentToolEntry> = Vec::new();
+    for (child, (tn, _desc)) in tool_children.iter().zip(tool_meta.iter()) {
+        let tn = tn.clone();
+        let pd: PlaceHandle<DynamicToken> = ctx.state(
+            format!("p_{id}_dispatch_{tn}"),
+            format!("{label} - Dispatch {tn}"),
+        );
+        dispatch_places.push((tn.clone(), pd.clone()));
+        tool_entries.push(AgentToolEntry {
+            tool_name: tn,
+            child_id: child.id.clone(),
+            dispatch_place: pd,
+            on_tool_error,
+        });
+    }
+
+    // ----- t_enter: initialise state, hand to p_state -----
+    // The parked envelope keeps the slim agent state: turn counter,
+    // accumulating token totals, conversation history (in-token Vec for
+    // v1), and `final_response` (set on the terminal turn). The user's
+    // inbound token rides through as `state.input`.
+    ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Agent"))
+        .auto_input("input", &p_input)
+        .auto_output("state", &p_state)
+        .logic_rhai(
+            r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, history: [], input: input, final_response: () } }"#
+                .to_string(),
+        )
+        .done();
+
+    // ----- t_prepare_call: state → exec_inbox + p_state_in_flight -----
+    // Consumes `p_state`, produces the executor job AND parks state on
+    // `p_state_in_flight` for the LLM call's duration. Consumption gates
+    // re-entry: t_prepare_call cannot fire again until t_collect_<tn>
+    // (or t_route_unknown) re-deposits on `p_state`.
+    let exec_inbox = ctx.state::<ExecutorSubmitInput>(
+        format!("p_{id}_call_inbox"),
+        format!("{label} - Call Inbox"),
+    );
+    let exec_inbox_for_lc = exec_inbox.clone();
+    ctx.transition(
+        format!("t_{id}_prepare_call"),
+        format!("{label} - Prepare LLM Call"),
+    )
+    .auto_input("state", &p_state)
+    .auto_output("job", &exec_inbox)
+    .auto_output("state_in_flight", &p_state_in_flight)
+    // Rhai variables are mutable by default — no `mut` keyword exists,
+    // so `let mut d = ...` would parse `mut` as a fresh variable name
+    // and then fail at the next token. Plain `let d` is mutable.
+    //
+    // The `/*__BORROWED_INPUTS__*/` marker is a Rhai block comment the
+    // borrow apply phase splices ResourceEnvelope staging snippets into
+    // (e.g. `job_inputs.push(#{ "name": "openai.json", ... })`). Without
+    // it, an agent with `model.resource_alias` set deploys to staging,
+    // which then fails with "resource '<alias>' not staged as
+    // <alias>.json — compiler must emit a ResourceEnvelope borrow for
+    // this step". Mirrors the marker site in
+    // `lower_automated_step::t_<id>_prepare`.
+    .logic_rhai(format!(
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; #{{ job: d, state_in_flight: s }}"#
+    ))
+    .done();
+
+    // Scoped-prefix wrap mirrors `lower_automated_step`. Without it the
+    // lifecycle's terminal places (`completed`, `dead_letter`,
+    // `cancelled`) leak into the top-level namespace and (1) collide if
+    // any other node calls `executor_lifecycle`, (2) clutter the
+    // petri-net visualisation with free-floating terminals that look
+    // like workflow exits. Inside the prefix they become
+    // `{id}/completed`, `{id}/dead_letter`, etc. — same shape an LLM
+    // AutomatedStep produces.
+    let lc = ctx.scoped_prefix(id.as_str(), label.as_str(), |ctx| {
+        executor_lifecycle(
+            ctx,
+            ExecutorBridges {
+                inbox: exec_inbox_for_lc,
+                result_out: None,
+                failure_out: None,
+                process_id: None,
+                process_step: None,
+                catalogue: false,
+                process: false,
+            },
+        )
+    });
+
+    // ----- t_to_response: lc.completed + p_state_in_flight → p_response -----
+    // Re-unites state with the LLM response and accumulates this turn's
+    // token usage into the parked state envelope. Output token carries
+    // both: `{state: ..., response: done}` so the route transitions can
+    // consume a single token + see everything they need. The defensive
+    // `type_of(...)` chain tolerates an absent / non-map `usage` field
+    // (some adapters emit `null` until tokens land — never trust the
+    // wire shape unconditionally).
+    ctx.transition(
+        format!("t_{id}_to_response"),
+        format!("{label} - To Response"),
+    )
+    .auto_input("done", &lc.completed)
+    .auto_input("state", &p_state_in_flight)
+    .auto_output("response", &p_response)
+    .logic_rhai(
+        r#"let outs = if type_of(done.detail) == "map" && type_of(done.detail.outputs) == "map" { done.detail.outputs } else { #{} }; let usage = if type_of(outs.usage) == "map" { outs.usage } else { #{} }; let in_tok = if type_of(usage.input_tokens) == "i64" { usage.input_tokens } else { 0 }; let out_tok = if type_of(usage.output_tokens) == "i64" { usage.output_tokens } else { 0 }; state.total_tokens_in = state.total_tokens_in + in_tok; state.total_tokens_out = state.total_tokens_out + out_tok; state.message_count = state.message_count + 1; #{ response: #{ state: state, response: done } }"#
+            .to_string(),
+    )
+    .done();
+
+    // Executor-side failure paths drain state out of `p_state_in_flight`
+    // too — otherwise it'd stay parked forever and block any retry path
+    // a wrapping workflow might author. State is discarded on hard
+    // executor failure (no good way to surface partial state).
+    ctx.transition(format!("t_{id}_call_failed"), format!("{label} - LLM Call Failed"))
+        .auto_input("dead", &lc.failed)
+        .auto_input("state", &p_state_in_flight)
+        .auto_output("error", &p_error)
+        .logic_rhai("#{ error: dead }".to_string())
+        .done();
+    ctx.transition(format!("t_{id}_call_timed_out"), format!("{label} - LLM Call Timed Out"))
+        .auto_input("dead", &lc.timed_out)
+        .auto_input("state", &p_state_in_flight)
+        .auto_output("error", &p_error)
+        .logic_rhai("#{ error: dead }".to_string())
+        .done();
+    ctx.transition(format!("t_{id}_call_dead"), format!("{label} - LLM Call Dead Letter"))
+        .auto_input("dead", &lc.dead_letter)
+        .auto_input("state", &p_state_in_flight)
+        .auto_output("error", &p_error)
+        .logic_rhai("#{ error: dead }".to_string())
+        .done();
+
+    // ----- Route transitions: one per branch, each guarded -----
+    //
+    // Mirror lower_loop's t_continue / t_exit pattern: multiple
+    // transitions on the same input place with complementary guards
+    // (engine picks whichever is enabled). No single multi-output Rhai
+    // script — each route's effect is one path.
+    //
+    // The Rhai `turn_result` extractor below tolerates either shape the
+    // LLM backend may emit: `outputs.turn_result` (multi-turn / tool-call
+    // path) or the canonical `{response, usage, finish_reason, model}`
+    // single-shot fields. Whichever the backend gave us, `tr` ends up as
+    // a map with `{content, tool_calls, stop_reason}` so the route guards
+    // below can blindly index `tr.tool_calls`, `tr.content`, etc. Without
+    // this normalisation, `tr.tool_calls` on a bare string would silently
+    // fail every guard and stall the net.
+    let extract_tr: &str = r#"let r = response.response; let outs = r.detail.outputs; let tr_raw = outs.turn_result; let tr = if type_of(tr_raw) == "map" { tr_raw } else { #{ content: if type_of(outs.response) == "string" { outs.response } else { () }, tool_calls: [], stop_reason: if type_of(outs.finish_reason) == "string" { outs.finish_reason } else { "end_turn" } } };"#;
+
+    // t_route_final: terminate — tool_calls empty OR max_turns reached
+    // OR stop_when satisfied. Produces the final envelope on p_final.
+    //
+    // The deposited token mirrors the executor envelope an
+    // `AutomatedStep(Llm)` would produce — `{execution_id, job_id, run,
+    // status, source, detail: {outputs, exit_code}}` — so the
+    // `NodeKind::AutomatedStep` hoist path (`detail.outputs`) the borrow
+    // planner uses resolves `<agent>.response`, `<agent>.usage`, etc.
+    // exactly the way a plain LLM step's borrows resolve.
+    //
+    // We START from `outs` (the LLM backend's actual emit) so structured
+    // `response_format: json_schema` outputs (each schema property
+    // unpacked by `unpack_by_name`) flow through unchanged — matches what
+    // `output_ports()`'s call to `LLM_DECL.derive_output_port` declares.
+    // Then we OVERRIDE `usage` with the per-turn-accumulated totals from
+    // state (the executor's `usage` is just the last turn's count, the
+    // agent's is the conversation total) and add the four agent-specific
+    // extras (turn, history, final_response, input).
+    ctx.transition(
+        format!("t_{id}_route_final"),
+        format!("{label} - Route: Final"),
+    )
+    .auto_input("response", &p_response)
+    .auto_output("final", &p_final)
+    .guard_rhai(format!(
+        r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() == 0 || s.turn + 1 >= {max_turns} || {stop_when_expr}"#
+    ))
+    .logic_rhai(format!(
+        r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history = s.history; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
+    ))
+    .done();
+
+    // t_route_dispatch_<tn>: one per declared tool. Guard fires only
+    // when model picked this specific tool, max_turns isn't exhausted,
+    // and stop_when is false. State migrates to p_state_in_tool (with
+    // assistant turn appended to history, turn += 1); call args go to
+    // p_dispatch_<tn>.
+    for (tn, pd) in &dispatch_places {
+        ctx.transition(
+            format!("t_{id}_route_dispatch_{tn}"),
+            format!("{label} - Route: Dispatch {tn}"),
+        )
+        .auto_input("response", &p_response)
+        .auto_output("dispatch", pd)
+        .auto_output("state_in_tool", &p_state_in_tool)
+        .guard_rhai(format!(
+            r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() > 0 && tc[0].name == "{tn}" && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
+        ))
+        // `call` is a Rhai reserved keyword (it's the indirect-call syntax
+        // marker). Use `tcall` for the tool_calls[0] binding.
+        .logic_rhai(format!(
+            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let assistant_content = if type_of(tr.content) == "string" {{ tr.content }} else {{ "" }}; s.history.push(#{{ role: "assistant", content: assistant_content, tool_call_id: tcall.id, tool_name: "{tn}", tool_args: tcall.arguments }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ dispatch: #{{ call_id: tcall.id, tool_name: "{tn}", args: tcall.arguments }}, state_in_tool: s }}"#
+        ))
+        .done();
+    }
+
+    // t_route_unknown: both policies emit a transition for the
+    // unknown-tool case, but the destination differs.
+    //
+    // - Feedback (default): append a synthetic `role: tool` failure
+    //   message to history, re-deposit state on p_state, let the model
+    //   retry on the next turn with the corrected tool list in context.
+    // - Bubble: deposit a status-failed envelope on p_error so the agent
+    //   exits via its error handle. Without this transition the token
+    //   sat on p_response forever — a silent stall that looked exactly
+    //   like a hung LLM call to anyone debugging.
+    if !tool_children.is_empty() {
+        match on_tool_error {
+            ToolErrorPolicy::Feedback => {
+                ctx.transition(
+                    format!("t_{id}_route_unknown"),
+                    format!("{label} - Route: Unknown Tool (feedback)"),
+                )
+                .auto_input("response", &p_response)
+                .auto_output("state", &p_state)
+                .guard_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
+                ))
+                .logic_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; s.history.push(#{{ role: "tool", tool_name: tcall.name, tool_call_id: tcall.id, content: "tool '" + tcall.name + "' not found — pick one of: " + {known_names_rhai} }}); s.turn = s.turn + 1; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                ))
+                .done();
+            }
+            ToolErrorPolicy::Bubble => {
+                ctx.transition(
+                    format!("t_{id}_route_unknown"),
+                    format!("{label} - Route: Unknown Tool (bubble to error)"),
+                )
+                .auto_input("response", &p_response)
+                .auto_output("error", &p_error)
+                .guard_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
+                ))
+                .logic_rhai(format!(
+                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let msg = "agent picked unknown tool '" + tcall.name + "' (known: " + {known_names_rhai} + ")"; #{{ error: #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "failed", source: "agent_loop", detail: #{{ outputs: #{{}}, exit_code: 1, error: #{{ kind: "unknown_tool", message: msg, tool_name: tcall.name }} }} }} }}"#
+                ))
+                .done();
+            }
+        }
+    }
+
+    // ----- t_exit -----
+    ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit"))
+        .auto_input("final", &p_final)
+        .auto_output("output", &p_output)
+        .logic_rhai("#{ output: final }".to_string())
+        .done();
+
+    // Foundation split: park the agent's output envelope so downstream
+    // `<agent_slug>.final_response` / `<agent_slug>.turn` reads resolve
+    // via the read-arc synthesis pass.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, label, &p_output);
+
+    // Queue the agent → tool-child wiring fixup. Tool children's
+    // NodePorts aren't populated yet — they'll be lowered later in the
+    // topological pass. `apply_agent_tool_wirings` drains this after
+    // the loop so every child's input/output places are addressable.
+    if !tool_entries.is_empty() {
+        cx.fixups.agent_tool_wirings.push(AgentToolWiring {
+            agent_id: id.clone(),
+            agent_label: label.clone(),
+            p_state: p_state.clone(),
+            p_state_in_tool: p_state_in_tool.clone(),
+            p_error: p_error.clone(),
+            tools: tool_entries,
+        });
+    }
+
+    cx.ports.insert(
+        id.clone(),
+        NodePorts {
+            input_place: p_input,
+            output_places: vec![
+                (None, p_ctrl),
+                (Some("error".to_string()), p_error),
+            ],
+            input_places: HashMap::new(),
+            input_handles: HashMap::new(),
+        },
+    );
+    cx.publish_interface().data_port = Some(data_place_id);
+    Ok(())
+}
+
+/// Translate a tool node's declared input port into a JSON Schema fragment
+/// for the LLM's tool-use call. The model addresses tool args by the exact
+/// field names declared here (e.g. `order_id`); the runner then promotes
+/// those args to Python globals via `_AccessibleDict`, so a name mismatch
+/// surfaces as `AttributeError: '_AccessibleDict' object has no attribute
+/// 'X'` at runtime. Keep the property list tight + `additionalProperties:
+/// false` when fields are declared so the LLM can't invent unknown args.
+fn port_to_input_schema(port: &crate::models::template::Port) -> serde_json::Value {
+    use crate::models::template::FieldKind;
+    use serde_json::json;
+    let mut properties = serde_json::Map::new();
+    let mut required: Vec<String> = Vec::new();
+    for f in &port.fields {
+        let type_str: &str = match f.kind {
+            FieldKind::Number => "number",
+            FieldKind::Bool => "boolean",
+            FieldKind::Json => "object",
+            _ => "string",
+        };
+        let mut prop = serde_json::Map::new();
+        prop.insert("type".to_string(), json!(type_str));
+        let description = f
+            .description
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| f.label.clone());
+        if !description.is_empty() {
+            prop.insert("description".to_string(), json!(description));
+        }
+        properties.insert(f.name.clone(), serde_json::Value::Object(prop));
+        if f.required {
+            required.push(f.name.clone());
+        }
+    }
+    let mut schema = serde_json::Map::new();
+    schema.insert("type".to_string(), json!("object"));
+    schema.insert("properties".to_string(), serde_json::Value::Object(properties));
+    if !required.is_empty() {
+        schema.insert("required".to_string(), json!(required));
+    }
+    schema.insert("additionalProperties".to_string(), json!(false));
+    serde_json::Value::Object(schema)
+}

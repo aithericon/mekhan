@@ -12,9 +12,17 @@
 
 import type { components } from '$lib/api/schema';
 import { analyzeGraph } from '$lib/api/client';
+import {
+	listResourceTypes,
+	listResources,
+	type ResourceTypeInfo,
+	type ResourceSummary
+} from '$lib/api/resources';
 
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
 type FieldKind = components['schemas']['FieldKind'];
+type GuardDiagnosticDto = components['schemas']['GuardDiagnosticDto'];
+export type TyDescriptor = components['schemas']['TyDescriptor'];
 
 export type ScopeEntry = {
 	nodeId: string;
@@ -25,37 +33,87 @@ export type ScopeEntry = {
 	 *  for borrowed parked-producer data (e.g. `review.invoice_amount`), or
 	 *  `input.<path>` for genuinely control-token-resident leaves. */
 	qualified: string;
+	/** Full recursive type tree from the backend analyzer. Populated for
+	 *  scope entries that came from the compiler; absent for resource
+	 *  entries (built client-side from the resource type registry).
+	 *  Pickers drill into `ty.fields` (Object) or `ty.element` (Array) to
+	 *  surface nested + per-element refs without further round-trips. */
+	ty?: TyDescriptor;
 };
 
-/** Backend type label → editor `FieldKind`. Non-scalar shapes (Object,
- *  Array, Any, Opaque) collapse to `json` — addressable but untyped at the
- *  leaf the picker offers. */
-function tyToFieldKind(ty: string): FieldKind {
-	switch (ty) {
-		case 'String':
-			return 'text';
-		case 'Number':
-			return 'number';
-		case 'Bool':
-			return 'bool';
-		case 'FileRef':
-			return 'file';
-		case 'Timestamp':
-			return 'timestamp';
+/** Result of one `/api/v1/analyze` round-trip. `graphOk: false` means the
+ *  compiler refused to scope the graph (dangling edge, missing End, cycle),
+ *  in which case `scopes` is empty and `diagnostics` carries the reasons.
+ *  Picker UIs should grey themselves out and surface the diagnostic. */
+export type ScopeAnalysis = {
+	scopes: Map<string, ScopeEntry[]>;
+	graphOk: boolean;
+	diagnostics: GuardDiagnosticDto[];
+	/** True when the analyzer call itself failed (network / 5xx). Distinct
+	 *  from `graphOk: false`, which is a deliberate compiler verdict. */
+	requestFailed: boolean;
+};
+
+/** Reduce a [`TyDescriptor`] to the legacy single-label `FieldKind` for
+ *  callers that haven't moved to the recursive tree. The label matches the
+ *  string the backend used to emit on `ScopeEntryDto.ty`, so behavior is
+ *  byte-identical to before. */
+export function tyDescriptorToFieldKind(ty: TyDescriptor | undefined): FieldKind {
+	if (!ty) return 'json';
+	switch (ty.kind) {
+		case 'scalar':
+			switch (ty.name) {
+				case 'String':
+					return 'text';
+				case 'Number':
+					return 'number';
+				case 'Bool':
+					return 'bool';
+				case 'FileRef':
+					return 'file';
+				case 'Timestamp':
+					return 'timestamp';
+				default:
+					return 'json';
+			}
 		default:
 			return 'json';
 	}
 }
 
+/** Human-readable label for a [`TyDescriptor`], used by picker badges.
+ *  Arrays render as `array<T>` (recursing on `element`); objects render as
+ *  `{a, b, c}`; scalars use their raw name; `any` / `opaque` use their
+ *  canonical labels. */
+export function tyDescriptorLabel(ty: TyDescriptor | undefined): string {
+	if (!ty) return 'unknown';
+	switch (ty.kind) {
+		case 'scalar':
+			return ty.name;
+		case 'array':
+			return `array<${tyDescriptorLabel(ty.element)}>`;
+		case 'object': {
+			const keys = Object.keys(ty.fields);
+			if (keys.length === 0) return 'object';
+			if (keys.length <= 3) return `{${keys.join(', ')}}`;
+			return `{${keys.slice(0, 3).join(', ')}, …}`;
+		}
+		case 'any':
+			return 'any';
+		case 'opaque':
+			return `Opaque(${ty.name})`;
+	}
+}
+
 /**
  * Fetch the in-scope identifiers at every node from the backend analyzer.
- * Returns a map keyed by node id. Best-effort: on any failure (network, or a
- * draft too broken to analyze) returns an empty map, matching the previous
- * "show whatever resolved" behavior — the editor degrades, never throws.
+ * Returns the scope map keyed by node id, plus the `graph_ok` flag and any
+ * diagnostics — both surfaceable by the IDE so an empty picker explains
+ * itself. Best-effort: on any failure (network, 5xx) returns
+ * `{ scopes: empty, graphOk: false, requestFailed: true }` — the editor
+ * degrades, never throws.
  */
-export async function fetchNodeScopes(
-	graph: WorkflowGraph
-): Promise<Map<string, ScopeEntry[]>> {
+export async function fetchNodeScopes(graph: WorkflowGraph): Promise<ScopeAnalysis> {
 	const out = new Map<string, ScopeEntry[]>();
 	try {
 		const surface = await analyzeGraph({
@@ -71,13 +129,137 @@ export async function fetchNodeScopes(
 					nodeId: e.producer_node,
 					nodeLabel: e.producer_label,
 					field: e.path.split('.').pop() ?? e.path,
-					kind: tyToFieldKind(e.ty),
-					qualified: e.path
+					kind: tyDescriptorToFieldKind(e.ty),
+					qualified: e.path,
+					ty: e.ty
 				}))
 			);
 		}
+		return {
+			scopes: out,
+			graphOk: surface.graph_ok ?? false,
+			diagnostics: surface.diagnostics ?? [],
+			requestFailed: false
+		};
 	} catch {
-		// best-effort: editor still works without scope chips
+		return { scopes: out, graphOk: false, diagnostics: [], requestFailed: true };
+	}
+}
+
+/**
+ * Lazy, module-cached fetch of `/api/v1/resources/types`. The registry is
+ * compile-time on the server (built from `inventory::submit!`) — values
+ * never change at runtime, so one fetch per session is enough. The
+ * promise is cached so multiple pickers opening at once share one
+ * network round-trip. Failures cache a rejected promise for ~5s to
+ * avoid hammering the server, then refetch on the next call.
+ */
+let resourceTypesCache: Promise<ResourceTypeInfo[]> | null = null;
+let resourceTypesCachedAt = 0;
+const RESOURCE_TYPES_ERROR_TTL_MS = 5_000;
+
+export function loadResourceTypes(): Promise<ResourceTypeInfo[]> {
+	if (resourceTypesCache) return resourceTypesCache;
+	const promise = listResourceTypes();
+	resourceTypesCache = promise;
+	resourceTypesCachedAt = Date.now();
+	promise.catch(() => {
+		setTimeout(() => {
+			if (resourceTypesCache === promise && Date.now() - resourceTypesCachedAt >= RESOURCE_TYPES_ERROR_TTL_MS) {
+				resourceTypesCache = null;
+			}
+		}, RESOURCE_TYPES_ERROR_TTL_MS);
+	});
+	return promise;
+}
+
+/**
+ * Workspace resources — like the type registry, fetched once per session
+ * and shared across all pickers. Cached promise + 5s error TTL mirror the
+ * type-registry pattern. Unlike types, resources DO change at runtime
+ * (CRUD from `/resources`), but the editor's "Refresh" affordance + a
+ * full page reload pick up changes — keeping the picker reactive to
+ * every mutation would require a websocket the resources kernel doesn't
+ * carry yet.
+ */
+let workspaceResourcesCache: Promise<ResourceSummary[]> | null = null;
+let workspaceResourcesCachedAt = 0;
+
+export function loadWorkspaceResources(): Promise<ResourceSummary[]> {
+	if (workspaceResourcesCache) return workspaceResourcesCache;
+	const promise = listResources({ perPage: 200 }).then((page) => page.items);
+	workspaceResourcesCache = promise;
+	workspaceResourcesCachedAt = Date.now();
+	promise.catch(() => {
+		setTimeout(() => {
+			if (workspaceResourcesCache === promise && Date.now() - workspaceResourcesCachedAt >= RESOURCE_TYPES_ERROR_TTL_MS) {
+				workspaceResourcesCache = null;
+			}
+		}, RESOURCE_TYPES_ERROR_TTL_MS);
+	});
+	return promise;
+}
+
+/** Test/HMR helper — drops the caches so the next loaders re-fetch. */
+export function _clearResourceTypesCache(): void {
+	resourceTypesCache = null;
+	workspaceResourcesCache = null;
+}
+
+/**
+ * Project the workspace's resources + the type registry into
+ * `ScopeEntry[]` shaped for `RefPicker`'s Resources tab. Each workspace
+ * resource contributes one entry per field of its declared type (public
+ * + secret); the synthetic `nodeId` is `resource:<name>` so it never
+ * collides with a real producer slug.
+ *
+ * The compiler resolves `<name>.<field>` directly against the workspace's
+ * resource list at publish time (no per-workflow alias indirection), so
+ * the picker shows the same set of resources for every workflow — they
+ * are workspace-scoped, not workflow-scoped.
+ *
+ * Field `kind` is best-effort:
+ *  - `port` → `number`
+ *  - everything else → `text` (most resource configs are strings)
+ *
+ * Resources whose type is not in the registry are dropped silently —
+ * the picker only surfaces what the user can actually consume.
+ */
+export function buildResourceScope(
+	resources: ResourceSummary[] | undefined,
+	types: ResourceTypeInfo[]
+): ScopeEntry[] {
+	if (!resources || resources.length === 0) return [];
+	const out: ScopeEntry[] = [];
+	const byType = new Map(types.map((t) => [t.name, t]));
+	// `path` is the workspace-unique key the compiler matches against
+	// Python `<head>.<field>` source patterns — alphabetise by it so the
+	// picker order matches what the user types.
+	const sorted = [...resources].sort((a, b) => a.path.localeCompare(b.path));
+	for (const resource of sorted) {
+		const info = byType.get(resource.resource_type);
+		if (!info) continue;
+		// Dynamic-fields (kv) resources surface the user-supplied key list
+		// in `dynamic_keys`. Typed resources use the descriptor's static
+		// `public_fields ∪ secret_fields`. Either way the picker emits
+		// `<path>.<field>` entries that match what the compiler resolves.
+		const fields = resource.dynamic_keys ?? [
+			...(info.public_fields ?? []),
+			...(info.secret_fields ?? [])
+		];
+		for (const field of fields) {
+			out.push({
+				nodeId: `resource:${resource.id}`,
+				// Use display_name when present (more human-readable in the
+				// picker's left column); fall back to path so an unnamed
+				// resource still has a label. Pickers showing the full
+				// `<path>.<field>` qualified form keep the contract clear.
+				nodeLabel: resource.display_name || resource.path,
+				field,
+				kind: field === 'port' ? 'number' : 'text',
+				qualified: `${resource.path}.${field}`
+			});
+		}
 	}
 	return out;
 }

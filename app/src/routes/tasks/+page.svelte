@@ -6,11 +6,19 @@
 
 	const store = createTaskStore();
 
-	const statusColors: Record<string, string> = {
-		pending: 'bg-amber-100 text-amber-700',
-		completed: 'bg-green-100 text-green-700',
-		cancelled: 'bg-slate-100 text-slate-700',
-		failed: 'bg-red-100 text-red-700'
+	type StatusConfig = { class: string; label: string };
+	const statusConfig: Record<string, StatusConfig> = {
+		pending: { class: 'border-amber-200 bg-amber-50 text-amber-700', label: 'Pending' },
+		completed: { class: 'border-emerald-200 bg-emerald-50 text-emerald-700', label: 'Completed' },
+		cancelled: { class: 'border-slate-200 bg-slate-50 text-slate-600', label: 'Cancelled' },
+		failed: { class: 'border-red-200 bg-red-50 text-red-600', label: 'Rejected' }
+	};
+
+	const hoverByStatus: Record<string, string> = {
+		pending: 'hover:border-primary/40 hover:shadow-md',
+		completed: 'hover:border-emerald-300 hover:bg-emerald-50/40',
+		cancelled: 'hover:border-slate-300 hover:bg-slate-50/40',
+		failed: 'hover:border-red-300 hover:bg-red-50/40'
 	};
 
 	type StatusFilter = 'all' | 'pending' | 'completed' | 'failed';
@@ -28,7 +36,38 @@
 		store.refetch(f === 'all' ? undefined : f);
 	}
 
-	const formatDate = (s: string) => new Date(s).toLocaleString();
+	function formatDate(s?: string | null): string {
+		return s ? new Date(s).toLocaleString() : '—';
+	}
+
+	function formatDuration(ms?: number | null): string | null {
+		if (ms == null) return null;
+		if (ms < 1000) return `${ms}ms`;
+		const seconds = Math.floor(ms / 1000);
+		if (seconds < 60) return `${(ms / 1000).toFixed(1)}s`;
+		const minutes = Math.floor(seconds / 60);
+		const remSec = seconds % 60;
+		if (minutes < 60) return `${minutes}m ${remSec}s`;
+		const hours = Math.floor(minutes / 60);
+		const remMin = minutes % 60;
+		if (hours < 24) return `${hours}h ${remMin}m`;
+		const days = Math.floor(hours / 24);
+		const remHours = hours % 24;
+		return `${days}d ${remHours}h`;
+	}
+
+	function dateText(task: { status: string; created_at: string; completed_at?: string; cancelled_at?: string; failed_at?: string }): string {
+		switch (task.status) {
+			case 'completed':
+				return `Completed ${formatDate(task.completed_at ?? task.created_at)}`;
+			case 'cancelled':
+				return `Cancelled ${formatDate(task.cancelled_at ?? task.created_at)}`;
+			case 'failed':
+				return `Rejected ${formatDate(task.failed_at ?? task.created_at)}`;
+			default:
+				return `Received ${formatDate(task.created_at)}`;
+		}
+	}
 
 	$effect(() => {
 		store.init();
@@ -47,7 +86,7 @@
 
 		<!-- Status filter tabs -->
 		<div class="mb-4 flex gap-1">
-			{#each filters as f}
+			{#each filters as f (f.key)}
 				<Button
 					variant={activeFilter === f.key ? 'default' : 'ghost'}
 					size="sm"
@@ -81,33 +120,33 @@
 		{:else}
 			<div class="space-y-2">
 				{#each store.tasks as task (task.task_id)}
+					{@const cfg = statusConfig[task.status] ?? statusConfig.pending}
+					{@const hover = hoverByStatus[task.status] ?? hoverByStatus.pending}
+					{@const duration = formatDuration(task.duration_ms)}
 					<a
 						href="/tasks/{task.task_id}"
-						class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+						class="group block rounded-xl border border-border bg-card p-4 transition {hover}"
 					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="text-sm font-medium text-foreground truncate">
+						<div class="flex items-start justify-between gap-3">
+							<div class="min-w-0 flex-1">
+								<div class="truncate text-sm font-semibold leading-snug text-foreground">
 									{task.title}
-								</span>
-								<Badge
-									class={statusColors[task.status] ?? ''}
-									variant="secondary"
-								>
-									{task.status}
-								</Badge>
+								</div>
+								<div class="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+									<span>{dateText(task)}</span>
+									{#if duration}
+										<span class="text-muted-foreground/60">·</span>
+										<span>{duration}</span>
+									{/if}
+									{#if task.process_id}
+										<span class="text-muted-foreground/60">·</span>
+										<span class="font-mono text-sm">{task.process_id}</span>
+									{/if}
+								</div>
 							</div>
-							{#if task.process_id}
-								<p class="mt-1 text-sm text-muted-foreground">
-									Process: {task.process_id}
-								</p>
-							{/if}
-							<p class="mt-1 text-sm text-muted-foreground">
-								{formatDate(task.created_at)}
-								{#if task.duration_ms}
-									<span class="ml-2">({(task.duration_ms / 1000).toFixed(1)}s)</span>
-								{/if}
-							</p>
+							<Badge variant="outline" class="shrink-0 rounded-full {cfg.class}">
+								{cfg.label}
+							</Badge>
 						</div>
 					</a>
 				{/each}

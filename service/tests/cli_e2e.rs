@@ -127,10 +127,10 @@ async fn cli_workflow_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
 
     // -----------------------------------------------------------------------
-    // 1. LIST — GET /api/templates → template appears in listing
+    // 1. LIST — GET /api/v1/templates → template appears in listing
     // -----------------------------------------------------------------------
     let resp = client
-        .get(format!("{server}/api/templates?page=1&per_page=50"))
+        .get(format!("{server}/api/v1/templates?page=1&per_page=50"))
         .send()
         .await
         .unwrap();
@@ -155,12 +155,12 @@ async fn cli_workflow_roundtrip() {
     std::fs::create_dir_all(&pull_dir).unwrap();
 
     let meta = json!({
-        "templateId": template_id.to_string(),
+        "baseTemplateId": template_id.to_string(),
         "serverUrl": server,
         "lastPull": "2026-01-01T00:00:00Z"
     });
     std::fs::write(
-        pull_dir.join(".mekhan.json"),
+        pull_dir.join("mekhan.lock.json"),
         serde_json::to_string_pretty(&meta).unwrap(),
     )
     .unwrap();
@@ -185,7 +185,7 @@ async fn cli_workflow_roundtrip() {
     }
 
     // Verify directory layout
-    assert!(pull_dir.join(".mekhan.json").exists());
+    assert!(pull_dir.join("mekhan.lock.json").exists());
     assert!(pull_dir.join("graph.json").exists());
     assert_eq!(graph.nodes.len(), 2, "default graph has Start + End nodes");
 
@@ -209,10 +209,10 @@ async fn cli_workflow_roundtrip() {
 
     // Local has a file, remote doesn't
     assert!(
-        !remote_files
+        remote_files
             .get("start")
             .and_then(|f| f.get("main.py"))
-            .is_some(),
+            .is_none(),
         "remote should not have the file yet"
     );
 
@@ -238,7 +238,7 @@ async fn cli_workflow_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws3.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws3.send(Message::Binary(update_msg)).await.unwrap();
 
     // Small delay to let the server persist
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -266,10 +266,10 @@ async fn cli_workflow_roundtrip() {
     );
 
     // -----------------------------------------------------------------------
-    // 7. PUBLISH — POST /api/templates/{id}/publish
+    // 7. PUBLISH — POST /api/v1/templates/{id}/publish
     // -----------------------------------------------------------------------
     let resp = client
-        .post(format!("{server}/api/templates/{template_id}/publish"))
+        .post(format!("{server}/api/v1/templates/{template_id}/publish"))
         .send()
         .await
         .unwrap();
@@ -290,10 +290,10 @@ async fn cli_workflow_roundtrip() {
     );
 
     // -----------------------------------------------------------------------
-    // 9. RUN — POST /api/instances (may 502 if petri-lab not running)
+    // 9. RUN — POST /api/v1/instances (may 502 if petri-lab not running)
     // -----------------------------------------------------------------------
     let resp = client
-        .post(format!("{server}/api/instances"))
+        .post(format!("{server}/api/v1/instances"))
         .json(&json!({
             "template_id": template_id,
             "created_by": Uuid::nil()
@@ -310,11 +310,11 @@ async fn cli_workflow_roundtrip() {
     );
 
     // -----------------------------------------------------------------------
-    // 10. INSTANCES — GET /api/instances
+    // 10. INSTANCES — GET /api/v1/instances
     // -----------------------------------------------------------------------
     let resp = client
         .get(format!(
-            "{server}/api/instances?template_id={template_id}"
+            "{server}/api/v1/instances?template_id={template_id}"
         ))
         .send()
         .await
@@ -342,7 +342,7 @@ async fn cli_workflow_roundtrip() {
     .unwrap();
 
     let resp = client
-        .delete(format!("{server}/api/instances/{instance_id}"))
+        .delete(format!("{server}/api/v1/instances/{instance_id}"))
         .send()
         .await
         .unwrap();
@@ -572,7 +572,7 @@ async fn graph_topology_roundtrip() {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
 
     // -----------------------------------------------------------------------
@@ -595,7 +595,7 @@ async fn graph_topology_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws2.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws2.send(Message::Binary(update_msg)).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     ws2.close(None).await.ok();
@@ -681,7 +681,7 @@ async fn graph_topology_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws4.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws4.send(Message::Binary(update_msg)).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     ws4.close(None).await.ok();
@@ -820,7 +820,7 @@ async fn yaml_format_roundtrip() {
                     edge_type: "sequence".to_string(),
                 },
             ],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         }
     };
 
@@ -847,7 +847,7 @@ async fn yaml_format_roundtrip() {
     let mut update_msg = Vec::with_capacity(1 + diff.len());
     update_msg.push(MSG_SYNC_UPDATE);
     update_msg.extend_from_slice(&diff);
-    ws2.send(Message::Binary(update_msg.into())).await.unwrap();
+    ws2.send(Message::Binary(update_msg)).await.unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     ws2.close(None).await.ok();
@@ -896,7 +896,7 @@ async fn asset_upload_roundtrip() {
     let template_id = create_template(&db).await;
 
     // -----------------------------------------------------------------------
-    // 1. Upload a fake PNG image via POST /api/templates/{id}/files/{node_id}
+    // 1. Upload a fake PNG image via POST /api/v1/templates/{id}/files/{node_id}
     // -----------------------------------------------------------------------
     // Minimal PNG: 8-byte signature + minimal IHDR chunk
     let fake_png: Vec<u8> = vec![
@@ -917,7 +917,7 @@ async fn asset_upload_roundtrip() {
 
     let resp = client
         .post(format!(
-            "{server}/api/files/upload/{template_id}/start"
+            "{server}/api/v1/files/upload/{template_id}/start"
         ))
         .multipart(form)
         .send()
@@ -944,10 +944,10 @@ async fn asset_upload_roundtrip() {
         );
 
         // -------------------------------------------------------------------
-        // 2. Retrieve the uploaded file via GET /api/files/{key}
+        // 2. Retrieve the uploaded file via GET /api/v1/files/{key}
         // -------------------------------------------------------------------
         let resp = client
-            .get(format!("{server}/api/files/{s3_key}"))
+            .get(format!("{server}/api/v1/files/{s3_key}"))
             .send()
             .await
             .unwrap();
@@ -998,7 +998,7 @@ async fn asset_upload_roundtrip() {
 
     let resp = client
         .post(format!(
-            "{server}/api/files/upload/{template_id}/start"
+            "{server}/api/v1/files/upload/{template_id}/start"
         ))
         .multipart(form)
         .send()

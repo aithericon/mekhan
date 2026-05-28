@@ -1,0 +1,114 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Failure Demo ({{ fail_mode }})",
+        "initial": {
+          "id": "in",
+          "label": "Run Config",
+          "fields": [
+            {
+              "name": "fail_mode",
+              "label": "Failure Mode",
+              "kind": "select",
+              "required": true,
+              "options": [
+                { "value": "ok",    "label": "Succeed" },
+                { "value": "raise", "label": "Raise Python exception" },
+                { "value": "exit",  "label": "Exit with non-zero code" }
+              ]
+            },
+            {
+              "name": "payload",
+              "label": "Payload Text",
+              "kind": "text",
+              "required": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "risky_step",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Risky Step",
+        "description": "Either succeeds (writes `summary`) or fails on purpose. A Python `raise` or `sys.exit(<nonzero>)` produces a non-zero process exit; the executor reports a job-level failure and — once retries are exhausted — the token routes out the red `error` handle.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Result",
+          "fields": [
+            { "name": "summary", "label": "Summary", "kind": "text", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate", "baseDelayMs": 0 },
+        "deploymentModel": { "mode": "inline" }
+      }
+    },
+    {
+      "id": "handle_fail",
+      "type": "failure",
+      "position": { "x": 600, "y": 360 },
+      "data": {
+        "type": "failure",
+        "label": "Handle Failure",
+        "description": "Stamps a structured `{ ok: false, error: { reason, value } }` envelope onto the token. The downstream End preserves the envelope (instead of overwriting it with its own resultMapping) — so the instance completes with `result.ok = false`. `errorResultMapping` expressions are raw Rhai — they can borrow `<slug>.<field>` from upstream producers reachable on the failure path (here, `start.*`). Reaching for `risky_step.*` would deadlock at runtime — the failed step never parked its outputs. (Note: the Failure node *also* fires a `process_fail` effect, but on the AutomatedStep error path the retry topology rebuilds the token without its process tag, so the HPI process row stays `completed`. The error envelope is the authoritative signal.)",
+        "failureMessage": "Risky Step failed (see error.value for details)",
+        "errorResultMapping": [
+          { "targetField": "fail_mode", "expression": "start.fail_mode" },
+          { "targetField": "payload",   "expression": "start.payload" }
+        ]
+      }
+    },
+    {
+      "id": "end_ok",
+      "type": "end",
+      "position": { "x": 900, "y": 80 },
+      "data": {
+        "type": "end",
+        "label": "Done (Happy Path)",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "\"ok\"" },
+          { "targetField": "summary", "expression": "risky_step.summary" }
+        ]
+      }
+    },
+    {
+      "id": "end_fail",
+      "type": "end",
+      "position": { "x": 900, "y": 360 },
+      "data": {
+        "type": "end",
+        "label": "Done (Failure Path)",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "\"failed\"" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_risky",     "source": "start",      "target": "risky_step", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_risky_ok",        "source": "risky_step", "target": "end_ok",     "targetHandle": "in", "type": "sequence" },
+    { "id": "e_risky_fail",      "source": "risky_step", "target": "handle_fail","targetHandle": "in", "sourceHandle": "error", "label": "on error", "type": "sequence" },
+    { "id": "e_handle_fail_end", "source": "handle_fail","target": "end_fail",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

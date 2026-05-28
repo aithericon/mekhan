@@ -81,6 +81,7 @@ impl ExecutionBackend for KreuzbergBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let resolved: ResolvedKreuzbergConfig =
@@ -172,26 +173,19 @@ async fn execute_single(
                 Ok(extraction) => {
                     let (outputs, metrics, stdout_tail) = build_single_outputs(&extraction, duration);
 
-                    // Map undeclared spec outputs to content (like LLM maps to response).
-                    let mut outputs = outputs;
-                    let content_value = serde_json::json!(&extraction.content);
-                    for decl in &run_context.spec.outputs {
-                        if !outputs.contains_key(&decl.name) {
-                            outputs.insert(decl.name.clone(), content_value.clone());
-                        }
-                    }
-
-                    // Write to expected_outputs file paths.
+                    // Write declared outputs to expected_outputs file paths.
+                    // No remapping: the value must come from a kreuzberg-native
+                    // output key. If the user declared a name that doesn't
+                    // exist in `outputs`, skip the write and let the executor's
+                    // required-output check fail with a clear error.
                     for (name, path) in &run_context.expected_outputs {
-                        if !path.exists() {
-                            let content = if let Some(val) = outputs.get(name) {
-                                serde_json::to_string_pretty(val).unwrap_or_default()
-                            } else {
-                                serde_json::to_string_pretty(&content_value).unwrap_or_default()
-                            };
-                            if let Err(e) = std::fs::write(path, content) {
-                                warn!(output = %name, "failed to write output file: {e}");
-                            }
+                        if path.exists() {
+                            continue;
+                        }
+                        let Some(val) = outputs.get(name) else { continue };
+                        let content = serde_json::to_string_pretty(val).unwrap_or_default();
+                        if let Err(e) = std::fs::write(path, content) {
+                            warn!(output = %name, "failed to write output file: {e}");
                         }
                     }
 
@@ -283,7 +277,6 @@ async fn execute_batch(
     let mut failed = 0usize;
     let mut total_content_length = 0usize;
     let mut total_table_count = 0usize;
-    let mut total_word_count = 0usize;
 
     for (idx, (name, path)) in targets.iter().enumerate() {
         // Check cancellation before each file.
@@ -337,34 +330,16 @@ async fn execute_batch(
 
         match kreuzberg::extract_file(&path_str, mime, &extraction_config).await {
             Ok(extraction) => {
-                let word_count = extraction.content.split_whitespace().count();
                 total_content_length += extraction.content.len();
                 total_table_count += extraction.tables.len();
-                total_word_count += word_count;
                 successful += 1;
 
-                let tables: Vec<serde_json::Value> = extraction
-                    .tables
-                    .iter()
-                    .map(|t| {
-                        serde_json::json!({
-                            "markdown": t.markdown,
-                            "page_number": t.page_number,
-                            "rows": t.cells.len(),
-                        })
-                    })
-                    .collect();
-
-                results.push(serde_json::json!({
-                    "file": name,
-                    "content": extraction.content,
-                    "mime_type": extraction.mime_type,
-                    "tables": tables,
-                    "table_count": extraction.tables.len(),
-                    "word_count": word_count,
-                    "char_count": extraction.content.len(),
-                    "detected_languages": extraction.detected_languages,
-                }));
+                let mut entry = serde_json::to_value(&extraction)
+                    .unwrap_or(serde_json::json!({}));
+                if let serde_json::Value::Object(ref mut map) = entry {
+                    map.insert("file".into(), serde_json::json!(name));
+                }
+                results.push(entry);
             }
             Err(e) => {
                 failed += 1;
@@ -431,8 +406,7 @@ async fn execute_batch(
     };
 
     let stdout_tail = format!(
-        "Extracted {successful}/{total} files ({failed} failed, {} tables, {total_word_count} words)",
-        total_table_count
+        "Extracted {successful}/{total} files ({failed} failed, {total_table_count} tables)"
     );
 
     let outcome = if failed > 0 && successful == 0 {
@@ -488,48 +462,30 @@ async fn execute_batch(
 // ---------------------------------------------------------------------------
 
 /// Build the standard outputs for a single extraction result.
+///
+/// Emits kreuzberg's native `ExtractionResult` shape 1:1 — every top-level
+/// field becomes an output of the same name. No renaming, no derived counts,
+/// no remapping. Consumers declare outputs using kreuzberg's vocabulary:
+/// `content`, `mime_type`, `metadata`, `tables`, `detected_languages`, and
+/// the optional `chunks`, `images`, `pages`, `elements`, `djot_content` when
+/// the corresponding extraction config is enabled.
 fn build_single_outputs(
     result: &kreuzberg::ExtractionResult,
     duration: std::time::Duration,
 ) -> (HashMap<String, serde_json::Value>, MetricSummary, String) {
-    let word_count = result.content.split_whitespace().count();
-
-    let tables: Vec<serde_json::Value> = result
-        .tables
-        .iter()
-        .map(|t| {
-            serde_json::json!({
-                "markdown": t.markdown,
-                "page_number": t.page_number,
-                "rows": t.cells.len(),
-            })
-        })
-        .collect();
-
-    let outputs = HashMap::from([
-        ("content".into(), serde_json::json!(&result.content)),
-        ("mime_type".into(), serde_json::json!(&result.mime_type)),
-        ("tables".into(), serde_json::json!(tables)),
-        ("table_count".into(), serde_json::json!(result.tables.len())),
-        ("word_count".into(), serde_json::json!(word_count)),
-        ("char_count".into(), serde_json::json!(result.content.len())),
-        (
-            "detected_languages".into(),
-            serde_json::json!(&result.detected_languages),
-        ),
-        (
-            "metadata".into(),
-            serde_json::to_value(&result.metadata).unwrap_or(serde_json::json!(null)),
-        ),
-    ]);
+    let value = serde_json::to_value(result).unwrap_or(serde_json::json!({}));
+    let mut outputs: HashMap<String, serde_json::Value> = HashMap::new();
+    if let serde_json::Value::Object(map) = value {
+        for (k, v) in map {
+            outputs.insert(k, v);
+        }
+    }
 
     let metrics = MetricSummary {
-        total_points: 4,
+        total_points: 2,
         metric_names: vec![
             "kreuzberg/extraction_time_ms".into(),
             "kreuzberg/content_length".into(),
-            "kreuzberg/word_count".into(),
-            "kreuzberg/table_count".into(),
         ],
         latest_values: HashMap::from([
             (
@@ -539,11 +495,6 @@ fn build_single_outputs(
             (
                 "kreuzberg/content_length".into(),
                 result.content.len() as f64,
-            ),
-            ("kreuzberg/word_count".into(), word_count as f64),
-            (
-                "kreuzberg/table_count".into(),
-                result.tables.len() as f64,
             ),
         ]),
     };
@@ -597,6 +548,11 @@ mod tests {
             run_dir: RunDirectory::new(&std::env::temp_dir(), &id),
             timeout,
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -611,6 +567,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config,
+            config_ref: None,
         }
     }
 
@@ -639,6 +596,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: serde_json::json!({}),
+            config_ref: None,
         };
         assert!(!backend.supports(&spec));
     }

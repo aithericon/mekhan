@@ -1,6 +1,7 @@
 <script lang="ts">
 	import KeyValueEditor from '../../shared/KeyValueEditor.svelte';
 	import StringListEditor from '../../shared/StringListEditor.svelte';
+	import PythonRuntimeReference from './PythonRuntimeReference.svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type * as Y from 'yjs';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -217,3 +218,5 @@
 		onchange={(env) => onchange({ ...config, env })}
 	/>
 </div>
+
+<PythonRuntimeReference />

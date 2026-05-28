@@ -12,6 +12,19 @@
 //! The dispatcher additionally reached directly into the `petri::instance`
 //! free functions. [`InstanceLauncher`] owns the sequence once; both callers
 //! depend on this seam instead of re-implementing it.
+//!
+//! ## Resources at launch
+//!
+//! Workspace resources are resolved + spliced into the AIR at **publish
+//! time** by the publish handler — the AIR persisted in
+//! `workflow_template_versions.air_json` already carries baked-in
+//! `__resources` declarations on every prepare transition that needs them.
+//! The launcher therefore does not touch resources, takes no bindings, and
+//! is workspace-agnostic. Pinning by `resource_id @ latest_version` happens
+//! once, in the compiler, and survives every subsequent launch unchanged.
+//! The `workflow_instances.resource_pins` JSONB column kept its shape — but
+//! it is now populated lazily by replay/debug tooling, not by the launcher
+//! (which has no map to write).
 
 use petri_api_types::DispatchOptions;
 use serde_json::Value;
@@ -28,7 +41,7 @@ use crate::petri::instance::{
 
 /// Why a launch failed. Each caller maps these to its own surface:
 /// `create_instance` turns [`LaunchError::Parameterize`] into a 400 and
-/// [`LaunchError::Deploy`] into a 502; `fire_spawn` folds both into
+/// [`LaunchError::Deploy`] into a 502; `fire_spawn` folds them into
 /// `TriggerError::InstanceFailed`. The launcher itself is surface-agnostic.
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchError {
@@ -79,6 +92,13 @@ pub enum LaunchSpec<'a> {
         air_json: &'a Value,
         graph: &'a WorkflowGraph,
         start_tokens: &'a [StartToken],
+        /// Categorizes the instance. `None` ⇒ `'live'` (the historical default).
+        /// `Some("draft")` for user-initiated experiments; `Some("test_run")` is
+        /// reserved for the template-test runner.
+        mode: Option<&'a str>,
+        /// Set when `mode == "test_run"`. Forwards into the instance row so the
+        /// run can be reconciled with its originating `template_tests` row.
+        test_id: Option<Uuid>,
         /// Per-run ablation envelope (#126.2): `skip_mask` +
         /// `stage_overrides` threaded into the engine's
         /// `LoadScenarioRequest`. Defaults to empty on caller side via
@@ -145,6 +165,8 @@ impl<'a> InstanceLauncher<'a> {
             created_by,
             metadata,
             dispatch_options,
+            mode,
+            test_id,
         ) = match spec {
             LaunchSpec::Templated {
                 instance_id,
@@ -156,6 +178,8 @@ impl<'a> InstanceLauncher<'a> {
                 air_json,
                 graph,
                 start_tokens,
+                mode,
+                test_id,
                 dispatch_options,
             } => {
                 let parameterized = parameterize_air(
@@ -176,6 +200,8 @@ impl<'a> InstanceLauncher<'a> {
                     created_by,
                     metadata,
                     dispatch_options,
+                    mode,
+                    test_id,
                 )
             }
             LaunchSpec::PreAir {
@@ -208,14 +234,19 @@ impl<'a> InstanceLauncher<'a> {
                     created_by,
                     metadata,
                     dispatch_options,
+                    // Pre-AIR triggers are headless service calls — no
+                    // template-test runner / experiment-mode framing applies.
+                    None,
+                    None,
                 )
             }
         };
 
+        let mode_str = mode.unwrap_or("live");
         let instance = sqlx::query_as::<_, WorkflowInstance>(
             r#"
-            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata)
-            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6)
+            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata, mode, test_id)
+            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6, $7, $8)
             RETURNING *
             "#,
         )
@@ -225,6 +256,8 @@ impl<'a> InstanceLauncher<'a> {
         .bind(&net_id)
         .bind(created_by)
         .bind(&metadata)
+        .bind(mode_str)
+        .bind(test_id)
         .fetch_one(self.db)
         .await
         .map_err(|e| {

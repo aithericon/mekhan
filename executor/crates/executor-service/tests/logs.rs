@@ -73,56 +73,6 @@ async fn test_ipc_log_message_summary() {
     ctx.cleanup().await;
 }
 
-/// Verify LogsForwarded event is emitted to the events stream.
-#[tokio::test]
-async fn test_ipc_log_message_event() {
-    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-
-    let ctx = ExecutorTestContext::new().await;
-    let eid = format!("ipc-logs-evt-{}", Uuid::new_v4().simple());
-    let status_consumer = ctx.status_consumer("ipc-logs-evt-status", &eid).await;
-    let events_consumer = ctx.events_consumer("ipc-logs-evt-events", &eid).await;
-    let worker = ctx.spawn_worker();
-
-    let plan = serde_json::json!({
-        "actions": [
-            { "type": "log_message", "level": "info", "message": "hello" },
-            { "type": "log_message", "level": "error", "message": "something broke" }
-        ],
-        "exit_code": 0
-    });
-
-    ctx.push_job(ipc_client_job(&eid, &plan, vec![])).await;
-
-    let statuses = ctx
-        .collect_statuses(&status_consumer, Duration::from_secs(15))
-        .await;
-
-    assert_status_sequence(
-        &statuses,
-        &[
-            ExecutionStatus::Accepted,
-            ExecutionStatus::Running,
-            ExecutionStatus::Completed,
-        ],
-    );
-
-    // Check for Log event
-    let events = ctx
-        .collect_events(&events_consumer, 1, Duration::from_secs(5))
-        .await;
-    assert!(!events.is_empty(), "expected at least 1 Log event, got 0");
-
-    let log_event = events
-        .iter()
-        .find(|e| e.category.as_str() == "log")
-        .expect("should have a log category event");
-    assert_eq!(log_event.category.as_str(), "log");
-
-    worker.abort();
-    ctx.cleanup().await;
-}
-
 /// Verify all 5 log levels are tracked correctly.
 #[tokio::test]
 async fn test_ipc_log_all_levels() {

@@ -35,11 +35,12 @@
 
 use std::collections::HashMap;
 
+use aithericon_executor_domain::LlmToolCall;
 use async_trait::async_trait;
 
 use crate::port::{
     CompletionPort, CompletionRequest, CompletionResponse, LlmError, Message, ResponseFormat,
-    ToolCall, ToolError, ToolErrorKind,
+    ToolError, ToolErrorKind,
 };
 use crate::config::Role;
 
@@ -71,7 +72,7 @@ pub enum SseEvent {
 /// the implementation returns scripted results immediately.
 #[async_trait]
 pub trait ToolDispatcher: Send + Sync {
-    async fn dispatch(&self, call: &ToolCall) -> Result<serde_json::Value, ToolError>;
+    async fn dispatch(&self, call: &LlmToolCall) -> Result<serde_json::Value, ToolError>;
 }
 
 /// Run the LLM ↔ tool conversation loop.
@@ -116,9 +117,9 @@ pub async fn run_agent_loop(
         // Emit tool_call SSE events before dispatching (park-before-emit ordering).
         for tc in &response.tool_calls {
             sse_emit(SseEvent::ToolCall {
-                call_id: tc.call_id.clone(),
+                call_id: tc.id.clone(),
                 name: tc.name.clone(),
-                args: tc.args.clone(),
+                args: tc.arguments.clone(),
             });
         }
 
@@ -139,7 +140,7 @@ pub async fn run_agent_loop(
                 Ok(val) => {
                     let content = serde_json::to_string(val).unwrap_or_default();
                     let sse = SseEvent::ToolResolved {
-                        call_id: tc.call_id.clone(),
+                        call_id: tc.id.clone(),
                         result: Some(val.clone()),
                         error: None,
                     };
@@ -148,7 +149,7 @@ pub async fn run_agent_loop(
                 Err(err) => {
                     let content = format!("error: {} ({})", err.message, kind_str(err.kind));
                     let sse = SseEvent::ToolResolved {
-                        call_id: tc.call_id.clone(),
+                        call_id: tc.id.clone(),
                         result: None,
                         error: Some(err.clone()),
                     };
@@ -158,7 +159,7 @@ pub async fn run_agent_loop(
 
             messages.push(Message {
                 role: Role::User,
-                content: format!("[tool_result call_id={} name={}]\n{}", tc.call_id, tc.name, content),
+                content: format!("[tool_result call_id={} name={}]\n{}", tc.id, tc.name, content),
                 images: vec![],
             });
 
@@ -172,7 +173,7 @@ pub async fn run_agent_loop(
 /// Dispatch all calls in a turn concurrently.
 async fn dispatch_all(
     dispatcher: &dyn ToolDispatcher,
-    calls: &[ToolCall],
+    calls: &[LlmToolCall],
 ) -> Vec<Result<serde_json::Value, ToolError>> {
     let futures: Vec<_> = calls
         .iter()
@@ -182,7 +183,7 @@ async fn dispatch_all(
     futures::future::join_all(futures).await
 }
 
-fn summarise_tool_calls(calls: &[ToolCall]) -> String {
+fn summarise_tool_calls(calls: &[LlmToolCall]) -> String {
     let names: Vec<_> = calls.iter().map(|tc| tc.name.as_str()).collect();
     format!("[calling tools: {}]", names.join(", "))
 }
@@ -207,8 +208,8 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::port::{CompletionResponse, FinishReason, LlmError, ToolCall, ToolDefinition,
-                      ToolError, ToolErrorKind, TokenUsage};
+    use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage, ToolSchema};
+    use crate::port::{CompletionResponse, LlmError, ToolError, ToolErrorKind};
 
     // ---------------------------------------------------------------------------
     // Fake CompletionPort: returns scripted responses from a queue.
@@ -229,20 +230,20 @@ mod tests {
     fn terminal_response(content: &str) -> CompletionResponse {
         CompletionResponse {
             content: content.to_string(),
-            usage: TokenUsage { input_tokens: 5, output_tokens: 10, total_tokens: 15 },
+            usage: LlmUsage { input_tokens: 5, output_tokens: 10, total_tokens: 15 },
             model: "test-model".to_string(),
-            finish_reason: FinishReason::Stop,
+            stop_reason: LlmStopReason::EndTurn,
             structured_output: None,
             tool_calls: vec![],
         }
     }
 
-    fn tool_call_response(calls: Vec<ToolCall>) -> CompletionResponse {
+    fn tool_call_response(calls: Vec<LlmToolCall>) -> CompletionResponse {
         CompletionResponse {
             content: String::new(),
-            usage: TokenUsage { input_tokens: 5, output_tokens: 10, total_tokens: 15 },
+            usage: LlmUsage { input_tokens: 5, output_tokens: 10, total_tokens: 15 },
             model: "test-model".to_string(),
-            finish_reason: FinishReason::Stop,
+            stop_reason: LlmStopReason::ToolUse,
             structured_output: None,
             tool_calls: calls,
         }
@@ -299,7 +300,7 @@ mod tests {
 
     #[async_trait]
     impl ToolDispatcher for ScriptedDispatcher {
-        async fn dispatch(&self, call: &ToolCall) -> Result<serde_json::Value, ToolError> {
+        async fn dispatch(&self, call: &LlmToolCall) -> Result<serde_json::Value, ToolError> {
             if let Some(r) = self.results.get(&call.name) {
                 return match r {
                     Ok(v) => Ok(v.clone()),
@@ -315,11 +316,11 @@ mod tests {
 
     fn empty_env() -> HashMap<String, String> { HashMap::new() }
 
-    fn make_tool_call(name: &str) -> ToolCall {
-        ToolCall {
-            call_id: format!("call_{name}"),
+    fn make_tool_call(name: &str) -> LlmToolCall {
+        LlmToolCall {
+            id: format!("call_{name}"),
             name: name.to_string(),
-            args: serde_json::json!({}),
+            arguments: serde_json::json!({}),
         }
     }
 
@@ -372,7 +373,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             response_format: ResponseFormat::Text,
-            tools: vec![ToolDefinition {
+            tools: vec![ToolSchema {
                 name: "search_patient_context".to_string(),
                 description: "Search clinical data".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
@@ -429,7 +430,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             response_format: ResponseFormat::Text,
-            tools: vec![ToolDefinition {
+            tools: vec![ToolSchema {
                 name: "loop_tool".to_string(),
                 description: "A tool".to_string(),
                 input_schema: serde_json::json!({}),
@@ -474,12 +475,12 @@ mod tests {
             max_tokens: None,
             response_format: ResponseFormat::Text,
             tools: vec![
-                ToolDefinition {
+                ToolSchema {
                     name: "tool_alpha".to_string(),
                     description: "Alpha".to_string(),
                     input_schema: serde_json::json!({}),
                 },
-                ToolDefinition {
+                ToolSchema {
                     name: "tool_beta".to_string(),
                     description: "Beta".to_string(),
                     input_schema: serde_json::json!({}),
@@ -537,7 +538,7 @@ mod tests {
             temperature: None,
             max_tokens: None,
             response_format: ResponseFormat::Text,
-            tools: vec![ToolDefinition {
+            tools: vec![ToolSchema {
                 name: "failing_tool".to_string(),
                 description: "A failing tool".to_string(),
                 input_schema: serde_json::json!({}),

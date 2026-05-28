@@ -5,11 +5,16 @@ use chrono::Utc;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use aithericon_executor_backend::outputs::{
+    fill_missing_declared, unpack_by_name, MissingOutputFallback,
+};
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError,
     LogEntry, LogLevel, LogSummary, MetricSummary, RunContext,
 };
+
+use aithericon_executor_backend_configs::llm::ResolvedOpenAiResource;
 
 use crate::adapters;
 use crate::config::{ImageInput, LlmConfig};
@@ -37,8 +42,16 @@ impl ExecutionBackend for LlmBackend {
         _job: &ExecutionJob,
         mut run_context: RunContext,
     ) -> Result<RunContext, ExecutorError> {
-        // Resolve {{input:NAME}} patterns in the raw config JSON.
-        let mut raw_config = run_context.spec.config.clone();
+        // Start from the secret-resolved overlay when PlanSecretsHook has
+        // populated it (e.g. `api_key: {{secret:openai-api-key#login}}` from
+        // an `openai` resource), otherwise fall back to `spec.config`. We
+        // MUST NOT read `spec.config` directly — it still carries the
+        // unresolved `{{secret:...}}` templates and would feed them straight
+        // into the provider adapter as a Bearer token.
+        let mut raw_config = run_context
+            .resolved_config
+            .clone()
+            .unwrap_or_else(|| run_context.spec.config.clone());
         aithericon_executor_backend::resolve::resolve_inputs(
             &mut raw_config,
             &run_context.staged_inputs,
@@ -46,8 +59,21 @@ impl ExecutionBackend for LlmBackend {
         .map_err(|e| ExecutorError::Config(format!("llm input resolution: {e}")))?;
 
         // Deserialize resolved config
-        let config: LlmConfig = serde_json::from_value(raw_config)
+        let mut config: LlmConfig = serde_json::from_value(raw_config)
             .map_err(|e| ExecutorError::Config(format!("invalid llm backend config: {e}")))?;
+
+        // Resource binding: when the step is bound to a workspace resource
+        // (e.g. `openai_prod`), the compiler stages `<alias>.json` into the
+        // run dir's inputs via a ResourceEnvelope borrow. PlanSecretsHook
+        // resolves any `{{secret:...}}` refs in that file at staging time, so
+        // it carries plaintext credentials by the time we read it. Per-step
+        // overrides (set in the LLM panel) WIN over resource values — that
+        // matches how SMTP treats `from` against `from_address`.
+        if let Some(alias) = config.resource_alias.clone() {
+            if !alias.is_empty() {
+                overlay_resource(&mut config, &alias, &run_context)?;
+            }
+        }
 
         // Validate: model must be non-empty
         if config.model.is_empty() {
@@ -72,6 +98,7 @@ impl ExecutionBackend for LlmBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let config: LlmConfig = serde_json::from_value(run_context.backend_state.clone())
@@ -103,9 +130,35 @@ impl ExecutionBackend for LlmBackend {
             }
         }
 
+        // Dispatch log — flows through the same NATS subject the IPC
+        // sidecar uses for child-process SDK logs, so it lands in
+        // mekhan's hpi_logs as a per-message entry rather than only
+        // appearing in the end-of-execution LogSummary count.
+        if let Some(ref es) = event_stream {
+            es.log(
+                LogLevel::Info,
+                format!("dispatching LLM request to {}/{}", adapter.name(), config.model),
+                HashMap::from([
+                    ("provider".into(), adapter.name().to_string()),
+                    ("model".into(), config.model.clone()),
+                    ("image_count".into(), config.images.len().to_string()),
+                ]),
+            )
+            .await;
+        }
+
         // Merge config-level api_key and base_url into env so adapters can
         // find them alongside process-level environment variables.
+        //
+        // Overlay `resolved_env` on top of `env`: any env entry that carried
+        // a `{{secret:KEY}}` template has its plaintext in `resolved_env`
+        // courtesy of `PlanSecretsHook`. Without this overlay, an env-routed
+        // `OPENAI_API_KEY={{secret:...}}` would reach the adapter as the
+        // literal template string (and produce a 401 from the provider).
         let mut env = run_context.env.clone();
+        for (k, v) in &run_context.resolved_env {
+            env.insert(k.clone(), v.clone());
+        }
         if let Some(ref api_key) = config.api_key {
             // Set the provider-specific env var key
             let env_key = match config.provider {
@@ -189,16 +242,82 @@ impl ExecutionBackend for LlmBackend {
                                 "output_tokens": resp.usage.output_tokens,
                                 "total_tokens": resp.usage.total_tokens,
                             })),
-                            ("finish_reason".into(), serde_json::json!(resp.finish_reason.to_string())),
+                            ("finish_reason".into(), serde_json::json!(resp.stop_reason.to_string())),
                             ("model".into(), serde_json::json!(resp.model)),
                         ]);
 
-                        // Map spec-declared output names to the response value.
-                        for decl in &run_context.spec.outputs {
-                            if !outputs.contains_key(&decl.name) {
-                                outputs.insert(decl.name.clone(), response_value.clone());
+                        // Agent path: when the LLM may have called a tool,
+                        // surface a normalized turn_result envelope and
+                        // (in tool_use stop branches) the raw tool_calls
+                        // array. The agent compiler's `t_route` transition
+                        // reads `response.tool_calls[0].name` to decide
+                        // which dispatch place to deposit to; in the final
+                        // branch it reads `response.content`. Single-shot
+                        // LLM AutomatedSteps never hit this — the compiler
+                        // never declares tools for them, so `request.tools`
+                        // is empty and the adapter returns empty tool_calls.
+                        if !request.tools.is_empty() {
+                            let turn_result = aithericon_executor_domain::LlmTurnResult {
+                                content: if resp.content.is_empty() {
+                                    None
+                                } else {
+                                    Some(resp.content.clone())
+                                },
+                                tool_calls: resp.tool_calls.clone(),
+                                stop_reason: resp.stop_reason.clone(),
+                                usage: resp.usage.clone(),
+                            };
+                            outputs.insert(
+                                "turn_result".into(),
+                                serde_json::to_value(&turn_result).unwrap_or_default(),
+                            );
+
+                            // Emit a per-turn event so the UI can render
+                            // each tool call as it happens. Gated by the
+                            // job's `stream_events` set: non-agent LLM
+                            // jobs don't include `AgentTurn` in stream_events
+                            // and the event drops silently. v1 reports
+                            // `turn: 0` — runtime turn-threading lands when
+                            // the engine wires p_state into config_ref
+                            // (docs/12 § 3.4 follow-up).
+                            if let Some(ref es) = event_stream {
+                                es.agent_turn(
+                                    0,
+                                    resp.stop_reason.clone(),
+                                    turn_result.content.clone(),
+                                    resp.tool_calls.clone(),
+                                    resp.usage.clone(),
+                                )
+                                .await;
                             }
                         }
+
+                        // Per-key unpack: when the LLM returned a structured-JSON
+                        // object and the spec declares multiple output fields,
+                        // map each top-level key to the matching port by name —
+                        // mirrors the Python backend's name-based output sweep.
+                        // Declared port names WIN over built-ins (response/usage/
+                        // finish_reason/model) so workflow authors don't have to
+                        // dodge vendor-side reserved names.
+                        if let Some(ref extracted) = resp.structured_output {
+                            unpack_by_name(&mut outputs, &run_context.spec.outputs, extracted);
+                        }
+
+                        // Fallback for declared outputs the per-key unpack
+                        // didn't fill: REQUIRED ports get the whole
+                        // `response_value` (keeps single-output / free-text
+                        // shapes working — a `prompt: "summarize"` step with
+                        // one declared `response` field would otherwise emit
+                        // `outputs = {}` and the required check would fail);
+                        // OPTIONAL ports get `null` (the LLM legitimately
+                        // omits them when response_format marks them
+                        // omittable — Python-idiomatic, schemas allow null on
+                        // declared scalars).
+                        fill_missing_declared(
+                            &mut outputs,
+                            &run_context.spec.outputs,
+                            MissingOutputFallback::RequiredOrNull(&response_value),
+                        );
 
                         // Write to expected_outputs file paths
                         for (name, path) in &run_context.expected_outputs {
@@ -214,9 +333,35 @@ impl ExecutionBackend for LlmBackend {
                             }
                         }
 
+                        // Completion log — counterpart to the dispatch log
+                        // above. Surfaces timing + token usage as a real
+                        // hpi_logs entry, not just the LogSummary count.
+                        if let Some(ref es) = event_stream {
+                            es.log(
+                                LogLevel::Info,
+                                format!(
+                                    "LLM response received from {} in {}ms ({} input + {} output tokens)",
+                                    resp.model,
+                                    duration.as_millis(),
+                                    resp.usage.input_tokens,
+                                    resp.usage.output_tokens,
+                                ),
+                                HashMap::from([
+                                    ("provider".into(), adapter.name().to_string()),
+                                    ("model".into(), resp.model.clone()),
+                                    ("duration_ms".into(), duration.as_millis().to_string()),
+                                    ("input_tokens".into(), resp.usage.input_tokens.to_string()),
+                                    ("output_tokens".into(), resp.usage.output_tokens.to_string()),
+                                    ("total_tokens".into(), resp.usage.total_tokens.to_string()),
+                                    ("finish_reason".into(), resp.stop_reason.to_string()),
+                                ]),
+                            )
+                            .await;
+                        }
+
                         let logs = Some(LogSummary {
-                            total_entries: 1,
-                            count_by_level: HashMap::from([("info".into(), 1)]),
+                            total_entries: 2,
+                            count_by_level: HashMap::from([("info".into(), 2)]),
                             recent_errors: vec![],
                             dropped_count: 0,
                         });
@@ -246,9 +391,28 @@ impl ExecutionBackend for LlmBackend {
                             repeat_count: 1,
                         };
 
+                        // Per-message error log so the failure shows up in
+                        // hpi_logs alongside the dispatch entry, not only
+                        // in the failed-execution summary.
+                        if let Some(ref es) = event_stream {
+                            es.log(
+                                LogLevel::Error,
+                                format!("LLM execution failed: {e}"),
+                                HashMap::from([
+                                    ("provider".into(), adapter.name().to_string()),
+                                    ("model".into(), config.model.clone()),
+                                    ("duration_ms".into(), duration.as_millis().to_string()),
+                                ]),
+                            )
+                            .await;
+                        }
+
                         let logs = Some(LogSummary {
-                            total_entries: 1,
-                            count_by_level: HashMap::from([("error".into(), 1)]),
+                            total_entries: 2,
+                            count_by_level: HashMap::from([
+                                ("info".into(), 1),
+                                ("error".into(), 1),
+                            ]),
                             recent_errors: vec![error_entry],
                             dropped_count: 0,
                         });
@@ -278,6 +442,32 @@ impl ExecutionBackend for LlmBackend {
     fn supports(&self, spec: &ExecutionSpec) -> bool {
         spec.backend == "llm"
     }
+}
+
+// ---------------------------------------------------------------------------
+// Resource envelope overlay
+// ---------------------------------------------------------------------------
+
+/// Read `<alias>.json` from the staged-inputs side-channel and overlay
+/// the fields the LLM backend cares about (`api_key`, `base_url`) onto
+/// the deserialized config. Per-step values, when set, take precedence —
+/// callers can still pin a one-off api_key on a single step without
+/// touching the resource.
+fn overlay_resource(
+    config: &mut LlmConfig,
+    alias: &str,
+    run_context: &RunContext,
+) -> Result<(), ExecutorError> {
+    let resource =
+        aithericon_executor_backend::load_resource::<ResolvedOpenAiResource>(run_context, alias)?;
+
+    if config.api_key.is_none() {
+        config.api_key = Some(resource.api_key);
+    }
+    if config.base_url.is_none() {
+        config.base_url = resource.base_url;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

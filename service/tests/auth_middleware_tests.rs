@@ -17,9 +17,9 @@ use tower::ServiceExt;
 
 use common::mock_auth::MockAuthenticator;
 
-/// Helper: GET /api/templates with an optional `mekhan_session` cookie value.
+/// Helper: GET /api/v1/templates with an optional `mekhan_session` cookie value.
 async fn get_templates(app: &axum::Router, cookie: Option<&str>) -> StatusCode {
-    let mut req = Request::builder().method("GET").uri("/api/templates");
+    let mut req = Request::builder().method("GET").uri("/api/v1/templates");
     if let Some(value) = cookie {
         req = req.header("cookie", format!("mekhan_session={value}"));
     }

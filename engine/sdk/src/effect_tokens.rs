@@ -689,3 +689,29 @@ pub struct ExecutorEventSignal {
     /// ISO 8601 timestamp.
     pub timestamp: String,
 }
+
+// ─── Subworkflow effect tokens ──────────────────────────────────────────────
+
+/// Input to the `subworkflow_cancel` effect handler.
+///
+/// Terminates a running child net by id. Used by the Timeout node's body
+/// cancellation post-pass — when the timer wins, the Timeout emits one
+/// `SubWorkflowCancelInput` per SubWorkflow body child to terminate each.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct SubWorkflowCancelInput {
+    /// ID of the child net to terminate.
+    pub child_net_id: String,
+    /// Optional reason recorded in the `NetCancelled` lifecycle event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Output from the `subworkflow_cancel` effect handler.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct SubWorkflowCancelled {
+    /// ID of the child net the cancel was requested for.
+    pub child_net_id: String,
+    /// `true` if the net was active and got cancelled; `false` if it was
+    /// already terminal / unknown.
+    pub already_terminal: bool,
+}

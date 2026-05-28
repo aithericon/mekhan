@@ -43,26 +43,25 @@ async fn body_json(body: Body) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// Wipe NATS streams + delete shared durable consumers so a stale state from a
-/// prior failed run can't filter out this run's signals. Mirrors the
-/// `clean_slate` in `causality_e2e` (same broker, same streams).
-async fn clean_slate(nats: &MekhanNats) {
-    for (stream_name, consumer_name) in [
+/// Best-effort delete of this test's per-prefix durables on the shared
+/// streams. Each prefix is uniquely UUID-derived so a panicked test only
+/// leaks its own durables until `just dev reset`.
+async fn cleanup_durables(nats: &MekhanNats) {
+    let prefix = match nats.consumer_prefix() {
+        Some(p) => p,
+        None => return,
+    };
+    for (stream_name, base) in [
         ("PETRI_GLOBAL", "mekhan-causality-ingest"),
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
-        ("PROCESS", "mekhan-process-event-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.delete_consumer(consumer_name).await;
+            let _ = stream
+                .delete_consumer(&format!("{prefix}_{base}"))
+                .await;
         }
     }
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.purge().await;
-        }
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
 struct TaskHandle(tokio::task::AbortHandle);
@@ -137,9 +136,9 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     }
 }
 
-/// `Start → ParallelSplit → (taskA, taskB) → ParallelJoin → End`.
+/// `Start → ParallelSplit → (taskA, taskB) → Join (mode: all) → End`.
 /// Branch nodes are HumanTasks whose `task_id` and place are picked up from
-/// the spawned hpi_tasks row and completed via `POST /api/tasks/{id}/complete`.
+/// the spawned hpi_tasks row and completed via `POST /api/v1/tasks/{id}/complete`.
 fn parallel_graph() -> Value {
     json!({
         "nodes": [
@@ -170,8 +169,8 @@ fn parallel_graph() -> Value {
                                 "name": "ok", "label": "OK",
                                 "kind": "checkbox", "required": true } }]
                         }] } },
-            { "id": "join", "type": "parallel_join", "position": { "x": 600, "y": 0 },
-              "data": { "type": "parallel_join", "label": "Join" } },
+            { "id": "join", "type": "join", "position": { "x": 600, "y": 0 },
+              "data": { "type": "join", "label": "Join", "mode": "all" } },
             { "id": "e", "type": "end", "position": { "x": 800, "y": 0 },
               "data": { "type": "end", "label": "Done",
                         "resultMapping": [
@@ -201,7 +200,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> (Uuid, String) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -226,7 +225,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> (Uuid, String) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -241,7 +240,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> (Uuid, String) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -300,7 +299,7 @@ async fn complete_task(app: &axum::Router, task_id: &str) {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/tasks/{task_id}/complete"))
+                .uri(format!("/api/v1/tasks/{task_id}/complete"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({ "data": {} }).to_string()))
                 .unwrap(),
@@ -324,8 +323,12 @@ async fn parallel_forks_joins_and_completes() {
     }
     let nats_url = engine_nats_url();
     let (app, db) = common::test_app_with_petri_url(&nats_url, &engine_url()).await;
-    let nats = MekhanNats::connect(&nats_url, None).await.expect("nats");
-    clean_slate(&nats).await;
+    let prefix = format!("test_{}", Uuid::new_v4().simple());
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(prefix);
+    let cleanup_nats = nats.clone();
     let (_causality, _lifecycle) = spawn_consumers(nats, db.clone()).await;
 
     let (id, net_id) = publish_and_start(&app, parallel_graph()).await;
@@ -340,4 +343,5 @@ async fn parallel_forks_joins_and_completes() {
     }
 
     wait_for_completion(&db, id, Duration::from_secs(30)).await;
+    cleanup_durables(&cleanup_nats).await;
 }

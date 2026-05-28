@@ -10,6 +10,7 @@ use mekhan_service::models::template::WorkflowGraph;
 
 use crate::fs_ops;
 use crate::push;
+use crate::tests_fs;
 
 #[derive(Serialize)]
 struct ApplyBody<'a> {
@@ -28,13 +29,18 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
     let assets = fs_ops::read_node_assets(&dir)?;
 
     let server_url = meta.server_url.trim_end_matches('/').to_string();
-    let template_id = &meta.template_id;
+    // `apply_template` resolves its path id through `base_template_id`
+    // before touching any state, so the lock's stable chain root is the
+    // right thing to hit — no `resolve_latest` round trip needed.
+    // Clone so the lastPull rewrite below can take `meta` by value.
+    let base_id = meta.base_template_id.clone();
+    let base_id = base_id.as_str();
 
     let source_ref = git_source_ref(&dir);
     match &source_ref {
         Some(s) => println!(
-            "Applying template {} from {}@{}{}",
-            template_id,
+            "Applying template chain {} from {}@{}{}",
+            base_id,
             s["remote"].as_str().unwrap_or("?"),
             s["sha"].as_str().unwrap_or("?"),
             if s["dirty"].as_bool().unwrap_or(false) {
@@ -44,20 +50,22 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
             }
         ),
         None => println!(
-            "Applying template {} (no git provenance — not a git work tree)",
-            template_id
+            "Applying template chain {} (no git provenance — not a git work tree)",
+            base_id
         ),
     }
 
-    // Upload binary assets BEFORE apply. Server keys them under the new
-    // version path; an orphan on later failure is inert.
+    // Upload binary assets BEFORE apply. The asset upload route is keyed by
+    // the version row the apply will land in, but `apply_template` derives
+    // that from the base id internally, so passing the base id is fine —
+    // and an orphan on later failure is inert.
     if !assets.is_empty() {
         let total: usize = assets.values().map(|f| f.len()).sum();
         println!("Uploading {} asset file(s)...", total);
-        push::upload_assets(&server_url, template_id, &assets).await?;
+        push::upload_assets(&server_url, base_id, &assets).await?;
     }
 
-    let url = format!("{}/api/templates/{}/apply", server_url, template_id);
+    let url = format!("{}/api/v1/templates/{}/apply", server_url, base_id);
     let body = ApplyBody {
         graph: &graph,
         files: &text_files,
@@ -74,8 +82,19 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
 
     match status.as_u16() {
         200 => {
+            // `baseTemplateId` doesn't change on a version bump (that's the
+            // point of pinning the chain root). Refresh `lastPull` only so
+            // the lock records when this checkout last synchronized.
+            let new_version_id = resp_body["id"].as_str().unwrap_or("?");
             let version = resp_body["version"].as_i64().unwrap_or(0);
-            println!("Applied template {} (version {})", template_id, version);
+            let mut refreshed = meta;
+            refreshed.last_pull = chrono::Utc::now().to_rfc3339();
+            fs_ops::write_meta(&dir, &refreshed)
+                .context("failed to refresh mekhan.lock.json after apply")?;
+            println!(
+                "Applied chain {} → version {} ({})",
+                base_id, version, new_version_id,
+            );
         }
         409 => {
             let msg = resp_body["error"].as_str().unwrap_or("conflict");
@@ -92,6 +111,23 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
         _ => {
             let msg = resp_body["error"].as_str().unwrap_or("unknown error");
             anyhow::bail!("Apply failed ({}): {}", status, msg);
+        }
+    }
+
+    // Sync tests after the apply succeeds. Tests are stored against the
+    // template family, so the just-published version inherits them. Note:
+    // unlike a UI publish, apply doesn't run the test gate against this
+    // freshly-published row — gitops authors who want CI-style coverage
+    // should run `mekhan test <dir>` after apply.
+    let local_tests = tests_fs::read_tests(&dir)?;
+    if !local_tests.is_empty() || dir.join("tests").exists() {
+        let (created, updated, deleted) =
+            tests_fs::sync_to_server(&server_url, base_id, &local_tests).await?;
+        if created + updated + deleted > 0 {
+            println!(
+                "  tests: {} created, {} updated, {} deleted",
+                created, updated, deleted
+            );
         }
     }
 

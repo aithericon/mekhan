@@ -33,6 +33,7 @@ fn make_llm_spec(config: serde_json::Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 
@@ -56,6 +57,11 @@ fn make_run_context(spec: ExecutionSpec, timeout: Duration) -> RunContext {
         run_dir: RunDirectory::new(&PathBuf::from("/tmp"), &execution_id),
         timeout,
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -243,7 +249,7 @@ async fn ollama_vision_basic() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -307,7 +313,7 @@ async fn ollama_vision_structured_output() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

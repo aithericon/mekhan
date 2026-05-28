@@ -10,7 +10,6 @@ pub use artifact_store::ArtifactStoreState;
 pub use net_registry::CatalogueIntegrationConfig;
 #[cfg(feature = "executor")]
 pub use net_registry::{ExecutorIntegrationConfig, HttpExecutorConfig};
-#[cfg(feature = "human")]
 pub use net_registry::HumanIntegrationConfig;
 pub use net_registry::{NetInstance, NetRegistry, OnNetCreated, SchedulerBackend, SchedulerConfig};
 pub use router::{create_router, create_router_with_registry, ApiDoc, AppState};

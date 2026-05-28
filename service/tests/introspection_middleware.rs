@@ -33,7 +33,7 @@ async fn create_draft(app: &axum::Router) -> String {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::from(
@@ -54,7 +54,7 @@ async fn create_draft(app: &axum::Router) -> String {
 fn apply_req(id: &str, bearer: Option<&str>) -> Request<Body> {
     let mut b = Request::builder()
         .method("POST")
-        .uri(format!("/api/templates/{id}/apply"))
+        .uri(format!("/api/v1/templates/{id}/apply"))
         .header("content-type", "application/json");
     if let Some(t) = bearer {
         b = b.header("authorization", format!("Bearer {t}"));

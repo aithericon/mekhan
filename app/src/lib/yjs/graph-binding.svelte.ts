@@ -8,7 +8,10 @@ import type {
 	TriggerNodeData,
 	PhaseUpdateNodeData,
 	SubWorkflowNodeData,
-	AutomatedStepNodeData
+	AutomatedStepNodeData,
+	EndNodeData,
+	FailureNodeData,
+	AgentNodeData
 } from '$lib/types/editor';
 
 /**
@@ -169,8 +172,16 @@ export class YjsGraphBinding {
 					...(processName ? { processName } : {})
 				};
 			}
-			case 'end':
-				return { ...base, type: 'end' };
+			case 'end': {
+				const resultMapping = config?.resultMapping as
+					| EndNodeData['resultMapping']
+					| undefined;
+				return {
+					...base,
+					type: 'end',
+					...(resultMapping && resultMapping.length > 0 ? { resultMapping } : {})
+				};
+			}
 			case 'human_task':
 				return {
 					...base,
@@ -216,14 +227,26 @@ export class YjsGraphBinding {
 				};
 			case 'parallel_split':
 				return { ...base, type: 'parallel_split' };
-			case 'parallel_join':
+			case 'join': {
+				type JoinDataT = Extract<WorkflowNodeData, { type: 'join' }>;
+				const mode = (config?.mode as 'all' | 'any') ?? 'all';
+				const output =
+					(config?.output as JoinDataT['output'] | undefined) ??
+					({ id: 'out', label: 'Output', fields: [] } as JoinDataT['output']);
 				return {
 					...base,
-					type: 'parallel_join',
-					mergeStrategy:
-						(config?.mergeStrategy as 'shallow_last_wins' | 'deep_merge') ??
-						'shallow_last_wins'
+					type: 'join',
+					mode,
+					...(mode === 'all'
+						? {
+								mergeStrategy:
+									(config?.mergeStrategy as 'shallow_last_wins' | 'deep_merge') ??
+									'shallow_last_wins'
+							}
+						: {}),
+					output
 				};
+			}
 			case 'loop':
 				return {
 					...base,
@@ -255,14 +278,21 @@ export class YjsGraphBinding {
 						? { totalSteps: config.totalSteps as number }
 						: {})
 				};
-			case 'failure':
+			case 'failure': {
+				const errorResultMapping = config?.errorResultMapping as
+					| FailureNodeData['errorResultMapping']
+					| undefined;
 				return {
 					...base,
 					type: 'failure',
 					...(config?.failureMessage
 						? { failureMessage: config.failureMessage as string }
+						: {}),
+					...(errorResultMapping && errorResultMapping.length > 0
+						? { errorResultMapping }
 						: {})
 				};
+			}
 			case 'trigger':
 				return {
 					...base,
@@ -297,6 +327,40 @@ export class YjsGraphBinding {
 							label: 'Result',
 							fields: []
 						}
+				};
+			case 'agent':
+				return {
+					...base,
+					type: 'agent',
+					model: (config?.model as AgentNodeData['model']) ?? {
+						provider: 'anthropic',
+						model: 'claude-haiku-4-5-20251001'
+					},
+					userPrompt: (config?.userPrompt as string) ?? '',
+					...(config?.systemPrompt
+						? { systemPrompt: config.systemPrompt as string }
+						: {}),
+					...(config?.responseFormat
+						? { responseFormat: config.responseFormat }
+						: {}),
+					maxTurns: (config?.maxTurns as number) ?? 1,
+					...(config?.stopWhen ? { stopWhen: config.stopWhen as string } : {}),
+					contextStrategy:
+						(config?.contextStrategy as AgentNodeData['contextStrategy']) ?? 'none',
+					onToolError:
+						(config?.onToolError as AgentNodeData['onToolError']) ?? 'feedback'
+				};
+			case 'delay':
+				return {
+					...base,
+					type: 'delay',
+					durationMsExpr: (config?.durationMsExpr as string) ?? '5000'
+				};
+			case 'timeout':
+				return {
+					...base,
+					type: 'timeout',
+					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
 		}
 	}
@@ -341,15 +405,27 @@ export class YjsGraphBinding {
 					new Y.Text(
 						[
 							'# Python step — runs on the Aithericon executor.',
-							'# `token`, `set_output` and `log_*` are injected by the runner',
-							'# (no imports, no init/shutdown). `token` is the workflow token;',
-							'# see the Reference panel for the fields you can read here.',
+							'# Each upstream node is available as a Python global named after',
+							'# its slug — no imports, no `token[...]`. Just write the access',
+							'# directly: the compiler detects `<slug>.<field>` in this source',
+							'# and stages the producer\'s data automatically.',
+							'#',
+							'#   amount = review.invoice_amount      # borrowed from upstream "review"',
+							'#   vendor = review.vendor_name',
+							'#',
+							'# Outputs: assign declared output field names at top level — the',
+							'# runner sweeps them into this node\'s output port after exec. Add',
+							'# fields in the right-hand "Output" panel, then write them here:',
+							'#',
+							'#   result = { "ok": True }            # if "result" is declared',
+							'#',
+							'# Escape hatch: `set_output(name, value)` is also injected for',
+							'# dynamic names or writes from inside branches/loops. Logging',
+							'# helpers `log_*`, `update_progress`, `define_phases`/`update_phase`,',
+							'# `log_metric`, `log_artifact` are injected too. The Reference panel',
+							'# on the right lists every `<slug>.<field>` in scope at this node.',
 							'',
 							'log_info("step started")',
-							'',
-							'# Each set_output(name, value) adds a field to this node’s output',
-							'# port, readable as token.<name> by downstream steps.',
-							'# set_output("result", token.some_field)',
 							''
 						].join('\n')
 					)
@@ -427,6 +503,26 @@ export class YjsGraphBinding {
 			const yNode = this.yNodes.get(nodeId);
 			if (!yNode || !(yNode instanceof Y.Map)) return;
 			yNode.set('position', position);
+		});
+	}
+
+	/**
+	 * Resize a container node. NodeResizer fires on gesture end with the final
+	 * `{x, y, width, height}` (top/left-edge resizes shift `x`/`y` as well as
+	 * size, so we accept an optional `position`). One transaction so coauthors
+	 * never observe a partial mid-resize state. Mirrors the size fields written
+	 * at `addNode` time so the Y.Map round-trips identically.
+	 */
+	resizeNode(
+		nodeId: string,
+		change: { position?: { x: number; y: number }; width: number; height: number }
+	): void {
+		this.doc.transact(() => {
+			const yNode = this.yNodes.get(nodeId);
+			if (!yNode || !(yNode instanceof Y.Map)) return;
+			if (change.position) yNode.set('position', change.position);
+			yNode.set('width', change.width);
+			yNode.set('height', change.height);
 		});
 	}
 
@@ -594,6 +690,11 @@ export class YjsGraphBinding {
 				}
 				break;
 			case 'end':
+				if (data.resultMapping && data.resultMapping.length > 0) {
+					config.set('resultMapping', data.resultMapping);
+				} else {
+					config.delete('resultMapping');
+				}
 				break;
 			case 'human_task':
 				config.set('taskTitle', data.taskTitle);
@@ -619,8 +720,17 @@ export class YjsGraphBinding {
 				break;
 			case 'parallel_split':
 				break;
-			case 'parallel_join':
-				config.set('mergeStrategy', data.mergeStrategy ?? 'shallow_last_wins');
+			case 'join':
+				config.set('mode', data.mode ?? 'all');
+				if ((data.mode ?? 'all') === 'all') {
+					config.set('mergeStrategy', data.mergeStrategy ?? 'shallow_last_wins');
+				} else {
+					config.delete('mergeStrategy');
+				}
+				config.set(
+					'output',
+					data.output ?? { id: 'out', label: 'Output', fields: [] }
+				);
 				break;
 			case 'loop':
 				config.set('maxIterations', data.maxIterations);
@@ -661,6 +771,11 @@ export class YjsGraphBinding {
 				} else {
 					config.delete('failureMessage');
 				}
+				if (data.errorResultMapping && data.errorResultMapping.length > 0) {
+					config.set('errorResultMapping', data.errorResultMapping);
+				} else {
+					config.delete('errorResultMapping');
+				}
 				break;
 			case 'trigger':
 				config.set('source', data.source);
@@ -681,6 +796,34 @@ export class YjsGraphBinding {
 					'output',
 					data.output ?? { id: 'out', label: 'Result', fields: [] }
 				);
+				break;
+			case 'agent':
+				config.set('model', data.model);
+				config.set('userPrompt', data.userPrompt);
+				if (data.systemPrompt) {
+					config.set('systemPrompt', data.systemPrompt);
+				} else {
+					config.delete('systemPrompt');
+				}
+				if (data.responseFormat) {
+					config.set('responseFormat', data.responseFormat);
+				} else {
+					config.delete('responseFormat');
+				}
+				config.set('maxTurns', data.maxTurns ?? 1);
+				if (data.stopWhen) {
+					config.set('stopWhen', data.stopWhen);
+				} else {
+					config.delete('stopWhen');
+				}
+				config.set('contextStrategy', data.contextStrategy ?? 'none');
+				config.set('onToolError', data.onToolError ?? 'feedback');
+				break;
+			case 'delay':
+				config.set('durationMsExpr', data.durationMsExpr ?? '5000');
+				break;
+			case 'timeout':
+				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
 				break;
 		}
 	}

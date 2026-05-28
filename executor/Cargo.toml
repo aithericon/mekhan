@@ -18,6 +18,11 @@ members = [
     "crates/executor-storage-types",
     "crates/executor-backend-configs",
     "crates/executor-surya",
+    "crates/executor-process",
+    "crates/executor-docker",
+    "crates/executor-http",
+    "crates/executor-python",
+    "crates/executor-smtp",
 ]
 
 [workspace.package]
@@ -46,7 +51,17 @@ aithericon-executor-file-ops = { path = "crates/executor-file-ops" }
 aithericon-executor-kreuzberg = { path = "crates/executor-kreuzberg" }
 aithericon-executor-postgres = { path = "crates/executor-postgres" }
 aithericon-executor-surya = { path = "crates/executor-surya" }
+aithericon-executor-process = { path = "crates/executor-process" }
+aithericon-executor-docker = { path = "crates/executor-docker" }
+aithericon-executor-http = { path = "crates/executor-http" }
+aithericon-executor-python = { path = "crates/executor-python" }
+aithericon-executor-smtp = { path = "crates/executor-smtp" }
 aithericon-secrets = { path = "../shared/secrets" }
+# Cross-crate backend metadata — the same `&'static [&BackendMeta]` slice
+# the mekhan compiler keys off. Driving `build_executor` from this list
+# is the Phase 2 payoff: adding a new backend means one entry in shared
+# + one match arm in executor-service + the trait impl in its own crate.
+aithericon-backends = { path = "../shared/backends" }
 
 # Apalis (forked with NATS backend) — use local path for development, switch to git for CI/deploy
 apalis = { path = "../shared/apalis", default-features = false, features = ["limit"] }

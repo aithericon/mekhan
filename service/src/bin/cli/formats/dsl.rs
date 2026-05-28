@@ -159,7 +159,7 @@ impl DslWorkflow {
         let mut graph = WorkflowGraph {
             nodes,
             edges,
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         // Apply decision edge labels from conditions
@@ -404,7 +404,7 @@ flow:
                 label: None,
                 edge_type: "sequence".to_string(),
             }],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         // Convert to DSL and back
@@ -604,7 +604,7 @@ flow:
                     edge_type: "sequence".to_string(),
                 },
             ],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         // Assert the url image + download blocks survived a round-trip,
@@ -810,7 +810,7 @@ flow:
                     edge_type: "sequence".to_string(),
                 },
             ],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         fn assert_fields_intact(

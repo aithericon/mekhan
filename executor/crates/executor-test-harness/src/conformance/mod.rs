@@ -1,5 +1,7 @@
 pub mod backend_tests;
 pub mod kit;
+pub mod kreuzberg_kit;
+pub mod kreuzberg_tests;
 pub mod llm_kit;
 pub mod llm_tests;
 pub mod pipeline_tests;
@@ -13,6 +15,16 @@ pub mod file_ops_kit;
 pub mod file_ops_tests;
 #[cfg(feature = "python")]
 pub mod python_kit;
+
+// The Postgres backend deliberately does NOT have a shared kit here.
+// Its conformance surface is dominated by tenant isolation via RLS,
+// `SET LOCAL` security invariants, and connection-pool reuse — all of which
+// are stateful, postgres-internal, and have no analog in other backends.
+// Forcing them through a shared trait would either expose postgres-specific
+// concepts the other kits ignore, or strip the tests of what makes them
+// useful. Postgres integration tests live in
+// `executor-postgres/tests/integration.rs` and stay there by design. See
+// `executor-postgres/src/backend.rs` for the contract they verify.
 
 /// Generate backend-level conformance tests for a `BackendTestKit` implementation.
 ///
@@ -474,6 +486,73 @@ macro_rules! file_ops_conformance_tests {
                     return;
                 }
                 $crate::conformance::file_ops_tests::test_duration_tracked(&kit).await;
+            }
+        }
+    };
+}
+
+/// Generate Kreuzberg-backend conformance tests for a [`KreuzbergTestKit`]
+/// implementation.
+///
+/// Kreuzberg backends differ from process-style backends: no stdout/stderr,
+/// no exit codes, no env vars. Errors surface as `BackendError` from
+/// `execute()` (or `Config` from `prepare()`), not `ExitFailure`. This macro
+/// (and the matching `kreuzberg_tests` module) mirrors the pattern of
+/// [`file_ops_conformance_tests`] / [`llm_conformance_tests`].
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use aithericon_executor_test_harness::kreuzberg_conformance_tests;
+///
+/// kreuzberg_conformance_tests!(kreuzberg, KreuzbergConformanceKit::new());
+/// ```
+#[macro_export]
+macro_rules! kreuzberg_conformance_tests {
+    ($prefix:ident, $kit_expr:expr) => {
+        mod $prefix {
+            #[allow(unused_imports)]
+            use super::*;
+            use $crate::conformance::kreuzberg_kit::KreuzbergTestKit;
+
+            #[tokio::test]
+            async fn conform_single_text_extract_success() {
+                let kit = $kit_expr;
+                if let Some(reason) = kit.skip_reason().await {
+                    eprintln!("SKIPPED: {reason}");
+                    return;
+                }
+                $crate::conformance::kreuzberg_tests::test_single_text_extract_success(&kit).await;
+            }
+
+            #[tokio::test]
+            async fn conform_batch_text_extract_success() {
+                let kit = $kit_expr;
+                if let Some(reason) = kit.skip_reason().await {
+                    eprintln!("SKIPPED: {reason}");
+                    return;
+                }
+                $crate::conformance::kreuzberg_tests::test_batch_text_extract_success(&kit).await;
+            }
+
+            #[tokio::test]
+            async fn conform_missing_input_fails_clean() {
+                let kit = $kit_expr;
+                if let Some(reason) = kit.skip_reason().await {
+                    eprintln!("SKIPPED: {reason}");
+                    return;
+                }
+                $crate::conformance::kreuzberg_tests::test_missing_input_fails_clean(&kit).await;
+            }
+
+            #[tokio::test]
+            async fn conform_status_callback_fires() {
+                let kit = $kit_expr;
+                if let Some(reason) = kit.skip_reason().await {
+                    eprintln!("SKIPPED: {reason}");
+                    return;
+                }
+                $crate::conformance::kreuzberg_tests::test_status_callback_fires(&kit).await;
             }
         }
     };

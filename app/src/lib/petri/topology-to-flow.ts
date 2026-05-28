@@ -20,7 +20,7 @@ import type {
 	TransitionStatus,
 	ValidationIssue
 } from '$lib/types/petri';
-import { getTransitionHeight, getLayoutedElements, TRANSITION_WIDTH } from './graph-layout';
+import { getTransitionHeight, getTransitionWidth, getLayoutedElements } from './graph-layout';
 import { applyGroupCollapse } from './group-collapse';
 
 // SvelteFlow uses node.id as the key in keyed {#each} blocks. Places and
@@ -211,6 +211,15 @@ export function topologyToFlow(opts: TopologyToFlowOptions): {
 			outputPorts.length,
 			causedSignals.length
 		);
+		const transWidth = getTransitionWidth({
+			label: transition.name,
+			hasGuard: !!transition.guard,
+			isEffect: logicType === 'effect',
+			enabled: isEnabled,
+			inputPortNames: inputPorts.map((p) => p.name),
+			outputPortNames: outputPorts.map((p) => p.name),
+			causedSignalNames: causedSignals.map((s) => s.name)
+		});
 
 		rawNodes.push({
 			id: transNodeId(transition.id),
@@ -234,7 +243,7 @@ export function topologyToFlow(opts: TopologyToFlowOptions): {
 				pulseRole,
 				onFire: () => onFireTransition(transition.id),
 				onSelect: () => onSelectTransition?.(transition.id),
-				_dims: { width: TRANSITION_WIDTH, height: transHeight }
+				_dims: { width: transWidth, height: transHeight }
 			}
 		});
 	}

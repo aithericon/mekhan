@@ -53,7 +53,7 @@ async fn seed_entry(
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue -> empty list when no entries
+// GET /api/v1/catalogue -> empty list when no entries
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -63,7 +63,7 @@ async fn catalogue_list_empty() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue")
+                .uri("/api/v1/catalogue")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -78,7 +78,7 @@ async fn catalogue_list_empty() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue -> returns seeded entries (Paginated response)
+// GET /api/v1/catalogue -> returns seeded entries (Paginated response)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -91,7 +91,7 @@ async fn catalogue_list_returns_seeded_entries() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue")
+                .uri("/api/v1/catalogue")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -121,7 +121,7 @@ async fn catalogue_filter_bracket_notation() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?filter%5Bcategory%5D%5Beq%5D=model")
+                .uri("/api/v1/catalogue?filter%5Bcategory%5D%5Beq%5D=model")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -149,7 +149,7 @@ async fn catalogue_filter_contains() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?filter%5Bname%5D%5Bcontains%5D=gp_model")
+                .uri("/api/v1/catalogue?filter%5Bname%5D%5Bcontains%5D=gp_model")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -175,7 +175,7 @@ async fn catalogue_filter_in() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?filter%5Bcategory%5D%5Bin%5D=model,dataset")
+                .uri("/api/v1/catalogue?filter%5Bcategory%5D%5Bin%5D=model,dataset")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -201,7 +201,7 @@ async fn catalogue_sort_desc() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?sort=-size_bytes")
+                .uri("/api/v1/catalogue?sort=-size_bytes")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -229,7 +229,7 @@ async fn catalogue_search() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?search=gp_model")
+                .uri("/api/v1/catalogue?search=gp_model")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -258,7 +258,7 @@ async fn catalogue_combined_query() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?filter%5Bcategory%5D%5Beq%5D=model&search=gp&sort=-size_bytes&page_size=2&page=0")
+                .uri("/api/v1/catalogue?filter%5Bcategory%5D%5Beq%5D=model&search=gp&sort=-size_bytes&page_size=2&page=0")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -285,7 +285,7 @@ async fn catalogue_invalid_filter_field() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?filter%5Bsqlinjection%5D%5Beq%5D=bad")
+                .uri("/api/v1/catalogue?filter%5Bsqlinjection%5D%5Beq%5D=bad")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -308,7 +308,7 @@ async fn catalogue_invalid_sort_field() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?sort=-not_a_column")
+                .uri("/api/v1/catalogue?sort=-not_a_column")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -321,7 +321,7 @@ async fn catalogue_invalid_sort_field() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue/:exec/:id -> single entry
+// GET /api/v1/catalogue/:exec/:id -> single entry
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -333,7 +333,7 @@ async fn catalogue_get_single_entry() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue/exec-42/art-1")
+                .uri("/api/v1/catalogue/exec-42/art-1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -347,7 +347,7 @@ async fn catalogue_get_single_entry() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue/:exec/:id -> 404 for missing
+// GET /api/v1/catalogue/:exec/:id -> 404 for missing
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -357,7 +357,7 @@ async fn catalogue_get_not_found() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue/nonexistent/nope")
+                .uri("/api/v1/catalogue/nonexistent/nope")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -368,7 +368,7 @@ async fn catalogue_get_not_found() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue/stats -> filterable statistics
+// GET /api/v1/catalogue/stats -> filterable statistics
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -384,7 +384,7 @@ async fn catalogue_stats_filterable() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue/stats")
+                .uri("/api/v1/catalogue/stats")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -400,7 +400,7 @@ async fn catalogue_stats_filterable() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue/stats?filter%5Bsource_net%5D%5Beq%5D=net-a")
+                .uri("/api/v1/catalogue/stats?filter%5Bsource_net%5D%5Beq%5D=net-a")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -413,7 +413,7 @@ async fn catalogue_stats_filterable() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue/stats/by-net
+// GET /api/v1/catalogue/stats/by-net
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -427,7 +427,7 @@ async fn catalogue_stats_by_net() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue/stats/by-net")
+                .uri("/api/v1/catalogue/stats/by-net")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -443,7 +443,7 @@ async fn catalogue_stats_by_net() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue/lineage/:process_id
+// GET /api/v1/catalogue/lineage/:process_id
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -457,7 +457,7 @@ async fn catalogue_lineage() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue/lineage/campaign-42")
+                .uri("/api/v1/catalogue/lineage/campaign-42")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -474,7 +474,7 @@ async fn catalogue_lineage() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/catalogue/distinct/category -> dropdown values
+// GET /api/v1/catalogue/distinct/category -> dropdown values
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -488,7 +488,7 @@ async fn catalogue_distinct_values() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue/distinct/category")
+                .uri("/api/v1/catalogue/distinct/category")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -527,7 +527,7 @@ async fn catalogue_filter_by_metadata() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?metadata=%7B%22kernel%22%3A%22rbf%22%7D")
+                .uri("/api/v1/catalogue?metadata=%7B%22kernel%22%3A%22rbf%22%7D")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -554,7 +554,7 @@ async fn catalogue_pagination() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/catalogue?page=1&page_size=2")
+                .uri("/api/v1/catalogue?page=1&page_size=2")
                 .body(Body::empty())
                 .unwrap(),
         )

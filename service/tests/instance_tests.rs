@@ -30,7 +30,7 @@ async fn create_published_template(app: &axum::Router) -> String {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -52,7 +52,7 @@ async fn create_published_template(app: &axum::Router) -> String {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -83,7 +83,7 @@ async fn create_instance_from_unpublished_returns_400() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -105,7 +105,7 @@ async fn create_instance_from_unpublished_returns_400() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -139,7 +139,7 @@ async fn create_instance_from_nonexistent_returns_404() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -157,7 +157,7 @@ async fn create_instance_from_nonexistent_returns_404() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/instances/:nonexistent -> 404
+// GET /api/v1/instances/:nonexistent -> 404
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -168,7 +168,7 @@ async fn get_nonexistent_instance_returns_404() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/instances/{}", Uuid::new_v4()))
+                .uri(format!("/api/v1/instances/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -179,7 +179,7 @@ async fn get_nonexistent_instance_returns_404() {
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /api/instances/:nonexistent -> 404
+// DELETE /api/v1/instances/:nonexistent -> 404
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -190,7 +190,7 @@ async fn cancel_nonexistent_instance_returns_404() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/instances/{}", Uuid::new_v4()))
+                .uri(format!("/api/v1/instances/{}", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -212,7 +212,7 @@ async fn list_instances_returns_paginated() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -235,7 +235,7 @@ async fn list_instances_with_status_filter() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/instances?status=running")
+                .uri("/api/v1/instances?status=running")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -256,7 +256,7 @@ async fn list_instances_with_template_filter() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/instances?template_id={template_id}"))
+                .uri(format!("/api/v1/instances?template_id={template_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -298,7 +298,7 @@ async fn cancel_instance_updates_status_in_db() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -349,7 +349,7 @@ async fn cancel_already_cancelled_returns_409() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -386,7 +386,7 @@ async fn cancel_completed_returns_409() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -397,7 +397,7 @@ async fn cancel_completed_returns_409() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/instances/:id -> returns instance data
+// GET /api/v1/instances/:id -> returns instance data
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -423,7 +423,7 @@ async fn get_instance_returns_data() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(&format!("/api/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )

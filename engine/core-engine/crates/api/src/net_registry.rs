@@ -26,8 +26,9 @@ use petri_application::{
     AdapterScheduler, EventRepository, MockSchedulerClient, PetriNetService,
     ProcessCompleteHandler, ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
     ProcessStartHandler, ProcessStatusDetailHandler,
-    SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection, TimerCancelHandler,
-    TimerScheduleHandler, TopologyRepository,
+    SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection,
+    subworkflow_handlers::SubWorkflowCancelHandler, TimerCancelHandler, TimerScheduleHandler,
+    TopologyRepository,
 };
 #[cfg(feature = "catalogue")]
 use petri_application::{
@@ -36,11 +37,12 @@ use petri_application::{
 };
 #[cfg(feature = "executor")]
 use petri_application::{ExecutorCancelHandler, ExecutorSubmitHandler};
-#[cfg(feature = "human")]
 use petri_domain::human::HumanTaskClient;
 #[cfg(feature = "executor")]
 use petri_domain::ExecutorClient;
-use petri_domain::{effects, timer::TimerClient, PlaceId, SchedulerClient};
+use petri_domain::{
+    effects, subworkflow::SubWorkflowCancellor, timer::TimerClient, PlaceId, SchedulerClient,
+};
 
 use crate::dto::RunMode;
 use crate::router::{AppState, SseSignal};
@@ -72,11 +74,9 @@ pub trait MetadataLookup: Send + Sync {
 }
 
 /// Factory function type for creating human task clients per net.
-#[cfg(feature = "human")]
 pub type HumanClientFactory = Arc<dyn Fn(&str) -> Arc<dyn HumanTaskClient> + Send + Sync>;
 
 /// Configuration for human task integration.
-#[cfg(feature = "human")]
 #[derive(Clone)]
 pub struct HumanIntegrationConfig {
     /// Factory to create a human task client for a specific net.
@@ -300,11 +300,17 @@ where
     on_create: Option<OnNetCreated<E, T, S>>,
     scheduler_config: Option<SchedulerConfig>,
     timer_client: Option<Arc<dyn TimerClient>>,
+    /// Cancellor for child nets. The Timeout node's body-cancellation path
+    /// fires `subworkflow_cancel` effects to terminate spawned child nets.
+    /// Wrapped in `RwLock` because main.rs installs it after the registry is
+    /// already `Arc`-wrapped (the cancellor needs `Arc<NetRegistry>` itself
+    /// to call `terminate`, which creates a one-way cycle resolved at use
+    /// time). See `set_subworkflow_cancellor` and [`RegistryCancellor`].
+    subworkflow_cancellor: RwLock<Option<Arc<dyn SubWorkflowCancellor>>>,
     #[cfg(feature = "executor")]
     executor_config: Option<ExecutorIntegrationConfig>,
     #[cfg(feature = "executor")]
     http_executor_config: Option<HttpExecutorConfig>,
-    #[cfg(feature = "human")]
     human_config: Option<HumanIntegrationConfig>,
     #[cfg(feature = "catalogue")]
     catalogue_config: Option<CatalogueIntegrationConfig>,
@@ -336,11 +342,11 @@ where
             on_create: None,
             scheduler_config: None,
             timer_client: None,
+            subworkflow_cancellor: RwLock::new(None),
             #[cfg(feature = "executor")]
             executor_config: None,
             #[cfg(feature = "executor")]
             http_executor_config: None,
-            #[cfg(feature = "human")]
             human_config: None,
             #[cfg(feature = "catalogue")]
             catalogue_config: None,
@@ -466,7 +472,6 @@ where
     }
 
     /// Set the human task integration config.
-    #[cfg(feature = "human")]
     pub fn set_human_config(&mut self, config: HumanIntegrationConfig) {
         self.human_config = Some(config);
     }
@@ -474,6 +479,16 @@ where
     /// Set the timer client for durable delays.
     pub fn set_timer_client(&mut self, client: Arc<dyn TimerClient>) {
         self.timer_client = Some(client);
+    }
+
+    /// Install the cancellor used by the `subworkflow_cancel` effect handler.
+    /// Typically wired in main.rs as a thin adapter over
+    /// `NetRegistry::terminate` (see [`RegistryCancellor`]) so the engine can
+    /// cancel its own child nets. Takes `&self` so it can be called after
+    /// the registry is `Arc`-wrapped; must be set before any net that wants
+    /// to use the handler is created.
+    pub fn set_subworkflow_cancellor(&self, cancellor: Arc<dyn SubWorkflowCancellor>) {
+        *self.subworkflow_cancellor.write() = Some(cancellor);
     }
 
     /// Set a callback to run after each new net instance is created.
@@ -717,7 +732,6 @@ where
         }
 
         // Register human task effect handlers if configured
-        #[cfg(feature = "human")]
         if let Some(ref hcfg) = self.human_config {
             // Create a per-net human client using the factory
             let human_client = (hcfg.client_factory)(net_id);
@@ -833,6 +847,23 @@ where
                 .expect("register timer_cancel effect handler");
 
             tracing::info!(net_id = %net_id, "Registered timer effect handlers");
+        }
+
+        // Register subworkflow cancel handler if configured (used by Timeout
+        // node's body-cancellation post-pass to terminate child nets).
+        if let Some(cancellor) = self.subworkflow_cancellor.read().clone() {
+            service
+                .register_effect_handler(
+                    effects::SUBWORKFLOW_CANCEL.handler_id,
+                    Arc::new(SubWorkflowCancelHandler::new(
+                        cancellor,
+                        effects::SUBWORKFLOW_CANCEL.default_input_port,
+                        effects::SUBWORKFLOW_CANCEL.default_output_port,
+                    )),
+                )
+                .expect("register subworkflow_cancel effect handler");
+
+            tracing::info!(net_id = %net_id, "Registered subworkflow_cancel effect handler");
         }
 
         // Register catalogue effect handler if configured
@@ -1030,6 +1061,12 @@ where
     }
 
     /// Terminate a net: emit NetCancelled, cancel tasks, remove from memory.
+    ///
+    /// Returns `Err("Net '<id>' not found")` if no net with that id is
+    /// currently registered (already terminal or never existed). Callers that
+    /// need to distinguish "already gone" from a real error should treat the
+    /// "not found" prefix as idempotent success — see
+    /// [`RegistryCancellor`] for the canonical wrapper.
     pub async fn terminate(
         &self,
         net_id: &str,
@@ -2124,6 +2161,64 @@ use nats_catalogue_client::NatsCatalogueClient;
 // NetTopologyResolver impl — bridges application-layer bridge validation
 // to the API-layer net registry.
 // ---------------------------------------------------------------------------
+
+/// Adapter that bridges `SubWorkflowCancellor` (defined in petri-domain)
+/// onto `NetRegistry::terminate`. Construct via [`RegistryCancellor::new`]
+/// after the registry is `Arc`-wrapped; install on the registry with
+/// [`NetRegistry::set_subworkflow_cancellor`] so the `subworkflow_cancel`
+/// handler can terminate child nets without `application` depending on `api`.
+pub struct RegistryCancellor<E, T, S>
+where
+    E: EventRepository + 'static,
+    T: TopologyRepository + 'static,
+    S: StateProjection + 'static,
+{
+    registry: Arc<NetRegistry<E, T, S>>,
+}
+
+impl<E, T, S> RegistryCancellor<E, T, S>
+where
+    E: EventRepository + 'static,
+    T: TopologyRepository + 'static,
+    S: StateProjection + 'static,
+{
+    pub fn new(registry: Arc<NetRegistry<E, T, S>>) -> Self {
+        Self { registry }
+    }
+}
+
+#[async_trait::async_trait]
+impl<E, T, S> SubWorkflowCancellor for RegistryCancellor<E, T, S>
+where
+    E: EventRepository + 'static,
+    T: TopologyRepository + 'static,
+    S: StateProjection + 'static,
+{
+    async fn cancel(
+        &self,
+        request: petri_domain::subworkflow::SubWorkflowCancelRequest,
+    ) -> Result<bool, petri_domain::subworkflow::SubWorkflowCancelError> {
+        match self
+            .registry
+            .terminate(
+                &request.child_net_id,
+                request.reason.clone(),
+                Some("subworkflow_cancel".to_string()),
+            )
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(e) if e.starts_with("Net '") && e.ends_with("' not found") => Ok(false),
+            Err(e) => Err(
+                petri_domain::subworkflow::SubWorkflowCancelError::CancellationFailed(e),
+            ),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "net-registry-cancellor"
+    }
+}
 
 impl<E, T, S> petri_application::NetTopologyResolver for NetRegistry<E, T, S>
 where

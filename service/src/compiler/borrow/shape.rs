@@ -1,0 +1,117 @@
+//! Unified borrow shape: the post-scan record every planner emits.
+//!
+//! See [`crate::compiler::borrow`] for the surrounding architecture
+//! narrative — this module just declares the data shape.
+
+use uuid::Uuid;
+
+use crate::models::template::FieldKind;
+
+/// Rhai block-comment sentinel emitted by `lower_automated_step` /
+/// `lower_llm_classify` into the prepare-transition source. The borrow
+/// phases splice `job_inputs.push(...)` statements at this marker; any
+/// remaining occurrences are stripped at the end of apply_borrows.
+pub(crate) const BORROW_MARKER: &str = "/*__BORROWED_INPUTS__*/";
+
+/// One scanned-and-resolved borrow record. The shape is uniform across the
+/// five authoring surfaces — what differs per surface is the rewrite
+/// strategy carried in [`resolution`](Borrow::resolution).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Borrow {
+    /// Node whose authored source carries the borrow.
+    pub consumer_node_id: String,
+    /// Resolved producer node whose parked data the borrow reaches.
+    pub producer_node: String,
+    /// The author's slug (HumanTask/AutomatedStep `<slug>.<field>` head;
+    /// guard's dotted-ref head). Drives staging filenames and is the
+    /// key for per-consumer deduplication where applicable.
+    pub slug: String,
+    /// Per-surface rewrite strategy — what the apply step does with this
+    /// borrow once the read-arc is wired.
+    pub resolution: BorrowResolution,
+}
+
+/// Per-surface rewrite strategy. Read-arc wiring is uniform; what varies
+/// is how the consumer's source code reaches the producer's field value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BorrowResolution {
+    /// Decision/Loop guard: the consumer's guard / result-mapping source
+    /// holds the dotted identifier (`review.invoice_amount`); the apply
+    /// step word-boundary-substitutes it for `d_<producer>.<producer_path>`.
+    ///
+    /// `dotted` is the exact substring the rewriter searches for; e.g.
+    /// `"review.invoice_amount"`. `producer_path` is the segment-after-
+    /// `d_<producer>.` the rewrite replaces it with; e.g. `"data.invoice_amount"`
+    /// (HumanTask producer) or `"detail.outputs.invoice_amount"`
+    /// (AutomatedStep producer). The borrow's `slug` is the head of
+    /// `dotted`.
+    Guard {
+        dotted: String,
+        producer_path: String,
+    },
+
+    /// Python AutomatedStep: stage the producer's whole parked envelope
+    /// (with business fields hoisted to the top level) as `<slug>.json`
+    /// via a `job_inputs.push(...)` snippet spliced at `BORROW_MARKER`.
+    /// The runner's `AccessibleDict` then exposes `<slug>.<field>` to
+    /// user Python without any source rewrite. One Borrow per
+    /// `(consumer, producer)` pair regardless of how many fields the
+    /// Python source reads — the staged file is the whole envelope.
+    PythonEnvelope,
+
+    /// HumanTask: the wire-edge transition's Rhai already calls
+    /// `__pluck(input, ["<slug>", "<attr>"])` for each placeholder
+    /// (emitted by `build_human_task_injection_logic` at lowering).
+    /// The apply step substring-rewrites those calls to use
+    /// `d_<producer>` instead of `input`. No staging, no marker —
+    /// just an in-place needle replacement against the lowered
+    /// `__pluck(input, ["<slug>", ` prefix. One Borrow per
+    /// `(consumer, producer)` pair (all attr's under the same slug
+    /// share the same needle).
+    HumanTaskInputRewrite,
+
+    /// Python AutomatedStep with a workspace-level Resource ref. Stages
+    /// `<name>.json` from the compiler-spliced `__resources` envelope — there
+    /// is no upstream producer to wire a read-arc from, so this variant
+    /// intentionally skips `wire_read_arc`. The publish handler resolves the
+    /// resource by name to a concrete `(resource_id, latest_version)` pin,
+    /// runs the resource resolver to produce the envelope JSON, and splices
+    /// `let __resources = #{ ... };` into prepare transitions at publish
+    /// time.
+    ///
+    /// `resource_id` is the rename-safe stable id of the workspace resource;
+    /// `latest_version` is the version pinned at publish time. Both ride the
+    /// borrow record for downstream consumers (telemetry, `.pyi` generation)
+    /// that need the pin without re-querying the workspace.
+    ResourceEnvelope {
+        /// Workspace-scoped resource name (the `<head>` in Python's
+        /// `<head>.<field>` access). Also the staged file stem (`<name>.json`)
+        /// and the AccessibleDict Python global.
+        name: String,
+        /// Pinned resource_id — rename-safe across publishes; deleting the
+        /// resource breaks (intentionally).
+        resource_id: Uuid,
+        /// Resource type name (`postgres`, `openai`, …) — kept on the borrow
+        /// for downstream consumers.
+        type_name: String,
+        /// Resource version pinned at publish time. Carried for replay /
+        /// debugging tooling that wants the exact pin without re-querying.
+        latest_version: i32,
+    },
+
+    /// LLM / Kreuzberg AutomatedStep: stage one input file per `(slug, attr)`
+    /// via a `job_inputs.push(...)` snippet at `BORROW_MARKER` AND
+    /// rewrite the `{{<slug>.<attr>}}` placeholder in the embedded config
+    /// to `{{input:NAME}}` (content sites) or `{{input_path:NAME}}` (path
+    /// sites). The executor's resolver handles both forms uniformly.
+    BackendFieldStage {
+        attr: String,
+        /// True when this site needs a filesystem path (LLM
+        /// `images[].path`, all Kreuzberg sites). False = content site
+        /// (LLM prompt / system_prompt / history).
+        is_path_site: bool,
+        /// Resolved FieldKind of `<attr>` on the producer's data port —
+        /// drives Raw vs StoragePath staging dispatch.
+        field_kind: FieldKind,
+    },
+}

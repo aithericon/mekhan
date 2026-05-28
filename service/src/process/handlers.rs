@@ -72,13 +72,13 @@ fn to_human_task_json(task: &HpiTask) -> JsonValue {
     JsonValue::Object(obj)
 }
 
-/// GET /api/processes — list processes with filter/sort/pagination.
+/// GET /api/v1/processes — list processes with filter/sort/pagination.
 ///
 /// Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,
 /// `sort`, `page`, `page_size`. Response shape is paginated.
 #[utoipa::path(
     get,
-    path = "/api/processes",
+    path = "/api/v1/processes",
     responses(
         (status = 200, description = "Paginated list of processes", body = Paginated<HpiProcess>),
         (status = 400, description = "Invalid query", body = ErrorResponse),
@@ -96,10 +96,10 @@ pub async fn list_processes(
     Ok(Json(serde_json::to_value(response).unwrap_or(json!({}))))
 }
 
-/// GET /api/processes/stats — aggregate process statistics.
+/// GET /api/v1/processes/stats — aggregate process statistics.
 #[utoipa::path(
     get,
-    path = "/api/processes/stats",
+    path = "/api/v1/processes/stats",
     responses(
         (status = 200, description = "Process counts by status", body = ProcessStats),
         (status = 500, description = "Server error", body = ErrorResponse),
@@ -116,10 +116,10 @@ pub async fn process_stats(
     Ok(Json(stats))
 }
 
-/// GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).
+/// GET /api/v1/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count).
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}",
+    path = "/api/v1/processes/{process_id}",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
         (status = 200, description = "Process detail with tasks, metrics, logs", body = ProcessDetail),
@@ -142,10 +142,10 @@ pub async fn get_process(
     Ok(Json(detail))
 }
 
-/// PUT /api/processes/{process_id} — partial update of a process.
+/// PUT /api/v1/processes/{process_id} — partial update of a process.
 #[utoipa::path(
     put,
-    path = "/api/processes/{process_id}",
+    path = "/api/v1/processes/{process_id}",
     params(("process_id" = String, Path, description = "Process id")),
     request_body = ProcessUpdateRequest,
     responses(
@@ -176,10 +176,10 @@ pub struct MetricQueryParams {
     pub limit: Option<i64>,
 }
 
-/// GET /api/processes/{process_id}/metrics/summary — aggregated metric stats per key.
+/// GET /api/v1/processes/{process_id}/metrics/summary — aggregated metric stats per key.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/metrics/summary",
+    path = "/api/v1/processes/{process_id}/metrics/summary",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
         (status = 200, description = "Per-key min/max/avg/last", body = Vec<HpiMetricSummary>),
@@ -200,10 +200,10 @@ pub async fn get_process_metrics_summary(
     Ok(Json(summary))
 }
 
-/// GET /api/processes/{process_id}/metrics — list metrics for a process.
+/// GET /api/v1/processes/{process_id}/metrics — list metrics for a process.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/metrics",
+    path = "/api/v1/processes/{process_id}/metrics",
     params(
         ("process_id" = String, Path, description = "Process id"),
         MetricQueryParams,
@@ -229,10 +229,10 @@ pub async fn get_process_metrics(
     Ok(Json(metrics))
 }
 
-/// GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination.
+/// GET /api/v1/processes/{process_id}/logs — list logs for a process with filter/pagination.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/logs",
+    path = "/api/v1/processes/{process_id}/logs",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
         (status = 200, description = "Paginated logs", body = Paginated<HpiLog>),
@@ -254,10 +254,10 @@ pub async fn get_process_logs(
     Ok(Json(serde_json::to_value(response).unwrap_or(json!({}))))
 }
 
-/// GET /api/processes/{process_id}/tasks — list tasks for a process.
+/// GET /api/v1/processes/{process_id}/tasks — list tasks for a process.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/tasks",
+    path = "/api/v1/processes/{process_id}/tasks",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
         (status = 200, description = "Tasks (HumanTask-shaped JSON)", body = Vec<serde_json::Value>),
@@ -279,10 +279,10 @@ pub async fn get_process_tasks(
     Ok(Json(shaped))
 }
 
-/// GET /api/processes/{process_id}/artifacts — list catalogue entries for a process.
+/// GET /api/v1/processes/{process_id}/artifacts — list catalogue entries for a process.
 #[utoipa::path(
     get,
-    path = "/api/processes/{process_id}/artifacts",
+    path = "/api/v1/processes/{process_id}/artifacts",
     params(("process_id" = String, Path, description = "Process id")),
     responses(
         (status = 200, description = "Paginated catalogue entries", body = Paginated<CatalogueEntry>),
@@ -304,7 +304,7 @@ pub async fn get_process_artifacts(
     Ok(Json(serde_json::to_value(response).unwrap_or(json!({}))))
 }
 
-/// GET /api/tasks — list all tasks with filter/sort/pagination.
+/// GET /api/v1/tasks — list all tasks with filter/sort/pagination.
 ///
 /// Returns `{ tasks, total, page, page_size, total_pages, has_next, has_previous }`
 /// where each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).
@@ -312,7 +312,7 @@ pub async fn get_process_artifacts(
 /// of the pagination envelope is preserved for richer clients.
 #[utoipa::path(
     get,
-    path = "/api/tasks",
+    path = "/api/v1/tasks",
     responses(
         (status = 200, description = "Paginated tasks (HumanTask-shaped) in `tasks` envelope", body = TaskListResponse),
         (status = 400, description = "Invalid query", body = ErrorResponse),
@@ -339,7 +339,7 @@ pub async fn list_tasks(
     }))
 }
 
-/// GET /api/tasks/:id — get a single task.
+/// GET /api/v1/tasks/:id — get a single task.
 ///
 /// Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`
 /// JSONB projected by the causality consumer. This includes `task_id`, `steps`,
@@ -347,7 +347,7 @@ pub async fn list_tasks(
 /// task form needs to render.
 #[utoipa::path(
     get,
-    path = "/api/tasks/{id}",
+    path = "/api/v1/tasks/{id}",
     params(("id" = String, Path, description = "Task id")),
     responses(
         (status = 200, description = "HumanTask-shaped JSON object", body = serde_json::Value),
@@ -478,10 +478,10 @@ fn coerce_bool(v: &JsonValue) -> bool {
     }
 }
 
-/// POST /api/tasks/{id}/complete — complete a task and publish NATS signal.
+/// POST /api/v1/tasks/{id}/complete — complete a task and publish NATS signal.
 #[utoipa::path(
     post,
-    path = "/api/tasks/{id}/complete",
+    path = "/api/v1/tasks/{id}/complete",
     params(("id" = String, Path, description = "Task id")),
     request_body(content = serde_json::Value, description = "Completion payload — `data` field is forwarded as the task result"),
     responses(
@@ -561,10 +561,10 @@ pub async fn complete_task(
     Ok(Json(to_human_task_json(&updated)))
 }
 
-/// POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal.
+/// POST /api/v1/tasks/{id}/cancel — cancel a task and publish NATS signal.
 #[utoipa::path(
     post,
-    path = "/api/tasks/{id}/cancel",
+    path = "/api/v1/tasks/{id}/cancel",
     params(("id" = String, Path, description = "Task id")),
     request_body(content = serde_json::Value, description = "Optional `reason` field"),
     responses(

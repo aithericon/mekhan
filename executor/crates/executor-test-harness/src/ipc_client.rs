@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use aithericon_executor_backend::ProcessConfig;
+use aithericon_executor_process::ProcessConfig;
 use aithericon_executor_domain::{
     ExecutionJob, InputDeclaration, InputSource, JobPriority, OutputDeclaration,
 };

@@ -160,6 +160,7 @@ fn file_ops_spec(config: serde_json::Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 
@@ -276,6 +277,11 @@ impl FileOpsTestKit for LocalFileOpsKit {
             run_dir,
             timeout,
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),

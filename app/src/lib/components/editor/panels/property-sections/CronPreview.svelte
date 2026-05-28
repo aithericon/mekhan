@@ -38,7 +38,7 @@
 		try {
 			// We hit the preview endpoint directly with fetch — adding a typed
 			// wrapper to client.ts isn't worth it for a single editor helper.
-			const res = await fetch('/api/triggers/preview/cron', {
+			const res = await fetch('/api/v1/triggers/preview/cron', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ schedule: s, timezone: tz, count: 5 })

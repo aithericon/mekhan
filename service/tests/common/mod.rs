@@ -1,3 +1,8 @@
+// `mod common` is included by many test binaries; each binary only references
+// a subset of these helpers, so unused items appear "dead" per-binary even
+// though they're load-bearing in others.
+#![allow(dead_code, unused_imports)]
+
 use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -8,6 +13,7 @@ use tokio::net::TcpListener;
 
 pub mod mock_auth;
 pub mod test_infra;
+pub mod workspace_fixtures;
 pub mod zitadel_live;
 pub mod zitadel_mock;
 pub use test_infra::{nats_url, postgres_url, wait_for_nats, wait_for_postgres, TestDb, TestNats};
@@ -91,6 +97,9 @@ pub fn test_config() -> AppConfig {
         artifact_s3: None,
         frontend_dir: None,
         auth: AuthConfig::default(),
+        // Tests publish demos explicitly through the API; the startup
+        // seeder is off so each test owns its template ids.
+        demos: mekhan_service::config::DemosConfig::default(),
     }
 }
 
@@ -143,6 +152,10 @@ pub async fn test_app_with_authenticator(
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -188,6 +201,10 @@ pub async fn test_app_with_introspection(
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -195,7 +212,7 @@ pub async fn test_app_with_introspection(
 }
 
 /// Build the full Axum Router with a caller-supplied [`ZitadelMgmt`] wired
-/// into `AppState.zitadel_mgmt` (the embedded `/api/auth/tokens` broker). The
+/// into `AppState.zitadel_mgmt` (the embedded `/api/v1/auth/tokens` broker). The
 /// cookie `Authenticator` is a mock that *requires* a cookie, so a request
 /// with no cookie (e.g. a Bearer PAT) 401s — letting tests prove the
 /// cookie-only privilege boundary as well as the happy path.
@@ -231,6 +248,10 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         zitadel_mgmt: Some(mgmt),
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -276,6 +297,10 @@ pub async fn test_app() -> (Router, PgPool) {
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -320,6 +345,10 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -366,6 +395,10 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -426,16 +459,93 @@ pub async fn test_app_waiters(
         zitadel_mgmt: None,
         triggers,
         result_waiters: result_waiters.clone(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
     (router, db, result_waiters)
 }
 
+/// Like [`test_app_with_petri_url`] but also returns the `Arc<TriggerDispatcher>`
+/// from the constructed `AppState`. The same `Arc` must be handed to the
+/// `start_lifecycle_listener` task so the `on_instance_terminal` hook (used
+/// for `SingleActiveCoalesce` follow-up fires) talks to the same dispatcher
+/// the fire handler uses — two separate dispatchers would each hold their
+/// own `concurrency` DashMap and never converge.
+pub async fn test_app_with_petri_url_and_triggers(
+    nats_url: &str,
+    petri_url: &str,
+) -> (
+    Router,
+    PgPool,
+    Arc<mekhan_service::triggers::TriggerDispatcher>,
+) {
+    let db = create_test_db().await;
+    let mut config = test_config();
+    config.nats_url = nats_url.to_string();
+    config.petri_lab_url = petri_url.to_string();
+
+    let petri = PetriClient::new(petri_url);
+
+    let nats = MekhanNats::connect(nats_url, None)
+        .await
+        .unwrap_or_else(|e| panic!("failed to connect to NATS at {nats_url}: {e}"));
+
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
+    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
+
+    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
+    let state = AppState {
+        db: db.clone(),
+        petri,
+        nats,
+        config: config.clone(),
+        yjs: yjs_manager,
+        s3: artifact_store,
+        artifact_s3: None,
+        catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
+        live: LiveBroadcasts::new(),
+        authenticator: Arc::new(NoopAuthenticator::default()),
+        session_store,
+        oidc: None,
+        token_verifier: Arc::new(NoopTokenVerifier::default()),
+        principal_resolver: Arc::new(StaticPrincipalResolver),
+        introspection: None,
+        zitadel_mgmt: None,
+        triggers: triggers.clone(),
+        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
+        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_resolver: std::sync::Arc::new(
+            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
+    };
+
+    let router = build_router(state);
+    (router, db, triggers)
+}
+
 /// Start the full Axum server on a random port for WebSocket tests.
 /// Returns `(SocketAddr, PgPool)` — the address to connect to and the pool for assertions.
 pub async fn start_test_server() -> (SocketAddr, PgPool) {
     let (app, db) = test_app().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(axum::serve(listener, app).into_future());
+    (addr, db)
+}
+
+/// Like `start_test_server` but with a caller-supplied `Authenticator` —
+/// lets a WS test exercise the per-request gate (e.g. workspace
+/// membership) with the header-driven mock from `mock_auth.rs`.
+pub async fn start_test_server_with_authenticator(
+    authenticator: Arc<dyn Authenticator>,
+) -> (SocketAddr, PgPool) {
+    let (app, db) = test_app_with_authenticator(authenticator).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(axum::serve(listener, app).into_future());

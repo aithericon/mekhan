@@ -68,7 +68,7 @@ impl LiveZitadel {
     }
 
     /// The `mekhan-token-broker` PAT bootstrap.sh wrote — drives the embedded
-    /// `/api/auth/tokens` broker against live Zitadel.
+    /// `/api/v1/auth/tokens` broker against live Zitadel.
     pub fn broker_pat(&self) -> String {
         let toml = std::fs::read_to_string("mekhan.local.toml")
             .or_else(|_| std::fs::read_to_string("../mekhan.local.toml"))

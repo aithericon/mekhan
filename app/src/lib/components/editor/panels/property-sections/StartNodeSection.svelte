@@ -2,10 +2,12 @@
 	import { createDefaultNodeData, type StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Button } from '$lib/components/ui/button';
 	import PortsSection from './PortsSection.svelte';
+	import InsertRefButton from './InsertRefButton.svelte';
 	import Zap from '@lucide/svelte/icons/zap';
 	import Plus from '@lucide/svelte/icons/plus';
 
@@ -17,10 +19,24 @@
 		onchange: (data: StartNodeData) => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
+		scope?: ScopeEntry[];
 		onselectnode?: (id: string) => void;
 	};
 
-	let { data, readonly = false, onchange, binding, nodeId, onselectnode }: Props = $props();
+	let {
+		data,
+		readonly = false,
+		onchange,
+		binding,
+		nodeId,
+		scope = [],
+		onselectnode
+	}: Props = $props();
+
+	function appendToProcessName(snippet: string) {
+		const curr = data.processName ?? '';
+		handleProcessNameChange(curr ? `${curr} ${snippet}` : snippet);
+	}
 
 	// Pre-typed-ports templates have no `initial` field — synthesize an empty
 	// input port so the editor renders cleanly.
@@ -110,11 +126,18 @@
 		oninput={(e) =>
 			handleProcessNameChange((e.currentTarget as HTMLInputElement).value)}
 	/>
+	{#if scope.length > 0}
+		<InsertRefButton
+			{scope}
+			disabled={readonly}
+			oninsert={appendToProcessName}
+		/>
+	{/if}
 	<p class="text-sm text-muted-foreground">
 		Optional. When set, each instance registers a named process (shown in the
-		process list and completed when the workflow ends). Use
-		<code>{'{{ field }}'}</code> to interpolate an initial-token field below — e.g.
-		<code>Invoice {'{{ invoice_id }}'}</code>. Leave empty to opt out.
+		process list and completed when the workflow ends).
+		<code>{'{{ ref }}'}</code> placeholders interpolate initial-token fields declared below.
+		Leave empty to opt out.
 	</p>
 </div>
 

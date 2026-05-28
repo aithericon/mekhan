@@ -8,11 +8,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
-use yrs::{Any, Array, Map, ReadTxn, StateVector, Transact, WriteTxn};
+use yrs::{Map, ReadTxn, StateVector, Transact, WriteTxn};
 
 async fn body_json(body: Body) -> Value {
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -34,7 +32,7 @@ async fn publish_reads_from_ydoc() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -85,7 +83,7 @@ async fn publish_reads_from_ydoc() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -116,7 +114,7 @@ async fn publish_falls_back_to_db_graph() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -151,7 +149,7 @@ async fn publish_falls_back_to_db_graph() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(&format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -177,7 +175,7 @@ async fn create_template_seeds_ydoc() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({

@@ -1,0 +1,144 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Email Welcome",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "intake",
+      "type": "human_task",
+      "slug": "intake",
+      "position": { "x": 280, "y": 120 },
+      "data": {
+        "type": "human_task",
+        "label": "Intake",
+        "description": "Collect the recipient's name and email so the SMTP step has something to template against.",
+        "taskTitle": "Sign up",
+        "taskDescription": "Enter the recipient's name and email address; the next step will email them a welcome message.",
+        "steps": [
+          {
+            "id": "main",
+            "title": "Contact",
+            "blocks": [
+              {
+                "type": "input",
+                "field": {
+                  "name": "name",
+                  "label": "Name",
+                  "kind": "text",
+                  "required": true
+                }
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "email",
+                  "label": "Email",
+                  "kind": "text",
+                  "required": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "send",
+      "type": "automated_step",
+      "slug": "send",
+      "position": { "x": 560, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Send Welcome",
+        "description": "SMTP backend with Tera templates. Subject + plain-text + HTML bodies are all rendered against the intake form output. The transport (host/port/auth) comes from the workspace resource `mail` (bound at launch time). Dry-run is off — set true to render without sending.",
+        "executionSpec": {
+          "backendType": "smtp",
+          "config": {
+            "resource_alias": "mail",
+            "to": ["{{ intake.email }}"],
+            "cc": [],
+            "bcc": [],
+            "subject": {
+              "label": "subject.tera",
+              "source": "Welcome, {{ intake.name }}!"
+            },
+            "body_text": {
+              "label": "body.txt.tera",
+              "source": "Hi {{ intake.name }},\n\nWelcome aboard! This email was rendered by the Aithericon SMTP backend and sent through the `{{ mail.host }}` relay.\n\n— The Aithericon team\n"
+            },
+            "body_html": {
+              "label": "body.html.tera",
+              "source": "<!DOCTYPE html>\n<html><body>\n<h1>Welcome, {{ intake.name }}!</h1>\n<p>This email was rendered by the Aithericon SMTP backend and sent through the <code>{{ mail.host }}</code> relay.</p>\n<p>— The Aithericon team</p>\n</body></html>\n"
+            },
+            "attachments": [],
+            "dry_run": false,
+            "vars": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Result",
+          "fields": [
+            { "name": "outcome", "label": "Outcome", "kind": "json" },
+            { "name": "subject", "label": "Subject", "kind": "text" },
+            { "name": "body_text_preview", "label": "Body (text)", "kind": "textarea" },
+            { "name": "body_html_preview", "label": "Body (html)", "kind": "textarea" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "inline" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 840, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "send.outcome" },
+          { "targetField": "subject", "expression": "send.subject" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_intake",
+      "source": "start",
+      "target": "intake",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_intake_send",
+      "source": "intake",
+      "target": "send",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_send_end",
+      "source": "send",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

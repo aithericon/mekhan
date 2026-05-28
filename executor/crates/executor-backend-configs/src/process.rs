@@ -49,6 +49,7 @@ impl ProcessConfig {
             inputs,
             outputs,
             config: serde_json::to_value(self).expect("ProcessConfig serialization cannot fail"),
+            config_ref: None,
         }
     }
 

@@ -7,16 +7,18 @@ use apalis_nats::{NatsStorage, ProgressHeartbeatLayer};
 use tracing::{error, info, warn};
 
 #[cfg(feature = "docker")]
-use aithericon_executor_backend::DockerBackend;
+use aithericon_executor_docker::DockerBackend;
 #[cfg(feature = "http")]
-use aithericon_executor_backend::HttpBackend;
-use aithericon_executor_backend::ProcessBackend;
+use aithericon_executor_http::HttpBackend;
+use aithericon_executor_process::ProcessBackend;
 #[cfg(feature = "python")]
-use aithericon_executor_backend::PythonBackend;
+use aithericon_executor_python::PythonBackend;
 #[cfg(feature = "kreuzberg")]
 use aithericon_executor_kreuzberg::KreuzbergBackend;
 #[cfg(feature = "llm")]
 use aithericon_executor_llm::LlmBackend;
+#[cfg(feature = "smtp")]
+use aithericon_executor_smtp::SmtpBackend;
 use aithericon_executor_domain::ExecutionJob;
 use aithericon_executor_logs::{
     CompositeLogSink, FileLogSink, LevelFilterSink, LogSink, LogSinkConfig, NatsLogSink,
@@ -31,7 +33,7 @@ use aithericon_executor_storage::OpenDalArtifactStore;
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 #[cfg(feature = "python")]
-use aithericon_executor_backend::python::cache::{BuildRequest, VenvCache};
+use aithericon_executor_python::cache::{BuildRequest, VenvCache};
 use aithericon_executor_worker::{
     drain_signal, handle_execution, BackendRegistry, BatchRunner, CancellationRegistry,
     CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,
@@ -503,7 +505,93 @@ async fn run_manifest(
     Ok(())
 }
 
+/// Register one `ExecutorJob` backend on the registry. Match arms are
+/// feature-gated so backends whose feature isn't compiled simply log a
+/// skip line — keeps `build_executor` working under any feature subset
+/// (`docker`-less CI builds, `--no-default-features` reproducer builds,
+/// etc.).
+///
+/// Unknown wire-names are also a warn-and-skip rather than a hard error
+/// because `aithericon-backends::BACKENDS` is the source of truth — if a
+/// new entry lands there before the executor side gets a match arm, the
+/// service test fails first, not this binary's startup.
+fn register_executor_backend(
+    registry: BackendRegistry,
+    meta: &aithericon_backends::BackendMeta,
+    config: &ExecutorConfig,
+    #[allow(unused_variables)] base_dir: &Path,
+) -> BackendRegistry {
+    match meta.wire_name {
+        "process" => {
+            info!("process backend registered");
+            registry.register(ProcessBackend::new().with_max_output_bytes(config.max_output_bytes))
+        }
+        #[cfg(feature = "python")]
+        "python" => {
+            let mut python = PythonBackend::new().with_max_output_bytes(config.max_output_bytes);
+            if let Some(venv_cache) = build_venv_cache(config, base_dir) {
+                python = python.with_venv_cache(venv_cache);
+                info!("python backend registered with venv cache");
+            } else {
+                info!("python backend registered (no venv cache)");
+            }
+            registry.register(python)
+        }
+        #[cfg(feature = "docker")]
+        "docker" => match DockerBackend::new() {
+            Ok(docker) => {
+                info!("docker backend registered");
+                registry.register(docker.with_max_output_bytes(config.max_output_bytes))
+            }
+            Err(e) => {
+                warn!("docker backend unavailable: {e}");
+                registry
+            }
+        },
+        #[cfg(feature = "http")]
+        "http" => {
+            info!("http backend registered");
+            registry.register(HttpBackend::new())
+        }
+        #[cfg(feature = "llm")]
+        "llm" => {
+            info!("llm backend registered");
+            registry.register(LlmBackend::new())
+        }
+        #[cfg(feature = "file-ops")]
+        "file_ops" => {
+            info!("file_ops backend registered");
+            registry.register(
+                aithericon_executor_file_ops::FileOpsBackend::new()
+                    .with_default_storage(config.storage.clone()),
+            )
+        }
+        #[cfg(feature = "kreuzberg")]
+        "kreuzberg" => {
+            info!("kreuzberg backend registered");
+            registry.register(KreuzbergBackend::new())
+        }
+        #[cfg(feature = "smtp")]
+        "smtp" => {
+            info!("smtp backend registered");
+            registry.register(SmtpBackend::new())
+        }
+        other => {
+            info!(
+                "backend '{other}' declared in aithericon-backends but not built into this executor binary — skipping"
+            );
+            registry
+        }
+    }
+}
+
 /// Build a `JobExecutor` from config — shared by both service and batch modes.
+///
+/// Backend registration is driven by `aithericon_backends::BACKENDS`. Every
+/// entry with `dispatch_mode == ExecutorJob` is dispatched to
+/// `register_executor_backend`, whose feature-gated match arms own the
+/// `Backend::new(...)` calls. Backends with `dispatch_mode == EngineEffect`
+/// (CatalogueQuery today) are skipped — the engine runs them itself.
 fn build_executor(
     config: &ExecutorConfig,
     reporter: StatusReporter,
@@ -512,61 +600,17 @@ fn build_executor(
 ) -> Result<JobExecutor, Box<dyn std::error::Error + Send + Sync>> {
     let base_dir = PathBuf::from(&config.base_dir);
 
-    // Create the backend registry
     #[allow(unused_mut)]
-    let mut registry = BackendRegistry::new(config.default_timeout())
-        .register(ProcessBackend::new().with_max_output_bytes(config.max_output_bytes));
+    let mut registry = BackendRegistry::new(config.default_timeout());
 
-    #[cfg(feature = "python")]
-    {
-        let mut python = PythonBackend::new().with_max_output_bytes(config.max_output_bytes);
-        if let Some(venv_cache) = build_venv_cache(config, &base_dir) {
-            python = python.with_venv_cache(venv_cache);
-            info!("python backend registered with venv cache");
-        } else {
-            info!("python backend registered (no venv cache)");
+    for meta in aithericon_backends::BACKENDS {
+        if !matches!(
+            meta.dispatch_mode,
+            aithericon_backends::DispatchMode::ExecutorJob
+        ) {
+            continue;
         }
-        registry = registry.register(python);
-    }
-
-    #[cfg(feature = "docker")]
-    {
-        match DockerBackend::new() {
-            Ok(docker) => {
-                registry = registry.register(docker.with_max_output_bytes(config.max_output_bytes));
-                info!("docker backend registered");
-            }
-            Err(e) => {
-                warn!("docker backend unavailable: {e}");
-            }
-        }
-    }
-
-    #[cfg(feature = "llm")]
-    {
-        registry = registry.register(LlmBackend::new());
-        info!("llm backend registered");
-    }
-
-    #[cfg(feature = "http")]
-    {
-        registry = registry.register(HttpBackend::new());
-        info!("http backend registered");
-    }
-
-    #[cfg(feature = "file-ops")]
-    {
-        registry = registry.register(
-            aithericon_executor_file_ops::FileOpsBackend::new()
-                .with_default_storage(config.storage.clone()),
-        );
-        info!("file_ops backend registered");
-    }
-
-    #[cfg(feature = "kreuzberg")]
-    {
-        registry = registry.register(KreuzbergBackend::new());
-        info!("kreuzberg backend registered");
+        registry = register_executor_backend(registry, meta, config, &base_dir);
     }
 
     let registry = Arc::new(registry);

@@ -204,7 +204,7 @@ introspect_client_secret=$(echo "$api_create" | jq -r '.clientSecret')
 echo "API app id:    $api_app_id"
 
 # ── ensure token-broker service user ─────────────────────────────────────────
-# Backs the embedded /api/auth/tokens feature: Mekhan, authenticated as this
+# Backs the embedded /api/v1/auth/tokens feature: Mekhan, authenticated as this
 # machine user's PAT, lazily creates one machine user + PAT per token a
 # logged-in human mints from /profile. ORG_OWNER lets it manage those users
 # within the org. The PAT secret is only returned at creation, so (like the
@@ -220,7 +220,7 @@ if [ -z "$broker_user_id" ]; then
   echo "Creating token-broker service user..."
   broker_create=$(api POST /management/v1/users/machine \
     "$(jq -nc --arg name "$BROKER_USERNAME" \
-        '{userName: $name, name: "Mekhan Token Broker", description: "Brokers per-user automation PATs for the embedded /api/auth/tokens feature"}')")
+        '{userName: $name, name: "Mekhan Token Broker", description: "Brokers per-user automation PATs for the embedded /api/v1/auth/tokens feature"}')")
   broker_user_id=$(echo "$broker_create" | jq -r '.userId')
 fi
 echo "Token-broker user id: $broker_user_id"
@@ -278,7 +278,7 @@ client_id = "$client_id"
 introspection_client_id = "$introspect_client_id"
 introspection_client_secret = "$introspect_client_secret"
 # Service-user PAT Mekhan presents to the Zitadel Management API to broker the
-# embedded /api/auth/tokens feature (Profile → Access tokens): one machine
+# embedded /api/v1/auth/tokens feature (Profile → Access tokens): one machine
 # user + PAT per token a logged-in human mints. Re-minted every bootstrap run.
 broker_pat = "$broker_pat"
 # Local http dev: do not set the Secure cookie attribute (browsers drop

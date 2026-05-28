@@ -4,6 +4,9 @@
 //! here so the cross-musl CI build doesn't have to clone an extra repo just
 //! for ~250 LoC of dev-only helpers.
 
+// Per-binary subset usage — see `common/mod.rs`.
+#![allow(dead_code)]
+
 use std::ops::Deref;
 use std::time::Duration;
 

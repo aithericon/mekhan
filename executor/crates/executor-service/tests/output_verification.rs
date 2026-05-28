@@ -20,6 +20,7 @@ async fn test_required_output_present() {
         name: "result.txt".into(),
         path: Some("result.txt".into()),
         required: true,
+        kind: None,
         upload_to: None,
     }];
 
@@ -61,6 +62,7 @@ async fn test_required_output_missing() {
         name: "result.txt".into(),
         path: Some("result.txt".into()),
         required: true,
+        kind: None,
         upload_to: None,
     }];
 
@@ -105,6 +107,7 @@ async fn test_optional_output_missing() {
         name: "optional.txt".into(),
         path: Some("optional.txt".into()),
         required: false,
+        kind: None,
         upload_to: None,
     }];
 
@@ -142,6 +145,7 @@ async fn test_output_check_skipped_on_failure() {
         name: "result.txt".into(),
         path: Some("result.txt".into()),
         required: true,
+        kind: None,
         upload_to: None,
     }];
 
@@ -184,6 +188,7 @@ async fn test_file_output_json_content() {
         name: "result".into(),
         path: Some("result.json".into()),
         required: true,
+        kind: None,
         upload_to: None,
     }];
 
@@ -233,6 +238,7 @@ async fn test_file_output_plain_text_content() {
         name: "greeting".into(),
         path: Some("greeting.txt".into()),
         required: true,
+        kind: None,
         upload_to: None,
     }];
 
@@ -302,6 +308,7 @@ async fn test_file_output_ipc_takes_precedence() {
         name: "result".into(),
         path: Some("result.json".into()),
         required: true,
+        kind: None,
         upload_to: None,
     }];
 

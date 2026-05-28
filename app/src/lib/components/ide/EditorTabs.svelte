@@ -3,7 +3,9 @@
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
-	import CollabCodeEditor from '$lib/components/editor/panels/shared/CollabCodeEditor.svelte';
+	import CollabCodeEditor, {
+		type CodeEditorApi
+	} from '$lib/components/editor/panels/shared/CollabCodeEditor.svelte';
 	import ImageViewer from './ImageViewer.svelte';
 	import X from '@lucide/svelte/icons/x';
 
@@ -21,10 +23,22 @@
 		provider?: MekhanWsProvider;
 		onCloseTab: (key: string) => void;
 		onSelectTab: (key: string) => void;
+		/** Forwarded from the inner CollabCodeEditor; lets the parent IDE
+		 *  insert refs at the active editor's cursor. Re-fires on each
+		 *  tab switch (each tab mounts a fresh editor). */
+		onEditorReady?: (api: CodeEditorApi | null) => void;
 	};
 
-	let { tabs, activeTab, binding, awareness, provider, onCloseTab, onSelectTab }: Props =
-		$props();
+	let {
+		tabs,
+		activeTab,
+		binding,
+		awareness,
+		provider,
+		onCloseTab,
+		onSelectTab,
+		onEditorReady
+	}: Props = $props();
 
 	// The collaborative editor must only bind to a Y.Text once the server's
 	// authoritative document has synced. Binding to a not-yet-synced shared
@@ -73,7 +87,7 @@
 	// For image files, the Y.Text content is the S3 key — build the URL
 	const activeImageSrc = $derived(
 		activeTabInfo && activeYText && isImageFile(activeTabInfo.filename)
-			? `/api/files/${activeYText.toString()}`
+			? `/api/v1/files/${activeYText.toString()}`
 			: null
 	);
 </script>
@@ -126,6 +140,7 @@
 						{awareness}
 						minHeight="100%"
 						maxHeight="100%"
+						onready={onEditorReady}
 					/>
 				{/key}
 			{:else if activeYText && activeTabInfo}

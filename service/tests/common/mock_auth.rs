@@ -7,6 +7,9 @@
 //! - [`MockAuthenticator`] — the per-request authn double: decide 200/401
 //!   based on the presence of the `mekhan_session` cookie.
 
+// Per-binary subset usage — see `common/mod.rs`.
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
@@ -87,6 +90,11 @@ pub enum AuthnMode {
     RejectExpiredCookie { subject: String },
     /// Every request authenticates (dev_noop contract).
     AlwaysAllow { subject: String },
+    /// Multi-tenant test mode. Reads `X-Test-Subject` and optional
+    /// `X-Test-Workspace` (UUID) from request headers and yields a
+    /// matching `AuthUser`. Lets one test instance drive requests as
+    /// many distinct users without rebuilding the app per user.
+    HeaderDriven,
 }
 
 pub struct MockAuthenticator {
@@ -117,6 +125,12 @@ impl MockAuthenticator {
             },
         }
     }
+
+    pub fn header_driven() -> Self {
+        Self {
+            mode: AuthnMode::HeaderDriven,
+        }
+    }
 }
 
 fn user(subject: &str) -> AuthUser {
@@ -126,6 +140,7 @@ fn user(subject: &str) -> AuthUser {
         display_name: Some(subject.to_string()),
         roles: Vec::new(),
         org_id: None,
+        workspace_id: None,
     }
 }
 
@@ -133,7 +148,7 @@ fn user(subject: &str) -> AuthUser {
 impl Authenticator for MockAuthenticator {
     async fn authenticate(
         &self,
-        _headers: &HeaderMap,
+        headers: &HeaderMap,
         jar: &CookieJar,
     ) -> Result<AuthUser, AuthError> {
         let cookie = jar
@@ -150,6 +165,20 @@ impl Authenticator for MockAuthenticator {
                 Some("expired") | None => Err(AuthError::MissingToken),
                 Some(_) => Ok(user(subject)),
             },
+            AuthnMode::HeaderDriven => {
+                let subject = headers
+                    .get("x-test-subject")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("dev-user")
+                    .to_string();
+                let workspace_id = headers
+                    .get("x-test-workspace")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| uuid::Uuid::parse_str(s).ok());
+                let mut u = user(&subject);
+                u.workspace_id = workspace_id;
+                Ok(u)
+            }
         }
     }
 }

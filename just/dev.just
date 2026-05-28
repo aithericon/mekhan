@@ -27,25 +27,37 @@ pid_dir   := ".dev/pid"
 log_dir   := ".dev/log"
 work_dir  := ".dev/work"
 
-# Executor build features. Skip `kreuzberg` (heavy pdfium deps) and `llm`
-# (requires API keys) — re-add if you need them.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs"
+# Executor build features. `llm` is included so an AutomatedStep with
+# backendType=llm can dispatch against the local Ollama daemon
+# (`just dev ollama-up`); external-provider workflows need API keys in the
+# LlmConfig but the local Ollama path needs none. `kreuzberg` is
+# included so demo 07 (OCR + LLM classification) works out of the box —
+# first build pulls heavy pdfium deps, but the cached rebuild cost is
+# normal.
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,vault"
 
 # Local infra endpoints (also baked into service/mekhan.toml + engine env)
 nats_url     := "nats://localhost:4333"
 database_url := "postgres://mekhan:mekhan@localhost:5439/mekhan"
 s3_endpoint  := "http://localhost:9005"
+vault_addr   := "http://localhost:8200"
+vault_token  := "root"
 
 # ── Entrypoints ──────────────────────────────────────────────────────────────
 
 # Default recipe: bring up the full stack
 default: up
 
-# Start everything: infra + executor + engine + mekhan + app (auth: dev_noop)
+# Start everything: infra + ollama + executor + engine + mekhan + app
+# (auth: dev_noop). Ollama starts BEFORE the executor so the first
+# LLM-step dispatch finds a ready server. If Ollama isn't installed
+# locally, `up-ollama` no-ops with a hint — the rest of the stack still
+# comes up; only LLM-using workflows would fail at dispatch time.
 up:
     @just dev::_dirs
     @just dev::_infra-up
     @just dev::_wait-infra
+    @just dev::up-ollama
     @just dev::up-executor
     @just dev::up-engine
     @just dev::up-mekhan
@@ -59,6 +71,7 @@ up-auth:
     @just dev::_dirs
     @just dev::_infra-up auth
     @just dev::_wait-infra
+    @just dev::up-ollama
     @just dev::up-executor
     @just dev::up-engine
     @just dev::up-mekhan bff
@@ -71,6 +84,7 @@ down:
     @just dev::down-mekhan   || true
     @just dev::down-engine   || true
     @just dev::down-executor || true
+    @just dev::down-ollama   || true
     @just dev::_kill nomad   || true
     @just dev::_infra-down
 
@@ -99,7 +113,7 @@ status:
     docker compose ps --format "table {{ '{{.Name}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Ports}}' }}" 2>/dev/null || echo "  (compose not running)"
     echo ""
     echo "── native daemons ─────────────────────────────────────"
-    for name in executor engine nomad mekhan app; do
+    for name in ollama executor engine nomad mekhan app; do
       pf="{{pid_dir}}/$name.pid"
       if [ -s "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
         printf "  %-10s up  (pid %s)\n" "$name" "$(cat "$pf")"
@@ -124,16 +138,83 @@ logs name:
 psql:
     psql "{{database_url}}"
 
+# Configure this worktree to use sccache as cargo's rustc wrapper, so
+# compiled crates are content-addressed in ~/Library/Caches/Mozilla.sccache
+# and reused across worktrees without sharing target/ dirs (which would
+# serialize concurrent builds via cargo's target-dir lock). Pass
+# --clean-shared to additionally delete the legacy
+# ~/.cache/cargo-targets/aithericon-platform/ dirs from the old shared-target
+# scheme. Safe to re-run. Normally only needed if .envrc files are missing —
+# fresh worktrees created via `just dev::worktree-add` already have them.
+setup-cargo-cache *args:
+    just/scripts/setup-cargo-cache.sh {{args}}
+
+# GC stale build artifacts across all three workspaces. cargo-sweep removes
+# target/ files older than N days (default 30). Run periodically if disk
+# fills up — per-worktree target/ dirs can grow large even with sccache
+# (sccache caches rustc outputs but cargo still writes them to target/).
+# Use --installed instead of --time to prune artifacts from other toolchains.
+gc-targets days="30":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v cargo-sweep >/dev/null 2>&1 || {
+      echo "✗ cargo-sweep not on PATH — brew install cargo-sweep" >&2; exit 1; }
+    for ws in . engine executor; do
+      echo "▶ sweeping $ws/target (older than {{days}} days)…"
+      (cd "$ws" && cargo sweep --time {{days}} || true)
+    done
+    echo
+    echo "sccache stats:"
+    sccache --show-stats || true
+
+# Create a worktree at .claude/worktrees/<name> with sccache pre-allowed.
+# Trailing args pass through to `git worktree add` (e.g. a start-point, or
+# `-b <new-branch>`). The tracked .envrc files come with the checkout;
+# this recipe runs `direnv allow` for the three workspaces so the first
+# `cargo` invocation already has RUSTC_WRAPPER=sccache wired up.
+#
+# Examples:
+#   just dev::worktree-add foo                       # branch off HEAD, name `foo`
+#   just dev::worktree-add foo main                  # start at main
+#   just dev::worktree-add foo -b refactor/bar main  # new branch `refactor/bar` from main
+worktree-add name *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    wt=".claude/worktrees/{{name}}"
+    if [[ -e "$wt" ]]; then
+        echo "✗ $wt already exists" >&2
+        exit 1
+    fi
+    # Capture script path BEFORE creating the worktree — if the script
+    # isn't yet committed, the new worktree won't contain it, so we invoke
+    # the main repo's copy by absolute path.
+    setup_script="$(pwd)/just/scripts/setup-cargo-cache.sh"
+    git worktree add "$wt" {{args}}
+    # Run the setup script inside the new worktree. Idempotent: if .envrc
+    # files are already tracked + checked out, it just direnv-allows them;
+    # if they're missing (e.g. not yet committed), it writes them. Either
+    # way the new worktree picks up RUSTC_WRAPPER=sccache on first cd.
+    (cd "$wt" && "$setup_script")
+    echo
+    echo "✓ worktree ready: $wt"
+    echo "  cd $wt   # direnv loads RUSTC_WRAPPER=sccache automatically"
+
 # Regenerate openapi-mekhan.json (from the mekhan-service binary, no infra
 # needed) and refresh the SvelteKit app's typed schema from it. Run this
 # after any change to a #[utoipa::path] annotation or ToSchema-derived DTO.
+#
+# Uses `cargo run` rather than a hardcoded `./target/debug/mekhan` so the
+# target dir resolves through cargo's normal chain (CARGO_TARGET_DIR env →
+# .cargo/config.toml → ./target). Worktrees with shared CARGO_TARGET_DIR
+# (see CLAUDE.md "Worktrees share cargo target dirs by default") would
+# otherwise either fail (no such file) or — worse — invoke a stale local
+# ./target/debug/mekhan from a prior non-shared build. Cargo's `Compiling
+# …` / `Finished` lines go to stderr, so the stdout redirect stays clean.
 openapi:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "▶ building mekhan CLI…"
-    cargo build --bin mekhan
-    echo "▶ dumping spec → openapi-mekhan.json"
-    ./target/debug/mekhan openapi > openapi-mekhan.json
+    echo "▶ dumping spec → openapi-mekhan.json (cargo run --bin mekhan)"
+    cargo run --quiet --bin mekhan -- openapi > openapi-mekhan.json
     echo "▶ regenerating app/src/lib/api/schema.d.ts"
     (cd app && pnpm run openapi:generate)
     echo "✓ openapi spec + schema regenerated"
@@ -145,15 +226,15 @@ openapi:
 # the `auth`-gated Zitadel containers (zitadel-db / zitadel / zitadel-login
 # / zitadel-proxy). Default (no profile) skips them — the standard
 # `just dev up` flow runs mekhan-service in `dev_noop` mode and does not
-# need Zitadel.
+# need Zitadel. Vault is now in the base compose set (no profile).
 _infra-up profile="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -n "{{profile}}" ]; then
-      echo "▶ infra up (postgres + nats + rustfs + profile: {{profile}})…"
+      echo "▶ infra up (postgres + nats + rustfs + vault + profile: {{profile}})…"
       docker compose --profile {{profile}} up -d
     else
-      echo "▶ infra up (postgres + nats + rustfs)…"
+      echo "▶ infra up (postgres + nats + rustfs + vault)…"
       docker compose up -d
     fi
 
@@ -199,6 +280,142 @@ _wait-infra:
       curl -sf "{{s3_endpoint}}/" >/dev/null 2>&1 && break
       sleep 1
     done
+    echo "▶ waiting for vault…"
+    for _ in $(seq 1 30); do
+      curl -sf "{{vault_addr}}/v1/sys/health?standbyok=true" >/dev/null 2>&1 && break
+      sleep 1
+    done
+
+# ── Ollama (local inference daemon, native `provider:"ollama"` adapter) ─────
+#
+# Stands up a local Ollama daemon the executor's LLM backend dispatches against
+# (provider=ollama + base_url=http://localhost:11434 — no api_key needed). The
+# Ollama adapter supports vision-capable models via the native /api/chat
+# image-payload field; see executor/crates/executor-llm/src/adapters/ollama.rs.
+#
+# Prerequisite (per-machine, one-time): install Ollama. Either the macOS app
+# (https://ollama.com/download) or the CLI:
+#
+#   brew install ollama
+#
+# The recipe defers to an already-running daemon (macOS app or external
+# `ollama serve`) and only spawns its own when nothing is listening on
+# OLLAMA_PORT. Model pulls are idempotent — first `up` downloads the default
+# model (~7.8 GB for llama3.2-vision:11b); subsequent runs are no-ops.
+#
+# Knobs (env-overridable on the recipe call):
+#   OLLAMA_MODEL                   — model tag (default qwen3.5:9b — direct Ollama-library equivalent
+#                                    of the prior vllm-metal default `mlx-community/Qwen3.5-9B-MLX-4bit`;
+#                                    ~5.5 GB GGUF Q4_K_M). Other workable picks:
+#                                      qwen3.5:2b                              (~1.4 GB, lightest)
+#                                      qwen3.5:27b                             (~16 GB, more capable)
+#                                      qwen3-vl:8b                             (~6 GB, vision-capable variant)
+#                                      llama3.2-vision:11b                     (~7.8 GB, alternative vision)
+#                                    If you change OLLAMA_MODEL, also update the `model` field in any
+#                                    demo whose LlmConfig pins the tag (the demo carries it explicitly;
+#                                    Ollama serves under exactly the tag it loaded).
+#   OLLAMA_PORT                    — port (default 11434)
+#   OLLAMA_READY_TIMEOUT_SECS      — readiness poll budget (default 60; the daemon itself starts in <1s,
+#                                    the budget covers the cold model pull on first run, which can take
+#                                    minutes; raise for larger models on slow connections)
+up-ollama:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+    port="${OLLAMA_PORT:-11434}"
+    model="${OLLAMA_MODEL:-qwen3.5:9b}"
+    ready_timeout="${OLLAMA_READY_TIMEOUT_SECS:-60}"
+
+    # Defer to an already-running daemon (macOS Ollama.app, system service,
+    # or a prior `ollama serve`). We only spawn — and pidfile — when nothing
+    # answers on the port.
+    if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+      echo "  ollama already serving on :${port} (external — no pidfile)"
+    else
+      if ! command -v ollama >/dev/null 2>&1; then
+        echo "  · ollama not installed — skipping"
+        echo "    install:  brew install ollama   (or https://ollama.com/download for the macOS app)"
+        echo "    (the rest of the dev stack still comes up; only LLM-using workflows would fail)"
+        exit 0
+      fi
+      echo "▶ starting ollama serve on :${port}…"
+      nohup env OLLAMA_HOST="127.0.0.1:${port}" ollama serve \
+        > "{{log_dir}}/ollama.log" 2>&1 &
+      echo $! > "{{pid_dir}}/ollama.pid"
+      ready=0
+      for _ in $(seq 1 "$ready_timeout"); do
+        if curl -sf "http://localhost:${port}/api/version" >/dev/null 2>&1; then
+          ready=1; break
+        fi
+        sleep 1
+      done
+      if [ "$ready" != "1" ]; then
+        echo "✗ ollama did not become ready in ${ready_timeout}s (log: {{log_dir}}/ollama.log)" >&2
+        exit 1
+      fi
+      echo "  ✓ ollama (pid $(cat {{pid_dir}}/ollama.pid))  http://localhost:${port}  log: {{log_dir}}/ollama.log"
+    fi
+
+    # Idempotent model pull. `ollama list` enumerates installed tags; grep for
+    # the exact tag rather than substring so `:11b` doesn't also match `:11b-q8`.
+    if ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -Fxq "$model"; then
+      echo "  ✓ model already present: $model"
+    else
+      echo "▶ pulling model: $model  (first run only; can take several minutes)"
+      ollama pull "$model"
+      echo "  ✓ pulled $model"
+    fi
+
+down-ollama:
+    @just dev::_kill ollama
+
+# ── MailHog (test SMTP capture server) ───────────────────────────────────────
+#
+# MailHog is a tiny SMTP-receiving service that captures every message and
+# exposes them through an HTTP API + web UI. Used by the SMTP executor
+# backend in dev/test:
+#   • SMTP port:  1025   (point your `mail` resource at host=localhost port=1025)
+#   • Web UI:     8025   (browse received messages)
+#   • API:        8025/api/v1/messages
+#
+# Requires Docker (idempotent: re-running just makes the container available
+# again; pre-existing containers are detected and reused).
+#
+# Env:
+#   MAILHOG_TAG  — image tag (default `mailhog/mailhog:latest`)
+mailhog-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="${MAILHOG_TAG:-mailhog/mailhog:latest}"
+    container="mekhan-mailhog"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      echo "  ✓ mailhog already running (container: $container)"
+      echo "    SMTP   localhost:1025"
+      echo "    UI     http://localhost:8025"
+      exit 0
+    fi
+    if docker ps -a --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker start "$container" >/dev/null
+    else
+      echo "▶ starting mailhog (image: $tag) — SMTP :1025, UI :8025"
+      docker run -d --rm --name "$container" \
+        -p 1025:1025 -p 8025:8025 \
+        "$tag" >/dev/null
+    fi
+    echo "  ✓ mailhog up"
+    echo "    SMTP   localhost:1025  (host=localhost port=1025 in your `smtp` resource)"
+    echo "    UI     http://localhost:8025  (received messages land here)"
+
+mailhog-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    container="mekhan-mailhog"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker stop "$container" >/dev/null
+      echo "  ✓ mailhog stopped"
+    else
+      echo "  · mailhog not running"
+    fi
 
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 
@@ -258,8 +475,16 @@ up-executor:
     echo "▶ starting executor…"
     # CWD must contain executor.toml — executor loads `./executor.toml`.
     # Use bash -c so we can `cd` before exec inside nohup's child shell.
-    bin="$PWD/executor/target/debug/aithericon-executor-service"
+    # VAULT_ADDR is set so PlanSecretsHook can unwrap per-job wrapping tokens
+    # the engine attaches; VAULT_TOKEN is intentionally NOT set on the
+    # executor — it authenticates by exchanging the wrapping token itself.
+    # Honor CARGO_TARGET_DIR so the binary lookup follows the same
+    # redirect cargo did. Shared-target setups (umbrella .envrc) put
+    # everything under `~/.cache/cargo-targets/...`; the bare workspace
+    # fallback is what cargo uses when no env var is set.
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
     nohup env RUST_LOG="info,aithericon_executor=debug" \
+      VAULT_ADDR="{{vault_addr}}" \
       bash -c 'cd "{{work_dir}}/executor" && exec "$0"' "$bin" \
       > "{{log_dir}}/executor.log" 2>&1 &
     echo $! > "{{pid_dir}}/executor.pid"
@@ -324,6 +549,13 @@ up-engine scheduler="off":
     # falls back to NATS dispatch which needs an `ExecutionSpec.backend`
     # field that only the enrichment chain injects, so the cert-stack fails
     # closed with "missing field `backend`" at the engine's executor effect.
+    #
+    # VAULT_ADDR + VAULT_TOKEN flip the engine's `executor-vault-secrets`
+    # path on: at job-submit time it scans the spec for secret-template
+    # refs, resolves them via VaultSecretStore, and wraps them into a
+    # single-use wrapping token attached to the job. Without these env
+    # vars, secrets travel unresolved and the executor's PlanSecretsHook
+    # falls back to EnvVarSecretStore (which can't resolve resource paths).
     nohup env \
       RUST_LOG="info,petri_application=debug,petri_api=debug" \
       NATS_URL="{{nats_url}}" \
@@ -332,8 +564,10 @@ up-engine scheduler="off":
       EXECUTOR_NAMESPACE="executor" \
       MEKHAN_EXECUTOR_DISPATCH="http" \
       PRE_DISPATCH_HOOKS_CONFIG="$PWD/engine/core-engine/.dev/pre-dispatch-hooks.toml" \
+      VAULT_ADDR="{{vault_addr}}" \
+      VAULT_TOKEN="{{vault_token}}" \
       PORT="3030" \
-      "$PWD/engine/target/debug/core-engine" \
+      "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
     echo $! > "{{pid_dir}}/engine.pid"
     echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  http://localhost:3030  log: {{log_dir}}/engine.log"
@@ -380,7 +614,7 @@ scheduler-up:
     fi
 
     # 2. Executor binary — reused by Nomad per job (run_to_completion).
-    exec_bin="$PWD/executor/target/debug/aithericon-executor-service"
+    exec_bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
     if [ ! -x "$exec_bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -746,6 +980,12 @@ up-mekhan auth_mode="dev_noop":
     # Conditional pass-through: include the env line only when the parent
     # shell has it exported. Operator runs `CLOUD_LAYER_JWT_SECRET=... just
     # dev up` or sources cloud-layer's .env.dev before launching.
+    #
+    # VAULT_ADDR + VAULT_TOKEN promote the resource_store from the
+    # in-memory placeholder (which loses secrets on every mekhan restart)
+    # to a real VaultResourceStore. Resource secrets created via the
+    # `/api/v1/resources` CRUD path now land in Vault and survive restarts
+    # (until `just dev reset` wipes the dev vault container).
     nohup env \
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
@@ -756,8 +996,12 @@ up-mekhan auth_mode="dev_noop":
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
       ${CLOUD_LAYER_JWT_SECRET:+CLOUD_LAYER_JWT_SECRET="$CLOUD_LAYER_JWT_SECRET"} \
       ${CLOUD_LAYER_BASE_URL:+CLOUD_LAYER_BASE_URL="$CLOUD_LAYER_BASE_URL"} \
+      MEKHAN__DEMOS__SEED="true" \
+      MEKHAN__DEMOS__DIR="$PWD/demos" \
+      VAULT_ADDR="{{vault_addr}}" \
+      VAULT_TOKEN="{{vault_token}}" \
       ${mode_assign:+"$mode_assign"} \
-      "$PWD/target/debug/mekhan-service" \
+      "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"
     echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  http://localhost:3100  log: {{log_dir}}/mekhan.log"
@@ -833,6 +1077,8 @@ _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
     @echo "  nats       → localhost:4333              (http monitor: http://localhost:8333)"
     @echo "  rustfs     → http://localhost:9005       (console: http://localhost:9006 / admin: rustfsadmin)"
+    @echo "  vault      → http://localhost:8200       (dev mode; root token: root; KV v2 at secret/)"
+    @echo "  ollama     → http://localhost:11434      (native /api/chat; up if installed, see just/dev.just::up-ollama)"
     @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:3105)"
     @echo "  engine     → http://localhost:3030"
     @echo "  mekhan     → http://localhost:3100"
@@ -840,7 +1086,7 @@ _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""
     @echo "  auth       → {{auth}}"
     @echo ""
-    @echo "  logs   : just dev logs <executor|engine|mekhan|app|infra>"
+    @echo "  logs   : just dev logs <ollama|executor|engine|mekhan|app|infra>"
     @echo "  status : just dev status"
     @echo "  stop   : just dev down"
     @echo "  wipe   : just dev reset   (destroys pg/nats/rustfs data)"

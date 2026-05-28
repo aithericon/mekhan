@@ -131,7 +131,7 @@ async fn publish_and_start(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -156,7 +156,7 @@ async fn publish_and_start(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -171,7 +171,7 @@ async fn publish_and_start(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -222,7 +222,7 @@ fn decision_graph() -> Value {
                         "edgeId": "cond_high", "label": "High",
                         "guard": "input.amount > 100"
                     }],
-                    "defaultBranch": "cond_low"
+                    "defaultBranch": "default"
                 }
             },
             {
@@ -252,7 +252,7 @@ fn decision_graph() -> Value {
             { "id": "cond_high", "source": "dec", "target": "end_high",
               "sourceHandle": "cond_high", "targetHandle": "in", "type": "sequence" },
             { "id": "cond_low", "source": "dec", "target": "end_low",
-              "sourceHandle": "cond_low", "targetHandle": "in", "type": "sequence" }
+              "sourceHandle": "default", "targetHandle": "in", "type": "sequence" }
         ]
     })
 }

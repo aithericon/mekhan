@@ -35,10 +35,10 @@ fn engine_url() -> String {
 
 /// Check if the petri-lab engine is reachable.
 async fn engine_available() -> bool {
-    match reqwest::get(format!("{}/api/nets/metadata", engine_url())).await {
-        Ok(resp) if resp.status().is_success() => true,
-        _ => false,
-    }
+    matches!(
+        reqwest::get(format!("{}/api/nets/metadata", engine_url())).await,
+        Ok(resp) if resp.status().is_success()
+    )
 }
 
 /// Simple Start → End workflow graph.
@@ -85,7 +85,7 @@ fn simple_graph() -> WorkflowGraph {
             label: None,
             edge_type: "sequence".to_string(),
         }],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     }
 }
 
@@ -155,7 +155,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -180,7 +180,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -199,7 +199,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -242,7 +242,7 @@ async fn full_instance_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/instances/{instance_id}/state"))
+                .uri(format!("/api/v1/instances/{instance_id}/state"))
                 .body(Body::empty())
                 .unwrap(),
         )

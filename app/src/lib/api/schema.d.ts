@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-    "/api/analyze": {
+    "/api/v1/analyze": {
         parameters: {
             query?: never;
             header?: never;
@@ -25,17 +25,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/auth/tokens": {
+    "/api/v1/auth/tokens": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/auth/tokens — the caller's automation tokens. */
+        /** GET /api/v1/auth/tokens — the caller's automation tokens. */
         get: operations["list_tokens"];
         put?: never;
-        /** POST /api/auth/tokens — mint a token. The `secret` is returned once. */
+        /** POST /api/v1/auth/tokens — mint a token. The `secret` is returned once. */
         post: operations["create_token"];
         delete?: never;
         options?: never;
@@ -43,7 +43,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/auth/tokens/{id}": {
+    "/api/v1/auth/tokens/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -53,14 +53,14 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** DELETE /api/auth/tokens/{id} — revoke a token (ownership-guarded). */
+        /** DELETE /api/v1/auth/tokens/{id} — revoke a token (ownership-guarded). */
         delete: operations["revoke_token"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue": {
+    "/api/v1/backends": {
         parameters: {
             query?: never;
             header?: never;
@@ -68,7 +68,72 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue
+         * GET /api/v1/backends
+         * @description List every registered backend with its display metadata, default editor
+         *     config, default output port shape, dispatch mode (executor job vs.
+         *     engine effect), resource channel (staged file vs. config overlay), and
+         *     schedulability.
+         *
+         *     The frontend reads this once per session (cached in
+         *     `app/src/lib/editor/backend-registry.svelte.ts`) and drives the
+         *     AutomatedStep editor panel from it — backend picker label/icon,
+         *     default config seed, default output port. The Svelte config-panel
+         *     component map (`backend-panels.ts`) stays hand-written; everything
+         *     else flows from here.
+         */
+        get: operations["list_backends"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/backends/{name}/derive-output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/backends/{name}/derive-output
+         * @description Compute the canonical output [`Port`] for an AutomatedStep with this
+         *     backend, given its current config. Frontend calls this for
+         *     `output_authoring == "derived"` backends (LLM today) whenever the
+         *     step's config changes, so the read-only port editor always reflects
+         *     the actual runtime envelope.
+         *
+         *     Permissive: a half-typed config (missing fields, partial schema)
+         *     returns the closest valid port — not an error. Hard validation runs at
+         *     publish time via `BackendDecl::validate`.
+         *
+         *     Returns:
+         *     - 200 with the derived [`Port`] on success.
+         *     - 400 when the backend exists but isn't `Derived` (callers should use
+         *       `default_output_port` from `GET /api/v1/backends` for `Fixed` /
+         *       `Free` backends).
+         *     - 404 when the backend name doesn't resolve.
+         */
+        post: operations["derive_backend_output"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalogue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/catalogue
          * @description List/search catalogue entries with full filter, sort, pagination support.
          *
          *     Query parameters:
@@ -81,7 +146,7 @@ export interface paths {
          *       - `file_metadata` — JSONB containment on file_metadata
          *
          *     Example:
-         *       GET /api/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10
+         *       GET /api/v1/catalogue?filter[category][eq]=model&filter[source_net][contains]=surrogate&sort=-size_bytes&page=0&page_size=10
          */
         get: operations["list_entries"];
         put?: never;
@@ -92,7 +157,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/distinct-jsonb/{column}/{key}": {
+    "/api/v1/catalogue/distinct-jsonb/{column}/{key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -100,9 +165,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/distinct-jsonb/:column/:key
+         * GET /api/v1/catalogue/distinct-jsonb/:column/:key
          * @description Distinct values for a JSONB key within file_metadata or user_metadata.
-         *     Example: GET /api/catalogue/distinct-jsonb/file_metadata/format → ["json", "csv"]
+         *     Example: GET /api/v1/catalogue/distinct-jsonb/file_metadata/format → ["json", "csv"]
          */
         get: operations["distinct_jsonb_values"];
         put?: never;
@@ -113,7 +178,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/distinct/{column}": {
+    "/api/v1/catalogue/distinct/{column}": {
         parameters: {
             query?: never;
             header?: never;
@@ -121,11 +186,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/distinct/:column
+         * GET /api/v1/catalogue/distinct/:column
          * @description Returns distinct non-null values for a column (for populating filter dropdowns).
          *     Column must be in the allowed filter fields whitelist.
          *
-         *     Example: GET /api/catalogue/distinct/category → ["model", "dataset", "plot"]
+         *     Example: GET /api/v1/catalogue/distinct/category → ["model", "dataset", "plot"]
          */
         get: operations["distinct_values"];
         put?: never;
@@ -136,7 +201,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/download/{*path}": {
+    "/api/v1/catalogue/download/{*path}": {
         parameters: {
             query?: never;
             header?: never;
@@ -144,9 +209,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/download/{path} — download artifact bytes by storage path.
+         * GET /api/v1/catalogue/download/{path} — download artifact bytes by storage path.
          * @description The path parameter is the S3 storage_path from the catalogue entry.
-         *     Example: GET /api/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
+         *     Example: GET /api/v1/catalogue/download/artifacts/exec-123/gp_model/gp_model.json
          */
         get: operations["download_artifact"];
         put?: never;
@@ -157,14 +222,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/lineage/{process_id}": {
+    "/api/v1/catalogue/lineage/{process_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step. */
+        /** GET /api/v1/catalogue/lineage/{process_id} — all artifacts for a campaign, grouped by step. */
         get: operations["lineage"];
         put?: never;
         post?: never;
@@ -174,7 +239,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/stats": {
+    "/api/v1/catalogue/stats": {
         parameters: {
             query?: never;
             header?: never;
@@ -182,7 +247,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/catalogue/stats
+         * GET /api/v1/catalogue/stats
          * @description Aggregate statistics. Accepts the same filter params as the list endpoint,
          *     so you can get stats for a subset (e.g., stats for a specific net or category).
          */
@@ -195,14 +260,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/stats/by-net": {
+    "/api/v1/catalogue/stats/by-net": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/catalogue/stats/by-net — per-net breakdown. */
+        /** GET /api/v1/catalogue/stats/by-net — per-net breakdown. */
         get: operations["stats_by_net"];
         put?: never;
         post?: never;
@@ -212,14 +277,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/catalogue/{execution_id}/{id}": {
+    "/api/v1/catalogue/{execution_id}/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/catalogue/{execution_id}/{id} — single catalogue entry. */
+        /** GET /api/v1/catalogue/{execution_id}/{id} — single catalogue entry. */
         get: operations["get_entry"];
         put?: never;
         post?: never;
@@ -229,7 +294,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/compile": {
+    "/api/v1/compile": {
         parameters: {
             query?: never;
             header?: never;
@@ -239,8 +304,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/compile
-         *     POST /api/compile
+         * POST /api/v1/compile
+         *     POST /api/v1/compile
          * @description Stateless compilation: accepts a graph (and optional inline file contents)
          *     and returns AIR JSON without database access. Used by the editor's "Preview
          *     AIR" button before publish.
@@ -252,7 +317,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/files/upload/{id}/{node_id}": {
+    "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -262,7 +327,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/files/upload/{id}/{node_id}
+         * POST /api/v1/files/upload/{id}/{node_id}
          *     Accepts multipart/form-data with a `file` field.
          */
         post: operations["upload_file"];
@@ -272,7 +337,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/files/{*key}": {
+    "/api/v1/files/{*key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -280,7 +345,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/files/{key}
+         * GET /api/v1/files/{key}
          *     Serves a file from S3 with the correct content type.
          * @description `key` is a multi-segment S3 path (templates/{id}/v{ver}/{node}/{file}).
          *     utoipa-axum 0.2 forwards the path string verbatim to axum::Router, so a
@@ -298,17 +363,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances": {
+    "/api/v1/instances": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/instances */
+        /** GET /api/v1/instances */
         get: operations["list_instances"];
         put?: never;
-        /** POST /api/instances */
+        /** POST /api/v1/instances */
         post: operations["create_instance"];
         delete?: never;
         options?: never;
@@ -316,25 +381,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}": {
+    "/api/v1/instances/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/instances/:id */
+        /** GET /api/v1/instances/:id */
         get: operations["get_instance"];
         put?: never;
         post?: never;
-        /** DELETE /api/instances/:id */
+        /** DELETE /api/v1/instances/:id */
         delete: operations["cancel_instance"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/events": {
+    "/api/v1/instances/{id}/events": {
         parameters: {
             query?: never;
             header?: never;
@@ -342,7 +407,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/instances/:id/events
+         * GET /api/v1/instances/:id/events
          * @description Returns the full event log for an instance from JetStream.
          */
         get: operations["get_instance_events"];
@@ -354,7 +419,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/state": {
+    "/api/v1/instances/{id}/promote-to-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/instances/{id}/promote-to-test — create a `template_tests` row
+         *     from an existing instance's event log.
+         * @description Scoops the instance's start tokens (from the initial Start-place tokens)
+         *     and human-task completions (from signal-place tokens) into a new test
+         *     fixture attached to the instance's template family. The user typically
+         *     completes authoring by adding assertions in the editor afterward.
+         */
+        post: operations["promote_instance_to_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{id}/state": {
         parameters: {
             query?: never;
             header?: never;
@@ -362,7 +451,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/instances/:id/state
+         * GET /api/v1/instances/:id/state
          * @description Returns instance state with marking projected from JetStream events (source
          *     of truth) and best-effort engine status for enabled transitions / run mode.
          */
@@ -375,7 +464,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/instances/{id}/stream": {
+    "/api/v1/instances/{id}/step-executions": {
         parameters: {
             query?: never;
             header?: never;
@@ -383,7 +472,29 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/instances/{id}/stream
+         * GET /api/v1/instances/:id/step-executions
+         * @description Returns one row per workflow node × execution iteration for an instance.
+         *     Materialized by the step-executions projection consumer; the frontend
+         *     overlays this data on the canvas node cards.
+         */
+        get: operations["list_step_executions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/instances/{id}/stream
          * @description SSE stream of the instance's domain events, replayed from the start
          *     (`DeliverPolicy::All`) then live, terminated by a final `result` event
          *     carrying the structured envelope. Composes with FireAndForget: fire, get
@@ -399,7 +510,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes": {
+    "/api/v1/node-types": {
         parameters: {
             query?: never;
             header?: never;
@@ -407,7 +518,60 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/processes — list processes with filter/sort/pagination.
+         * GET /api/v1/node-types
+         * @description List every registered workflow node type with its display metadata,
+         *     runtime kind, and protocol flags. The frontend reads this once per
+         *     session (cached alongside the backends registry) and drives the
+         *     editor's palette + property-panel dispatch from it. The Svelte
+         *     component map (`lib/components/editor/nodes/index.ts`) and the Lucide
+         *     icon map stay hand-written — components and icon imports can't be
+         *     serialized through JSON — but the palette label, description, kind,
+         *     and protocol flags flow from here.
+         */
+        get: operations["list_node_types"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/silent-drops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/observability/silent-drops`
+         * @description Reads the dead-letter queue: every record any consumer ACKed and
+         *     dropped because it couldn't parse the input. Drains up to `limit`
+         *     recent records from `MEKHAN_SILENT_DROPS` and returns them along
+         *     with the process-wide counter.
+         *
+         *     The stream itself enforces retention (currently 7d / 10k msgs); this
+         *     endpoint just exposes whatever is currently retained.
+         */
+        get: operations["list_silent_drops"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/processes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/processes — list processes with filter/sort/pagination.
          * @description Query parameters use a custom DSL (see `query/extractor.rs`): `filter`,
          *     `sort`, `page`, `page_size`. Response shape is paginated.
          */
@@ -420,14 +584,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/stats": {
+    "/api/v1/processes/stats": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/stats — aggregate process statistics. */
+        /** GET /api/v1/processes/stats — aggregate process statistics. */
         get: operations["process_stats"];
         put?: never;
         post?: never;
@@ -437,16 +601,16 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}": {
+    "/api/v1/processes/{process_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count). */
+        /** GET /api/v1/processes/{process_id} — get process detail (with tasks, metrics, logs, artifact count). */
         get: operations["get_process"];
-        /** PUT /api/processes/{process_id} — partial update of a process. */
+        /** PUT /api/v1/processes/{process_id} — partial update of a process. */
         put: operations["update_process"];
         post?: never;
         delete?: never;
@@ -455,14 +619,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/artifacts": {
+    "/api/v1/processes/{process_id}/artifacts": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/artifacts — list catalogue entries for a process. */
+        /** GET /api/v1/processes/{process_id}/artifacts — list catalogue entries for a process. */
         get: operations["get_process_artifacts"];
         put?: never;
         post?: never;
@@ -472,7 +636,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/artifacts/list": {
+    "/api/v1/processes/{process_id}/artifacts/list": {
         parameters: {
             query?: never;
             header?: never;
@@ -488,7 +652,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/artifacts/stream": {
+    "/api/v1/processes/{process_id}/artifacts/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -505,14 +669,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/logs": {
+    "/api/v1/processes/{process_id}/logs": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/logs — list logs for a process with filter/pagination. */
+        /** GET /api/v1/processes/{process_id}/logs — list logs for a process with filter/pagination. */
         get: operations["get_process_logs"];
         put?: never;
         post?: never;
@@ -522,7 +686,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/logs/stream": {
+    "/api/v1/processes/{process_id}/logs/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -539,7 +703,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/logs/tail": {
+    "/api/v1/processes/{process_id}/logs/tail": {
         parameters: {
             query?: never;
             header?: never;
@@ -555,14 +719,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics": {
+    "/api/v1/processes/{process_id}/metrics": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/metrics — list metrics for a process. */
+        /** GET /api/v1/processes/{process_id}/metrics — list metrics for a process. */
         get: operations["get_process_metrics"];
         put?: never;
         post?: never;
@@ -572,7 +736,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics/series": {
+    "/api/v1/processes/{process_id}/metrics/series": {
         parameters: {
             query?: never;
             header?: never;
@@ -588,7 +752,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics/stream": {
+    "/api/v1/processes/{process_id}/metrics/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -608,14 +772,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/metrics/summary": {
+    "/api/v1/processes/{process_id}/metrics/summary": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/metrics/summary — aggregated metric stats per key. */
+        /** GET /api/v1/processes/{process_id}/metrics/summary — aggregated metric stats per key. */
         get: operations["get_process_metrics_summary"];
         put?: never;
         post?: never;
@@ -625,14 +789,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/processes/{process_id}/tasks": {
+    "/api/v1/processes/{process_id}/tasks": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/processes/{process_id}/tasks — list tasks for a process. */
+        /** GET /api/v1/processes/{process_id}/tasks — list tasks for a process. */
         get: operations["get_process_tasks"];
         put?: never;
         post?: never;
@@ -642,7 +806,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/from-artifact/{execution_id}/{artifact_id}": {
+    "/api/v1/projects/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/projects/{id} */
+        delete: operations["delete_project"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/projects/{id}/templates
+         * @description Attach a template (by *base* id — the chain root). The caller must be
+         *     an editor on the project's workspace AND able to read the template
+         *     (workspace member OR template is public).
+         */
+        post: operations["attach_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/templates/{base_template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/projects/{id}/templates/{base_template_id} */
+        delete: operations["detach_template"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -650,7 +870,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10
+         * GET /api/v1/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10
          * @description Resolves a catalogue entry to its producing token and returns the full
          *     ancestry chain. Uses `source_event_sequence` for direct lookup when
          *     available, falling back to signal_key → cross-link resolution.
@@ -664,7 +884,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/link/{signal_key}": {
+    "/api/v1/provenance/link/{signal_key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -672,7 +892,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/link/{signal_key}
+         * GET /api/v1/provenance/link/{signal_key}
          * @description Look up a cross-net bridge link by signal_key.
          */
         get: operations["cross_link"];
@@ -684,7 +904,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/{net_id}/{event_seq}/detail": {
+    "/api/v1/provenance/{net_id}/{event_seq}/detail": {
         parameters: {
             query?: never;
             header?: never;
@@ -692,7 +912,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/{net_id}/{event_seq}/detail
+         * GET /api/v1/provenance/{net_id}/{event_seq}/detail
          * @description Returns the full context for a causality event by joining to domain
          *     tables based on effect_handler. Enables rich detail views in the
          *     provenance DAG visualization.
@@ -706,7 +926,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/provenance/{net_id}/{token_id}": {
+    "/api/v1/provenance/{net_id}/{token_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -714,7 +934,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/provenance/{net_id}/{token_id}?depth=10
+         * GET /api/v1/provenance/{net_id}/{token_id}?depth=10
          * @description Recursive CTE walking token ancestry: for a given token, find which events
          *     produced it, what tokens those events consumed, and recurse.
          */
@@ -727,7 +947,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks": {
+    "/api/v1/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/resources` — paginated list, optionally filtered by type. */
+        get: operations["list_resources"];
+        put?: never;
+        /** `POST /api/v1/resources` — create a logical resource and its v1 row. */
+        post: operations["create_resource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/types": {
         parameters: {
             query?: never;
             header?: never;
@@ -735,7 +973,94 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/tasks — list all tasks with filter/sort/pagination.
+         * `GET /api/v1/resources/types` — registry introspection. Powers the
+         *     frontend picker's type list and the schema-driven create form.
+         */
+        get: operations["list_resource_types"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/resources/{id}` — admin view. Secret fields are listed by
+         *     name only; values never leave Vault on the read path.
+         */
+        get: operations["get_resource"];
+        /**
+         * `PUT /api/v1/resources/{id}` — update display_name and/or config. Setting
+         *     `config` bumps `latest_version` and writes a fresh vault_path; name-only
+         *     updates do not.
+         */
+        put: operations["update_resource"];
+        post?: never;
+        /**
+         * `DELETE /api/v1/resources/{id}` — soft delete. Preserves
+         *     `resource_versions` rows + Vault paths so already-pinned instances keep
+         *     resolving.
+         */
+        delete: operations["delete_resource"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/{id}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/resources/{id}/audit` — paginated audit trail for a resource. */
+        get: operations["list_resource_audit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/{id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/resources/{id}/rotate` — write a new version. Identical to
+         *     `update_resource` with only `config` set, plus a different audit verb.
+         */
+        post: operations["rotate_resource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/tasks — list all tasks with filter/sort/pagination.
          * @description Returns `{ tasks, total, page, page_size, total_pages, has_next, has_previous }`
          *     where each task is a `HumanTask`-shaped JSON object (see `to_human_task_json`).
          *     The `tasks` key is what the Mekhan frontend's task store expects; the rest
@@ -750,7 +1075,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/stream": {
+    "/api/v1/tasks/stream": {
         parameters: {
             query?: never;
             header?: never;
@@ -758,7 +1083,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/tasks/stream — SSE endpoint for real-time task events from NATS.
+         * GET /api/v1/tasks/stream — SSE endpoint for real-time task events from NATS.
          * @description Emits `{event, data}` lines for `task_created`, `task_completed`,
          *     `task_failed`, `task_cancelled`, `process_update`. `data` is the raw
          *     NATS payload as a JSON string (clients re-parse it).
@@ -772,7 +1097,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/{id}": {
+    "/api/v1/tasks/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -780,7 +1105,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/tasks/:id — get a single task.
+         * GET /api/v1/tasks/:id — get a single task.
          * @description Returns a `HumanTask`-shaped JSON object built from the DB row + `detail`
          *     JSONB projected by the causality consumer. This includes `task_id`, `steps`,
          *     `instructions_mdsvex`, `net_id`, `place`, etc. — everything the frontend
@@ -795,7 +1120,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/{id}/cancel": {
+    "/api/v1/tasks/{id}/cancel": {
         parameters: {
             query?: never;
             header?: never;
@@ -804,7 +1129,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/tasks/{id}/cancel — cancel a task and publish NATS signal. */
+        /** POST /api/v1/tasks/{id}/cancel — cancel a task and publish NATS signal. */
         post: operations["cancel_task"];
         delete?: never;
         options?: never;
@@ -812,7 +1137,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tasks/{id}/complete": {
+    "/api/v1/tasks/{id}/complete": {
         parameters: {
             query?: never;
             header?: never;
@@ -821,7 +1146,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/tasks/{id}/complete — complete a task and publish NATS signal. */
+        /** POST /api/v1/tasks/{id}/complete — complete a task and publish NATS signal. */
         post: operations["complete_task"];
         delete?: never;
         options?: never;
@@ -829,17 +1154,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates": {
+    "/api/v1/templates": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates */
+        /** GET /api/v1/templates */
         get: operations["list_templates"];
         put?: never;
-        /** POST /api/templates */
+        /** POST /api/v1/templates */
         post: operations["create_template"];
         delete?: never;
         options?: never;
@@ -847,20 +1172,20 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}": {
+    "/api/v1/templates/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id} */
+        /** GET /api/v1/templates/{id} */
         get: operations["get_template"];
-        /** PUT /api/templates/{id} */
+        /** PUT /api/v1/templates/{id} */
         put: operations["update_template"];
         post?: never;
         /**
-         * DELETE /api/templates/{id}
+         * DELETE /api/v1/templates/{id}
          *     Per Section 11.7: cascade cleanup for published templates with finished instances.
          */
         delete: operations["delete_template"];
@@ -869,14 +1194,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/air": {
+    "/api/v1/templates/{id}/air": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/air */
+        /** GET /api/v1/templates/{id}/air */
         get: operations["get_air"];
         put?: never;
         post?: never;
@@ -886,7 +1211,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/apply": {
+    "/api/v1/templates/{id}/apply": {
         parameters: {
             query?: never;
             header?: never;
@@ -896,7 +1221,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/templates/{id}/apply
+         * POST /api/v1/templates/{id}/apply
          * @description GitOps entry point: atomically publish a new version of the chain straight
          *     from a git-authored artifact. The supplied `graph` REPLACES the chain head
          *     wholesale (no CRDT merge). Either seeds-and-publishes a fresh `mekhan init`
@@ -912,7 +1237,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/compile": {
+    "/api/v1/templates/{id}/bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/templates/{id}/bundle */
+        get: operations["get_template_bundle"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/compile": {
         parameters: {
             query?: never;
             header?: never;
@@ -921,7 +1263,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/templates/{id}/compile */
+        /** POST /api/v1/templates/{id}/compile */
         post: operations["compile_preview"];
         delete?: never;
         options?: never;
@@ -929,7 +1271,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/io-stubs": {
+    "/api/v1/templates/{id}/io-stubs": {
         parameters: {
             query?: never;
             header?: never;
@@ -937,7 +1279,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/templates/{id}/io-stubs
+         * GET /api/v1/templates/{id}/io-stubs
          *     Generated `_aithericon_io` pair (`.py` SDK delegate + typed `.pyi` overlay)
          *     per Python automated step, derived from each node's input scope. An
          *     authoring aid: unlike compile it does NOT require the graph to be
@@ -956,7 +1298,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/new-version": {
+    "/api/v1/templates/{id}/latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/latest
+         * @description Resolve any id in a template's version chain to the row currently flagged
+         *     `is_latest`. Accepts the chain root (`base_template_id`) — the stable
+         *     identifier the CLI's `mekhan.lock.json` pins — or any historical version
+         *     id; both resolve through the same `base_template_id` column.
+         *
+         *     CLI commands that need "the chain head right now" (`run`, `test`, the
+         *     post-pull bundle fetch) call this first, then operate on the returned id.
+         *     The split keeps `/bundle`, `/instances`, `/tests/...` semantics
+         *     strictly version-id-scoped (you can still pull a historical version by
+         *     passing its concrete id) — the resolver layer is the only place that
+         *     follows the chain.
+         */
+        get: operations["get_latest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/new-version": {
         parameters: {
             query?: never;
             header?: never;
@@ -965,7 +1337,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/templates/{id}/new-version */
+        /** POST /api/v1/templates/{id}/new-version */
         post: operations["new_version"];
         delete?: never;
         options?: never;
@@ -973,7 +1345,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/publish": {
+    "/api/v1/templates/{id}/publish": {
         parameters: {
             query?: never;
             header?: never;
@@ -982,7 +1354,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/templates/{id}/publish */
+        /** POST /api/v1/templates/{id}/publish */
         post: operations["publish_template"];
         delete?: never;
         options?: never;
@@ -990,14 +1362,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/triggers": {
+    "/api/v1/templates/{id}/tags": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/triggers */
+        get?: never;
+        /** PUT /api/v1/templates/{id}/tags — full replace. */
+        put: operations["set_template_tags"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/templates/{id}/tests — list tests for a template family. */
+        get: operations["list_tests"];
+        put?: never;
+        /** POST /api/v1/templates/{id}/tests — create a new test. */
+        post: operations["create_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/tests/run-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/{id}/tests/run-all — run every enabled test for a
+         *     template family. Used by the editor's "Run all" button and by the
+         *     publication gate.
+         */
+        post: operations["run_all"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/templates/{id}/triggers */
         get: operations["list_template_triggers"];
         put?: never;
         post?: never;
@@ -1007,14 +1435,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/templates/{id}/versions": {
+    "/api/v1/templates/{id}/versions": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/templates/{id}/versions */
+        /** GET /api/v1/templates/{id}/versions */
         get: operations["list_versions"];
         put?: never;
         post?: never;
@@ -1024,14 +1452,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers": {
+    "/api/v1/templates/{id}/visibility": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/triggers */
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * PATCH /api/v1/templates/{id}/visibility
+         * @description Flipping visibility is a tenancy decision (cross-workspace exposure) so
+         *     it requires admin, not editor — even though it touches a template row.
+         */
+        patch: operations["set_template_visibility"];
+        trace?: never;
+    };
+    "/api/v1/templates/{template_id}/tests/{test_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE /api/v1/templates/{template_id}/tests/{test_id} */
+        delete: operations["delete_test"];
+        options?: never;
+        head?: never;
+        /** PATCH /api/v1/templates/{template_id}/tests/{test_id} — partial update. */
+        patch: operations["update_test"];
+        trace?: never;
+    };
+    "/api/v1/templates/{template_id}/tests/{test_id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/v1/templates/{template_id}/tests/{test_id}/run — execute one test. */
+        post: operations["run_one"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{template_id}/tests/{test_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{template_id}/tests/{test_id}/runs — recent run history.
+         * @description Returns newest-first. The editor's detail sheet shows the latest one
+         *     (failure_detail + final_scope + instance_id) so authors can diagnose a
+         *     failure without chasing it through `/instances`.
+         */
+        get: operations["list_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/triggers */
         get: operations["list_triggers"];
         put?: never;
         post?: never;
@@ -1041,7 +1547,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/metrics": {
+    "/api/v1/triggers/metrics": {
         parameters: {
             query?: never;
             header?: never;
@@ -1049,7 +1555,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/triggers/metrics
+         * GET /api/v1/triggers/metrics
          * @description Returns aggregate counters per source kind plus the registry size. Useful
          *     for /admin dashboards and the editor's trigger landing page.
          */
@@ -1062,7 +1568,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/preview/cron": {
+    "/api/v1/triggers/preview/cron": {
         parameters: {
             query?: never;
             header?: never;
@@ -1072,7 +1578,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/triggers/preview/cron
+         * POST /api/v1/triggers/preview/cron
          * @description Returns the next N fire times for a cron schedule. Used by the editor's
          *     trigger inspector to show users when their cron will fire next without
          *     having to ship the workflow first.
@@ -1084,7 +1590,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/source-scope": {
+    "/api/v1/triggers/source-scope": {
         parameters: {
             query?: never;
             header?: never;
@@ -1092,7 +1598,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/triggers/source-scope?kind=cron
+         * GET /api/v1/triggers/source-scope?kind=cron
          * @description The per-source scope contract, surfaced so the editor can show authors
          *     exactly which identifiers are in scope under each mapping expression
          *     instead of leaving them to guess.
@@ -1106,7 +1612,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/{node_id}/enabled": {
+    "/api/v1/triggers/{node_id}/enabled": {
         parameters: {
             query?: never;
             header?: never;
@@ -1120,7 +1626,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * PATCH /api/triggers/{node_id}/enabled
+         * PATCH /api/v1/triggers/{node_id}/enabled
          * @description Arm or pause a single trigger on its **published** template. This is the
          *     deliberate inverse of the rest of the template: a trigger's `source`,
          *     `payload_mapping` and target are frozen at publish, but whether it is
@@ -1136,7 +1642,7 @@ export interface paths {
         patch: operations["set_trigger_enabled"];
         trace?: never;
     };
-    "/api/triggers/{node_id}/fire": {
+    "/api/v1/triggers/{node_id}/fire": {
         parameters: {
             query?: never;
             header?: never;
@@ -1152,14 +1658,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/triggers/{node_id}/history": {
+    "/api/v1/triggers/{node_id}/history": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** GET /api/triggers/{node_id}/history */
+        /** GET /api/v1/triggers/{node_id}/history */
         get: operations["trigger_history"];
         put?: never;
         post?: never;
@@ -1169,7 +1675,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/health": {
+    "/api/v1/workspaces": {
         parameters: {
             query?: never;
             header?: never;
@@ -1177,8 +1683,115 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /health
-         * @description Liveness probe — fixed shape, no DB / NATS dependencies.
+         * GET /api/v1/workspaces
+         * @description Lists every workspace the caller is a member of. Authenticated; no
+         *     per-workspace gate (the caller is implicitly restricted by their
+         *     `workspace_members` rows).
+         */
+        get: operations["list_workspaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/workspaces/{id} */
+        get: operations["get_workspace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/workspaces/{id}/members */
+        get: operations["list_members"];
+        put?: never;
+        /**
+         * POST /api/v1/workspaces/{id}/members
+         * @description Adds a member identified by OIDC `subject`. Server derives `user_id`
+         *     via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` so this works for
+         *     principals that haven't yet logged into mekhan. Upserts so calling
+         *     twice with a different role flips the role rather than failing.
+         */
+        post: operations["add_member"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/members/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * DELETE /api/v1/workspaces/{id}/members/{user_id}
+         * @description Removes a member. Refuses to remove the last `owner` so the workspace
+         *     can't be orphaned.
+         */
+        delete: operations["remove_member"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/v1/workspaces/{id}/projects */
+        get: operations["list_projects"];
+        put?: never;
+        /** POST /api/v1/workspaces/{id}/projects */
+        post: operations["create_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /healthz
+         * @description Liveness probe — fixed shape, no DB / NATS dependencies. Lives at the
+         *     root (NOT under `/api/v1`) and OUTSIDE the auth layer so load balancers,
+         *     Nomad/k8s probes, and uptime monitors can poll it without a session
+         *     cookie. The path follows k8s convention; spec stays in the OpenAPI doc
+         *     for completeness but the runtime mount is intentionally separate from
+         *     the main protected `OpenApiRouter`.
          */
         get: operations["liveness"];
         put?: never;
@@ -1193,6 +1806,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AddMemberRequest: {
+            /** @description One of: `owner`, `admin`, `editor`, `viewer`. */
+            role: string;
+            /**
+             * @description OIDC `sub` claim — the server derives `user_id` via
+             *     `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)`. Phase B will add an
+             *     email→subject resolver for the admin UI.
+             */
+            subject: string;
+        };
         AncestryNode: {
             /** Format: int32 */
             depth: number;
@@ -1210,7 +1833,7 @@ export interface components {
             transition_name?: string | null;
         };
         /**
-         * @description Request body for `POST /api/templates/{id}/apply` — the GitOps path.
+         * @description Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
          *     The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
          *     assets are uploaded out-of-band via the files endpoint before this call.
          */
@@ -1224,12 +1847,86 @@ export interface components {
             source_ref?: null | components["schemas"]["SourceRef"];
         };
         /**
-         * @description Response shape for `GET /api/processes/{process_id}/artifacts/list`.
+         * @description Response shape for `GET /api/v1/processes/{process_id}/artifacts/list`.
          *
          *     Frontend reads `body.entries[]` directly — keep the single-field envelope.
          */
         ArtifactsListResponse: {
             entries: components["schemas"]["CatalogueEntry"][];
+        };
+        /** @enum {string} */
+        AssertOp: "eq" | "neq" | "exists" | "not_exists" | "gt" | "gte" | "lt" | "lte" | "matches" | "contains";
+        /**
+         * @description A single check evaluated against the runner's synthetic post-instance scope
+         *     (`{ result, steps.<slug>.output }`). `path` is a dot-pathed JSON pointer
+         *     into that scope (e.g. `"result.value.invoice_amount"`,
+         *     `"steps.review.output.approved"`). Evaluation is intentionally data-driven —
+         *     no DSL parser. See `handlers::template_tests::runner::eval_assertion`.
+         */
+        Assertion: {
+            op: components["schemas"]["AssertOp"];
+            path: string;
+            /**
+             * @description Right-hand side. For `Exists`/`NotExists` this is ignored; for
+             *     `Matches` it must be a string (regex); for `Contains` it can be a
+             *     scalar (substring on string actual / membership on array actual).
+             */
+            value?: unknown;
+        };
+        AttachTemplateRequest: {
+            /**
+             * Format: uuid
+             * @description The *base* template id (the first version's id, which the
+             *     `is_latest`-chained version graph hangs off of). Project membership
+             *     follows the live version chain so attaching once survives version
+             *     bumps.
+             */
+            template_id: string;
+        };
+        /**
+         * @description Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.
+         *
+         *     The Svelte component map (`backend-panels.ts`) stays hand-written — TS
+         *     can't import components dynamically from a JSON tag at runtime without
+         *     defeating Vite chunking — but every other per-backend constant
+         *     (display name, icon, default config, default output fields, dispatch
+         *     mode, resource channel) flows from here. This is what kills the
+         *     `automated-ports.ts` ↔ `default_output_port()` drift hazard.
+         */
+        BackendDescriptor: {
+            /**
+             * @description Whether this backend's declared output port fields drive a Rhai
+             *     `outputs:` constant (mostly informational for the frontend).
+             */
+            consumesDeclaredOutputs: boolean;
+            /**
+             * @description Seed config inserted into a fresh step when this backend is
+             *     selected. Opaque JSON — the backend's Svelte config panel decodes
+             *     its own structure.
+             */
+            defaultEditorConfig: unknown;
+            /**
+             * @description Canonical output port shape. Frontend uses this for the "Reset to
+             *     default" button on the output port editor.
+             */
+            defaultOutputPort: components["schemas"]["Port"];
+            dispatchMode: components["schemas"]["DispatchMode"];
+            displayName: string;
+            icon: string;
+            /**
+             * @description Snake-case wire tag (`"smtp"`, `"python"`, …). Matches
+             *     [`ExecutionBackendType`]'s wire encoding and the executor's
+             *     `ExecutionSpec.backend` string.
+             */
+            name: string;
+            /**
+             * @description Who owns the output port shape — user (free), backend (fixed), or
+             *     derived from config. Drives the editor's port-section rendering.
+             */
+            outputAuthoring: components["schemas"]["OutputAuthoring"];
+            resourceChannel: components["schemas"]["ResourceChannel"];
+            /** @description Whether the editor should show the Scheduled deployment toggle. */
+            schedulable: boolean;
         };
         /**
          * @description Delay applied between automated-step retry attempts.
@@ -1324,8 +2021,8 @@ export interface components {
             node_id?: string | null;
         };
         /**
-         * @description Request body for stateless compilation. Used by `POST /api/compile` and
-         *     `POST /api/templates/{id}/compile`. `files` is a per-node, per-filename map
+         * @description Request body for stateless compilation. Used by `POST /api/v1/compile` and
+         *     `POST /api/v1/templates/{id}/compile`. `files` is a per-node, per-filename map
          *     of inline contents; the preview compile emits `InputSource::Raw` entries so
          *     the AIR matches the StoragePath-keyed shape produced by publish.
          */
@@ -1352,6 +2049,13 @@ export interface components {
                 window_secs: number;
             };
         };
+        /**
+         * @description Context-window management strategy for an [`WorkflowNodeData::Agent`].
+         *     Inert in PR 1's degenerate path; declared upfront so the type stays
+         *     stable across the follow-up loop-lowering PR (`docs/12` § 3).
+         * @enum {string}
+         */
+        ContextStrategy: "none" | "drop_oldest" | "summarize_oldest";
         CreateInstanceRequest: {
             /**
              * @description Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
@@ -1359,6 +2063,11 @@ export interface components {
              *     driven solely by `start_tokens`.
              */
             metadata?: unknown;
+            /**
+             * @description `live` (default) | `draft` | `test_run`. `test_run` is reserved for
+             *     the test runner — callers requesting it directly are rejected.
+             */
+            mode?: string | null;
             /**
              * @description Typed seeds for each Start block in the template. A Start with a
              *     non-empty `initial` port requires a matching entry here; otherwise the
@@ -1368,6 +2077,35 @@ export interface components {
             start_tokens?: components["schemas"]["StartToken"][];
             /** Format: uuid */
             template_id: string;
+        };
+        CreateProjectRequest: {
+            description?: string;
+            display_name: string;
+            slug: string;
+        };
+        /**
+         * @description Request body for `POST /api/v1/resources`. Carries every field needed to
+         *     land both a `resources` row and the first `resource_versions` row.
+         */
+        CreateResourceRequest: {
+            /**
+             * @description Full config map — both public and secret fields. The handler splits
+             *     it by descriptor lists.
+             */
+            config: unknown;
+            /** @description UI label. Defaults to `path` if empty. */
+            display_name?: string | null;
+            /** @description Windmill-style path identifier: `^[ufg]/[a-z0-9_-]+/[a-z0-9_-]+$`. */
+            path: string;
+            /** @description Wire identifier from `ResourceTypeDescriptor.name`. */
+            resource_type: string;
+            /**
+             * Format: uuid
+             * @description Optional workspace scoping. No `workspaces` table exists in v1; a
+             *     `None` here resolves to `Uuid::nil()`. When the table lands, this
+             *     will be set by the auth layer.
+             */
+            workspace_id?: string | null;
         };
         CreateTemplateRequest: {
             description?: string | null;
@@ -1385,7 +2123,18 @@ export interface components {
             graph?: null | components["schemas"]["WorkflowGraph"];
             name: string;
         };
-        /** @description Request body for `POST /api/auth/tokens`. */
+        CreateTemplateTestRequest: {
+            assertions?: components["schemas"]["Assertion"][];
+            enabled?: boolean;
+            /**
+             * @description Map of `<node_slug>` → form data captured by the human-task UI.
+             *     Missing slugs fail the run at the first un-stubbed `human.request`.
+             */
+            human_answers?: unknown;
+            name: string;
+            start_tokens: components["schemas"]["StartToken"][];
+        };
+        /** @description Request body for `POST /api/v1/auth/tokens`. */
         CreateTokenRequest: {
             /** @description Optional longer note — stored as the machine-user `description`. */
             description?: string | null;
@@ -1398,7 +2147,7 @@ export interface components {
             name: string;
         };
         /**
-         * @description Response of `POST /api/auth/tokens`. Identical to [`TokenSummary`] plus the
+         * @description Response of `POST /api/v1/auth/tokens`. Identical to [`TokenSummary`] plus the
          *     one-time `secret` — Mekhan never stores or re-serves it.
          */
         CreatedToken: {
@@ -1481,6 +2230,19 @@ export interface components {
             resources?: null | components["schemas"]["ResourceConfig"];
         };
         /**
+         * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
+         *     step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
+         *     per-step author choice on any `ExecutorJob` backend.
+         */
+        DispatchMode: {
+            /** @enum {string} */
+            kind: "executor_job";
+        } | {
+            handler: string;
+            /** @enum {string} */
+            kind: "engine_effect";
+        };
+        /**
          * @description One entry in a `download` task block. Mirrors the frontend `DownloadItem`
          *     (`app/src/lib/hpi/types.ts`) field-for-field on the wire.
          */
@@ -1498,17 +2260,32 @@ export interface components {
             run_mode?: string | null;
         };
         /**
-         * @description Uniform error body returned by every fallible handler. Replaces the ad-hoc
-         *     `json!({"error": ...})` pattern so the spec exposes a single
-         *     `ErrorResponse` schema and the frontend gets one consistent error shape.
+         * @description Uniform error body returned by every fallible handler. The spec exposes a
+         *     single `ErrorResponse` schema and the frontend gets one consistent error
+         *     shape: switch on `code` (machine-readable, stable kebab-case) for
+         *     programmatic handling; render `error` for humans.
+         *
+         *     `code` is populated automatically by every `ApiError::*` constructor.
+         *     Stable values: `"bad-request"`, `"unauthorized"`, `"forbidden"`,
+         *     `"not-found"`, `"conflict"`, `"precondition-failed"`, `"internal"`,
+         *     `"compile-failed"`, `"publish-gate"`. Absent only on the few
+         *     extractor-level rejections that don't flow through `ApiError`.
          *
          *     Optional `compile_errors` carries structured per-edge / per-node failures
-         *     from the workflow compiler so the editor can highlight inline (Phase 2
-         *     typed-ports). Absent on non-compile errors.
+         *     from the workflow compiler so the editor can highlight inline.
+         *     Optional `failing_tests` carries the publish gate's per-test detail.
          */
         ErrorResponse: {
+            code?: string | null;
             compile_errors?: components["schemas"]["CompileErrorView"][] | null;
             error: string;
+            /**
+             * @description Structured per-test failures returned by the publication gate when a
+             *     publish is blocked. Absent on non-gate errors. The shape mirrors
+             *     `models::template_test::FailingTestInfo`; declared as `Value` here to
+             *     avoid pulling the dependency into this module's signature.
+             */
+            failing_tests?: unknown;
         };
         EventDetail: {
             artifact?: null | components["schemas"]["CatalogueEntry"];
@@ -1534,11 +2311,16 @@ export interface components {
         };
         /**
          * @description Discriminator selecting which executor backend handles an automated step.
+         *
          *     Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
-         *     `"llm"`, `"file_ops"`, `"kreuzberg"`.
+         *     `"llm"`, `"file_ops"`, `"kreuzberg"`, `"smtp"`, `"catalogue_query"`.
+         *
+         *     This is the canonical OpenAPI discriminator, the Y.Doc-stored string in
+         *     production templates, and the executor's `ExecutionSpec.backend` value.
+         *     Both the mekhan compiler and the executor registry key off it.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "catalogue_query";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "smtp" | "catalogue_query";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -1548,6 +2330,14 @@ export interface components {
              *     editor still surfaces it for python/process/docker.
              */
             entrypoint?: string | null;
+        };
+        FailingTestInfo: {
+            name: string;
+            reason: string;
+            /** Format: uuid */
+            run_id?: string | null;
+            /** Format: uuid */
+            test_id: string;
         };
         /**
          * @description Type kind for a typed port field. Superset of `TaskFieldKind`: adds `Bool`
@@ -1573,7 +2363,7 @@ export interface components {
             targetField: string;
         };
         /**
-         * @description Response shape for `POST /api/files/upload/{id}/{node_id}`.
+         * @description Response shape for `POST /api/v1/files/upload/{id}/{node_id}`.
          *
          *     The handler returns S3 metadata after a successful upload.
          */
@@ -1617,6 +2407,11 @@ export interface components {
             /** @enum {string} */
             outcome: "dropped";
             reason: string;
+        } | {
+            /** Format: uuid */
+            active_instance_id: string;
+            /** @enum {string} */
+            outcome: "coalesced";
         };
         /** @description Wrap an outcome with metadata the history endpoint records on every fire. */
         FireResult: {
@@ -1726,7 +2521,22 @@ export interface components {
          */
         ImageDisplay: "single" | "grid" | "gallery";
         /**
-         * @description Response shape for `GET /api/instances/{id}/events`.
+         * @description Template-level instance concurrency policy. Read by the trigger
+         *     dispatcher on fire and the lifecycle listener on instance terminal.
+         *
+         *     Tagged on the wire as `{"mode": "unlimited"}` / `{"mode":
+         *     "single_active_coalesce"}` so future variants (e.g. queue, locked)
+         *     can land without breaking the existing wire shape.
+         */
+        InstanceConcurrencyPolicy: {
+            /** @enum {string} */
+            mode: "unlimited";
+        } | {
+            /** @enum {string} */
+            mode: "single_active_coalesce";
+        };
+        /**
+         * @description Response shape for `GET /api/v1/instances/{id}/events`.
          *
          *     Mirrors the literal `json!({ "net_id": ..., "events": [...], "event_count": ... })`
          *     envelope the handler previously emitted. `events` stays `Vec<serde_json::Value>`
@@ -1749,6 +2559,7 @@ export interface components {
             /** Format: uuid */
             id: string;
             metadata: unknown;
+            mode: string;
             net_id: string;
             /** Format: date-time */
             started_at?: string | null;
@@ -1758,6 +2569,8 @@ export interface components {
             template_name: string;
             /** Format: int32 */
             template_version: number;
+            /** Format: uuid */
+            test_id?: string | null;
         };
         InstanceStateResponse: {
             current_step?: string | null;
@@ -1771,6 +2584,13 @@ export interface components {
             net_id: string;
             status: string;
         };
+        /**
+         * @description Firing rule for a `Join` node. `All` (the default) is the AND-join —
+         *     waits for every incoming branch. `Any` fires per arriving token — the
+         *     canonical petri-net XOR-join, dual of `Decision`'s XOR-split.
+         * @enum {string}
+         */
+        JoinMode: "all" | "any";
         /** @description Lineage response: artifacts grouped by iteration/step. */
         LineageResponse: {
             process_id: string;
@@ -1799,6 +2619,12 @@ export interface components {
             mime_type?: string | null;
             name: string;
             process_id: string;
+            /**
+             * @description HPI tag/annotation propagated from the engine's `EffectCompleted`
+             *     event (`process_step_completed` ∘ `process_step_started`). A label
+             *     for human-process correlation — NOT a pointer to the
+             *     `step_execution` table. See module-level docs.
+             */
             process_step?: string | null;
             /** Format: int64 */
             seq: number;
@@ -1844,7 +2670,7 @@ export interface components {
             timestamp: string;
         };
         /**
-         * @description Response shape for `GET /api/processes/{process_id}/logs/tail`.
+         * @description Response shape for `GET /api/v1/processes/{process_id}/logs/tail`.
          *
          *     Frontend reads `body.logs[]` directly — keep the single-field envelope.
          */
@@ -1859,7 +2685,8 @@ export interface components {
             form?: components["schemas"]["TaskFieldConfig"][];
         };
         /**
-         * @description How a `ParallelJoin` merges the tokens arriving on its joined branches.
+         * @description How a `Join { mode: All }` merges the tokens arriving on its joined
+         *     branches.
          *
          *     `ShallowLastWins` is the historical behaviour (top-level keys overwrite,
          *     last branch to arrive wins on a key collision). `DeepMerge` recursively
@@ -1882,6 +2709,39 @@ export interface components {
             series: {
                 [key: string]: components["schemas"]["MetricPoint"][];
             };
+        };
+        /**
+         * @description LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors
+         *     the subset of `aithericon_executor_backend_configs::llm::LlmConfig` the
+         *     editor authors directly (provider, model, optional creds / sampling
+         *     knobs); the degenerate single-turn lowering reconstructs the full
+         *     `LlmConfig` from these fields plus the Agent's prompts. Wire shape
+         *     matches the existing `LlmConfig` JSON one-for-one so the equivalence
+         *     test (PR 1) produces byte-identical `config_ref` blobs.
+         */
+        ModelRef: {
+            apiKey?: string | null;
+            baseUrl?: string | null;
+            /** Format: int64 */
+            maxTokens?: number | null;
+            /**
+             * @description Provider-specific model identifier (e.g. `"gpt-4o"`,
+             *     `"claude-sonnet-4-20250514"`).
+             */
+            model: string;
+            /**
+             * @description `"openai"` | `"anthropic"` | `"ollama"`. Wire format is lowercase to
+             *     line up with `LlmConfig::Provider`'s `rename_all = "lowercase"`.
+             */
+            provider: string;
+            /**
+             * @description Workspace resource alias the LLM call binds to (e.g. `"openai_prod"`).
+             *     Same channel as `LlmConfig::resource_alias` — the compiler emits a
+             *     `ResourceEnvelope` borrow when present.
+             */
+            resourceAlias?: string | null;
+            /** Format: double */
+            temperature?: number | null;
         };
         /**
          * @description Multipart body wrapper for spec documentation. The runtime extractor is
@@ -1921,6 +2781,43 @@ export interface components {
             /** Format: int64 */
             total_bytes: number;
         };
+        /**
+         * @description Frontend-visible metadata for one node type. Returned by
+         *     `GET /api/v1/node-types`.
+         *
+         *     Mirrors [`crate::backends::BackendDescriptor`]'s role for backends. The
+         *     Svelte component map, Lucide icon imports, and per-section property
+         *     panels stay frontend-only (they reference Svelte components that can't
+         *     be serialized through JSON); everything else flows from here.
+         */
+        NodeDescriptor: {
+            description?: string | null;
+            displayLabel: string;
+            isJoin: boolean;
+            /**
+             * @description Runtime kind as snake_case string. Differs from `wire_name` only for
+             *     `agent` (kind = `automated_step`).
+             */
+            kind: string;
+            lowersToAir: boolean;
+            parksDataEnvelope: boolean;
+            /** @description Snake-case wire tag — matches the variant's serde rename. */
+            wireName: string;
+        };
+        /**
+         * @description Who owns the AutomatedStep's output port shape — the user (free
+         *     authoring), the backend (fixed canonical shape), or the backend's
+         *     config (derived from `response_format` / schema / similar).
+         *
+         *     Frontend reads this off `BackendDescriptor` and either renders the
+         *     generic editable `PortsSection` (Free) or a read-only one whose fields
+         *     come from the registry (Fixed) or from a per-config server-side derive
+         *     call (Derived). The compiler still validates the persisted `output`
+         *     against the canonical shape on publish — the authoring flag is a UX
+         *     contract, not a security boundary.
+         * @enum {string}
+         */
+        OutputAuthoring: "free" | "fixed" | "derived";
         PaginatedResponse_InstanceListItem: {
             items: {
                 /** Format: date-time */
@@ -1933,6 +2830,7 @@ export interface components {
                 /** Format: uuid */
                 id: string;
                 metadata: unknown;
+                mode: string;
                 net_id: string;
                 /** Format: date-time */
                 started_at?: string | null;
@@ -1942,6 +2840,61 @@ export interface components {
                 template_name: string;
                 /** Format: int32 */
                 template_version: number;
+                /** Format: uuid */
+                test_id?: string | null;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_ResourceAuditEntry: {
+            items: {
+                action: string;
+                /** Format: int64 */
+                id: number;
+                /** Format: uuid */
+                instance_id?: string | null;
+                /** Format: date-time */
+                occurred_at: string;
+                /** Format: uuid */
+                principal_id: string;
+                /** Format: uuid */
+                resource_id: string;
+                /** Format: int32 */
+                resource_version: number;
+                site: string;
+                step_id?: string | null;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_ResourceSummary: {
+            items: {
+                /** Format: date-time */
+                created_at: string;
+                display_name: string;
+                /**
+                 * @description User-supplied key names for dynamic-fields resources (`kv`). The
+                 *     picker uses this list to emit `<path>.<key>` entries; resolver
+                 *     uses it to build the secret-template envelope. `None` for typed
+                 *     resources whose fields are static on the descriptor.
+                 */
+                dynamic_keys?: string[] | null;
+                /** Format: uuid */
+                id: string;
+                /** Format: int32 */
+                latest_version: number;
+                path: string;
+                resource_type: string;
+                /** Format: date-time */
+                updated_at: string;
             }[];
             /** Format: int64 */
             page: number;
@@ -1963,6 +2916,7 @@ export interface components {
                 graph: unknown;
                 /** Format: uuid */
                 id: string;
+                interface_json?: unknown;
                 is_latest: boolean;
                 name: string;
                 /** Format: uuid */
@@ -1977,6 +2931,9 @@ export interface components {
                 updated_at: string;
                 /** Format: int32 */
                 version: number;
+                visibility: string;
+                /** Format: uuid */
+                workspace_id: string;
             }[];
             /** Format: int64 */
             page: number;
@@ -2118,7 +3075,13 @@ export interface components {
             kind: components["schemas"]["FieldKind"];
             label: string;
             name: string;
-            options?: string[] | null;
+            /**
+             * @description Choice list for `kind = Select`. Same `{value, label}` shape as
+             *     [`TaskFieldConfig::options`]; the deserializer accepts either bare
+             *     strings or `{value, label}` objects and normalizes to the rich
+             *     form. See [`SelectOption`].
+             */
+            options?: components["schemas"]["SelectOption"][] | null;
             required?: boolean;
         };
         Position: {
@@ -2150,21 +3113,80 @@ export interface components {
             owner?: string | null;
             status?: string | null;
         };
+        Project: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            description: string;
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        PromoteToTestRequest: {
+            /** @description Name for the new test. Must be unique within the template family. */
+            name: string;
+            /**
+             * @description Optional override for the start tokens. When omitted, the runner
+             *     best-effort-extracts them from the instance's initial TokenCreated
+             *     events; this override lets the UI pre-fill from a known-good source
+             *     (e.g. the original `CreateInstanceRequest`).
+             */
+            start_tokens?: unknown;
+        };
         /** @description Full provenance response: ancestry nodes + explicit cross-net edges. */
         ProvenanceResponse: {
             cross_net_edges: components["schemas"]["CrossNetEdge"][];
             nodes: components["schemas"]["AncestryNode"][];
         };
         /**
-         * @description How a `POST /api/triggers/{id}/fire` caller wants the response delivered.
+         * @description Failure shape returned by the publication gate when one or more enabled
+         *     tests block publish. Surfaces in the editor's `PublishGateModal`.
+         */
+        PublishGateBlockedResponse: {
+            failing_tests: components["schemas"]["FailingTestInfo"][];
+        };
+        /**
+         * @description How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.
          *     The caller selects per-request (query `?reply=`, `Prefer` header, or a
          *     JSON body field); a Trigger node's optional `replyDefault` is used only
          *     when the caller doesn't specify. `Sse` is never *executed* on the fire
-         *     endpoint — SSE is the dedicated `GET /api/instances/{id}/stream` — but is
+         *     endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
          *     modeled so a node can advertise it as the intended consumption mode.
          * @enum {string}
          */
         ReplyMode: "fire_and_forget" | "wait_for_result" | "sse";
+        /** @description One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`. */
+        ResourceAuditEntry: {
+            action: string;
+            /** Format: int64 */
+            id: number;
+            /** Format: uuid */
+            instance_id?: string | null;
+            /** Format: date-time */
+            occurred_at: string;
+            /** Format: uuid */
+            principal_id: string;
+            /** Format: uuid */
+            resource_id: string;
+            /** Format: int32 */
+            resource_version: number;
+            site: string;
+            step_id?: string | null;
+        };
+        /**
+         * @description How a resolved resource envelope reaches the running backend.
+         *
+         *     The executor and mekhan compiler both branch on this — the compiler to
+         *     decide what kind of borrow to emit, the executor to know whether to
+         *     merge the envelope into the runtime config (`ConfigOverlay`) or stage it
+         *     as a sidecar file (`StagedFile`).
+         * @enum {string}
+         */
+        ResourceChannel: "staged_file" | "config_overlay" | "none";
         /** @description Optional resource hints forwarded to the scheduler for a `Scheduled` step. */
         ResourceConfig: {
             /** Format: int32 */
@@ -2173,6 +3195,82 @@ export interface components {
             gpu?: number | null;
             /** Format: int32 */
             memoryMb?: number | null;
+        };
+        /**
+         * @description Admin view returned by `GET /api/v1/resources/{id}`. Secret fields appear
+         *     in `redacted_secret_fields` so the picker can render "<redacted>"
+         *     placeholders without ever shipping the real values.
+         */
+        ResourceDetail: {
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            latest_version: number;
+            path: string;
+            /**
+             * @description Public fields of the latest version, inline. Same shape the resolver
+             *     would assemble (minus the secret-template refs).
+             */
+            public_config: unknown;
+            /**
+             * @description Names of fields the type marks as secret. The frontend renders these
+             *     as redacted inputs; the real values live in Vault only.
+             */
+            redacted_secret_fields: string[];
+            resource_type: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description Compact list-row shape. Returned by `GET /api/v1/resources` — never carries
+         *     per-version data (`public_config`, `vault_path`) so the list endpoint
+         *     stays cheap to render.
+         */
+        ResourceSummary: {
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            /**
+             * @description User-supplied key names for dynamic-fields resources (`kv`). The
+             *     picker uses this list to emit `<path>.<key>` entries; resolver
+             *     uses it to build the secret-template envelope. `None` for typed
+             *     resources whose fields are static on the descriptor.
+             */
+            dynamic_keys?: string[] | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            latest_version: number;
+            path: string;
+            resource_type: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description One descriptor surfaced by `GET /api/v1/resources/types`. Drives the
+         *     picker's type list and the schema-driven create form. `schema` is the
+         *     schemars JSON Schema of the underlying ResourceType struct; the frontend
+         *     renders it field-by-field.
+         */
+        ResourceTypeInfo: {
+            display_name: string;
+            /**
+             * @description `true` for the `kv` escape hatch: the field set is per-INSTANCE,
+             *     so `secret_fields` / `public_fields` are empty at the type level
+             *     and the picker drives off `ResourceSummary.dynamic_keys`. Types
+             *     derived via `#[derive(ResourceType)]` always set this to `false`.
+             */
+            dynamic_fields?: boolean;
+            icon: string;
+            name: string;
+            oauth_provider?: string | null;
+            public_fields: string[];
+            /** @description JSON Schema of the type. Cached at first request, then reused. */
+            schema: unknown;
+            secret_fields: string[];
         };
         /**
          * @description Retry behaviour for an `AutomatedStep` whose execution fails or times out.
@@ -2198,9 +3296,31 @@ export interface components {
             maxRetries?: number;
         };
         /**
+         * @description Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps
+         *     version. The body carries the new config — the type cannot change at
+         *     rotation time (`resource_type` is immutable for a logical resource).
+         */
+        RotateResourceRequest: {
+            config: unknown;
+        };
+        /** @description Aggregate result for `run-all` (also returned to the publication gate). */
+        RunAllResponse: {
+            errored: number;
+            failed: number;
+            passed: number;
+            runs: components["schemas"]["TemplateTestRun"][];
+            total: number;
+        };
+        /**
          * @description One reachable, producer-attributed reference the guard picker should
          *     offer at a node. The single source of truth for editor scope —
          *     replaces the deleted client-side `computeScopes` reimplementation.
+         *
+         *     `ty` is the recursive [`TyDescriptor`] tree so the picker can drill into
+         *     nested objects and array element shapes without additional calls; for
+         *     File-anchored containers the tree's root carries `selectable: true` so
+         *     the row is pickable as a whole while its children are individually
+         *     pickable too.
          */
         ScopeEntryDto: {
             note: string;
@@ -2208,8 +3328,11 @@ export interface components {
             path: string;
             producer_label: string;
             producer_node: string;
-            /** @description Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …). */
-            ty: string;
+            /**
+             * @description Recursive type descriptor. Single source of truth for the picker's
+             *     nested drill-down and (later) array `[*]` iteration affordance.
+             */
+            ty: components["schemas"]["TyDescriptor"];
         };
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
@@ -2221,14 +3344,83 @@ export interface components {
             /** @description Rhai identifier the expression references (e.g. `fire_time`). */
             name: string;
         };
+        /**
+         * @description One choice in a `kind = "select"` field. `value` is what the form
+         *     submits / what guards downstream compare against; `label` is what the
+         *     UI renders. Authors typically write `{value, label}`; the deserializer
+         *     also accepts a bare string and stretches it to `{value: s, label: s}`.
+         */
+        SelectOption: {
+            label: string;
+            value: string;
+        };
+        SetTagsRequest: {
+            tags: string[];
+        };
         SetTriggerEnabledRequest: {
             enabled: boolean;
+        };
+        SetVisibilityRequest: {
+            /** @description `workspace` (default) or `public`. */
+            visibility: string;
         };
         SignalDispatch: {
             dispatch_net: string;
             /** Format: int64 */
             dispatch_seq: number;
             signal_key: string;
+        };
+        /**
+         * @description One dead-letter record. Published as a JSON message on
+         *     `mekhan.silent_drops.{kind}`.
+         */
+        SilentDropRecord: {
+            /**
+             * @description Per-site structured context. Free-form JSON object — typically
+             *     `subject`, `net_id`, `key`, `event_seq`, whatever the call site
+             *     knows that would help forensic inspection.
+             */
+            context?: unknown;
+            /**
+             * @description Human-readable failure description — the underlying error
+             *     (deser error, missing field, subject pattern mismatch, …).
+             */
+            error: string;
+            /**
+             * @description Stable identifier of the consumer + reason. Doubles as the NATS
+             *     subject suffix (`mekhan.silent_drops.{kind}`) so consumers can
+             *     filter at the broker. Examples: `catalogue_register`,
+             *     `event_envelope`, `lifecycle_subject`,
+             *     `catalogue_subscription_hydrate`.
+             */
+            kind: string;
+            /**
+             * @description Raw payload the consumer couldn't parse, captured as a UTF-8
+             *     string (lossy if the bytes weren't valid UTF-8). All current
+             *     call sites carry JSON, so lossy is fine in practice; the loss
+             *     only shows up if a malformed message contained binary noise.
+             *     `None` for sites that drop on subject-only checks (no payload
+             *     to capture).
+             */
+            payload?: string | null;
+            /**
+             * Format: date-time
+             * @description UTC timestamp the drop was recorded at.
+             */
+            recorded_at: string;
+        };
+        SilentDropsResponse: {
+            /**
+             * @description Captured records, newest first. May be empty if the stream is
+             *     empty or the filter excludes everything.
+             */
+            records: components["schemas"]["SilentDropRecord"][];
+            /**
+             * Format: int64
+             * @description Process-wide counter — total drops since boot. Independent of
+             *     the stream contents (which may have rolled off via retention).
+             */
+            total_since_boot: number;
         };
         /**
          * @description Git provenance recorded on a version published via `mekhan apply`.
@@ -2268,6 +3460,45 @@ export interface components {
             start_block_id: string;
             /** @description JSON object whose keys match the Start's `initial` port field names. */
             token: unknown;
+        };
+        /**
+         * @description Response shape for `GET /api/v1/instances/{id}/step-executions`.
+         *
+         *     One row per `(workflow node, execution iteration)` for an instance.
+         *     Materialized by the step-executions projection consumer
+         *     (`service/src/projections/step_executions/`). The frontend keys on
+         *     `node_id` to overlay runtime info onto each node card on the canvas.
+         */
+        StepExecutionResponse: {
+            /**
+             * @description Decision branch identifier: `"edge:<edge_id>"` for the output that
+             *     received the token. `None` for non-branching nodes.
+             */
+            branch_taken?: string | null;
+            /** Format: date-time */
+            completed_at?: string | null;
+            /** Format: int64 */
+            duration_ms?: number | null;
+            /** @description `EffectFailed` payload (error_message, retryable, ...) for failed steps. */
+            error?: unknown;
+            /**
+             * @description `{ "<producer_node_id>": <envelope> }` grouped by upstream owner of
+             *     each read-arc place this step consumed.
+             */
+            inputs?: unknown;
+            /** Format: int32 */
+            iteration_index: number;
+            node_id: string;
+            node_kind: string;
+            /**
+             * @description The envelope deposited at the node's `data_port` (parking nodes) or
+             *     `workflow_terminals[*]` (End nodes).
+             */
+            outputs?: unknown;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** @description `"pending" | "running" | "completed" | "failed" | "skipped"`. */
+            status: string;
         };
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
@@ -2309,24 +3540,124 @@ export interface components {
             downloads: components["schemas"]["DownloadItemConfig"][];
             /** @enum {string} */
             type: "download";
+        } | {
+            /**
+             * @description The sub-task body rendered per element. Any TaskBlockConfig
+             *     variant except a nested Repeater. `Input` children declare the
+             *     per-row form schema and contribute to `<output_slug>.results`
+             *     element shape; display blocks (Mdsvex/Callout/Image/Pdf/File/
+             *     Download/Divider) are rendered per row with placeholders
+             *     resolved against the current row's element.
+             *
+             *     `no_recursion` breaks the recursive schema cycle for
+             *     utoipa — the wire schema still references `TaskBlockConfig`
+             *     via `$ref`, but the generator stops descending here.
+             */
+            blocks: components["schemas"]["TaskBlockConfig"][];
+            /**
+             * @description Optional per-element row label ref, e.g.
+             *     `extract.tasks[*].title`. Must share the same iteration prefix
+             *     as `items_ref`.
+             */
+            item_label_ref?: string | null;
+            /**
+             * @description Producer-namespaced ref carrying exactly one `[*]` boundary,
+             *     e.g. `extract.tasks[*]`. The pre-`[*]` segments address an
+             *     upstream parked array; iteration happens consumer-side.
+             */
+            items_ref: string;
+            /**
+             * @description Rhai-safe slug under which the Repeater's typed output is
+             *     addressable downstream as `<output_slug>.results`. Defaults to
+             *     the parent HumanTask's slug when empty; must be unique within
+             *     the graph (the compiler's existing slug-collision check
+             *     covers it).
+             */
+            output_slug: string;
+            /** @enum {string} */
+            type: "repeater";
         };
         TaskFieldConfig: {
+            /**
+             * @description For `File` kind: accepted file types as an HTML input `accept`
+             *     attribute (e.g. `"image/png,image/jpeg,.pdf"`). Ignored for
+             *     non-file kinds.
+             */
+            accept?: string | null;
+            /** @description Per-field helper text shown under the input. Mdsvex source. */
+            description_mdsvex?: string | null;
+            /**
+             * @description For `Date` kind: when true, capture date + time (`YYYY-MM-DDTHH:MM`);
+             *     otherwise capture date only (`YYYY-MM-DD`).
+             */
+            include_time?: boolean | null;
             kind: components["schemas"]["TaskFieldKind"];
             label: string;
+            /**
+             * Format: double
+             * @description For `Number` / `Range` kinds: maximum allowed value (inclusive).
+             */
+            max?: number | null;
+            /**
+             * Format: int64
+             * @description For `File` kind: maximum file size in bytes.
+             */
+            max_file_size?: number | null;
+            /**
+             * Format: int32
+             * @description For `File` kind: maximum number of files (defaults to 1).
+             */
+            max_files?: number | null;
+            /**
+             * Format: int32
+             * @description For `Rating` kind: number of stars (defaults to 5).
+             */
+            max_rating?: number | null;
+            /**
+             * Format: double
+             * @description For `Number` / `Range` kinds: minimum allowed value (inclusive).
+             */
+            min?: number | null;
             name: string;
-            options?: string[] | null;
+            /**
+             * @description Choice list for `kind = "select"` / `"radio"`. Authored as
+             *     `[{"value": "approve", "label": "Approve"}, …]` — `value` is the
+             *     canonical wire value submitted by the form, `label` is the
+             *     human-facing display string. A bare string shorthand
+             *     (`["approve", "reject"]`) is accepted at deserialize time and
+             *     normalized to `{value, label}` where `label = value` — convenient
+             *     for trivial sets while keeping the runtime representation uniform.
+             */
+            options?: components["schemas"]["SelectOption"][] | null;
+            /** @description For `Signature` kind: ink color (CSS color string). */
+            pen_color?: string | null;
             placeholder?: string | null;
             required?: boolean | null;
+            /**
+             * @description For `Signature` kind: capture mode (currently only `"draw"` is
+             *     implemented).
+             */
+            signature_mode?: string | null;
+            /**
+             * Format: double
+             * @description For `Number` / `Range` kinds: step increment (defaults to 1).
+             */
+            step?: number | null;
         };
         /**
          * @description Form-field control kind for `input` task blocks. Snake-case wire values
          *     such as `"text"`, `"textarea"`, `"number"`, `"select"`, `"checkbox"`,
-         *     `"file"`, `"signature"`.
+         *     `"file"`, `"signature"`, `"radio"`, `"date"`, `"range"`, `"rating"`.
+         *     Must stay in sync with the engine's `TaskFieldKind` in
+         *     `engine/core-engine/crates/domain/src/human.rs` and the frontend's
+         *     `TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the
+         *     compiler accepts an author's choice that the engine rejects (or
+         *     vice-versa).
          * @enum {string}
          */
-        TaskFieldKind: "text" | "textarea" | "number" | "select" | "checkbox" | "file" | "signature";
+        TaskFieldKind: "text" | "textarea" | "number" | "select" | "checkbox" | "file" | "signature" | "radio" | "date" | "range" | "rating";
         /**
-         * @description Response shape for `GET /api/tasks`.
+         * @description Response shape for `GET /api/v1/tasks`.
          *
          *     `tasks` is `Vec<serde_json::Value>` because each task is a
          *     `HumanTask`-shaped JSON built by `to_human_task_json` from heterogeneous DB
@@ -2351,6 +3682,73 @@ export interface components {
             id: string;
             title: string;
         };
+        /**
+         * @description Authoring bundle for a template — graph plus inline per-node files. This
+         *     is the same `(graph, files)` pair the publish/new-version paths feed into
+         *     the compiler, served as plain JSON so non-collaborative clients (the CLI,
+         *     CI jobs) don't need a Yjs/WSS channel just to read a published template.
+         */
+        TemplateBundle: {
+            files: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+            graph: components["schemas"]["WorkflowGraph"];
+        };
+        /**
+         * @description A test attached to a logical template family. `template_id` is the family
+         *     root (the row's `id` when `base_template_id` is NULL, else the
+         *     `base_template_id`), resolved by `handlers::template_tests::family_root`.
+         */
+        TemplateTest: {
+            assertions: unknown;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            enabled: boolean;
+            human_answers: unknown;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            last_run_against_version?: number | null;
+            /** Format: date-time */
+            last_run_at?: string | null;
+            last_run_passed?: boolean | null;
+            name: string;
+            /**
+             * @description Snapshot of the synthetic scope the assertion DSL walks
+             *     (`{ result, steps.<slug>.output }`). Captured at promote-time from the
+             *     source instance, refreshed after each successful run. `NULL` for tests
+             *     authored from scratch that have never had a passing run.
+             */
+            reference_scope?: unknown;
+            start_tokens: unknown;
+            /** Format: uuid */
+            template_id: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        TemplateTestRun: {
+            /** Format: int32 */
+            duration_ms?: number | null;
+            failure_detail?: unknown;
+            final_scope?: unknown;
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            instance_id: string;
+            /** Format: date-time */
+            started_at: string;
+            status: string;
+            /** Format: int32 */
+            template_version: number;
+            /** Format: uuid */
+            test_id: string;
+        };
         /** @description The terminal disposition handed back to a WaitForResult caller. */
         TerminalOutcome: {
             /**
@@ -2372,7 +3770,7 @@ export interface components {
             role: string;
             token_id: string;
         };
-        /** @description One token row in `GET /api/auth/tokens`. Never carries the secret. */
+        /** @description One token row in `GET /api/v1/auth/tokens`. Never carries the secret. */
         TokenSummary: {
             /** @description RFC 3339 creation timestamp, when Zitadel reports it. */
             created_at?: string | null;
@@ -2381,11 +3779,20 @@ export interface components {
             expires_at?: string | null;
             /**
              * @description Opaque token id (the backing Zitadel machine-user id). Pass back to
-             *     `DELETE /api/auth/tokens/{id}` to revoke.
+             *     `DELETE /api/v1/auth/tokens/{id}` to revoke.
              */
             id: string;
             name: string;
         };
+        /**
+         * @description What happens when a tool call inside an [`WorkflowNodeData::Agent`]
+         *     fails after the tool's own retry budget is exhausted. Default `Feedback`
+         *     — append a synthetic `role: tool, content: "Tool '<name>' failed: …"`
+         *     message to the conversation and re-enter the LLM call. `Bubble` routes
+         *     the failure straight to the agent's `error` output. Inert in PR 1.
+         * @enum {string}
+         */
+        ToolErrorPolicy: "feedback" | "bubble";
         TriggerHistoryResponse: {
             history: components["schemas"]["FireResult"][];
         };
@@ -2446,6 +3853,39 @@ export interface components {
             template_version: number;
         };
         /**
+         * @description Wire-shaped recursive descriptor of a producer field's type — the picker
+         *     walks this to render nested fields and array element shapes. Mirrors
+         *     [`TokenShape`] but flattened to a serializable form. Plain (non-anchored)
+         *     Object containers carry `selectable: false`: the picker may expand them
+         *     but the row body acts as a toggle, not an emit (the user must drill into
+         *     scalar / file / array leaves). File-anchored containers carry
+         *     `selectable: true`, preserving the existing precedent that `document` is
+         *     pickable as a whole **and** `document.url` etc. are individually pickable.
+         */
+        TyDescriptor: {
+            /** @enum {string} */
+            kind: "scalar";
+            name: string;
+        } | {
+            fields: {
+                [key: string]: components["schemas"]["TyDescriptor"];
+            };
+            /** @enum {string} */
+            kind: "object";
+            selectable: boolean;
+        } | {
+            element: components["schemas"]["TyDescriptor"];
+            /** @enum {string} */
+            kind: "array";
+        } | {
+            /** @enum {string} */
+            kind: "any";
+        } | {
+            /** @enum {string} */
+            kind: "opaque";
+            name: string;
+        };
+        /**
          * @description Shape-aware analysis surface — per-node scope + diagnostics. Pure and
          *     graph-only: works on drafts that can't compile/publish yet.
          */
@@ -2456,10 +3896,27 @@ export interface components {
                 [key: string]: components["schemas"]["ScopeEntryDto"][];
             };
         };
+        /**
+         * @description Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
+         *     `config` (or both) may be set; if `config` is set the call bumps
+         *     `latest_version` and writes a new vault_path. `display_name`-only
+         *     updates do **not** bump version.
+         */
+        UpdateResourceRequest: {
+            config?: unknown;
+            display_name?: string | null;
+        };
         UpdateTemplateRequest: {
             description?: string | null;
             graph?: null | components["schemas"]["WorkflowGraph"];
             name?: string | null;
+        };
+        UpdateTemplateTestRequest: {
+            assertions?: components["schemas"]["Assertion"][] | null;
+            enabled?: boolean | null;
+            human_answers?: unknown;
+            name?: string | null;
+            start_tokens?: components["schemas"]["StartToken"][] | null;
         };
         /**
          * @description Which concrete child-template version a `SubWorkflow` embeds. Internally
@@ -2525,7 +3982,30 @@ export interface components {
             type: string;
         };
         WorkflowGraph: {
+            /**
+             * @description Workflow-scoped reusable JSON-Schema fragments. Referenced from
+             *     `executionSpec.config` (today: LLM `response_format.schema`) as
+             *     `{"$ref": "#/definitions/<name>"}` and inlined at compile time by
+             *     `compiler::schema_refs::inline_refs`. Local pointers only; external
+             *     `$ref`s and JSON-Schema 2020-12 sibling-key merge semantics are
+             *     rejected at validation. BTreeMap for byte-stable compile output.
+             */
+            definitions?: {
+                [key: string]: unknown;
+            };
             edges: components["schemas"]["WorkflowEdge"][];
+            /**
+             * @description How concurrent fires (from triggers / manual / API) interact with
+             *     already-running instances of this template. Defaults to `Unlimited`
+             *     so existing templates load unchanged.
+             *
+             *     Distinct from the per-`Trigger`-node `ConcurrencyPolicy` (which
+             *     gates *fires* by Skip/Queue/DedupKey before they reach this
+             *     template-level check). `InstanceConcurrencyPolicy` operates at the
+             *     instance lifecycle layer — it sees a fire that already passed the
+             *     per-trigger gate and decides whether to spawn now or coalesce.
+             */
+            instance_concurrency?: components["schemas"]["InstanceConcurrencyPolicy"];
             nodes: components["schemas"]["WorkflowNode"][];
             viewport?: null | components["schemas"]["Viewport"];
         };
@@ -2540,6 +4020,12 @@ export interface components {
             /** Format: uuid */
             id: string;
             metadata: unknown;
+            /**
+             * @description Categorizes the instance. `live` (default) is a production run.
+             *     `draft` is a user-initiated experimental run hidden from default
+             *     list views. `test_run` is spawned by the template-test runner.
+             */
+            mode: string;
             net_id: string;
             /**
              * @description Structured result envelope (`{ ok: true, value }` /
@@ -2548,6 +4034,12 @@ export interface components {
              *     state, and stays NULL for workflows with no result binding.
              */
             result?: unknown;
+            /**
+             * Format: uuid
+             * @description Set when a test was promoted from this instance — points back at the
+             *     instance whose event log seeded the test's fixture. Audit-only.
+             */
+            source_instance_id?: string | null;
             /** Format: date-time */
             started_at?: string | null;
             status: string;
@@ -2555,6 +4047,11 @@ export interface components {
             template_id: string;
             /** Format: int32 */
             template_version: number;
+            /**
+             * Format: uuid
+             * @description Set when `mode = 'test_run'`: the test this instance is running.
+             */
+            test_id?: string | null;
         };
         WorkflowNode: {
             data: components["schemas"]["WorkflowNodeData"];
@@ -2639,8 +4136,8 @@ export interface components {
              *     direct executor-lifecycle path. `Scheduled` = submit through the
              *     long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
              *     optionally pinning a job template + resources. `#[serde(default)]`
-             *     + `Inline` default ⇒ every existing template round-trips unchanged
-             *     (same precedent as `retry_policy`).
+             *     together with the `Inline` default ⇒ every existing template
+             *     round-trips unchanged (same precedent as `retry_policy`).
              */
             deploymentModel?: components["schemas"]["DeploymentModel"];
             description?: string | null;
@@ -2670,6 +4167,15 @@ export interface components {
             type: "automated_step";
         } | {
             conditions: components["schemas"]["BranchCondition"][];
+            /**
+             * @description Otherwise/else branch handle id. The wire shape is `Option<String>`
+             *     for forward-compat with future multi-default-branch decisions, but
+             *     today the only accepted value is `DEFAULT_BRANCH_HANDLE_ID`
+             *     (`"default"`) — both the editor's xyflow Handle id and the
+             *     compiler's default output place use that literal, so any other
+             *     value would render as a floating edge in the editor and is
+             *     rejected at compile time (see `compiler::validate`).
+             */
             defaultBranch?: string | null;
             description?: string | null;
             label: string;
@@ -2683,14 +4189,20 @@ export interface components {
         } | {
             description?: string | null;
             label: string;
+            mergeStrategy?: null | components["schemas"]["MergeStrategy"];
             /**
-             * @description How tokens arriving on the joined branches are merged into the
-             *     single output token. `ShallowLastWins` (default) preserves the
-             *     historical behaviour; `DeepMerge` recursively merges nested maps.
+             * @description `All` (AND-join) waits for every incoming branch. `Any` (XOR-join)
+             *     fires per arriving token.
              */
-            mergeStrategy?: components["schemas"]["MergeStrategy"];
+            mode?: components["schemas"]["JoinMode"];
+            /**
+             * @description Declared output shape. Each branch's inbound payload is parked at
+             *     `p_<id>_data`; the declared fields here describe what downstream
+             *     `<slug>.<field>` borrows can read.
+             */
+            output?: components["schemas"]["Port"];
             /** @enum {string} */
-            type: "parallel_join";
+            type: "join";
         } | {
             description?: string | null;
             label: string;
@@ -2753,6 +4265,28 @@ export interface components {
             /** @enum {string} */
             type: "failure";
         } | {
+            description?: string | null;
+            /**
+             * @description Rhai expression evaluated against the inbound token at runtime.
+             *     Must return an integer number of milliseconds. Examples:
+             *     `"5000"`, `"order.sla_ms"`, `"input.timeout * 1000"`.
+             */
+            durationMsExpr: string;
+            label: string;
+            /** @enum {string} */
+            type: "delay";
+        } | {
+            description?: string | null;
+            /**
+             * @description Rhai expression evaluated against the inbound token at runtime.
+             *     Must return an integer number of milliseconds. Same shape as
+             *     `Delay.duration_ms_expr`.
+             */
+            durationMsExpr: string;
+            label: string;
+            /** @enum {string} */
+            type: "timeout";
+        } | {
             /** @description Concurrency / dedup policy applied by the dispatcher. */
             concurrency?: components["schemas"]["ConcurrencyPolicy"];
             description?: string | null;
@@ -2769,6 +4303,57 @@ export interface components {
             source: components["schemas"]["TriggerSource"];
             /** @enum {string} */
             type: "trigger";
+        } | {
+            /**
+             * @description Context-window management strategy. Defaults to `None` (no
+             *     compaction). Inert in the degenerate path.
+             */
+            contextStrategy?: components["schemas"]["ContextStrategy"];
+            description?: string | null;
+            label: string;
+            /**
+             * Format: int32
+             * @description Hard cap on agent turns. `1` (default) is the single-shot LLM
+             *     call indistinguishable from `AutomatedStep(Llm)` — the degenerate
+             *     path the equivalence test pins down.
+             */
+            maxTurns?: number;
+            /**
+             * @description LLM model + provider selection. Same shape the existing
+             *     `LlmConfig` carries in `executionSpec.config`; the degenerate
+             *     path uses these fields verbatim when constructing the equivalent
+             *     `LlmConfig` payload.
+             */
+            model: components["schemas"]["ModelRef"];
+            /**
+             * @description What happens when a tool call fails. Defaults to `Feedback`.
+             *     Inert in PR 1 (no tools).
+             */
+            onToolError?: components["schemas"]["ToolErrorPolicy"];
+            /**
+             * @description Optional response-format constraint (`{"type": "text"}` or
+             *     `{"type": "json_schema", "schema": {...}}`). Opaque JSON in the
+             *     model layer — the executor LLM backend validates it.
+             */
+            responseFormat?: unknown;
+            /**
+             * @description Optional terminal Rhai guard. When `Some`, the agent loop exits
+             *     once this expression evaluates true on the parked agent state.
+             *     Inert in the degenerate (single-turn) path.
+             */
+            stopWhen?: string | null;
+            /**
+             * @description Optional system prompt template (supports `{{<slug>.<field>}}`
+             *     placeholders, same as the LLM `system_prompt` config field).
+             */
+            systemPrompt?: string | null;
+            /** @enum {string} */
+            type: "agent";
+            /**
+             * @description Initial user prompt template (supports `{{<slug>.<field>}}`
+             *     placeholders, corresponds to `LlmConfig::prompt`).
+             */
+            userPrompt: string;
         } | {
             description?: string | null;
             /**
@@ -2815,6 +4400,7 @@ export interface components {
             graph: unknown;
             /** Format: uuid */
             id: string;
+            interface_json?: unknown;
             is_latest: boolean;
             name: string;
             /** Format: uuid */
@@ -2829,6 +4415,36 @@ export interface components {
             updated_at: string;
             /** Format: int32 */
             version: number;
+            visibility: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description A single `workspace_members` row. `user_id` is derived from the OIDC
+         *     subject via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` — the same
+         *     derivation the resolver uses.
+         */
+        WorkspaceMember: {
+            /** Format: date-time */
+            added_at: string;
+            role: string;
+            /** Format: uuid */
+            user_id: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description Summary view returned by `GET /workspaces` and embedded in
+         *     `WorkspaceMember` responses.
+         */
+        WorkspaceSummary: {
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            /** Format: uuid */
+            id: string;
+            is_system: boolean;
+            slug: string;
         };
     };
     responses: never;
@@ -2997,6 +4613,67 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
+            };
+        };
+    };
+    list_backends: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered backends */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendDescriptor"][];
+                };
+            };
+        };
+    };
+    derive_backend_output: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Backend wire name (e.g. `llm`, `python`) */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Derived output port */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Port"];
+                };
+            };
+            /** @description Backend's output is not derived from config */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown backend */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -3386,6 +5063,12 @@ export interface operations {
                 per_page?: number;
                 template_id?: string | null;
                 status?: string | null;
+                /**
+                 * @description Filter by `mode`. Default behavior when omitted is to return only
+                 *     `live` instances; pass `mode=any` to include drafts and test runs,
+                 *     or `mode=draft` / `mode=test_run` to scope explicitly.
+                 */
+                mode?: string | null;
             };
             header?: never;
             path?: never;
@@ -3587,6 +5270,49 @@ export interface operations {
             };
         };
     };
+    promote_instance_to_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteToTestRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A test with this name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     get_instance_state: {
         parameters: {
             query?: never;
@@ -3606,6 +5332,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceStateResponse"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_step_executions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-step execution rows for this instance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepExecutionResponse"][];
                 };
             };
             /** @description Instance not found */
@@ -3665,6 +5432,51 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_node_types: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered node types */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeDescriptor"][];
+                };
+            };
+        };
+    };
+    list_silent_drops: {
+        parameters: {
+            query?: {
+                /** @description Max records to return (default 100, hard cap 1000) */
+                limit?: number;
+                /** @description Filter by kind (broker-side subject filter) */
+                kind?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counter + recent dead-letter records */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SilentDropsResponse"];
                 };
             };
         };
@@ -4176,6 +5988,120 @@ export interface operations {
             };
         };
     };
+    delete_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Project not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    attach_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Attached */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Project or template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    detach_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project id */
+                id: string;
+                /** @description Base template id */
+                base_template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Detached */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     provenance_from_artifact: {
         parameters: {
             query?: {
@@ -4319,6 +6245,322 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_resources: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+                /** @description Optional filter: only return resources of this type. */
+                resource_type?: string | null;
+                /**
+                 * @description Optional workspace filter. v1 default is `Uuid::nil()` so the
+                 *     no-workspace deployment Just Works; when workspaces land, the auth
+                 *     layer fills this in.
+                 */
+                workspace_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated list of resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_ResourceSummary"];
+                };
+            };
+        };
+    };
+    create_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateResourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Resource created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Path already exists in workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Secret backend write failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_resource_types: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered resource types */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceTypeInfo"][];
+                };
+            };
+        };
+    };
+    get_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceDetail"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateResourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Resource updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Secret backend write failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource soft-deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_resource_audit: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated audit entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_ResourceAuditEntry"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    rotate_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RotateResourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Resource rotated to a new version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Secret backend write failed */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4530,6 +6772,14 @@ export interface operations {
                 published?: boolean | null;
                 search?: string | null;
                 base_template_id?: string | null;
+                /**
+                 * @description Restrict to templates attached to a project (M:N via
+                 *     `project_templates.base_template_id`). The join is non-restrictive
+                 *     w.r.t. version chain — the live `is_latest` row wins.
+                 */
+                project_id?: string | null;
+                /** @description Restrict to templates carrying this tag in the user's workspace. */
+                tag?: string | null;
             };
             header?: never;
             path?: never;
@@ -4837,6 +7087,47 @@ export interface operations {
             };
         };
     };
+    get_template_bundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Template authoring bundle (graph + per-node inline files) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateBundle"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     compile_preview: {
         parameters: {
             query?: never;
@@ -4928,6 +7219,47 @@ export interface operations {
             };
         };
     };
+    get_latest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Any template id in the version chain (base or a specific version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest version in the template's chain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     new_version: {
         parameters: {
             query?: never;
@@ -4980,7 +7312,14 @@ export interface operations {
     };
     publish_template: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Bypass the template-test gate. Failing or stale tests do not block
+                 *     publish when `true`; an audit-level log records the override. Use
+                 *     only when a test itself is broken and you need to ship.
+                 */
+                force?: boolean;
+            };
             header?: never;
             path: {
                 /** @description Template id */
@@ -5026,8 +7365,180 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Template tests failing; publish blocked */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishGateBlockedResponse"];
+                };
+            };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_template_tags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetTagsRequest"];
+            };
+        };
+        responses: {
+            /** @description Tags applied */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_tests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"][];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTemplateTestRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A test with this name already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    run_all: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Run only enabled tests (default). `?include_disabled=true` runs every
+                 *     test — used by the editor's "Run all" button when authors want a
+                 *     total picture during debugging.
+                 */
+                include_disabled?: boolean;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAllResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No published version */
+            412: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5092,6 +7603,195 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    set_template_visibility: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetVisibilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Visibility updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid visibility value */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                template_id: string;
+                /** @description Test id */
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTemplateTestRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTest"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    run_one: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                template_id: string;
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTestRun"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No published version */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_runs: {
+        parameters: {
+            query?: {
+                /** @description Cap on returned rows. Defaults to 10; ignored if non-positive. */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                template_id: string;
+                test_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateTestRun"][];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5258,7 +7958,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Trigger fired (FireAndForget, or WaitForResult resolved) */
+            /** @description Trigger fired (FireAndForget / WaitForResult JSON, or SSE event stream when reply mode is `sse`). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5292,13 +7992,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description SSE requested on the fire endpoint — use GET /api/instances/{id}/stream */
-            406: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
         };
     };
     trigger_history: {
@@ -5320,6 +8013,280 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerHistoryResponse"];
+                };
+            };
+        };
+    };
+    list_workspaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Caller's workspaces */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"][];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_members: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Members */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMember"][];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    add_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Member added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMember"];
+                };
+            };
+            /** @description Invalid role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    remove_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+                /** @description Member user_id (subject_as_uuid) */
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not a member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Would orphan workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_projects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projects in this workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"][];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_project: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Project created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Slug already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

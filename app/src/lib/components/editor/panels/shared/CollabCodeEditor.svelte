@@ -1,3 +1,12 @@
+<script lang="ts" module>
+	/** Minimal imperative API for this editor. Exposed via `onready` so a
+	 *  parent (e.g. the IDE's reference panel) can insert refs at the
+	 *  current cursor without owning the EditorView instance. */
+	export type CodeEditorApi = {
+		insertAtCursor: (text: string) => void;
+	};
+</script>
+
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { onMount, onDestroy } from 'svelte';
@@ -11,6 +20,9 @@
 		awareness?: Awareness;
 		minHeight?: string;
 		maxHeight?: string;
+		/** Fires once the EditorView is mounted; called with `null` on destroy
+		 *  so the parent can drop its stale reference. */
+		onready?: (api: CodeEditorApi | null) => void;
 	};
 
 	let {
@@ -19,7 +31,8 @@
 		readonly = false,
 		awareness,
 		minHeight = '150px',
-		maxHeight = '400px'
+		maxHeight = '400px',
+		onready
 	}: Props = $props();
 
 	let containerEl: HTMLDivElement | undefined = $state();
@@ -90,9 +103,25 @@
 			state: EditorState.create({ doc: ytext.toString(), extensions }),
 			parent: containerEl
 		});
+
+		// Expose insert-at-cursor so the IDE's reference panel can drop a
+		// `token["..."]` snippet at the active selection without reaching
+		// across components for the EditorView.
+		onready?.({
+			insertAtCursor: (text: string) => {
+				if (!view || readonly) return;
+				const sel = view.state.selection.main;
+				view.dispatch({
+					changes: { from: sel.from, to: sel.to, insert: text },
+					selection: { anchor: sel.from + text.length }
+				});
+				view.focus();
+			}
+		});
 	});
 
 	onDestroy(() => {
+		onready?.(null);
 		view?.destroy();
 	});
 </script>

@@ -52,7 +52,7 @@
 		<img
 			{src}
 			alt={entry.name}
-			class="max-h-[60vh] w-full rounded-lg border border-border bg-card object-contain"
+			class="max-h-[60vh] w-auto max-w-2xl rounded-lg border border-border bg-card object-contain"
 			loading="lazy"
 		/>
 	{:else}

@@ -1,0 +1,85 @@
+[
+  {
+    "id": "step-decide",
+    "title": "Decision",
+    "blocks": [
+      {
+        "type": "callout",
+        "severity": "warning",
+        "title": "Invoice {{ invoice_id }} — High-value review",
+        "content": "Invoice **{{ invoice_id }}** from **{{ extract.vendor }}** totals **${{ extract.amount }}** and exceeds the $5,000 threshold. Manager sign-off is required."
+      },
+      {
+        "type": "mdsvex",
+        "content": "## Per-line review\n\nApprove each extracted line item below. The decision and your signature still apply to the invoice as a whole — these are advisory annotations for the finance team."
+      },
+      {
+        "type": "repeater",
+        "items_ref": "extract.line_items[*]",
+        "item_label_ref": "extract.line_items[*].description",
+        "output_slug": "line_approvals",
+        "blocks": [
+          {
+            "type": "input",
+            "field": {
+              "name": "decision",
+              "label": "Decision",
+              "kind": "select",
+              "required": true,
+              "options": [
+                {"value": "approve", "label": "Approve"},
+                {"value": "reject", "label": "Reject"}
+              ]
+            }
+          },
+          {
+            "type": "input",
+            "field": {
+              "name": "notes",
+              "label": "Notes",
+              "kind": "textarea",
+              "required": false,
+              "placeholder": "Optional notes for this line item"
+            }
+          }
+        ]
+      },
+      {
+        "type": "divider"
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "decision",
+          "label": "Approval Decision",
+          "kind": "select",
+          "required": true,
+          "options": [
+            "Approve",
+            "Reject",
+            "Request More Info"
+          ]
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "comments",
+          "label": "Comments",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Optional notes for the finance team"
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "signature",
+          "label": "Manager Signature",
+          "kind": "signature",
+          "required": true
+        }
+      }
+    ]
+  }
+]

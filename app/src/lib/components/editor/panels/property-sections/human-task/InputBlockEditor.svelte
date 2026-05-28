@@ -34,7 +34,11 @@
 		select: 'Select',
 		checkbox: 'Checkbox',
 		file: 'File',
-		signature: 'Signature'
+		signature: 'Signature',
+		radio: 'Radio',
+		date: 'Date',
+		range: 'Range',
+		rating: 'Rating'
 	};
 </script>
 
@@ -84,7 +88,11 @@
 					<Select.Item value="textarea" label="Textarea" />
 					<Select.Item value="number" label="Number" />
 					<Select.Item value="select" label="Select" />
+					<Select.Item value="radio" label="Radio" />
 					<Select.Item value="checkbox" label="Checkbox" />
+					<Select.Item value="date" label="Date" />
+					<Select.Item value="range" label="Range" />
+					<Select.Item value="rating" label="Rating" />
 					<Select.Item value="file" label="File" />
 					<Select.Item value="signature" label="Signature" />
 				</Select.Content>
@@ -143,11 +151,21 @@
 			{#if field.kind === 'select'}
 				<div class="space-y-1.5">
 					<Label class="text-sm text-muted-foreground">Options</Label>
+					<!--
+						See `PortFieldEditor.svelte`: this editor surfaces
+						`value` only. The wire shape is `{value, label}`;
+						labels default to value here, rich labels via raw
+						JSON authoring.
+					-->
 					<StringListEditor
-						items={field.options ?? []}
+						items={(field.options ?? []).map((o) => o.value)}
 						{readonly}
 						placeholder="Option value"
-						onchange={(options) => onchange({ ...field, options })}
+						onchange={(values) =>
+							onchange({
+								...field,
+								options: values.map((v) => ({ value: v, label: v }))
+							})}
 					/>
 				</div>
 			{/if}

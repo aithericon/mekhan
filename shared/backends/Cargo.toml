@@ -1,0 +1,11 @@
+[package]
+name = "aithericon-backends"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Aithericon GmbH"]
+description = "Cross-crate declarative metadata for Aithericon execution backends — wire name, dispatch mode, schedulability. The validate/ref_scan/lower half stays in mekhan-service; the trait-based runtime stays in executor-worker."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+utoipa = { version = "5", features = ["uuid"] }

@@ -5,8 +5,8 @@ mod venv_cache_tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use aithericon_executor_backend::python::cache::VenvCache;
-    use aithericon_executor_backend::{PythonBackend, PythonConfig};
+    use aithericon_executor_python::cache::VenvCache;
+    use aithericon_executor_python::{PythonBackend, PythonConfig};
     use aithericon_executor_domain::{
         ExecutionJob, ExecutionStatus, InputDeclaration, InputSource, JobPriority,
         OutputDeclaration,
@@ -34,7 +34,7 @@ mod venv_cache_tests {
         outputs: Vec<OutputDeclaration>,
     ) -> ExecutionJob {
         let mut config = PythonConfig {
-            script: aithericon_executor_backend::python::INLINE_SCRIPT_NAME.into(),
+            script: aithericon_executor_python::INLINE_SCRIPT_NAME.into(),
             python: "python3".into(),
             requirements,
             virtualenv: true,
@@ -48,14 +48,14 @@ mod venv_cache_tests {
         inputs.insert(
             0,
             InputDeclaration {
-                name: aithericon_executor_backend::python::INLINE_SCRIPT_NAME.into(),
+                name: aithericon_executor_python::INLINE_SCRIPT_NAME.into(),
                 source: InputSource::Raw {
                     content: code.into(),
                 },
                 required: true,
             },
         );
-        config.script = aithericon_executor_backend::python::INLINE_SCRIPT_NAME.into();
+        config.script = aithericon_executor_python::INLINE_SCRIPT_NAME.into();
         ExecutionJob {
             execution_id: eid.into(),
             spec: config.into_spec_with_io(inputs, outputs),
@@ -378,7 +378,7 @@ mod venv_cache_tests {
     /// subcommand wraps: it parses a requirements file and calls resolve.
     #[tokio::test]
     async fn warm_then_use_observes_cache_hit() {
-        use aithericon_executor_backend::python::cache::BuildRequest;
+        use aithericon_executor_python::cache::BuildRequest;
 
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 

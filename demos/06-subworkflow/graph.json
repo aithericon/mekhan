@@ -1,0 +1,59 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Greet {{ name }}",
+        "initial": {
+          "id": "in",
+          "label": "Caller Input",
+          "fields": [
+            { "name": "name", "label": "Name to greet (via child workflow)", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "call_greet",
+      "type": "sub_workflow",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Call Hello-World",
+        "description": "Embeds the 01-hello-world demo as a child. Resolved at publish time via templateId + Latest pin; the parent's published AIR freezes a concrete child version.",
+        "templateId": "00000000-0000-0000-0000-000000000011",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "name", "expression": "input.name" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Child Result",
+          "fields": [
+            { "name": "greeting", "label": "Greeting", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 640, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "greeting", "expression": "call_greet.greeting" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_call", "source": "start",      "target": "call_greet", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_call_end",   "source": "call_greet", "target": "end",        "targetHandle": "in", "type": "sequence" }
+  ]
+}

@@ -9,6 +9,7 @@
 	import GuardEditor from './GuardEditor.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	type Props = {
@@ -21,9 +22,13 @@
 		 * the single source of truth). Empty if detached or unresolvable.
 		 */
 		scope?: ScopeEntry[];
+		/** Workflow-level resource refs surfaced as a second tab in the
+		 *  embedded RefPicker (see GuardEditor). Empty when no resources
+		 *  are declared on the workflow. */
+		resourceScope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange, scope = [] }: Props = $props();
+	let { data, readonly = false, onchange, scope = [], resourceScope = [] }: Props = $props();
 
 	function addBranch() {
 		onchange({
@@ -73,7 +78,9 @@
 
 	// The default (else) branch handle id is the literal "default" — it must
 	// match DecisionNode's `<Handle id="default">` and the compiler's default
-	// output place so a drawn edge wires.
+	// output place so a drawn edge wires. Mirrors the Rust constant
+	// `DEFAULT_BRANCH_HANDLE_ID` in service/src/models/template.rs; the
+	// compiler's `validate` pass rejects any other value.
 	const DEFAULT_BRANCH_ID = 'default';
 	function toggleDefault(enabled: boolean) {
 		onchange({ ...data, defaultBranch: enabled ? DEFAULT_BRANCH_ID : undefined });
@@ -162,6 +169,7 @@
 				<GuardEditor
 					guard={condition.guard}
 					{scope}
+					{resourceScope}
 					{readonly}
 					onchange={(val) => updateConditionGuard(i, val)}
 				/>
@@ -172,12 +180,11 @@
 	<label
 		class="flex items-center gap-2 rounded-lg border border-dashed border-border p-2 text-sm text-muted-foreground"
 	>
-		<input
-			type="checkbox"
+		<Checkbox
 			checked={!!data.defaultBranch}
 			disabled={readonly}
 			data-testid="checkbox-default-branch"
-			onchange={(e) => toggleDefault((e.currentTarget as HTMLInputElement).checked)}
+			onCheckedChange={(checked) => toggleDefault(checked === true)}
 		/>
 		<span>
 			Add default (else) branch — taken when no guard matches. Wire its

@@ -332,8 +332,9 @@ def validate_invoice(data):
 import aithericon
 
 invoice_data = aithericon.token()
+# `result` matches the orchestrator-declared output port; the runner's
+# post-exec sweep promotes it into the executor's terminal status.
 result = validate_invoice(invoice_data)
-set_output("result", result)
 log_info(
     "Invoice validation complete",
     invoice=invoice_data.get("invoice_number", "unknown"),

@@ -1,5 +1,21 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { gotoDemoEditor } from './helpers/demo';
+
+// The showcase graph is mocked into the template GET response but the
+// consolidated editor hydrates `binding.graph` from the Yjs Y.Doc, not the
+// REST payload — and these tests run without a Yjs WS backend. So the canvas
+// starts empty and any test that needs a node clicks one it drops itself.
+async function dropHumanTask(page: Page): Promise<Locator> {
+	const dropZone = page.getByTestId('canvas-drop-zone');
+	const dropBounds = await dropZone.boundingBox();
+	if (!dropBounds) throw new Error('Drop zone not visible');
+	await page.getByTestId('palette-item-human_task').dragTo(dropZone, {
+		targetPosition: { x: dropBounds.width / 2, y: dropBounds.height / 2 }
+	});
+	const node = page.getByTestId('node-human-task');
+	await expect(node).toBeVisible({ timeout: 3000 });
+	return node;
+}
 
 test.describe('Editor Interaction', () => {
 	test.beforeEach(async ({ page }) => {
@@ -24,7 +40,7 @@ test.describe('Editor Interaction', () => {
 		await expect(page.getByTestId('palette-item-automated_step')).toBeVisible();
 		await expect(page.getByTestId('palette-item-decision')).toBeVisible();
 		await expect(page.getByTestId('palette-item-parallel_split')).toBeVisible();
-		await expect(page.getByTestId('palette-item-parallel_join')).toBeVisible();
+		await expect(page.getByTestId('palette-item-join')).toBeVisible();
 		await expect(page.getByTestId('palette-item-loop')).toBeVisible();
 	});
 
@@ -57,49 +73,43 @@ test.describe('Editor Interaction', () => {
 	});
 
 	test('clicking a node selects it and opens property panel', async ({ page }) => {
-		// The demo page starts with Start and End nodes
-		// We need to click on a node to select it
-		const startNode = page.getByTestId('node-start');
-		await expect(startNode).toBeVisible();
+		const node = await dropHumanTask(page);
+		await node.click();
 
-		// Click the start node to select it
-		await startNode.click();
-
-		// Property panel should open for the selected node
 		await expect(page.getByTestId('node-property-panel')).toBeVisible({ timeout: 3000 });
 		await expect(page.getByTestId('input-node-label')).toBeVisible();
 	});
 
 	test('property panel shows label input that can be edited', async ({ page }) => {
-		// Click start node to select it
-		await page.getByTestId('node-start').click();
+		const node = await dropHumanTask(page);
+		await node.click();
 		await expect(page.getByTestId('node-property-panel')).toBeVisible({ timeout: 3000 });
 
 		const labelInput = page.getByTestId('input-node-label');
 		await expect(labelInput).toBeVisible();
 
-		// The start node label should be "Start"
-		await expect(labelInput).toHaveValue('Start');
+		// Default label seeded by `createDefaultNodeData('human_task')`.
+		await expect(labelInput).toHaveValue('Human Task');
 
-		// Edit the label
 		await labelInput.clear();
-		await labelInput.fill('Begin');
-		await expect(labelInput).toHaveValue('Begin');
+		await labelInput.fill('Review Invoice');
+		await expect(labelInput).toHaveValue('Review Invoice');
 	});
 
 	test('close button dismisses property panel', async ({ page }) => {
-		// Select a node first
-		await page.getByTestId('node-start').click();
+		const node = await dropHumanTask(page);
+		await node.click();
 		await expect(page.getByTestId('node-property-panel')).toBeVisible({ timeout: 3000 });
 
-		// Click the close button
 		await page.getByTestId('btn-close-properties').click();
 		await expect(page.getByTestId('node-property-panel')).not.toBeVisible();
 	});
 
 	test('toolbar buttons are present', async ({ page }) => {
+		// `btn-save` is intentionally absent: the template editor saves via Yjs
+		// sync, so the page never wires `onsave` and the toolbar's
+		// `{#if onsave}` branch stays off.
 		await expect(page.getByTestId('btn-preview-air')).toBeVisible();
-		await expect(page.getByTestId('btn-save')).toBeVisible();
 		await expect(page.getByTestId('btn-publish')).toBeVisible();
 	});
 

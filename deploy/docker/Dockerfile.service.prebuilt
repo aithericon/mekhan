@@ -4,6 +4,9 @@
 # Assumes the build context contains:
 #   ./mekhan-service     — statically linked aarch64-musl binary
 #   ./frontend/build/    — SvelteKit adapter-static output
+#   ./demos/             — built-in demo workflow templates (.mekhan.json +
+#                          graph.json + nodes/). Seeded into the DB on startup
+#                          when MEKHAN__DEMOS__SEED=true. ~50-100 KB total.
 #
 # Staged by `just ci::package` after `build-backend` + `build-frontend`.
 # Pulls in no toolchain; the image is tiny because the binary is fully static.
@@ -19,6 +22,9 @@ WORKDIR /app
 
 COPY --chown=mekhan:mekhan mekhan-service /app/mekhan-service
 COPY --chown=mekhan:mekhan frontend/build /app/frontend/build
+# Built-in demos. Seeder is idempotent (keyed by templateId in demo.json), so
+# bumping the image redeploys the same demos without dupes.
+COPY --chown=mekhan:mekhan demos /app/demos
 
 RUN chmod +x /app/mekhan-service
 
@@ -27,6 +33,7 @@ USER mekhan
 ENV MEKHAN__HOST=0.0.0.0 \
     MEKHAN__PORT=3100 \
     MEKHAN__FRONTEND_DIR=/app/frontend/build \
+    MEKHAN__DEMOS__DIR=/app/demos \
     RUST_LOG=info
 
 EXPOSE 3100

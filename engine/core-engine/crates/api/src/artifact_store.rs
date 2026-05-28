@@ -54,6 +54,7 @@ mod inner {
                     secret_key,
                 },
                 retry: Default::default(),
+                resource_alias: None,
             };
 
             match build_operator(&config) {

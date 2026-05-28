@@ -1,12 +1,14 @@
 <script lang="ts">
 	import type { HumanTaskNodeData } from '$lib/types/editor';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import Plus from '@lucide/svelte/icons/plus';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Button } from '$lib/components/ui/button';
 	import StepEditor from './human-task/StepEditor.svelte';
+	import InsertRefButton from './InsertRefButton.svelte';
 
 	type Props = {
 		data: HumanTaskNodeData;
@@ -14,9 +16,25 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		onchange: (data: HumanTaskNodeData) => void;
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, binding, nodeId, onchange }: Props = $props();
+	let {
+		data,
+		readonly = false,
+		binding,
+		nodeId,
+		onchange,
+		scope = []
+	}: Props = $props();
+
+	function appendToInstructions(snippet: string) {
+		const curr = data.instructionsMdsvex ?? '';
+		onchange({
+			...data,
+			instructionsMdsvex: curr ? `${curr} ${snippet}` : snippet
+		});
+	}
 
 	function addStep() {
 		onchange({
@@ -61,6 +79,9 @@
 			})}
 		rows={4}
 	/>
+	{#if scope.length > 0}
+		<InsertRefButton {scope} disabled={readonly} oninsert={appendToInstructions} />
+	{/if}
 </div>
 
 <div class="space-y-3">
@@ -80,6 +101,7 @@
 			{readonly}
 			{binding}
 			{nodeId}
+			{scope}
 			onchange={(updatedStep) => {
 				const steps = [...data.steps];
 				steps[stepIdx] = updatedStep;

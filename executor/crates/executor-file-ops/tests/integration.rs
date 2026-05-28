@@ -108,6 +108,7 @@ fn make_spec(config: Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 
@@ -130,6 +131,11 @@ fn make_run_context(spec: ExecutionSpec, timeout: Duration) -> RunContext {
         run_dir: RunDirectory::new(&std::env::temp_dir(), "test-file-ops"),
         timeout,
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -147,6 +153,11 @@ fn make_run_context_with_id(spec: ExecutionSpec, timeout: Duration, id: &str) ->
         run_dir: RunDirectory::new(&std::env::temp_dir(), id),
         timeout,
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -195,7 +206,7 @@ async fn backend_stat_success() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -225,7 +236,7 @@ async fn backend_stat_missing_returns_success() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -253,7 +264,7 @@ async fn backend_delete_success() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -278,7 +289,7 @@ async fn backend_delete_ignore_missing() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -307,7 +318,7 @@ async fn backend_copy_success() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -343,7 +354,7 @@ async fn backend_copy_cross_backend() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -376,7 +387,7 @@ async fn backend_move_success() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -409,7 +420,7 @@ async fn backend_move_cross_backend() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -439,7 +450,7 @@ async fn backend_list_success() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -471,7 +482,7 @@ async fn backend_annotate_success() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -513,7 +524,7 @@ async fn backend_probe_csv() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -549,7 +560,7 @@ async fn backend_error_delete_not_found() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -582,7 +593,7 @@ async fn backend_error_copy_not_found() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -609,7 +620,7 @@ async fn backend_error_probe_not_found() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -731,7 +742,7 @@ async fn backend_cancellation() {
     cancel.cancel();
 
     let result = backend
-        .execute(&ctx, noop_callback(), cancel)
+        .execute(&ctx, noop_callback(), None, cancel)
         .await
         .unwrap();
 
@@ -766,7 +777,7 @@ async fn backend_reports_running_status() {
 
     let (cb, status_log) = tracking_callback();
     let result = backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -806,7 +817,7 @@ async fn workflow_write_annotate_probe_copy_list() {
     let ctx = make_run_context(annotate_spec, DEFAULT_TIMEOUT);
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
     assert!(matches!(result.outcome, ExecutionOutcome::Success));
@@ -821,7 +832,7 @@ async fn workflow_write_annotate_probe_copy_list() {
     let ctx = make_run_context_with_id(probe_spec, DEFAULT_TIMEOUT, "test-workflow-probe");
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
     assert!(
@@ -844,7 +855,7 @@ async fn workflow_write_annotate_probe_copy_list() {
     let ctx = make_run_context(copy_spec, DEFAULT_TIMEOUT);
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
     assert!(matches!(result.outcome, ExecutionOutcome::Success));
@@ -859,7 +870,7 @@ async fn workflow_write_annotate_probe_copy_list() {
     let ctx = make_run_context(list_spec, DEFAULT_TIMEOUT);
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
     assert!(matches!(result.outcome, ExecutionOutcome::Success));
@@ -903,7 +914,7 @@ async fn backend_with_prefix() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -925,6 +936,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(backend.supports(&file_ops_spec));
 
@@ -933,6 +945,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(!backend.supports(&process_spec));
 
@@ -941,6 +954,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(!backend.supports(&docker_spec));
 
@@ -949,6 +963,7 @@ fn supports_file_ops_only() {
         inputs: vec![],
         outputs: vec![],
         config: serde_json::json!({}),
+        config_ref: None,
     };
     assert!(!backend.supports(&llm_spec));
 }
@@ -976,7 +991,7 @@ async fn backend_copy_with_gzip_compression() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1029,7 +1044,7 @@ async fn backend_copy_decompress_gzip() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1075,7 +1090,7 @@ async fn backend_copy_transcode_gzip_to_zstd() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1121,7 +1136,7 @@ async fn backend_move_with_compression() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1165,7 +1180,7 @@ async fn backend_cross_backend_streaming_reports_bytes() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1198,7 +1213,7 @@ async fn backend_copy_with_zstd_compression() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1247,6 +1262,11 @@ fn make_run_context_with_inputs(
         run_dir: RunDirectory::new(&std::env::temp_dir(), id),
         timeout,
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs,
         expected_outputs: HashMap::new(),
@@ -1298,7 +1318,7 @@ async fn backend_annotate_with_input_annotations() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1372,7 +1392,7 @@ async fn backend_copy_with_input_path() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -1432,7 +1452,7 @@ async fn backend_input_resolution_with_string_interpolation() {
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

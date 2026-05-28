@@ -35,6 +35,11 @@ export type SignatureAudit = {
 	user_name: string;
 };
 
+export type SelectOption = {
+	value: string;
+	label: string;
+};
+
 export type TaskField = {
 	name: string;
 	label: string;
@@ -42,7 +47,7 @@ export type TaskField = {
 	required?: boolean;
 	placeholder?: string;
 	description_mdsvex?: string;
-	options?: string[];
+	options?: SelectOption[];
 	accept?: string;
 	max_file_size?: number;
 	max_files?: number;
@@ -91,7 +96,24 @@ export type TaskBlock =
 	| { type: 'callout'; severity: 'info' | 'warning' | 'error' | 'success'; title?: string; content: string }
 	| { type: 'pdf'; url: string; filename?: string; caption?: string; height?: string }
 	| { type: 'chart'; chart_type: ChartType; data: Record<string, unknown>[]; x?: string; series?: ChartSeries[]; caption?: string; height?: string; x_label?: string; y_label?: string }
-	| { type: 'divider' };
+	| { type: 'divider' }
+	/**
+	 * Feature B — render N copies of a sub-task body, one per element
+	 * of an upstream array. `items_ref` carries exactly one `[*]`
+	 * iteration boundary (e.g. `extract.tasks[*]`); the renderer reads
+	 * `taskData[<pre-[*]-path>]` for the resolved array and instantiates
+	 * `blocks` once per element. Input children build the per-row form
+	 * (collected under `output_slug` as `{ name: value }[]`); display
+	 * children render per row with placeholders resolved against the
+	 * current element.
+	 */
+	| {
+		type: 'repeater';
+		items_ref: string;
+		item_label_ref?: string;
+		blocks: TaskBlock[];
+		output_slug: string;
+	};
 
 export type TaskStep = {
 	id: string;
@@ -119,6 +141,15 @@ export type HumanTask = {
 	completed_at?: string;
 	completed_by?: string;
 	data?: Record<string, unknown>;
+	/**
+	 * Feature B — resolved upstream data the compiler stages into the
+	 * `HumanTaskRequest` envelope for `TaskForm` to consume. Carries
+	 * `<head>.<...pre>` paths for every Repeater block's `items_ref` so
+	 * the renderer can resolve `getAtPath(payload, [head, ...pre])` to
+	 * the array it iterates. Empty / undefined when no Repeater is in
+	 * play.
+	 */
+	payload?: Record<string, unknown>;
 	cancelled_at?: string;
 	cancel_reason?: string;
 	failed_at?: string;

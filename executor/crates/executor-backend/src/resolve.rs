@@ -181,14 +181,21 @@ fn interpolate_string(
                 ));
             }
             let input_value = load_input(name, staged_inputs, cache)?;
+            // JSON strings interpolate verbatim (no surrounding quotes —
+            // the LLM author wants the raw text spliced in). Non-string
+            // values (arrays, objects, numbers, bools, null) are
+            // pretty-printed as JSON so prompts can splice structured
+            // upstream outputs directly. The previous strict-string
+            // policy was a usability footgun: prompts that read
+            // `{{ ocr.tables }}` against a JSON-array port stalled the
+            // workflow with "must be a JSON string" instead of just
+            // doing what the author obviously meant.
             match input_value.as_str() {
                 Some(string_val) => result.push_str(string_val),
                 None => {
-                    return Err(InputResolveError::Resolution(format!(
-                        "input '{name}' used in string interpolation must be a JSON string, \
-                         got {}",
-                        value_type_name(&input_value)
-                    )));
+                    let rendered = serde_json::to_string_pretty(&input_value)
+                        .unwrap_or_else(|_| input_value.to_string());
+                    result.push_str(&rendered);
                 }
             }
             remaining = &after_prefix[end + PATTERN_SUFFIX.len()..];
@@ -238,17 +245,6 @@ fn load_input(
 
     cache.insert(name.to_string(), value.clone());
     Ok(value)
-}
-
-fn value_type_name(v: &serde_json::Value) -> &'static str {
-    match v {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
 }
 
 #[cfg(test)]
@@ -382,20 +378,33 @@ mod tests {
     }
 
     #[test]
-    fn resolve_interpolation_non_string_input_errors() {
-        let (name, path, _tmp) = stage_input(
-            "obj",
-            &serde_json::json!({"key": "value"}),
-        );
-        let staged = HashMap::from([(name, path)]);
+    fn resolve_interpolation_non_string_input_serializes_as_json() {
+        // Regression guard: a `{{input:NAME}}` against a staged
+        // upstream value that's an object/array/number/bool/null gets
+        // JSON-stringified inline. Used by LLM-step prompts that splice
+        // structured upstream outputs directly — e.g.
+        // `"...Tables: {{ ocr.tables }}..."` where `ocr.tables` is a
+        // JSON array. The previous strict-string policy errored here
+        // with "must be a JSON string", stalling the whole workflow on
+        // an entirely natural prompt shape.
+        let (name_obj, path_obj, _tmp_obj) =
+            stage_input("obj", &serde_json::json!({"key": "value"}));
+        let (name_arr, path_arr, _tmp_arr) =
+            stage_input("arr", &serde_json::json!([1, 2, 3]));
+        let staged = HashMap::from([(name_obj, path_obj), (name_arr, path_arr)]);
 
         let mut config = serde_json::json!({
-            "path": "prefix/{{input:obj}}/suffix"
+            "prompt": "obj is {{input:obj}}; arr is {{input:arr}}"
         });
 
-        let err = resolve_inputs(&mut config, &staged).unwrap_err();
-        assert!(matches!(err, InputResolveError::Resolution(_)));
-        assert!(err.to_string().contains("must be a JSON string"));
+        resolve_inputs(&mut config, &staged).expect("non-string interpolation should now succeed");
+
+        let prompt = config["prompt"].as_str().expect("prompt is string");
+        assert!(
+            prompt.contains("\"key\": \"value\""),
+            "object should be pretty-printed JSON: {prompt}"
+        );
+        assert!(prompt.contains("1") && prompt.contains("3"), "array elements should appear: {prompt}");
     }
 
     #[test]

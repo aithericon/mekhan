@@ -49,7 +49,7 @@ pub async fn test_success<K: BackendTestKit>(kit: &K) {
         .await;
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -84,7 +84,7 @@ pub async fn test_exit_failure<K: BackendTestKit>(kit: &K) {
         .await;
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -112,7 +112,7 @@ pub async fn test_timeout<K: BackendTestKit>(kit: &K) {
         .await;
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -145,7 +145,7 @@ pub async fn test_cancellation<K: BackendTestKit>(kit: &K) {
     });
 
     let result = backend
-        .execute(&ctx, noop_callback(), cancel)
+        .execute(&ctx, noop_callback(), None, cancel)
         .await
         .expect("execute failed");
 
@@ -171,7 +171,7 @@ pub async fn test_status_callback<K: BackendTestKit>(kit: &K) {
 
     let (cb, log) = tracking_callback();
     backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -208,7 +208,7 @@ pub async fn test_env_vars<K: BackendTestKit>(kit: &K) {
         .await;
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -243,7 +243,7 @@ pub async fn test_output_capture<K: BackendTestKit>(kit: &K) {
         .await;
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -287,7 +287,7 @@ pub async fn test_duration_tracked<K: BackendTestKit>(kit: &K) {
         .await;
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -311,7 +311,7 @@ pub async fn test_large_output_bounded<K: BackendTestKit>(kit: &K) {
         .await;
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 

@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000053",
+  "name": "Output Safety Gate",
+  "description": "Composable wrap-around critic. Designed to be called as a SubWorkflow at the end of any pipeline that produces clinical text (letter generation, drafting, SOAP summarization, …). Takes the upstream output text + the evidence it was supposed to be grounded in, runs a low-temperature LLM critic, verifies each flag's supporting_text against the evidence, and emits a {pass | warn | block} decision with reasons. Ports online-clinic's `output_safety_gate` (`server/db/seed/baseline/11-safety-pipelines.sql`) onto mekhan primitives: critic agent + python provenance + python decision compute. Inherits the clinic's stricter min_confidence=0.7 for provenance match."
+}

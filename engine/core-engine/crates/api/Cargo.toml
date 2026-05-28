@@ -10,7 +10,6 @@ slurm = ["dep:petri-slurm"]
 executor = ["dep:petri-executor", "dep:async-nats"]
 catalogue = ["dep:async-nats"]
 executor-vault-secrets = ["executor", "petri-executor/vault-secrets", "dep:aithericon-secrets", "aithericon-secrets/vault"]
-human = ["petri-domain/human", "petri-application/human"]
 artifact-store = ["dep:aithericon-executor-storage", "dep:aithericon-executor-storage-types", "dep:opendal", "aithericon-executor-storage/opendal-s3", "opendal/services-s3"]
 
 [dependencies]

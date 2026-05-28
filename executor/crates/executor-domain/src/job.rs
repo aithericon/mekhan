@@ -67,6 +67,12 @@ pub struct ExecutionJob {
 ///
 /// Domain-level declarations (inputs, outputs) live here because staging hooks
 /// need them regardless of backend.
+///
+/// `config_ref` exists to keep large static configs (LLM schemas, prompts,
+/// catalogue projections) out of the per-job NATS token. When `config_ref` is
+/// set, `FetchConfigHook` downloads the blob at the named storage key and
+/// writes it into `config` before staging proceeds — the backends still read
+/// from `config` and don't know which path it took.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExecutionSpec {
@@ -83,12 +89,38 @@ pub struct ExecutionSpec {
 
     /// Backend-specific configuration (opaque to domain and worker layers).
     /// Each backend deserializes this into its own typed config.
+    ///
+    /// When `config_ref` is `Some`, this field is populated by
+    /// `FetchConfigHook` at staging time from the referenced storage blob
+    /// (overwriting whatever was on the wire — typically `null` / empty
+    /// object). When `config_ref` is `None`, this field is taken as-is —
+    /// the inline path used by tests and one-off programmatic jobs.
     #[serde(default = "default_empty_object")]
     pub config: serde_json::Value,
+
+    /// Reference to a static config blob in object storage. Compiler-emitted
+    /// jobs always set this; the inline `config` field is left empty and
+    /// populated by `FetchConfigHook` before staging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_ref: Option<ConfigRef>,
 }
 
 fn default_empty_object() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
+}
+
+/// Pointer to a static node-config blob in object storage. The executor's
+/// `FetchConfigHook` downloads from `storage_path` via the global
+/// `ArtifactStore` and replaces `ExecutionSpec.config` with the fetched JSON.
+///
+/// The storage path is opaque to the executor — it's whatever key the
+/// compiler chose at publish time (Mekhan uses
+/// `templates/{template_id}/v{version}/{node_id}/node-config.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ConfigRef {
+    /// Storage key inside the global artifact bucket.
+    pub storage_path: String,
 }
 
 /// Declaration of an input file to be staged before execution.
@@ -146,6 +178,17 @@ pub struct OutputDeclaration {
     /// Whether this output is required (default true).
     #[serde(default = "default_true")]
     pub required: bool,
+
+    /// Declared field kind (lowercase: "text", "number", "bool", "json",
+    /// "textarea", "select", "file", "signature", "timestamp"). When the
+    /// service-side compiler emits a typed output port, this carries the
+    /// kind across the service/executor boundary so the runner can
+    /// strict-validate the emitted value against the declaration. `None`
+    /// means "no kind validation" (back-compat with pre-typed jobs +
+    /// non-Python backends). Backend-side validation is opt-in via
+    /// `PETRI_VALIDATE_SCHEMAS`; unknown kind strings skip validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 
     /// Upload this file output to a specific storage destination after execution.
     /// Supports `{{secret:KEY}}` patterns in storage credentials.

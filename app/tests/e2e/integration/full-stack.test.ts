@@ -672,9 +672,9 @@ test.describe('Test 7: Demo showcase graph lifecycle', () => {
 				},
 				{
 					id: 'join',
-					type: 'parallel_join',
+					type: 'join',
 					position: { x: 1600, y: 120 },
-					data: { type: 'parallel_join', label: 'Merge Results' }
+					data: { type: 'join', label: 'Merge Results', mode: 'all' }
 				},
 				{
 					id: 'end-approved',

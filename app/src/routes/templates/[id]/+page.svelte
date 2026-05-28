@@ -3,9 +3,20 @@
 	import { goto } from '$app/navigation';
 	import { onDestroy } from 'svelte';
 	import WorkflowCanvas from '$lib/components/editor/WorkflowCanvas.svelte';
-	import NodePropertyPanel from '$lib/components/editor/panels/NodePropertyPanel.svelte';
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
+	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
+	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
+	// NodePropertyPanel is lazy-loaded — its static import drags in 17
+	// property-section files (every AutomatedStep config panel, HumanTask
+	// StepEditor, SubWorkflow, Trigger, etc.) at page-init time. On a cold
+	// Vite-dev open that's enough module-eval to keep the main thread busy for
+	// ~10s, during which the toolbar shows "Reconnecting" because the Yjs
+	// onopen callback can't run. Defer until the user actually selects a node.
+	type NodePropertyPanelModule = typeof import(
+		'$lib/components/editor/panels/NodePropertyPanel.svelte'
+	);
 	import {
 		getTemplate,
 		publishTemplate,
@@ -13,9 +24,12 @@
 		createNewVersion,
 		compileGraph,
 		CompileApiError,
-		type Template
+		PublishGateError,
+		type Template,
+		type FailingTestInfo
 	} from '$lib/api/client';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import { buildAssertionScope } from '$lib/editor/assertion-scope';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type {
@@ -33,6 +47,9 @@
 	let selectedNodeId = $state<string | null>(null);
 	let airPreview = $state<object | null>(null);
 	let runDialogOpen = $state(false);
+	let testsPanelOpen = $state(false);
+	let publishGate = $state<FailingTestInfo[] | null>(null);
+	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 
 	// Yjs session + binding
 	const session = getSession(templateId);
@@ -57,14 +74,17 @@
 		}
 	}
 
-	async function handlePublish() {
+	async function handlePublish(force = false) {
 		if (!template || template.published) return;
 		try {
 			saving = true;
-			template = await publishTemplate(template.id);
+			template = await publishTemplate(template.id, force);
 			compileErrors.clear();
+			publishGate = null;
 		} catch (e) {
-			if (e instanceof CompileApiError) {
+			if (e instanceof PublishGateError) {
+				publishGate = e.failingTests;
+			} else if (e instanceof CompileApiError) {
 				compileErrors.set(e.compileErrors);
 				error = `${e.message} — ${e.compileErrors.length} issue${e.compileErrors.length === 1 ? '' : 's'} highlighted on the canvas`;
 			} else {
@@ -80,7 +100,11 @@
 		try {
 			saving = true;
 			const next = await createNewVersion(template.id);
-			goto(`/templates/${next.id}`);
+			// Full document load (not `goto`): the Yjs session + binding are
+			// created once at script top from the initial templateId, so a
+			// param-only nav would leave the canvas pinned to the published
+			// version's doc. See TemplateVersionMenu.select for the same reason.
+			window.location.assign(`/templates/${next.id}`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to create new version';
 			saving = false;
@@ -106,6 +130,18 @@
 		} catch (e) {
 			template = prev;
 			error = e instanceof Error ? e.message : 'Rename failed';
+		}
+	}
+
+	async function handleDescriptionChange(description: string) {
+		if (!template) return;
+		const prev = template;
+		template = { ...template, description }; // optimistic
+		try {
+			template = await updateTemplate(templateId, { description });
+		} catch (e) {
+			template = prev;
+			error = e instanceof Error ? e.message : 'Failed to update description';
 		}
 	}
 
@@ -167,6 +203,19 @@
 		}
 	}
 
+	function handleResizeNodes(
+		changes: Array<{
+			id: string;
+			width: number;
+			height: number;
+			position?: { x: number; y: number };
+		}>
+	) {
+		for (const { id, width, height, position } of changes) {
+			binding.resizeNode(id, { width, height, position });
+		}
+	}
+
 	function handleAddEdge(edge: WorkflowEdge) {
 		binding.addEdge(edge);
 	}
@@ -208,8 +257,24 @@
 			: null
 	);
 
+	const humanTaskSlugs = $derived(
+		binding.graph.nodes
+			.filter((n) => (n.data as { type?: string } | null)?.type === 'human_task')
+			.map((n) => (n.slug && n.slug.trim() !== '' ? n.slug : n.id))
+	);
+
+	const assertionScope = $derived(buildAssertionScope(binding.graph));
+
 	$effect(() => {
 		load();
+	});
+
+	$effect(() => {
+		if (selectedNodeId && !nodePropertyPanelModule) {
+			import('$lib/components/editor/panels/NodePropertyPanel.svelte').then((m) => {
+				nodePropertyPanelModule = m as NodePropertyPanelModule;
+			});
+		}
 	});
 
 	onDestroy(() => {
@@ -226,17 +291,20 @@
 	<div class="flex h-full flex-col" data-testid="template-editor-page">
 		<EditorToolbar
 			templateName={template?.name ?? 'New Workflow'}
+			templateDescription={template?.description ?? null}
 			published={template?.published ?? false}
 			{saving}
 			{templateId}
 			version={template?.version}
 			awareness={session.awareness}
 			provider={session.provider}
-			onpublish={handlePublish}
+			onpublish={() => handlePublish(false)}
 			onpreview={handlePreview}
 			onnewversion={handleNewVersion}
 			onrun={handleRun}
+			ontests={() => (testsPanelOpen = true)}
 			onrename={handleRename}
+			ondescriptionchange={handleDescriptionChange}
 		/>
 
 		{#if error}
@@ -259,11 +327,13 @@
 				onRemoveNodes={handleRemoveNodes}
 				onMoveNodes={handleMoveNodes}
 				onReparentNodes={handleReparentNodes}
+				onResizeNodes={handleResizeNodes}
 				onAddEdge={handleAddEdge}
 				onRemoveEdges={handleRemoveEdges}
 			/>
 
-			{#if selectedNodeData}
+			{#if selectedNodeData && nodePropertyPanelModule}
+				{@const NodePropertyPanel = nodePropertyPanelModule.default}
 				<NodePropertyPanel
 					data={selectedNodeData}
 					readonly={template?.published ?? false}
@@ -295,6 +365,29 @@
 		{/if}
 	</div>
 {/if}
+
+<Sheet.Root open={testsPanelOpen} onOpenChange={(o: boolean) => (testsPanelOpen = o)}>
+	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
+		<SheetTitle class="sr-only">Tests</SheetTitle>
+		{#if template}
+			<TestsPanel templateId={template.id} {humanTaskSlugs} {assertionScope} />
+		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<PublishGateModal
+	open={publishGate !== null}
+	failingTests={publishGate ?? []}
+	onclose={() => (publishGate = null)}
+	onforce={async () => {
+		publishGate = null;
+		await handlePublish(true);
+	}}
+	onretry={async () => {
+		publishGate = null;
+		await handlePublish(false);
+	}}
+/>
 
 <CreateInstanceDialog
 	bind:open={runDialogOpen}

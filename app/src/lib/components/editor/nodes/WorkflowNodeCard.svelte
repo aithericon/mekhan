@@ -13,12 +13,17 @@
 		| 'phase-update'
 		| 'progress-update'
 		| 'failure'
-		| 'sub-workflow';
+		| 'delay'
+		| 'timeout'
+		| 'sub-workflow'
+		| 'agent';
 
 	// tailwind-variants with explicit per-kind classes — Tailwind's JIT
 	// scanner can't expand `border-node-${kind}` dynamically.
+	// `bg-card` underlays the alpha gradient so the canvas dot-grid never
+	// bleeds through — the colored gradient sits on a solid card surface.
 	export const workflowNodeCardVariants = tv({
-		base: 'rounded-xl border-2 shadow-sm transition-shadow bg-gradient-to-br',
+		base: 'rounded-xl border-2 shadow-sm transition-shadow bg-card bg-linear-to-br',
 		variants: {
 			kind: {
 				'start':       'from-node-start/10       to-node-start/25       border-node-start/60',
@@ -32,7 +37,10 @@
 				'phase-update':    'from-node-phase-update/10    to-node-phase-update/25    border-node-phase-update/60',
 				'progress-update': 'from-node-progress-update/10 to-node-progress-update/25 border-node-progress-update/60',
 				'failure':         'from-node-failure/10         to-node-failure/25         border-node-failure/60',
+				'delay':           'from-node-delay/10           to-node-delay/25           border-node-delay/60',
+				'timeout':         'from-node-timeout/10         to-node-timeout/25         border-node-timeout/60',
 				'sub-workflow':    'from-node-sub-workflow/10    to-node-sub-workflow/25    border-node-sub-workflow/60',
+				'agent':           'from-node-agent/10           to-node-agent/25           border-node-agent/60',
 			},
 			selected: {
 				true: 'shadow-md',
@@ -51,7 +59,10 @@
 			{ kind: 'phase-update',    selected: true, class: 'border-node-phase-update' },
 			{ kind: 'progress-update', selected: true, class: 'border-node-progress-update' },
 			{ kind: 'failure',         selected: true, class: 'border-node-failure' },
+			{ kind: 'delay',           selected: true, class: 'border-node-delay' },
+			{ kind: 'timeout',         selected: true, class: 'border-node-timeout' },
 			{ kind: 'sub-workflow',    selected: true, class: 'border-node-sub-workflow' },
+			{ kind: 'agent',           selected: true, class: 'border-node-agent' },
 		],
 		defaultVariants: {
 			kind: 'start',
@@ -73,7 +84,10 @@
 		'phase-update':    'bg-node-phase-update',
 		'progress-update': 'bg-node-progress-update',
 		'failure':         'bg-node-failure',
+		'delay':           'bg-node-delay',
+		'timeout':         'bg-node-timeout',
 		'sub-workflow':    'bg-node-sub-workflow',
+		'agent':           'bg-node-agent',
 	};
 
 	const HEADER_BORDER: Record<WorkflowNodeKind, string> = {
@@ -88,7 +102,10 @@
 		'phase-update':    'border-node-phase-update/30',
 		'progress-update': 'border-node-progress-update/30',
 		'failure':         'border-node-failure/30',
+		'delay':           'border-node-delay/30',
+		'timeout':         'border-node-timeout/30',
 		'sub-workflow':    'border-node-sub-workflow/30',
+		'agent':           'border-node-agent/30',
 	};
 
 	const HANDLE_BORDER: Record<WorkflowNodeKind, string> = {
@@ -103,7 +120,10 @@
 		'phase-update':    '!border-node-phase-update',
 		'progress-update': '!border-node-progress-update',
 		'failure':         '!border-node-failure',
+		'delay':           '!border-node-delay',
+		'timeout':         '!border-node-timeout',
 		'sub-workflow':    '!border-node-sub-workflow',
+		'agent':           '!border-node-agent',
 	};
 
 	export function workflowNodeIconBg(kind: WorkflowNodeKind): string {
@@ -121,6 +141,7 @@
 	import { cn } from '$lib/utils';
 	import type { Component, Snippet } from 'svelte';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import NodeRuntimeBadge from '$lib/components/instances/NodeRuntimeBadge.svelte';
 
 	let {
 		kind,
@@ -170,6 +191,11 @@
 			<Icon class="size-3.5 text-white" />
 		</div>
 		<span class="text-sm font-medium text-foreground">{label}</span>
+		{#if nodeId}
+			<div class="ml-auto">
+				<NodeRuntimeBadge {nodeId} />
+			</div>
+		{/if}
 	</div>
 	{#if body}
 		<div class="px-3 py-2 text-sm text-muted-foreground">

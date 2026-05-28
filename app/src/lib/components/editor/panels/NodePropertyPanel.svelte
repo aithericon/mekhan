@@ -13,14 +13,23 @@
 	import TriggerNodeSection from './property-sections/TriggerNodeSection.svelte';
 	import RetryPolicySection from './property-sections/RetryPolicySection.svelte';
 	import ParallelSplitSection from './property-sections/ParallelSplitSection.svelte';
-	import ParallelJoinSection from './property-sections/ParallelJoinSection.svelte';
+	import JoinSection from './property-sections/JoinSection.svelte';
 	import ScopeSection from './property-sections/ScopeSection.svelte';
 	import PhaseUpdateNodeSection from './property-sections/PhaseUpdateNodeSection.svelte';
 	import ProgressUpdateNodeSection from './property-sections/ProgressUpdateNodeSection.svelte';
 	import FailureNodeSection from './property-sections/FailureNodeSection.svelte';
 	import EndNodeSection from './property-sections/EndNodeSection.svelte';
 	import SubWorkflowSection from './property-sections/SubWorkflowSection.svelte';
-	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import AgentNodeSection from './property-sections/AgentNodeSection.svelte';
+	import InScopeRefsSection from './property-sections/InScopeRefsSection.svelte';
+	import {
+		fetchNodeScopes,
+		loadResourceTypes,
+		loadWorkspaceResources,
+		buildResourceScope,
+		type ScopeEntry
+	} from '$lib/editor/guard-scope';
+	import type { ResourceTypeInfo, ResourceSummary } from '$lib/api/resources';
 	import { outputPortsFor } from '$lib/editor/derived-ports';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -95,10 +104,12 @@
 		if (binding && nodeId) binding.updateNodeSlug(nodeId, value);
 	}
 
-	// In-scope identifiers at the selected node for the Decision/Loop guard
-	// pickers. Single source of truth: the backend shape-aware analyzer
-	// (`POST /api/analyze`). Debounced so a burst of graph edits collapses to
-	// one round-trip; best-effort (stale/empty on failure — never throws).
+	// In-scope identifiers at the selected node, used by the universal
+	// Inputs-in-scope picker as well as every nested section that embeds a
+	// RefPicker (Decision, Loop, AutomatedStep, HumanTask). Single source of
+	// truth: the backend shape-aware analyzer (`POST /api/analyze`).
+	// Debounced so a burst of graph edits collapses to one round-trip;
+	// best-effort (stale/empty on failure — never throws).
 	let scope = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		const g = binding?.graph;
@@ -109,14 +120,60 @@
 		}
 		let cancelled = false;
 		const timer = setTimeout(async () => {
-			const all = await fetchNodeScopes(g);
-			if (!cancelled) scope = all.get(id) ?? [];
+			const result = await fetchNodeScopes(g);
+			if (!cancelled) scope = result.scopes.get(id) ?? [];
 		}, 250);
 		return () => {
 			cancelled = true;
 			clearTimeout(timer);
 		};
 	});
+
+	// Mirror the IDE rail: scope visibility is universal for any node type
+	// whose authoring depends on what data reaches it. Trigger/Parallel*/
+	// Scope/End either produce input or have no per-step refs to insert.
+	const SCOPE_BEARING_TYPES = new Set([
+		'start',
+		'human_task',
+		'automated_step',
+		'decision',
+		'loop',
+		'phase_update',
+		'progress_update',
+		'failure',
+		'end',
+		'sub_workflow',
+		'agent'
+	]);
+	const showScopePicker = $derived(SCOPE_BEARING_TYPES.has(data.type));
+
+	// Unmerged fan-in: pure graph topology, computed live so the warning
+	// inside the scope panel reflects the current edges.
+	const incomingCount = $derived(
+		binding && nodeId ? binding.graph.edges.filter((e) => e.target === nodeId).length : 0
+	);
+
+	// Workspace resources for the RefPicker's Resources tab. Direct-mode
+	// resources are workspace-scoped (no per-workflow alias layer) so the
+	// list is the same for every node and every workflow — one
+	// module-cached fetch covers the whole session. The type registry is
+	// fetched the same way; both run in parallel on mount, the picker
+	// degrades to a single-pane mode while either is pending.
+	let resourceTypes = $state<ResourceTypeInfo[]>([]);
+	let workspaceResources = $state<ResourceSummary[]>([]);
+	$effect(() => {
+		void loadResourceTypes()
+			.then((types) => {
+				resourceTypes = types;
+			})
+			.catch(() => {});
+		void loadWorkspaceResources()
+			.then((items) => {
+				workspaceResources = items;
+			})
+			.catch(() => {});
+	});
+	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
 </script>
 
 <div
@@ -203,9 +260,17 @@
 			</FormField>
 		{/if}
 
+		<!-- Inputs in scope — universal picker. Canvas omits the manual
+		     refresh affordance because the $effect above already debounce-
+		     refetches on every graph edit. No `oninsertref` here either:
+		     canvas rail has no code editor to target. -->
+		{#if showScopePicker}
+			<InScopeRefsSection {scope} {resourceScope} {incomingCount} />
+		{/if}
+
 		<!-- Type-specific sections -->
 		{#if data.type === 'start'}
-			<StartNodeSection {data} {readonly} {onchange} {binding} {nodeId} {onselectnode} />
+			<StartNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} {onselectnode} />
 		{:else if data.type === 'human_task'}
 			{#if templateId && nodeId}
 				<div class="space-y-3">
@@ -228,41 +293,51 @@
 					</Button>
 				</div>
 			{:else}
-				<HumanTaskSection {data} {readonly} {onchange} />
+				<HumanTaskSection {data} {readonly} {onchange} {scope} />
 			{/if}
 		{:else if data.type === 'automated_step'}
-			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} />
+			<AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} {scope} />
 			<RetryPolicySection {data} {readonly} {onchange} />
 		{:else if data.type === 'decision'}
-			<DecisionNodeSection {data} {readonly} {onchange} {scope} />
+			<DecisionNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
 		{:else if data.type === 'loop'}
-			<LoopNodeSection {data} {readonly} {onchange} {scope} />
+			<LoopNodeSection {data} {readonly} {onchange} {scope} {resourceScope} />
 		{:else if data.type === 'trigger'}
 			<TriggerNodeSection {data} {readonly} {onchange} {nodeId} {binding} />
 		{:else if data.type === 'parallel_split'}
 			<ParallelSplitSection {data} {binding} {nodeId} />
-		{:else if data.type === 'parallel_join'}
-			<ParallelJoinSection {data} {readonly} {onchange} {binding} {nodeId} />
+		{:else if data.type === 'join'}
+			<JoinSection {data} {readonly} {onchange} {binding} {nodeId} />
 		{:else if data.type === 'scope'}
 			<ScopeSection {data} {binding} {nodeId} />
 		{:else if data.type === 'phase_update'}
-			<PhaseUpdateNodeSection {data} {readonly} {onchange} />
+			<PhaseUpdateNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'progress_update'}
-			<ProgressUpdateNodeSection {data} {readonly} {onchange} />
+			<ProgressUpdateNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'failure'}
-			<FailureNodeSection {data} {readonly} {onchange} />
+			<FailureNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'end'}
-			<EndNodeSection {data} {readonly} {onchange} />
+			<EndNodeSection {data} {readonly} {onchange} {scope} />
 		{:else if data.type === 'sub_workflow'}
 			<SubWorkflowSection {data} {readonly} {onchange} {templateId} />
+		{:else if data.type === 'agent'}
+			<AgentNodeSection {data} {readonly} {onchange} {binding} {nodeId} {scope} />
 		{/if}
+
+		<!-- Tool tagging (deleted): there's no separate ToolMetaSection
+		     anymore. Any node wired to an Agent's `tools` source handle is
+		     exposed to the LLM by name; `tool_name` is derived from the
+		     node's own `label` (slugified) and `tool_description` from its
+		     `description`. Authors just edit the regular per-variant
+		     section. The agent's panel lists the wired tools + flags
+		     missing labels. -->
 
 		<!-- Phase 4: read-only derived port preview for variants whose outputs
 		     come from inner config rather than an editable PortsSection. Start
 		     and AutomatedStep already render an editable PortsSection inside
 		     their own section. End/Scope have no derived outputs to show
 		     until a port editor lands for them. -->
-		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'parallel_join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure'}
+		{#if data.type === 'human_task' || data.type === 'decision' || data.type === 'loop' || data.type === 'parallel_split' || data.type === 'join' || data.type === 'scope' || data.type === 'phase_update' || data.type === 'progress_update' || data.type === 'failure' || data.type === 'agent'}
 			<DerivedPortsSection
 				ports={outputPortsFor(data)}
 				title="Outputs"
@@ -271,7 +346,9 @@
 						? 'from task fields'
 						: data.type === 'decision'
 							? 'from branches'
-							: 'pass-through'
+							: data.type === 'agent'
+								? 'from agent loop'
+								: 'pass-through'
 				}
 			/>
 		{/if}

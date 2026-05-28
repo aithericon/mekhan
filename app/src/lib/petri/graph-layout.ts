@@ -19,10 +19,38 @@ export const GROUP_MIN_WIDTH = 180;
 export const GROUP_MIN_HEIGHT = 100;
 
 // Transition height is derived from port counts and must match the row
-// metrics in TransitionNode.svelte.
-const TRANS_HEADER_H = 24; // px-2 py-1 + text
+// metrics in TransitionNode.svelte. If those CSS/Tailwind values change,
+// update these in lockstep — otherwise dagre packs the rows tighter than
+// the rendered chip and adjacent nodes overlap.
+// Worst-case header: a guard/effect badge ("G", "FX") is `px-1.5 py-0.5
+// text-sm` → 20px line + 4px padding = 24px tall, so the row clears
+// max(text, badge) + py-1 = 24 + 8 = 32. Plain (label-only) transitions
+// over-pad by 4px — acceptable trade for keeping ports from overlapping.
+const TRANS_HEADER_H = 32;
 const TRANS_PORTS_PAD = 9; // border-t (1px) + py-1 (4px*2)
-const TRANS_PORT_ROW = 14; // .port-row height
+const TRANS_PORT_ROW = 22; // .port-row { min-height: 22px } in TransitionNode.svelte
+
+// Width is bounded — long titles truncate inside a known cap (the chip
+// has `truncate` on the label and a hover tooltip surfaces the full name),
+// so dagre, the user's eye, and the renderer all agree on the column.
+export const TRANSITION_MAX_WIDTH = 320;
+
+// Per-character width estimates for text-sm (14px). Deliberately generous
+// so the rendered chip never exceeds the dagre reservation.
+const SANS_CHAR_W = 7.5; // Space Grotesk text-sm font-semibold
+const MONO_CHAR_W = 8.4; // ui-monospace text-sm font-mono
+
+// Header geometry — must match the header row in TransitionNode.svelte.
+const HEADER_PAD_X = 16; // px-2 = 8 each side
+const HEADER_GAP = 4; // gap-1 between header elements
+const BADGE_W_GUARD = 22; // "G" badge: px-1.5 (12) + char ≈ 10
+const BADGE_W_EFFECT = 38; // "FX" badge: px-1.5 (12) + icon (10) + gap (2) + chars (14)
+const BUTTON_W_FIRE = 20; // p-0.5 + Play icon w-3 + breathing room
+
+// Ports section geometry.
+const PORT_SIDE_PAD_X = 8; // px-1 on each input/output column
+const PORT_HANDLE_W = 12; // handle (!w-2 = 8) + gap-1 (4)
+const PORT_GAP_MIN = 24; // floor for the flex-1 air between left/right
 
 export function getTransitionHeight(
 	inputCount: number,
@@ -34,11 +62,65 @@ export function getTransitionHeight(
 	return TRANS_HEADER_H + TRANS_PORTS_PAD + maxRows * TRANS_PORT_ROW;
 }
 
+/**
+ * Predict the rendered width of a transition chip from its content. Returned
+ * value is what we hand to both `_dims.width` (so dagre reserves the right
+ * column) and the chip itself (so it stops growing via `w-max`).
+ *
+ * The estimate is text-metric based — not pixel-perfect — but it's calibrated
+ * to slightly over-reserve, which is the safer direction: the chip truncates
+ * its title inside a known width instead of pushing into neighbours.
+ */
+export function getTransitionWidth(opts: {
+	label: string;
+	hasGuard: boolean;
+	isEffect: boolean;
+	enabled: boolean;
+	inputPortNames: string[];
+	outputPortNames: string[];
+	causedSignalNames: string[];
+}): number {
+	const headerContent =
+		Math.ceil(opts.label.length * SANS_CHAR_W) +
+		(opts.hasGuard ? BADGE_W_GUARD + HEADER_GAP : 0) +
+		(opts.isEffect ? BADGE_W_EFFECT + HEADER_GAP : 0) +
+		(opts.enabled ? BUTTON_W_FIRE + HEADER_GAP : 0);
+	const headerW = HEADER_PAD_X + headerContent;
+
+	// Port labels are hidden when there's exactly one input AND one output
+	// AND no caused signals (see `hasMultiplePorts` in TransitionNode.svelte).
+	const labelsShown =
+		opts.inputPortNames.length > 1 ||
+		opts.outputPortNames.length > 1 ||
+		opts.causedSignalNames.length > 0;
+	const leftLabelW = labelsShown
+		? Math.max(0, ...opts.inputPortNames.map((n) => Math.ceil(n.length * MONO_CHAR_W)))
+		: 0;
+	const rightLabelW = labelsShown
+		? Math.max(
+				0,
+				...opts.outputPortNames.map((n) => Math.ceil(n.length * MONO_CHAR_W)),
+				...opts.causedSignalNames.map((n) => Math.ceil(n.length * MONO_CHAR_W))
+			)
+		: 0;
+	const leftSide = leftLabelW > 0 ? leftLabelW + PORT_HANDLE_W : PORT_HANDLE_W;
+	const rightSide = rightLabelW > 0 ? rightLabelW + PORT_HANDLE_W : PORT_HANDLE_W;
+	const portsW = PORT_SIDE_PAD_X * 2 + leftSide + PORT_GAP_MIN + rightSide;
+
+	// Header is capped (long titles truncate); ports are not (they have
+	// `whitespace-nowrap` and don't truncate, so the chip has to fit them).
+	const cappedHeader = Math.min(TRANSITION_MAX_WIDTH, headerW);
+	return Math.max(TRANSITION_WIDTH, cappedHeader, portsW);
+}
+
 // Meta-group node dimensions (must match MetaGroupNode.svelte).
+// Header is two stacked text-sm rows (title + summary) inside `px-3 py-1.5`,
+// so 2 × 20px line-height + 2 × 6px padding = 52. Ports section adds a 1px
+// top border plus `py-1` (8px) above the first row.
 export const META_WIDTH = 220;
-const META_HEADER_H = 28;
-const META_PORT_ROW = 16;
-const META_PAD = 12;
+const META_HEADER_H = 52;
+const META_PORT_ROW = 16; // .port-row { height: 16px } in MetaGroupNode.svelte
+const META_PAD = 9; // border-t (1px) + py-1 (4px*2)
 
 export function getMetaHeight(inputCount: number, outputCount: number): number {
 	const maxPorts = Math.max(inputCount, outputCount, 1);

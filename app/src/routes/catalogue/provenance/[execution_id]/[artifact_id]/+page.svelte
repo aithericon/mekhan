@@ -12,7 +12,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 	import GitBranch from '@lucide/svelte/icons/git-branch';
-	import { authFetch } from '$lib/auth/fetch';
 
 	let ancestry = $state<AncestryNode[]>([]);
 	let crossNetEdges = $state<CrossNetEdge[]>([]);
@@ -37,14 +36,12 @@
 			ancestry = resp.nodes;
 			crossNetEdges = resp.cross_net_edges;
 
-			// Also load the artifact metadata for the header
+			// Also load the artifact metadata for the header (non-critical;
+			// the page degrades gracefully if it fails).
 			try {
-				const res = await authFetch(`/api/catalogue/${encodeURIComponent(execId)}/${encodeURIComponent(artId)}`);
-				if (res.ok) {
-					artifact = await res.json();
-				}
+				artifact = await getCatalogueEntry(execId, artId);
 			} catch {
-				// Non-critical — header just won't show artifact details
+				// Header just won't show artifact details.
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load provenance';

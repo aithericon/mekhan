@@ -153,14 +153,11 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     }
 }
 
-const MAIN_PY: &str = r#"from _aithericon_io import load_input
-
-load_input()
-log_info("scheduled slurm automated-step e2e ran")
+const MAIN_PY: &str = r#"log_info("scheduled slurm automated-step e2e ran", task_id=token.get("task_id"))
 set_output("ran", True)
 set_output("answer", 42)
 "#;
@@ -269,7 +266,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -293,7 +290,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -319,7 +316,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -450,7 +447,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/instances/{instance_id}/state"))
+                .uri(format!("/api/v1/instances/{instance_id}/state"))
                 .body(Body::empty())
                 .unwrap(),
         )

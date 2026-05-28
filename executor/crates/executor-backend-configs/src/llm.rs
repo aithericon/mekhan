@@ -6,6 +6,7 @@
 //! the JSON shape — drift between authoring and execution is a build error,
 //! not a runtime surprise.
 
+use aithericon_executor_domain::ToolSchema;
 use serde::{Deserialize, Serialize};
 
 /// LLM provider selection. Wire format is lowercase (`"openai"`, `"anthropic"`,
@@ -129,6 +130,14 @@ pub struct LlmConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
+    /// Optional workspace resource name (e.g. `openai_prod`) the LLM step is
+    /// bound to. When set, the compiler emits a ResourceEnvelope borrow that
+    /// stages `<resource_alias>.json` into the run dir; the backend overlays
+    /// the resource's `api_key` / `base_url` / `organization` on top of any
+    /// per-step values, so the step's authoring surface stays clean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_alias: Option<String>,
+
     /// The user prompt to send to the LLM.
     pub prompt: String,
 
@@ -157,6 +166,27 @@ pub struct LlmConfig {
     /// Each entry references a staged input file path (after `{{input:NAME}}` resolution).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageInput>,
+
+    /// Tools the LLM may call. Populated by the agent compiler from
+    /// child node `tool_meta` + input ports; empty for single-shot LLM
+    /// `AutomatedStep`s. Adapters that don't support tool calls (Ollama
+    /// today) ignore this field gracefully.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSchema>,
+}
+
+/// Resolved OpenAI-compatible resource binding read from the staged
+/// `<alias>.json` envelope. Mirrors `aithericon_resources::types::OpenAI`
+/// so the mekhan side and the backend stay in lockstep without a dep
+/// edge between them. Used when the LLM step binds to a workspace
+/// resource via `resource_alias`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedOpenAiResource {
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -170,6 +200,7 @@ mod tests {
             model: "gpt-4o".into(),
             api_key: Some("sk-test".into()),
             base_url: None,
+            resource_alias: None,
             prompt: "Hello, world!".into(),
             system_prompt: Some("You are a helpful assistant.".into()),
             history: vec![ChatMessage {
@@ -180,6 +211,7 @@ mod tests {
             max_tokens: Some(1024),
             response_format: None,
             images: vec![],
+            tools: vec![],
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();
@@ -237,6 +269,7 @@ mod tests {
             model: "qwen2.5:3b".into(),
             api_key: None,
             base_url: None,
+            resource_alias: None,
             prompt: "Hello".into(),
             system_prompt: None,
             history: vec![],
@@ -244,6 +277,7 @@ mod tests {
             max_tokens: None,
             response_format: Some(ResponseFormat::Text),
             images: vec![],
+            tools: vec![],
         };
 
         let json = serde_json::to_string(&config).unwrap();

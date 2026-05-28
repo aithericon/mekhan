@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use super::model::{CatalogueEntry, CatalogueRegisterCommand};
 use super::protocol::SubscribeRequest;
 use super::repository::CatalogueRepository;
+use crate::observability::record_silent_drop_with;
 
 /// A persisted catalogue subscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +90,19 @@ impl SubscriptionManager {
                             self.cache.insert(sub.subscription_id.clone(), sub);
                         }
                         Err(e) => {
-                            tracing::warn!(key = %key, "failed to deserialize subscription: {e}");
+                            // KV row is now poisoned — won't be recoverable
+                            // until something rewrites the key. Loud so an
+                            // operator sees they've got a stranded
+                            // subscription, not a quietly-missing trigger.
+                            record_silent_drop_with(
+                                "catalogue_subscription_hydrate",
+                                &e,
+                                serde_json::json!({
+                                    "kv_bucket": "CATALOGUE_SUBSCRIPTIONS",
+                                    "key": key.as_str(),
+                                }),
+                                Some(value.as_ref()),
+                            );
                         }
                     }
                 }
@@ -496,7 +509,11 @@ fn matches_filters(sub: &CatalogueSubscription, entry: &CatalogueEntry) -> bool 
 }
 
 /// Convert subscription filters to `QueryParams` for backfill queries.
-fn filters_to_query_params(
+///
+/// Reused by `triggers::sources::catalog::backfill_one` so subscription and
+/// Catalog-trigger backfill share one filter→query translation; if the
+/// filter grammar grows new operators, both paths pick them up.
+pub(crate) fn filters_to_query_params(
     filters: &HashMap<String, HashMap<String, String>>,
 ) -> crate::query::extractor::QueryParams {
     use crate::query::filter::{Filter, FilterCondition, FilterOperator, FilterValue};

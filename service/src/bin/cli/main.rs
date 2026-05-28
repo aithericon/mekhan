@@ -14,6 +14,8 @@ mod pull;
 mod push;
 mod run;
 mod status;
+mod test_cmd;
+mod tests_fs;
 mod ws_client;
 
 use clap::{Parser, Subcommand};
@@ -96,11 +98,27 @@ enum Commands {
         directory: String,
     },
 
-    /// Create a new workflow instance from a published template
+    /// Create a new workflow instance from a published template.
+    ///
+    /// Argument is either a template UUID (instantiates that template on
+    /// `--server`) or a path to a `mekhan.lock.json`-bearing directory (uses
+    /// the directory's pinned `server_url` + `template_id`). Defaults to
+    /// the current directory.
     Run {
-        /// Directory containing the template (defaults to current directory)
         #[arg(default_value = ".")]
-        directory: String,
+        template: String,
+
+        /// Seed a Start block's `initial` port. Repeatable. Format:
+        /// `<start_block_id>.<field>=<value>`. `<value>` is parsed as JSON
+        /// (`42`, `true`, `"x"`, `{...}`) and falls back to a bare string.
+        /// Mutually exclusive with `--start-tokens`.
+        #[arg(short = 'i', long = "input", value_name = "BLOCK.FIELD=VALUE")]
+        inputs: Vec<String>,
+
+        /// Path to a JSON file containing the full `start_tokens` array
+        /// (matches the test-fixture shape). Mutually exclusive with `-i`.
+        #[arg(long = "start-tokens", value_name = "PATH", conflicts_with = "inputs")]
+        start_tokens_file: Option<String>,
     },
 
     /// List workflow instances
@@ -128,8 +146,24 @@ enum Commands {
 
     /// Print the OpenAPI 3 spec to stdout (no DB or NATS required).
     /// Used by the frontend codegen pipeline to regenerate
-    /// `app/src/lib/api/schema.d.ts`.
+    /// `app/src/lib/api/v1/schema.d.ts`.
     Openapi,
+
+    /// Run template tests against the latest published version of a
+    /// template family. Exit code 0 only when every enabled test passes.
+    Test {
+        /// Either a template UUID or a directory holding `mekhan.lock.json`.
+        template: String,
+
+        /// Run only the test with this name (otherwise runs every enabled
+        /// test).
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Include disabled tests in the run (default skips them).
+        #[arg(long)]
+        include_disabled: bool,
+    },
 }
 
 #[tokio::main]
@@ -164,7 +198,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status { directory } => status::run(&cli.server, &directory).await,
         Commands::Publish { directory } => publish::run(&cli.server, &directory).await,
         Commands::Apply { directory } => apply::run(&cli.server, &directory).await,
-        Commands::Run { directory } => run::run(&cli.server, &directory).await,
+        Commands::Run {
+            template,
+            inputs,
+            start_tokens_file,
+        } => run::run(&cli.server, &template, &inputs, start_tokens_file.as_deref()).await,
         Commands::Instances { template } => {
             instances::run(&cli.server, template.as_deref()).await
         }
@@ -179,6 +217,19 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("serialize openapi: {e}"))?;
             println!("{json}");
             Ok(())
+        }
+        Commands::Test {
+            template,
+            name,
+            include_disabled,
+        } => {
+            test_cmd::run(
+                &cli.server,
+                &template,
+                name.as_deref(),
+                include_disabled,
+            )
+            .await
         }
     }
 }

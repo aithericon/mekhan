@@ -79,7 +79,7 @@ impl SyncHandle {
         msg.extend_from_slice(&diff);
 
         self.ws
-            .send(Message::Binary(msg.into()))
+            .send(Message::Binary(msg))
             .await
             .context("failed to send update via WebSocket")?;
 

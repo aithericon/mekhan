@@ -10,7 +10,6 @@ pub mod executor;
 pub mod executor_handlers;
 pub(crate) mod firing;
 pub mod http_executor_client;
-#[cfg(feature = "human")]
 pub mod human_handlers;
 pub(crate) mod idempotency_index;
 pub mod ports;
@@ -25,6 +24,7 @@ pub mod scheduler_client;
 pub mod scheduler_handlers;
 pub mod schema_registry;
 pub mod service;
+pub mod subworkflow_handlers;
 pub mod timer_handlers;
 pub(crate) mod token_manager;
 
@@ -42,7 +42,6 @@ pub use evaluation::{
 };
 pub use executor::*;
 pub use executor_handlers::*;
-#[cfg(feature = "human")]
 pub use human_handlers::*;
 pub use petri_domain::{apply_event_to_marking, project_marking};
 pub use ports::*;

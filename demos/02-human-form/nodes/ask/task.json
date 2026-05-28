@@ -1,0 +1,33 @@
+[
+  {
+    "id": "step-pick",
+    "title": "Pick Your Color",
+    "blocks": [
+      {
+        "type": "input",
+        "field": {
+          "name": "favorite_color",
+          "label": "Favorite Color",
+          "kind": "text",
+          "required": true,
+          "placeholder": "e.g. cerulean"
+        }
+      }
+    ]
+  },
+  {
+    "id": "step-recommend",
+    "title": "Feedback",
+    "blocks": [
+      {
+        "type": "input",
+        "field": {
+          "name": "would_recommend",
+          "label": "Would you recommend this demo to a colleague?",
+          "kind": "checkbox",
+          "required": false
+        }
+      }
+    ]
+  }
+]

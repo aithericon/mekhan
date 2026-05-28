@@ -157,7 +157,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_interpolation_non_string_input_errors() {
+    fn resolve_interpolation_non_string_input_pretty_prints_json() {
+        // Non-string inputs interpolated into a string get pretty-printed
+        // as JSON. The strict "must be a JSON string" policy was removed
+        // because LLM prompts like `{{ ocr.tables }}` against an array port
+        // were a usability footgun. For file-ops paths this just produces a
+        // weird path that the underlying op will reject — no silent corruption.
+        // See aithericon_executor_backend::resolve::interpolate_string.
         let (name, path, _tmp) = stage_input(
             "obj",
             &serde_json::json!({"key": "value"}),
@@ -168,9 +174,12 @@ mod tests {
             "path": "prefix/{{input:obj}}/suffix"
         });
 
-        let err = resolve_inputs(&mut config, &staged).unwrap_err();
-        assert!(matches!(err, FileOpsError::InputResolution(_)));
-        assert!(err.to_string().contains("must be a JSON string"));
+        resolve_inputs(&mut config, &staged).unwrap();
+        let resolved = config["path"].as_str().unwrap();
+        assert!(resolved.starts_with("prefix/"));
+        assert!(resolved.ends_with("/suffix"));
+        assert!(resolved.contains("\"key\""));
+        assert!(resolved.contains("\"value\""));
     }
 
     #[test]

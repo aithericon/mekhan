@@ -1,5 +1,5 @@
 //! End-to-end coverage for **Part B — caller return paths** of rich return
-//! values: the `POST /api/triggers/{id}/fire` reply-mode selection, the
+//! values: the `POST /api/v1/triggers/{id}/fire` reply-mode selection, the
 //! WaitForResult success / timeout mechanics, the SSE stream endpoint, and the
 //! FireAndForget byte-compatibility guarantee.
 //!
@@ -10,8 +10,9 @@
 //! covered there; this file is the Part B counterpart.
 //!
 //! Requires the dev/test infra + engine: `just dev up` (or the regression
-//! infra). Run single-threaded — `clean_slate` purges the shared
-//! `PETRI_GLOBAL` stream: `--test-threads=1`.
+//! infra). Each test builds a `MekhanNats` with a per-test
+//! `with_consumer_prefix` so the lifecycle + causality durables are
+//! scoped to this run and don't fight the live dev daemon's cursors.
 
 mod common;
 
@@ -59,6 +60,41 @@ async fn body_string(body: Body) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
+/// Minimal SSE parser for tests: collects (event-name, data) pairs from an
+/// `text/event-stream` payload. Joins multi-line `data:` into a single string
+/// per the SSE spec; drops comment lines and unrecognized fields. Defaults
+/// `event` to `"message"` when omitted, matching browsers.
+fn parse_sse(body: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut name = String::from("message");
+    let mut data = String::new();
+    for line in body.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            if !data.is_empty() {
+                out.push((std::mem::take(&mut name), std::mem::take(&mut data)));
+                name = String::from("message");
+            }
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("event:") {
+            name = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+        }
+    }
+    if !data.is_empty() {
+        out.push((name, data));
+    }
+    out
+}
+
 /// Abort-on-drop handle — the caller MUST keep these alive for the test's
 /// duration or the spawned consumers die mid-test.
 struct TaskHandle(tokio::task::AbortHandle);
@@ -78,23 +114,11 @@ where
     TaskHandle(handle.abort_handle())
 }
 
-async fn clean_slate(nats: &MekhanNats) {
-    for (stream_name, consumer_name) in [
-        ("PETRI_GLOBAL", "mekhan-causality-ingest"),
-        ("PETRI_GLOBAL", "mekhan-lifecycle"),
-        ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
-        ("PROCESS", "mekhan-process-event-ingest"),
-    ] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.delete_consumer(consumer_name).await;
-        }
-    }
-    for stream_name in ["PETRI_GLOBAL", "HUMAN_REQUESTS", "PROCESS"] {
-        if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream.purge().await;
-        }
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+/// Build a unique consumer prefix for this test invocation. Lets parallel
+/// runs (and the live dev daemon) keep independent lifecycle/causality
+/// cursors on the shared streams without any purge ritual.
+fn test_prefix() -> String {
+    format!("test_{}", Uuid::new_v4().simple())
 }
 
 async fn wait_for_instance_status(
@@ -231,8 +255,8 @@ async fn setup(
 
     let nats = MekhanNats::connect(&engine_nats, None)
         .await
-        .expect("connect to NATS");
-    clean_slate(&nats).await;
+        .expect("connect to NATS")
+        .with_consumer_prefix(test_prefix());
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -261,7 +285,7 @@ async fn setup(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -286,7 +310,7 @@ async fn setup(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{template_id}/publish"))
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -297,11 +321,11 @@ async fn setup(
     (app, db, waiters, causality, lifecycle)
 }
 
-/// `POST /api/triggers/trig/fire{query}` with `{ "payload": { "amount": 42 } }`.
+/// `POST /api/v1/triggers/trig/fire{query}` with `{ "payload": { "amount": 42 } }`.
 fn fire_req(query: &str, accept: Option<&str>) -> Request<Body> {
     let mut b = Request::builder()
         .method("POST")
-        .uri(format!("/api/triggers/trig/fire{query}"))
+        .uri(format!("/api/v1/triggers/trig/fire{query}"))
         .header("content-type", "application/json");
     if let Some(a) = accept {
         b = b.header("accept", a);
@@ -357,7 +381,9 @@ async fn faf_default_has_no_outcome_and_polls() {
 /// `?reply=wait` blocks until terminal, returns `200` with the
 /// `outcome:{status,result}` superset; the envelope equals the persisted row;
 /// the registry is empty afterward (resolve removed the entry — no leak).
-/// Also asserts SSE-on-fire is rejected 406 (same publish, cheap).
+/// Also asserts SSE-on-fire returns `text/event-stream` inline (same publish,
+/// cheap): leading `fire` event carries the FireResult, then the instance's
+/// domain events flow through to a terminal `result` envelope.
 #[tokio::test]
 #[serial_test::serial]
 async fn wait_for_result_returns_envelope_no_leak() {
@@ -367,27 +393,61 @@ async fn wait_for_result_returns_envelope_no_leak() {
     }
     let (app, db, waiters, _c, _l) = setup(success_graph(), 30).await;
 
-    // SSE is the dedicated stream endpoint, never negotiated on fire → 406.
-    let resp = app
-        .clone()
-        .oneshot(fire_req("", Some("text/event-stream")))
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_ACCEPTABLE,
-        "Accept: text/event-stream on fire ⇒ 406"
-    );
-    let resp = app
-        .clone()
-        .oneshot(fire_req("?reply=stream", None))
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_ACCEPTABLE,
-        "?reply=stream on fire ⇒ 406"
-    );
+    // SSE on /fire is delivered inline: response is text/event-stream, the
+    // first event (`fire`) carries the FireResult, then the JetStream-backed
+    // instance events flow through to a terminal `result`. Same semantics
+    // regardless of whether SSE was selected via Accept or ?reply=stream.
+    for (q, accept, label) in [
+        ("", Some("text/event-stream"), "Accept: text/event-stream"),
+        ("?reply=stream", None, "?reply=stream"),
+    ] {
+        let resp = app.clone().oneshot(fire_req(q, accept)).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "{label}: SSE on /fire is 200"
+        );
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert!(
+            ct.starts_with("text/event-stream"),
+            "{label}: content-type is SSE, got {ct:?}"
+        );
+        let body = body_string(resp.into_body()).await;
+        let events = parse_sse(&body);
+        // 1) Leading `fire` event with the FireResult (locator + outcome).
+        let (kind, data) = events
+            .first()
+            .unwrap_or_else(|| panic!("{label}: empty SSE body: {body:?}"));
+        assert_eq!(kind, "fire", "{label}: first SSE event is `fire`: {events:?}");
+        let fire_v: Value = serde_json::from_str(data)
+            .unwrap_or_else(|e| panic!("{label}: fire data not JSON: {e}: {data:?}"));
+        let iid = fire_v["outcome"]["instance_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{label}: fire event missing instance_id: {fire_v}"));
+        Uuid::parse_str(iid).expect("instance_id is a uuid");
+        // 2) Domain events appear (NetInitialized at minimum).
+        assert!(
+            events.iter().any(|(k, _)| k == "NetInitialized"),
+            "{label}: stream replayed NetInitialized: {events:?}"
+        );
+        // 3) Stream closed on a terminal `result` carrying the success envelope.
+        let (rkind, rdata) = events
+            .last()
+            .unwrap_or_else(|| panic!("{label}: no terminal event: {events:?}"));
+        assert_eq!(rkind, "result", "{label}: stream ends with `result`: {events:?}");
+        let envelope: Value = serde_json::from_str(rdata)
+            .unwrap_or_else(|e| panic!("{label}: result data not JSON: {e}: {rdata:?}"));
+        assert_eq!(
+            envelope,
+            SUCCESS_ENVELOPE(),
+            "{label}: terminal envelope matches the persisted row"
+        );
+    }
 
     // WaitForResult.
     let resp = app
@@ -489,7 +549,7 @@ async fn sse_already_terminal_emits_result_and_404() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/instances/{}/stream", Uuid::new_v4()))
+                .uri(format!("/api/v1/instances/{}/stream", Uuid::new_v4()))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -502,7 +562,7 @@ async fn sse_already_terminal_emits_result_and_404() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/instances/{iid}/stream"))
+                .uri(format!("/api/v1/instances/{iid}/stream"))
                 .body(Body::empty())
                 .unwrap(),
         )

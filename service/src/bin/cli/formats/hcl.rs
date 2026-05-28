@@ -3,7 +3,9 @@ use indexmap::IndexMap;
 
 use mekhan_service::models::template::WorkflowGraph;
 
-use super::dsl::{DslBranchCondition, DslExecution, DslStep, DslTaskStep, DslWorkflow};
+use super::dsl::{
+    DslBranchCondition, DslExecution, DslStep, DslTaskStep, DslWorkflow,
+};
 
 pub fn parse(content: &str) -> Result<WorkflowGraph> {
     let body: hcl::Body = hcl::from_str(content)
@@ -12,28 +14,26 @@ pub fn parse(content: &str) -> Result<WorkflowGraph> {
     let mut steps = IndexMap::new();
     let mut flow_entries: Vec<String> = Vec::new();
 
+    // Top-level attributes are intentionally ignored; only blocks contribute.
     for structure in body.into_iter() {
-        match structure {
-            hcl::Structure::Block(block) => {
-                let ident = block.identifier().to_string();
-                match ident.as_str() {
-                    "step" => {
-                        let key = block
-                            .labels()
-                            .first()
-                            .context("step block requires a label")?
-                            .as_str()
-                            .to_string();
-                        let step = parse_step_block(&block)?;
-                        steps.insert(key, step);
-                    }
-                    "flow" => {
-                        flow_entries = parse_flow_block(&block)?;
-                    }
-                    _ => {} // ignore unknown blocks
+        if let hcl::Structure::Block(block) = structure {
+            let ident = block.identifier().to_string();
+            match ident.as_str() {
+                "step" => {
+                    let key = block
+                        .labels()
+                        .first()
+                        .context("step block requires a label")?
+                        .as_str()
+                        .to_string();
+                    let step = parse_step_block(&block)?;
+                    steps.insert(key, step);
                 }
+                "flow" => {
+                    flow_entries = parse_flow_block(&block)?;
+                }
+                _ => {} // ignore unknown blocks
             }
-            _ => {} // ignore top-level attributes
         }
     }
 
@@ -63,6 +63,7 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
         instructions: get_attr_str(body, "instructions"),
         steps: None,
         execution: None,
+        agent: None,
         conditions: None,
         default_branch: get_attr_str(body, "default_branch"),
         max_iterations: get_attr_i64(body, "max_iterations").map(|v| v as i32),
@@ -87,6 +88,12 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
                     let cond = parse_condition_block(inner)?;
                     step.conditions.get_or_insert_with(Vec::new).push(cond);
                 }
+                // `tool_meta {}` blocks were removed when tool naming moved
+                // to be derived from the node's own `label` / `description`.
+                // Quietly ignore for old HCL files instead of hard-failing
+                // (so the rest of the file still parses); the agent compiler
+                // takes the label-derived path either way.
+                "tool_meta" => {}
                 _ => {}
             }
         }
@@ -359,7 +366,7 @@ fn get_attr_string_array(body: &hcl::Body, key: &str) -> Option<Vec<String>> {
                 if let hcl::Expression::Array(arr) = attr.expr() {
                     let strings: Vec<String> = arr
                         .iter()
-                        .filter_map(|e| expr_to_string(e))
+                        .filter_map(expr_to_string)
                         .collect();
                     if strings.is_empty() {
                         None
@@ -412,10 +419,8 @@ fn expr_to_json(expr: &hcl::Expression) -> Option<serde_json::Value> {
             // Convert hcl::Number → serde_json::Number
             if let Some(i) = n.as_i64() {
                 Some(serde_json::json!(i))
-            } else if let Some(f) = n.as_f64() {
-                Some(serde_json::json!(f))
             } else {
-                None
+                n.as_f64().map(|f| serde_json::json!(f))
             }
         }
         hcl::Expression::Bool(b) => Some(serde_json::Value::Bool(*b)),
@@ -438,7 +443,7 @@ fn expr_to_json(expr: &hcl::Expression) -> Option<serde_json::Value> {
         hcl::Expression::Array(arr) => {
             let items: Vec<serde_json::Value> = arr
                 .iter()
-                .filter_map(|e| expr_to_json(e))
+                .filter_map(expr_to_json)
                 .collect();
             Some(serde_json::Value::Array(items))
         }

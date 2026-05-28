@@ -5,14 +5,16 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use serde::Deserialize;
 use uuid::Uuid;
 
-use aithericon_executor_domain::InputSource;
-
-use crate::auth::AuthUser;
+use crate::auth::{require_role, AuthUser, MembershipError, Role};
 use crate::compiler::{
-    compile_to_air, compile_to_air_with_subworkflows, generate_py_io_files, node_input_scopes,
+    compile_to_air, compile_to_air_with_subworkflows_inline, generate_py_io_files,
+    node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
+    node_output_fields, TyDescriptor,
 };
+use crate::handlers::template_tests::{run_test, RunContext};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
@@ -20,13 +22,65 @@ use crate::models::template::{
     ExecutionBackendType, ListTemplatesQuery, PaginatedResponse, Position, UpdateTemplateRequest,
     WorkflowGraph, WorkflowNode, WorkflowNodeData, WorkflowTemplate,
 };
+use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
 use crate::AppState;
 
-/// POST /api/templates
+/// Visibility-aware read gate: passes when the template is `public` OR the
+/// caller is at least a `viewer` member of the template's workspace. Maps
+/// the underlying membership errors to standard `ApiError` shapes.
+fn gate_template_read(
+    _state: &AppState,
+    user: &AuthUser,
+    template: &WorkflowTemplate,
+) -> Result<(), ApiError> {
+    if template.visibility == "public" {
+        return Ok(());
+    }
+    let user_ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    if template.workspace_id == user_ws {
+        return Ok(());
+    }
+    Err(ApiError::forbidden("not a member of this template's workspace"))
+}
+
+/// Write gate for mutate paths (update/delete/publish): requires the caller
+/// to be at least an `editor` member of the template's workspace. Public
+/// visibility does NOT grant write — cross-workspace reads of public
+/// templates are read-only by design.
+async fn gate_template_write(
+    state: &AppState,
+    user: &AuthUser,
+    template: &WorkflowTemplate,
+) -> Result<(), ApiError> {
+    match require_role(&state.db, user, template.workspace_id, Role::Editor).await {
+        Ok(_) => Ok(()),
+        Err(MembershipError::NotMember(_)) => {
+            Err(ApiError::forbidden("not a member of this template's workspace"))
+        }
+        Err(MembershipError::InsufficientRole { .. }) => {
+            Err(ApiError::forbidden("editor role required"))
+        }
+        Err(MembershipError::TemplateNotFound(_)) => {
+            Err(ApiError::not_found("template not found"))
+        }
+        Err(MembershipError::Db(e)) => Err(ApiError::internal(e.to_string())),
+    }
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct PublishQuery {
+    /// Bypass the template-test gate. Failing or stale tests do not block
+    /// publish when `true`; an audit-level log records the override. Use
+    /// only when a test itself is broken and you need to ship.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// POST /api/v1/templates
 #[utoipa::path(
     post,
-    path = "/api/templates",
+    path = "/api/v1/templates",
     request_body = CreateTemplateRequest,
     responses(
         (status = 201, description = "Template created", body = WorkflowTemplate),
@@ -44,10 +98,16 @@ pub async fn create_template(
     let graph_json = serde_json::to_value(&graph).unwrap();
     let description = req.description.unwrap_or_default();
 
+    // Anchor the new template in the caller's workspace. Falls back to the
+    // seeded default workspace (Uuid::nil()) when the resolver didn't
+    // populate workspace_id — keeps test paths (which use the no-DB
+    // StaticPrincipalResolver) writing into a valid workspace.
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
-        INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id)
-        VALUES ($1, $2, $3, $1, 1, TRUE, $4, $5)
+        INSERT INTO workflow_templates (id, name, description, base_template_id, version, is_latest, graph, author_id, workspace_id)
+        VALUES ($1, $2, $3, $1, 1, TRUE, $4, $5, $6)
         RETURNING *
         "#,
     )
@@ -56,6 +116,7 @@ pub async fn create_template(
     .bind(&description)
     .bind(&graph_json)
     .bind(user.subject_as_uuid())
+    .bind(workspace_id)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -90,10 +151,10 @@ pub async fn create_template(
     Ok((StatusCode::CREATED, Json(template)))
 }
 
-/// GET /api/templates
+/// GET /api/v1/templates
 #[utoipa::path(
     get,
-    path = "/api/templates",
+    path = "/api/v1/templates",
     params(ListTemplatesQuery),
     responses(
         (status = 200, description = "Paginated list of templates", body = PaginatedResponse<WorkflowTemplate>),
@@ -102,17 +163,26 @@ pub async fn create_template(
 )]
 pub async fn list_templates(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(params): Query<ListTemplatesQuery>,
 ) -> Json<PaginatedResponse<WorkflowTemplate>> {
     let offset = (params.page - 1) * params.per_page;
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
 
-    // Build dynamic query based on filters
-    let (items, total): (Vec<WorkflowTemplate>, i64) = if let Some(base_id) = params.base_template_id {
-        // List versions for a specific template chain
+    // The version-chain listing (base_template_id != None) is a separate
+    // mode: it shows every version of a template chain regardless of
+    // is_latest. Workspace gate still applies — but on the chain root's
+    // workspace (versions inherit it, since `new_version` keeps the same
+    // workspace_id by default per the DB column DEFAULT).
+    if let Some(base_id) = params.base_template_id {
         let items = sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates WHERE base_template_id = $1 ORDER BY version DESC LIMIT $2 OFFSET $3",
+            "SELECT * FROM workflow_templates \
+              WHERE base_template_id = $1 \
+                AND (workspace_id = $2 OR visibility = 'public') \
+              ORDER BY version DESC LIMIT $3 OFFSET $4",
         )
         .bind(base_id)
+        .bind(workspace_id)
         .bind(params.per_page)
         .bind(offset)
         .fetch_all(&state.db)
@@ -120,118 +190,124 @@ pub async fn list_templates(
         .unwrap_or_default();
 
         let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM workflow_templates WHERE base_template_id = $1",
+            "SELECT COUNT(*) FROM workflow_templates \
+              WHERE base_template_id = $1 \
+                AND (workspace_id = $2 OR visibility = 'public')",
         )
         .bind(base_id)
+        .bind(workspace_id)
         .fetch_one(&state.db)
         .await
         .unwrap_or((0,));
 
-        (items, total.0)
-    } else {
-        // List latest versions, optionally filtered — all parameters bound safely
-        match (params.published, &params.search) {
-            (Some(published), Some(search)) => {
-                let pattern = format!("%{search}%");
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE AND published = $1 AND (name ILIKE $2 OR description ILIKE $2) ORDER BY updated_at DESC LIMIT $3 OFFSET $4",
-                )
-                .bind(published)
-                .bind(&pattern)
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+        return Json(PaginatedResponse {
+            items,
+            total: total.0,
+            page: params.page,
+            per_page: params.per_page,
+        });
+    }
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE AND published = $1 AND (name ILIKE $2 OR description ILIKE $2)",
-                )
-                .bind(published)
-                .bind(&pattern)
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    // Latest-version listing with composable filters. Use QueryBuilder so
+    // every optional filter (workspace, project_id, tag, published, search)
+    // composes through one code path. The workspace clause is mandatory:
+    // `(workspace_id = $ws OR visibility = 'public')`.
+    use sqlx::QueryBuilder;
 
-                (items, total.0)
-            }
-            (Some(published), None) => {
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE AND published = $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3",
-                )
-                .bind(published)
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT t.* FROM workflow_templates t",
+    );
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE AND published = $1",
-                )
-                .bind(published)
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    if let Some(project_id) = params.project_id {
+        qb.push(" JOIN project_templates pt ON pt.base_template_id = COALESCE(t.base_template_id, t.id) AND pt.project_id = ");
+        qb.push_bind(project_id);
+    }
 
-                (items, total.0)
-            }
-            (None, Some(search)) => {
-                let pattern = format!("%{search}%");
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE AND (name ILIKE $1 OR description ILIKE $1) ORDER BY updated_at DESC LIMIT $2 OFFSET $3",
-                )
-                .bind(&pattern)
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+    if let Some(ref tag) = params.tag {
+        qb.push(" JOIN template_tags tt ON tt.base_template_id = COALESCE(t.base_template_id, t.id) AND tt.workspace_id = ");
+        qb.push_bind(workspace_id);
+        qb.push(" AND tt.tag = ");
+        qb.push_bind(tag.clone());
+    }
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE AND (name ILIKE $1 OR description ILIKE $1)",
-                )
-                .bind(&pattern)
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    qb.push(" WHERE t.is_latest = TRUE AND (t.workspace_id = ");
+    qb.push_bind(workspace_id);
+    qb.push(" OR t.visibility = 'public')");
 
-                (items, total.0)
-            }
-            (None, None) => {
-                let items = sqlx::query_as::<_, WorkflowTemplate>(
-                    "SELECT * FROM workflow_templates WHERE is_latest = TRUE ORDER BY updated_at DESC LIMIT $1 OFFSET $2",
-                )
-                .bind(params.per_page)
-                .bind(offset)
-                .fetch_all(&state.db)
-                .await
-                .unwrap_or_default();
+    if let Some(published) = params.published {
+        qb.push(" AND t.published = ");
+        qb.push_bind(published);
+    }
 
-                let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM workflow_templates WHERE is_latest = TRUE",
-                )
-                .fetch_one(&state.db)
-                .await
-                .unwrap_or((0,));
+    let pattern: Option<String> = params.search.as_ref().map(|s| format!("%{s}%"));
+    if let Some(ref p) = pattern {
+        qb.push(" AND (t.name ILIKE ");
+        qb.push_bind(p.clone());
+        qb.push(" OR t.description ILIKE ");
+        qb.push_bind(p.clone());
+        qb.push(")");
+    }
 
-                (items, total.0)
-            }
-        }
-    };
+    // Count uses the same WHERE skeleton; build it once into a separate
+    // QueryBuilder so we don't double-bind. SQLx's `QueryBuilder::sql()`
+    // doesn't let us reuse params, so we replicate the predicate.
+    let mut cqb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT COUNT(*) FROM workflow_templates t",
+    );
+    if let Some(project_id) = params.project_id {
+        cqb.push(" JOIN project_templates pt ON pt.base_template_id = COALESCE(t.base_template_id, t.id) AND pt.project_id = ");
+        cqb.push_bind(project_id);
+    }
+    if let Some(ref tag) = params.tag {
+        cqb.push(" JOIN template_tags tt ON tt.base_template_id = COALESCE(t.base_template_id, t.id) AND tt.workspace_id = ");
+        cqb.push_bind(workspace_id);
+        cqb.push(" AND tt.tag = ");
+        cqb.push_bind(tag.clone());
+    }
+    cqb.push(" WHERE t.is_latest = TRUE AND (t.workspace_id = ");
+    cqb.push_bind(workspace_id);
+    cqb.push(" OR t.visibility = 'public')");
+    if let Some(published) = params.published {
+        cqb.push(" AND t.published = ");
+        cqb.push_bind(published);
+    }
+    if let Some(ref p) = pattern {
+        cqb.push(" AND (t.name ILIKE ");
+        cqb.push_bind(p.clone());
+        cqb.push(" OR t.description ILIKE ");
+        cqb.push_bind(p.clone());
+        cqb.push(")");
+    }
+
+    qb.push(" ORDER BY t.updated_at DESC LIMIT ");
+    qb.push_bind(params.per_page);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+
+    let items: Vec<WorkflowTemplate> = qb
+        .build_query_as()
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let total: (i64,) = cqb
+        .build_query_as()
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
 
     Json(PaginatedResponse {
         items,
-        total,
+        total: total.0,
         page: params.page,
         per_page: params.per_page,
     })
 }
 
-/// GET /api/templates/{id}
+/// GET /api/v1/templates/{id}
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}",
+    path = "/api/v1/templates/{id}",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Template", body = WorkflowTemplate),
@@ -242,6 +318,7 @@ pub async fn list_templates(
 )]
 pub async fn get_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -256,13 +333,70 @@ pub async fn get_template(
     })?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
 
+    gate_template_read(&state, &user, &template)?;
     Ok(Json(template))
 }
 
-/// PUT /api/templates/{id}
+/// Authoring bundle for a template — graph plus inline per-node files. This
+/// is the same `(graph, files)` pair the publish/new-version paths feed into
+/// the compiler, served as plain JSON so non-collaborative clients (the CLI,
+/// CI jobs) don't need a Yjs/WSS channel just to read a published template.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct TemplateBundle {
+    pub graph: WorkflowGraph,
+    pub files: HashMap<String, HashMap<String, String>>,
+}
+
+/// GET /api/v1/templates/{id}/bundle
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates/{id}/bundle",
+    params(("id" = Uuid, Path, description = "Template id")),
+    responses(
+        (status = 200, description = "Template authoring bundle (graph + per-node inline files)", body = TemplateBundle),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn get_template_bundle(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TemplateBundle>, ApiError> {
+    let existing = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_read(&state, &user, &existing)?;
+
+    let (graph, files) = match reconstruct_graph_from_ydoc(&state, id).await {
+        Ok(Some((g, f))) => (g, f),
+        Ok(None) => {
+            let g = serde_json::from_value(existing.graph.clone())
+                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
+            (g, HashMap::new())
+        }
+        Err(e) => {
+            tracing::error!("failed to load Y.Doc for template {id}: {e}");
+            let g = serde_json::from_value(existing.graph.clone())
+                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
+            (g, HashMap::new())
+        }
+    };
+
+    Ok(Json(TemplateBundle { graph, files }))
+}
+
+/// PUT /api/v1/templates/{id}
 #[utoipa::path(
     put,
-    path = "/api/templates/{id}",
+    path = "/api/v1/templates/{id}",
     params(("id" = Uuid, Path, description = "Template id")),
     request_body = UpdateTemplateRequest,
     responses(
@@ -275,6 +409,7 @@ pub async fn get_template(
 )]
 pub async fn update_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTemplateRequest>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
@@ -287,6 +422,8 @@ pub async fn update_template(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_write(&state, &user, &existing).await?;
 
     if existing.published {
         return Err(ApiError::conflict("cannot edit a published template"));
@@ -321,11 +458,11 @@ pub async fn update_template(
     Ok(Json(template))
 }
 
-/// DELETE /api/templates/{id}
+/// DELETE /api/v1/templates/{id}
 /// Per Section 11.7: cascade cleanup for published templates with finished instances.
 #[utoipa::path(
     delete,
-    path = "/api/templates/{id}",
+    path = "/api/v1/templates/{id}",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 204, description = "Template deleted"),
@@ -337,6 +474,7 @@ pub async fn update_template(
 )]
 pub async fn delete_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
@@ -347,6 +485,8 @@ pub async fn delete_template(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_write(&state, &user, &existing).await?;
 
     let base_id = existing.base_template_id.unwrap_or(existing.id);
 
@@ -422,24 +562,31 @@ pub async fn delete_template(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/templates/{id}/publish
+/// POST /api/v1/templates/{id}/publish
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/publish",
-    params(("id" = Uuid, Path, description = "Template id")),
+    path = "/api/v1/templates/{id}/publish",
+    params(
+        ("id" = Uuid, Path, description = "Template id"),
+        PublishQuery,
+    ),
     responses(
         (status = 200, description = "Template published; AIR compiled and stored", body = WorkflowTemplate),
         (status = 400, description = "Compilation failed or graph invalid", body = ErrorResponse),
         (status = 404, description = "Template not found", body = ErrorResponse),
         (status = 409, description = "Template already published", body = ErrorResponse),
+        (status = 412, description = "Template tests failing; publish blocked", body = PublishGateBlockedResponse),
         (status = 500, description = "Server error", body = ErrorResponse),
     ),
     tag = "templates",
 )]
 pub async fn publish_template(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
+    Query(query): Query<PublishQuery>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
+    let principal_id = user.subject_as_uuid();
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE id = $1",
     )
@@ -448,6 +595,8 @@ pub async fn publish_template(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    gate_template_write(&state, &user, &existing).await?;
 
     if existing.published {
         return Err(ApiError::conflict("template is already published"));
@@ -481,6 +630,8 @@ pub async fn publish_template(
     let CompiledArtifacts {
         air_json,
         graph_json,
+        interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -490,6 +641,8 @@ pub async fn publish_template(
             existing.version,
             Some(existing.base_template_id.unwrap_or(existing.id)),
             &mut ydoc_files,
+            principal_id,
+            existing.workspace_id,
         )
         .await?;
 
@@ -497,6 +650,44 @@ pub async fn publish_template(
     // runtime. Non-fatal for UI publish (legacy behavior).
     if let Err(e) = publisher.upload_files(id, existing.version, &ydoc_files).await {
         tracing::warn!("S3 file upload failed (non-fatal): {e}");
+    }
+    // Upload the per-node static configs the compiler offloaded so the
+    // executor's `FetchConfigHook` can resolve `config_ref` at run time.
+    // Non-fatal in UI publish — matches the upload_files behavior so a
+    // transient S3 hiccup doesn't strand a draft.
+    if let Err(e) = publisher
+        .upload_node_configs(id, existing.version, &node_configs)
+        .await
+    {
+        tracing::warn!("S3 node-config upload failed (non-fatal): {e}");
+    }
+
+    // Template-test gate. Run every enabled test for this template family
+    // against the freshly-compiled AIR before flipping `published`. Failing
+    // (or erroring) tests block the publish unless `?force=true`.
+    let failing = run_publish_gate(&state, &existing, &air_json, &graph, user.subject_as_uuid()).await?;
+    if !failing.is_empty() {
+        if query.force {
+            tracing::warn!(
+                template_id = %id,
+                failing = failing.len(),
+                "publish gate bypassed via ?force=true"
+            );
+        } else {
+            let failing_json = serde_json::to_value(&failing)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            return Err(ApiError {
+                status: StatusCode::PRECONDITION_FAILED,
+                body: Some(
+                    ErrorResponse::new(format!(
+                        "{} template test(s) failed; publish blocked. Pass ?force=true to override.",
+                        failing.len()
+                    ))
+                    .with_code("publish-gate")
+                    .with_failing_tests(failing_json),
+                ),
+            });
+        }
     }
 
     // Persist the Y.Doc-reconstructed graph we just compiled into the `graph`
@@ -509,7 +700,7 @@ pub async fn publish_template(
     //
     // UI publish: no git provenance (column stays NULL).
     let template =
-        finalize_publish_row(&state.db, id, &air_json, &graph_json, None).await?;
+        finalize_publish_row(&state.db, id, &air_json, &graph_json, &interface_json, None).await?;
 
     // Make the just-published template's triggers live immediately. The
     // dispatcher's in-memory registry is otherwise only filled by `hydrate()`
@@ -529,6 +720,7 @@ pub async fn publish_template(
 ///
 /// Reads from the new schema: Y.Map("nodes"), Y.Array("edges"), Y.Map("viewport").
 /// Also extracts Y.Text file entries from `nodes[nodeId].files`.
+#[allow(clippy::type_complexity)]
 async fn reconstruct_graph_from_ydoc(
     state: &AppState,
     template_id: Uuid,
@@ -569,62 +761,6 @@ async fn reconstruct_graph_from_ydoc(
     Ok(Some(result))
 }
 
-/// Build the per-node `name -> InputSource::StoragePath` map that the compiler
-/// uses to emit executor inputs. Mirrors the S3 layout written by
-/// [`crate::process::publish::PublishService::upload_files`]. Used by the
-/// stateful preview compile (`compile_preview`).
-fn storage_path_files(
-    template_id: Uuid,
-    version: i32,
-    ydoc_files: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    ydoc_files
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .keys()
-                .map(|filename| {
-                    let path =
-                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
-                    (
-                        filename.clone(),
-                        InputSource::StoragePath {
-                            path,
-                            storage: None,
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
-}
-
-/// Materialize a per-node `name -> InputSource::Raw` map straight from inline
-/// file contents. Used by the stateless preview compile, where files haven't
-/// been uploaded to S3 yet.
-fn inline_files(
-    inline: &HashMap<String, HashMap<String, String>>,
-) -> HashMap<String, HashMap<String, InputSource>> {
-    inline
-        .iter()
-        .map(|(node_id, files)| {
-            let sources = files
-                .iter()
-                .map(|(filename, content)| {
-                    (
-                        filename.clone(),
-                        InputSource::Raw {
-                            content: content.clone(),
-                        },
-                    )
-                })
-                .collect();
-            (node_id.clone(), sources)
-        })
-        .collect()
-}
-
 /// Mark a template row as no longer the latest in its version chain. Generic
 /// over the executor so it works on the pool or inside a transaction.
 async fn mark_not_latest<'e, E>(exec: E, id: Uuid) -> Result<(), ApiError>
@@ -649,6 +785,7 @@ async fn finalize_publish_row<'e, E>(
     id: Uuid,
     air_json: &serde_json::Value,
     graph_json: &serde_json::Value,
+    interface_json: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
 ) -> Result<WorkflowTemplate, ApiError>
 where
@@ -658,7 +795,7 @@ where
         r#"
         UPDATE workflow_templates
         SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3,
-            source_ref = $4, updated_at = NOW()
+            interface_json = $4, source_ref = $5, updated_at = NOW()
         WHERE id = $1
         RETURNING *
         "#,
@@ -666,6 +803,7 @@ where
     .bind(id)
     .bind(air_json)
     .bind(graph_json)
+    .bind(interface_json)
     .bind(source_ref)
     .fetch_one(exec)
     .await
@@ -688,6 +826,7 @@ async fn insert_published_version<'e, E>(
     version: i32,
     air_json: &serde_json::Value,
     graph_json: &serde_json::Value,
+    interface_json: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
 ) -> Result<WorkflowTemplate, ApiError>
 where
@@ -698,8 +837,9 @@ where
         r#"
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, parent_id, version,
-             is_latest, published, published_at, graph, air_json, source_ref, author_id)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10)
+             is_latest, published, published_at, graph, air_json,
+             interface_json, source_ref, author_id)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11)
         RETURNING *
         "#,
     )
@@ -711,6 +851,7 @@ where
     .bind(version)
     .bind(graph_json)
     .bind(air_json)
+    .bind(interface_json)
     .bind(source_ref)
     .bind(src.author_id)
     .fetch_one(exec)
@@ -736,10 +877,10 @@ async fn latest_in_chain(
     .ok_or_else(|| ApiError::not_found("template chain not found"))
 }
 
-/// POST /api/templates/{id}/new-version
+/// POST /api/v1/templates/{id}/new-version
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/new-version",
+    path = "/api/v1/templates/{id}/new-version",
     params(("id" = Uuid, Path, description = "Source template id")),
     responses(
         (status = 201, description = "New draft version created from published source", body = WorkflowTemplate),
@@ -886,7 +1027,7 @@ pub(crate) fn apply_mode(latest: &WorkflowTemplate) -> Result<ApplyMode, String>
     }
 }
 
-/// POST /api/templates/{id}/apply
+/// POST /api/v1/templates/{id}/apply
 ///
 /// GitOps entry point: atomically publish a new version of the chain straight
 /// from a git-authored artifact. The supplied `graph` REPLACES the chain head
@@ -897,7 +1038,7 @@ pub(crate) fn apply_mode(latest: &WorkflowTemplate) -> Result<ApplyMode, String>
 /// templates.
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/apply",
+    path = "/api/v1/templates/{id}/apply",
     params(("id" = Uuid, Path, description = "Any template id in the target chain")),
     request_body = ApplyTemplateRequest,
     responses(
@@ -950,6 +1091,8 @@ pub async fn apply_template(
     let CompiledArtifacts {
         air_json,
         graph_json,
+        interface_json,
+        node_configs,
     } = publisher
         .compile_artifacts(
             &graph,
@@ -959,6 +1102,11 @@ pub async fn apply_template(
             target_version,
             Some(latest.base_template_id.unwrap_or(latest.id)),
             &mut files_map,
+            user.subject_as_uuid(),
+            // Apply (no-version-bump) hits the same workspace as the latest
+            // template row; reuse it directly to keep the resource lookup
+            // tenant-correct.
+            latest.workspace_id,
         )
         .await?;
     let source_ref_json = req
@@ -978,6 +1126,17 @@ pub async fn apply_template(
     {
         return Err(ApiError::internal(format!("S3 file upload failed: {e}")));
     }
+    // Per-node static configs offloaded by the compiler. Fatal for apply —
+    // the executor `FetchConfigHook` would fail at run-time if a node's
+    // blob is missing, leaving a hard-to-trace runtime breakage.
+    if let Err(e) = publisher
+        .upload_node_configs(target_id, target_version, &node_configs)
+        .await
+    {
+        return Err(ApiError::internal(format!(
+            "S3 node-config upload failed: {e}"
+        )));
+    }
 
     // 4. Single transaction: the only persisted, queryable transition. The
     //    row is born in its final published+latest form — there is no
@@ -995,6 +1154,7 @@ pub async fn apply_template(
                 latest.id,
                 &air_json,
                 &graph_json,
+                &interface_json,
                 source_ref_json.as_ref(),
             )
             .await?
@@ -1008,6 +1168,7 @@ pub async fn apply_template(
                 target_version,
                 &air_json,
                 &graph_json,
+                &interface_json,
                 source_ref_json.as_ref(),
             )
             .await?
@@ -1059,7 +1220,7 @@ pub async fn apply_template(
     Ok(Json(applied))
 }
 
-/// POST /api/templates/apply-air
+/// POST /api/v1/templates/apply-air
 ///
 /// Clinic-style headless template upload: accepts pre-compiled AIR
 /// (`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,
@@ -1069,18 +1230,19 @@ pub async fn apply_template(
 /// into the `graph` column so the trigger dispatcher's `register_triggers`
 /// finds it post-commit.
 ///
-/// Idempotency: name-based. A first apply with a given `name` Seeds a
-/// fresh v1 chain (`is_latest = true`); subsequent applies with the same
-/// `name` Bump the chain to a new born-published version (prior latest's
-/// triggers `forget_template`'d, new version's triggers registered).
+/// Idempotency: name-based, scoped per workspace. A first apply with a
+/// given `name` in the caller's workspace Seeds a fresh v1 chain
+/// (`is_latest = true`); subsequent applies with the same `(name,
+/// workspace_id)` pair Bump the chain. Cross-workspace name collisions
+/// are independent chains.
 ///
-/// Distinct from `POST /api/templates/{id}/apply` (the GitOps path for
+/// Distinct from `POST /api/v1/templates/{id}/apply` (the GitOps path for
 /// graph-authored templates): that one demands an existing `{id}` and a
 /// `WorkflowGraph`, then runs the compile pass. This endpoint takes
 /// neither.
 #[utoipa::path(
     post,
-    path = "/api/templates/apply-air",
+    path = "/api/v1/templates/apply-air",
     request_body = ApplyAirTemplateRequest,
     responses(
         (status = 200, description = "Applied: seeded v1 or a new born-published version", body = WorkflowTemplate),
@@ -1144,6 +1306,10 @@ pub async fn apply_air_template(
         nodes: vec![stub_node],
         edges: vec![],
         viewport: None,
+        // Pre-AIR templates have no graph-level resource declarations or
+        // template-level concurrency policy — both default-empty.
+        definitions: Default::default(),
+        instance_concurrency: Default::default(),
     };
     let stub_graph_json = serde_json::to_value(&stub_graph)
         .map_err(|e| ApiError::internal(format!("synthesize stub graph: {e}")))?;
@@ -1155,14 +1321,23 @@ pub async fn apply_air_template(
         .map_err(|e| ApiError::internal(format!("serialize source_ref: {e}")))?;
     let description = req.description.clone().unwrap_or_default();
     let author_id = user.subject_as_uuid();
+    // Multi-tenant scoping per upstream's workspaces+visibility migration
+    // (`5ac9e72` + 9 commits). Pre-AIR apply is workspace-private by
+    // construction; `public` visibility is admin-only via
+    // `PATCH /api/v1/templates/{id}/visibility` (`38642db`).
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let visibility = "workspace";
 
-    // Name-based chain lookup. The pre-AIR endpoint uses `name` as the
-    // stable chain key (per Q3 disposition 2026-05-22) so the deploy
-    // recipe can re-apply idempotently from git without owning a UUID.
+    // Name-based chain lookup, scoped per workspace. The pre-AIR endpoint
+    // uses `(name, workspace_id)` as the stable chain key so the deploy
+    // recipe can re-apply idempotently from git without owning a UUID,
+    // and cross-tenant name collisions don't Bump the wrong chain.
     let latest: Option<WorkflowTemplate> = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE name = $1 AND is_latest = TRUE",
+        "SELECT * FROM workflow_templates \
+            WHERE name = $1 AND workspace_id = $2 AND is_latest = TRUE",
     )
     .bind(&req.name)
+    .bind(workspace_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1189,8 +1364,8 @@ pub async fn apply_air_template(
                 INSERT INTO workflow_templates
                     (id, name, description, base_template_id, parent_id, version,
                      is_latest, published, published_at, published_by,
-                     graph, air_json, source_ref, author_id)
-                VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11)
+                     graph, air_json, source_ref, author_id, workspace_id, visibility)
+                VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13)
                 RETURNING *
                 "#,
             )
@@ -1205,6 +1380,8 @@ pub async fn apply_air_template(
             .bind(&req.air_json)
             .bind(source_ref_json.as_ref())
             .bind(author_id)
+            .bind(workspace_id)
+            .bind(visibility)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| {
@@ -1221,8 +1398,8 @@ pub async fn apply_air_template(
                 INSERT INTO workflow_templates
                     (id, name, description, base_template_id, version,
                      is_latest, published, published_at, published_by,
-                     graph, air_json, source_ref, author_id)
-                VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8)
+                     graph, air_json, source_ref, author_id, workspace_id, visibility)
+                VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10)
                 RETURNING *
                 "#,
             )
@@ -1234,6 +1411,8 @@ pub async fn apply_air_template(
             .bind(&req.air_json)
             .bind(source_ref_json.as_ref())
             .bind(author_id)
+            .bind(workspace_id)
+            .bind(visibility)
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| {
@@ -1280,10 +1459,10 @@ pub async fn apply_air_template(
     Ok(Json(applied))
 }
 
-/// GET /api/templates/{id}/versions
+/// GET /api/v1/templates/{id}/versions
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/versions",
+    path = "/api/v1/templates/{id}/versions",
     params(("id" = Uuid, Path, description = "Any template id in the version chain")),
     responses(
         (status = 200, description = "All versions in the template's chain, newest first", body = Vec<WorkflowTemplate>),
@@ -1319,10 +1498,52 @@ pub async fn list_versions(
     Ok(Json(versions))
 }
 
-/// GET /api/templates/{id}/air
+/// GET /api/v1/templates/{id}/latest
+///
+/// Resolve any id in a template's version chain to the row currently flagged
+/// `is_latest`. Accepts the chain root (`base_template_id`) — the stable
+/// identifier the CLI's `mekhan.lock.json` pins — or any historical version
+/// id; both resolve through the same `base_template_id` column.
+///
+/// CLI commands that need "the chain head right now" (`run`, `test`, the
+/// post-pull bundle fetch) call this first, then operate on the returned id.
+/// The split keeps `/bundle`, `/instances`, `/tests/...` semantics
+/// strictly version-id-scoped (you can still pull a historical version by
+/// passing its concrete id) — the resolver layer is the only place that
+/// follows the chain.
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/air",
+    path = "/api/v1/templates/{id}/latest",
+    params(("id" = Uuid, Path, description = "Any template id in the version chain (base or a specific version)")),
+    responses(
+        (status = 200, description = "The latest version in the template's chain", body = WorkflowTemplate),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn get_latest(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<WorkflowTemplate>, ApiError> {
+    let existing = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("template not found"))?;
+
+    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let latest = latest_in_chain(&state.db, base_id).await?;
+    Ok(Json(latest))
+}
+
+/// GET /api/v1/templates/{id}/air
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates/{id}/air",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Compiled AIR JSON for the published template", body = serde_json::Value),
@@ -1356,10 +1577,10 @@ pub async fn get_air(
     Ok(Json(air))
 }
 
-/// POST /api/templates/{id}/compile
+/// POST /api/v1/templates/{id}/compile
 #[utoipa::path(
     post,
-    path = "/api/templates/{id}/compile",
+    path = "/api/v1/templates/{id}/compile",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Compiled AIR JSON preview from current draft graph", body = serde_json::Value),
@@ -1392,19 +1613,20 @@ pub async fn compile_preview(
         Ok(Some((_, f))) => f,
         _ => HashMap::new(),
     };
-    let files = storage_path_files(id, existing.version, &ydoc_files);
+    // Mirror the publish path: storage_path NodeFiles for executor
+    // staging + the same inline `ydoc_files` map passed to the borrow
+    // planner so the preview AIR matches what publish would emit.
+    let files = node_files_storage_path(id, existing.version, &ydoc_files);
 
-    // Resolve + freeze SubWorkflow children so the preview AIR matches what
-    // publish would emit (DB-backed; the stateless `/api/compile` path cannot
-    // and correctly surfaces `SubWorkflowUnresolved` instead).
     let publishing_family = Some(existing.base_template_id.unwrap_or(existing.id));
     let sub_air = resolve_subworkflow_air(&state, publishing_family, &graph).await?;
 
-    let air = compile_to_air_with_subworkflows(
+    let air = compile_to_air_with_subworkflows_inline(
         &graph,
         &existing.name,
         &existing.description,
         &files,
+        &ydoc_files,
         &sub_air,
     )
     .map_err(|e| {
@@ -1415,10 +1637,10 @@ pub async fn compile_preview(
     Ok(Json(air))
 }
 
-/// GET /api/templates/{id}/io-stubs
+/// GET /api/v1/templates/{id}/io-stubs
 #[utoipa::path(
     get,
-    path = "/api/templates/{id}/io-stubs",
+    path = "/api/v1/templates/{id}/io-stubs",
     params(("id" = Uuid, Path, description = "Template id")),
     responses(
         (status = 200, description = "Per-node generated `_aithericon_io` files", body = serde_json::Value),
@@ -1473,6 +1695,8 @@ pub async fn io_stubs(
     // (BTreeMap) for stable display.
     let mut scopes_out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     if let Some(graph) = graph {
+        let ns_scopes = node_namespace_scopes(&graph).ok();
+        let outputs = node_output_fields(&graph);
         match node_input_scopes(&graph) {
             Ok(scopes) => {
                 for node in &graph.nodes {
@@ -1480,7 +1704,23 @@ pub async fn io_stubs(
                         if execution_spec.backend_type == ExecutionBackendType::Python {
                             if let Some(scope) = scopes.get(&node.id) {
                                 let entry = generated.entry(node.id.clone()).or_default();
-                                for (filename, source) in generate_py_io_files(scope) {
+                                let empty: std::collections::BTreeMap<
+                                    String,
+                                    std::collections::BTreeMap<
+                                        String,
+                                        crate::models::template::FieldKind,
+                                    >,
+                                > = std::collections::BTreeMap::new();
+                                let empty_out: std::collections::BTreeMap<
+                                    String,
+                                    crate::models::template::FieldKind,
+                                > = std::collections::BTreeMap::new();
+                                let ns = ns_scopes
+                                    .as_ref()
+                                    .and_then(|m| m.get(&node.id))
+                                    .unwrap_or(&empty);
+                                let out = outputs.get(&node.id).unwrap_or(&empty_out);
+                                for (filename, source) in generate_py_io_files(scope, ns, out) {
                                     entry.insert(filename.to_string(), source);
                                 }
                                 scopes_out.insert(
@@ -1513,15 +1753,15 @@ pub async fn io_stubs(
     })))
 }
 
-/// POST /api/compile
-/// POST /api/compile
+/// POST /api/v1/compile
+/// POST /api/v1/compile
 ///
 /// Stateless compilation: accepts a graph (and optional inline file contents)
 /// and returns AIR JSON without database access. Used by the editor's "Preview
 /// AIR" button before publish.
 #[utoipa::path(
     post,
-    path = "/api/compile",
+    path = "/api/v1/compile",
     request_body = CompileRequest,
     responses(
         (status = 200, description = "Compiled AIR JSON", body = serde_json::Value),
@@ -1533,7 +1773,7 @@ pub async fn compile_graph(
     Json(body): Json<CompileRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let description = body.description.as_deref().unwrap_or("");
-    let files = inline_files(&body.files);
+    let files = node_files_inline(&body.files);
     let air = compile_to_air(&body.graph, &body.name, description, &files)
         .map_err(|e| {
             let view = e.to_view();
@@ -1545,12 +1785,19 @@ pub async fn compile_graph(
 /// One reachable, producer-attributed reference the guard picker should
 /// offer at a node. The single source of truth for editor scope —
 /// replaces the deleted client-side `computeScopes` reimplementation.
+///
+/// `ty` is the recursive [`TyDescriptor`] tree so the picker can drill into
+/// nested objects and array element shapes without additional calls; for
+/// File-anchored containers the tree's root carries `selectable: true` so
+/// the row is pickable as a whole while its children are individually
+/// pickable too.
 #[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct ScopeEntryDto {
     /// What you'd type in a guard, e.g. `input.data.invoice_amount`.
     pub path: String,
-    /// Type label (`String`, `Number`, `Bool`, `Opaque(..)`, …).
-    pub ty: String,
+    /// Recursive type descriptor. Single source of truth for the picker's
+    /// nested drill-down and (later) array `[*]` iteration affordance.
+    pub ty: TyDescriptor,
     pub producer_node: String,
     pub producer_label: String,
     pub note: String,
@@ -1578,7 +1825,7 @@ pub struct TypeSurfaceResponse {
 /// needed) so feedback lands while editing, not at publish.
 #[utoipa::path(
     post,
-    path = "/api/analyze",
+    path = "/api/v1/analyze",
     request_body = CompileRequest,
     responses(
         (status = 200, description = "Shape-aware scope + diagnostics", body = TypeSurfaceResponse),
@@ -1625,6 +1872,70 @@ pub async fn analyze_graph(
     }))
 }
 
+/// Run every enabled test for `existing`'s template family against a
+/// freshly-compiled AIR. Returns the list of failing (or erroring, or
+/// stale) tests so the publish handler can either block or be overridden
+/// with `?force=true`.
+///
+/// "Stale" only matters in the strict sense after publish — pre-publish we
+/// always re-run, so the version-staleness check folds into the live result.
+async fn run_publish_gate(
+    state: &AppState,
+    existing: &WorkflowTemplate,
+    air_json: &serde_json::Value,
+    graph: &WorkflowGraph,
+    created_by: Uuid,
+) -> Result<Vec<FailingTestInfo>, ApiError> {
+    let family = existing.base_template_id.unwrap_or(existing.id);
+
+    let tests: Vec<TemplateTest> = sqlx::query_as::<_, TemplateTest>(
+        "SELECT * FROM template_tests \
+         WHERE template_id = $1 AND enabled = TRUE \
+         ORDER BY created_at ASC",
+    )
+    .bind(family)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    if tests.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let ctx = RunContext {
+        template_id: existing.id,
+        template_version: existing.version,
+        air_json: air_json.clone(),
+        graph: graph.clone(),
+        created_by,
+    };
+
+    let mut failing = Vec::new();
+    for test in &tests {
+        let run = run_test(state, &ctx, test).await?;
+        if run.status != "passed" {
+            let reason = match run.status.as_str() {
+                "failed" => "assertion failed".to_string(),
+                "error" => run
+                    .failure_detail
+                    .as_ref()
+                    .and_then(|d| d.get("reason"))
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("runtime error")
+                    .to_string(),
+                other => format!("unexpected status '{other}'"),
+            };
+            failing.push(FailingTestInfo {
+                test_id: test.id,
+                name: test.name.clone(),
+                reason,
+                run_id: Some(run.id),
+            });
+        }
+    }
+    Ok(failing)
+}
+
 #[cfg(test)]
 mod apply_mode_tests {
     use super::{apply_mode, ApplyMode, WorkflowTemplate};
@@ -1645,10 +1956,13 @@ mod apply_mode_tests {
             published_by: None,
             graph: serde_json::json!({}),
             air_json: None,
+            interface_json: None,
             source_ref: None,
             author_id: Uuid::new_v4(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            workspace_id: Uuid::nil(),
+            visibility: "workspace".into(),
         }
     }
 

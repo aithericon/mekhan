@@ -496,6 +496,7 @@ async fn test_ipc_output_satisfies_required() {
         name: "result".into(),
         path: None, // No file path — satisfied by IPC set_output
         required: true,
+        kind: None,
         upload_to: None,
     }];
 

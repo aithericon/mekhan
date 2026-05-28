@@ -42,6 +42,11 @@ job "mekhan-service" {
       port "http" {
         to = ${service_port}
       }
+
+      port "engine" {
+        static = ${engine_service_port}
+        to     = ${engine_service_port}
+      }
     }
 
     service {
@@ -66,7 +71,37 @@ job "mekhan-service" {
 
       check {
         type     = "http"
-        path     = "/api/health"
+        path     = "/healthz"
+        interval = "10s"
+        timeout  = "2s"
+      }
+    }
+
+
+    service {
+      name     = "engine"
+      port     = "engine"
+      provider = "consul"
+
+      tags = [
+        "engine",
+        "mekhan",
+        "traefik.enable=true",
+        "traefik.http.routers.engine.rule=Host(`${hostname}`) && PathPrefix(`/petri`)",
+        "traefik.http.routers.engine.priority=200",
+        "traefik.http.routers.engine.entrypoints=websecure",
+        "traefik.http.routers.engine.tls=true",
+        "traefik.http.routers.engine.tls.certresolver=letsencrypt",
+        "traefik.http.routers.engine.middlewares=engine-stripprefix",
+        "traefik.http.middlewares.engine-stripprefix.stripprefix.prefixes=/petri",
+        "traefik.http.routers.engine.service=engine",
+      ]
+
+      # TCP check rather than HTTP — the engine doesn't expose /health
+      # (all routes are /api/*, per engine/core-engine/crates/api/src/router.rs).
+      check {
+        type     = "tcp"
+        port     = "engine"
         interval = "10s"
         timeout  = "2s"
       }
@@ -79,13 +114,16 @@ job "mekhan-service" {
       mode     = "delay"
     }
 
-    # Authenticate to Vault using Nomad workload identity. The `mekhan-dev`
-    # JWT role + matching policy live in deploy/dev/nats.tf (this repo) and
-    # are bound to nomad_job_id="mekhan-service" + namespace="default";
-    # together they grant read on the NATS user creds path below.
+    # Authenticate to Vault using Nomad workload identity. The `mekhan-service`
+    # JWT role + matching policies live in deploy/dev/vault.tf and are bound to
+    # nomad_job_id="mekhan-service" + namespace="${namespace}". The policies
+    # grant: (a) read on the NATS user creds path used below, (b) CRUD on
+    # secret/data/aithericon/resources/* for VaultResourceStore (write side)
+    # and the engine's secret-wrapping read side, (c) update on
+    # sys/wrapping/wrap for cubbyhole response wrapping at job dispatch.
     vault {
-      policies = ["nomad-workloads", "mekhan-dev"]
-      role     = "mekhan-dev"
+      policies = ["nomad-workloads", "mekhan-nats-read", "mekhan-resources-rw", "mekhan-wrap"]
+      role     = "mekhan-service"
     }
 
     task "service" {
@@ -101,19 +139,10 @@ job "mekhan-service" {
         }
       }
 
-      # NATS user credentials, rendered from Vault at alloc-start. The bundle
-      # is provisioned by deploy/dev/scripts/generate-nats-user.sh (run once
-      # in CI before first apply, re-run to rotate) and lives at
-      # secret/nats/apps/mekhan/dev/worker.
-      # change_mode=restart so a creds rotation cycles the task automatically.
+
       template {
         destination = "secrets/nats.creds"
         change_mode = "restart"
-        # 0644 not 0600 — Nomad's template runs as root on the client; the
-        # container task user (UID 1000, per Dockerfile.service.prebuilt)
-        # can't read root-owned 0600 files. The alloc's secrets dir is
-        # already private (mounted only into this task's namespace) so
-        # world-readable inside the container is fine.
         perms       = "0644"
         data        = <<-EOH
 {{- with secret "secret/data/nats/apps/mekhan/dev/worker" -}}
@@ -138,12 +167,20 @@ EOH
         MEKHAN__AUTH__CLIENT_ID    = "${auth_client_id}"
         MEKHAN__AUTH__AUDIENCE     = "${auth_audience}"
         MEKHAN__AUTH__REDIRECT_URI = "${auth_redirect_uri}"
-        # Used by handlers.rs for both the post-login bounce AND the
-        # `post_logout_redirect_uri` mekhan hands to Zitadel's end_session
-        # endpoint. The latter requires an exact match with one of the
-        # post_logout_redirect_uris we registered (see zitadel.tf), and
-        # Zitadel only allows absolute URLs — so we override the default `/`.
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID     = "${auth_introspection_client_id}"
+        MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET = "${auth_introspection_client_secret}"
+        MEKHAN__AUTH__BROKER_PAT                  = "${auth_broker_pat}"
+        MEKHAN__DEMOS__SEED        = "true"
+        # Vault — VaultResourceStore writes resource version secrets to
+        # secret/data/aithericon/resources/{ws}/{rid}/v{n}. Nomad's `vault {}`
+        # stanza above already injects VAULT_TOKEN into the task env (workload-
+        # identity exchange via the `mekhan-service` JWT role); VAULT_ADDR is
+        # rendered here because Nomad doesn't propagate the client's vault.addr
+        # to task env automatically. Without VAULT_ADDR set, service/src/main.rs
+        # falls back to InMemoryResourceStore and logs a WARN — see the
+        # `resource_store:` log line at boot.
+        VAULT_ADDR                 = "${vault_addr}"
         RUST_LOG                   = "${rust_log}"
       }
 
@@ -153,29 +190,19 @@ EOH
       }
     }
 
-    # ── Executor — sibling task in the same group ─────────────────────────
-    # Co-resident with `service` (always same Nomad client, shared network
-    # namespace, lifecycle-bound). Communicates with the cluster via NATS
-    # (work-pickup over JetStream subjects), not directly with `service`, so
-    # the only thing co-location buys us here is shared lifecycle + the same
-    # NATS creds file path layout. If executor concurrency ever needs to
-    # diverge from service count, split this into its own Nomad job.
-    task "executor" {
+    task "engine" {
       driver = "docker"
 
       config {
-        image = "${executor_image}"
-        # No port mapping — executor is NATS-driven, cancel HTTP is opt-in
-        # via EXECUTOR_CANCEL__HTTP=true and not enabled here.
+        image = "${engine_image}"
+        ports = ["engine"]
+
         auth {
           username = "${registry_user}"
           password = "${registry_password}"
         }
       }
 
-      # NATS user credentials — same Vault path as the service task. Each
-      # task gets its own /secrets dir, so we render the bundle twice rather
-      # than try to share a single file across tasks.
       template {
         destination = "secrets/nats.creds"
         change_mode = "restart"
@@ -188,24 +215,28 @@ EOH
       }
 
       env {
-        # Executor reads EXECUTOR_* (not MEKHAN__*) — see Dockerfile.executor
-        # lines 175-185. The NATS URL is the cluster's well-known Consul DNS
-        # name; same value the service task uses.
-        EXECUTOR_NATS_URL       = "${nats_url}"
-        EXECUTOR_NATS_CREDS     = "$${NOMAD_SECRETS_DIR}/nats.creds"
-        EXECUTOR_BASE_DIR       = "/var/lib/aithericon/executor"
-        EXECUTOR_CONCURRENCY    = "${executor_concurrency}"
-        EXECUTOR_PYTHON__ENABLED   = "true"
-        EXECUTOR_PYTHON__PREFER_UV = "true"
-        # Cancel HTTP off by default — turn on + add a port stanza above
-        # if the service ever needs to cancel executor jobs synchronously.
-        EXECUTOR_CANCEL__HTTP = "false"
-        RUST_LOG              = "${rust_log}"
+
+        PORT                = "${engine_service_port}"
+        NATS_URL            = "${nats_url}"
+        NATS_CREDS          = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        EXECUTOR_NATS_URL   = "${nats_url}"
+        EXECUTOR_NATS_CREDS = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        EXECUTOR_ENABLED    = "true"
+        EXECUTOR_NAMESPACE  = "executor"
+        # Vault — engine resolves `{{secret:...}}` refs against VaultSecretStore
+        # and wraps resolved values into a single-use token before publishing
+        # on NATS. Needs VAULT_TOKEN (Nomad-injected via the workload-identity
+        # exchange) + VAULT_ADDR (templated here). The `mekhan-wrap` policy on
+        # the mekhan-service role grants the `sys/wrapping/wrap` update cap;
+        # `mekhan-resources-rw` grants the read on secret/data/aithericon/
+        # resources/* that the engine needs to fetch values before wrapping.
+        VAULT_ADDR          = "${vault_addr}"
+        RUST_LOG            = "${rust_log}"
       }
 
       resources {
-        cpu    = ${executor_cpu_mhz}
-        memory = ${executor_memory_mb}
+        cpu    = ${engine_cpu_mhz}
+        memory = ${engine_memory_mb}
       }
     }
   }

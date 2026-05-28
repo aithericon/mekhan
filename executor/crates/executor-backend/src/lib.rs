@@ -1,18 +1,23 @@
-#[cfg(feature = "docker")]
-pub mod docker;
-#[cfg(feature = "http")]
-pub mod http;
-pub mod process;
-#[cfg(feature = "python")]
-pub mod python;
+//! Core execution traits and shared utilities for executor backends.
+//!
+//! This crate is intentionally light: just the [`ExecutionBackend`] /
+//! [`EventStream`] traits, the [`StatusCallback`] alias, and a few shared
+//! helpers ([`tail::TailBuffer`], [`outputs`], [`resolve`]) used by more
+//! than one backend.
+//!
+//! Concrete backends live in their own crates that depend on this one:
+//! `executor-process`, `executor-docker`, `executor-http`,
+//! `executor-python`, `executor-llm`, `executor-kreuzberg`,
+//! `executor-postgres`, `executor-file-ops`.
+
+pub mod outputs;
 pub mod resolve;
+pub mod resource;
+pub mod tail;
 pub mod traits;
 
-#[cfg(feature = "docker")]
-pub use docker::{DockerBackend, DockerConfig};
-#[cfg(feature = "http")]
-pub use http::{HttpBackend, HttpConfig};
-pub use process::{ProcessBackend, ProcessConfig};
-#[cfg(feature = "python")]
-pub use python::{PythonBackend, PythonConfig};
-pub use traits::{ExecutionBackend, StatusCallback};
+pub use resource::{
+    load_resource, load_resource_envelope, try_load_resource, try_load_resource_envelope,
+};
+pub use tail::TailBuffer;
+pub use traits::{EventStream, ExecutionBackend, StatusCallback};

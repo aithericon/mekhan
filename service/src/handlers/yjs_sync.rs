@@ -7,11 +7,9 @@ use axum::{
     },
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
 use axum_extra::extract::cookie::CookieJar;
 use futures::{SinkExt, StreamExt};
-use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -34,14 +32,17 @@ pub async fn ws_handler(
     // WS upgrade, but the same-origin cookie rides it automatically — no
     // `?token=` query param needed. Goes through the same `Authenticator` so
     // dev_noop accepts unauthenticated and bff requires a valid session.
-    if let Err(e) = state.authenticator.authenticate(&headers, &jar).await {
-        tracing::debug!(template_id = %template_id, "yjs ws auth rejected: {e}");
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "unauthenticated"})),
-        )
+    let user = match state.authenticator.authenticate(&headers, &jar).await {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::debug!(template_id = %template_id, "yjs ws auth rejected: {e}");
+            return crate::models::error::ApiError::new(
+                StatusCode::FORBIDDEN,
+                "unauthenticated",
+            )
             .into_response();
-    }
+        }
+    };
 
     // Verify the template exists. Published templates connect read-only so the
     // editor can render the frozen graph; writes are dropped in `handle_socket`.
@@ -52,24 +53,35 @@ pub async fn ws_handler(
     .fetch_optional(&state.db)
     .await;
 
-    let readonly = match existing {
-        Ok(Some(t)) => t.published,
+    let template = match existing {
+        Ok(Some(t)) => t,
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "template not found"})),
-            )
+            return crate::models::error::ApiError::not_found("template not found")
                 .into_response();
         }
         Err(e) => {
             tracing::error!("failed to check template for WS: {e}");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return crate::models::error::ApiError::internal(e.to_string()).into_response();
         }
     };
+
+    // Workspace ACL: public templates open to all authenticated users
+    // (read-only since publish-immutability already prevents writes); private
+    // templates require workspace membership. Editor-or-above is enforced
+    // implicitly via the existing `published` -> readonly check; viewers of
+    // a public template fall through to readonly anyway.
+    let user_ws = user.workspace_id.unwrap_or_else(Uuid::nil);
+    if template.visibility != "public" && template.workspace_id != user_ws {
+        tracing::debug!(
+            template_id = %template_id,
+            "yjs ws rejected: cross-workspace + not public"
+        );
+        return crate::models::error::ApiError::forbidden(
+            "not a member of this template's workspace",
+        )
+        .into_response();
+    }
+    let readonly = template.published;
 
     ws.on_upgrade(move |socket| handle_socket(socket, template_id, readonly, state))
 }

@@ -211,21 +211,25 @@ fn ui_linear_human_task_deserializes_and_compiles() {
 fn ui_invoice_processing_deserializes_and_compiles() {
     let graph = load_graph("invoice-processing.json");
 
-    // 11 nodes, 11 edges
-    assert_eq!(graph.nodes.len(), 11);
-    assert_eq!(graph.edges.len(), 11);
+    // 12 nodes, 13 edges (auto-validate Loop carries a `validate-check`
+    // AutomatedStep body + body_in/body_out edges — Loop requires a body
+    // since feat(loop): body authoring).
+    assert_eq!(graph.nodes.len(), 12);
+    assert_eq!(graph.edges.len(), 13);
 
-    // The "extract" node is a Python automation; the backend-config validator
-    // requires at least one staged file with a matching entrypoint default.
+    // Python automation nodes need a staged main.py for the backend-config
+    // validator: the top-level "extract" node and the Loop body
+    // "validate-check".
     let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
-    let mut extract_files = HashMap::new();
-    extract_files.insert(
+    let mut stub_py = HashMap::new();
+    stub_py.insert(
         "main.py".to_string(),
         InputSource::Raw {
             content: "# stub\n".to_string(),
         },
     );
-    files.insert("extract".to_string(), extract_files);
+    files.insert("extract".to_string(), stub_py.clone());
+    files.insert("validate-check".to_string(), stub_py);
 
     let air = compile_to_air(&graph, "invoice_processing", "Invoice workflow", &files)
         .expect("should compile");
@@ -306,7 +310,7 @@ fn ui_invoice_processing_deserializes_and_compiles() {
         "Compliance submit"
     );
 
-    // --- ParallelJoin: Merge Results ---
+    // --- Join (mode: all): Merge Results ---
     assert!(has_transition(&air, "t_join_join"), "Join transition");
 
     // --- Loop: Auto-Validate ---
@@ -339,18 +343,25 @@ fn ui_invoice_processing_deserializes_and_compiles() {
         })
         .collect();
 
-    // Only edges targeting HumanTask nodes should have injection transitions:
-    // e-start-review (→ Review), e-split-manager (→ Manager Approval)
+    // Edges that survive as `t_edge_*` transitions:
+    //   • e-start-review, e-split-manager — HumanTask injection wiring
+    //   • e-decision-loop, e-loop-body-out — Loop has 2 inbound edges (the
+    //     regular `in` plus the body's `body_out`), so the
+    //     merge-when-single-incoming optimization can't fold either pass-through
+    //     away.
     for et in &edge_transitions {
         assert!(
-            *et == "t_edge_e-start-review" || *et == "t_edge_e-split-manager",
+            *et == "t_edge_e-start-review"
+                || *et == "t_edge_e-split-manager"
+                || *et == "t_edge_e-decision-loop"
+                || *et == "t_edge_e-loop-body-out",
             "unexpected edge transition {et} — should have been merged"
         );
     }
     assert_eq!(
         edge_transitions.len(),
-        2,
-        "expected exactly 2 injection edge transitions, got: {edge_transitions:?}"
+        4,
+        "expected exactly 4 surviving edge transitions, got: {edge_transitions:?}"
     );
 }
 
@@ -364,14 +375,15 @@ fn ui_invoice_processing_interpolates_start_file_param() {
     let graph = load_graph("invoice-processing.json");
 
     let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
-    let mut extract_files = HashMap::new();
-    extract_files.insert(
+    let mut stub_py = HashMap::new();
+    stub_py.insert(
         "main.py".to_string(),
         InputSource::Raw {
             content: "# stub\n".to_string(),
         },
     );
-    files.insert("extract".to_string(), extract_files);
+    files.insert("extract".to_string(), stub_py.clone());
+    files.insert("validate-check".to_string(), stub_py);
 
     let air = compile_to_air(&graph, "invoice_processing", "Invoice workflow", &files)
         .expect("should compile");

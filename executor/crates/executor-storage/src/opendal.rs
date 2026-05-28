@@ -506,6 +506,7 @@ mod tests {
             prefix: "my/prefix/".into(),
             credentials: Default::default(),
             retry: Default::default(),
+            resource_alias: None,
         };
         let (op, prefix) = build_operator_with_prefix(&config).unwrap();
         assert_eq!(prefix, "my/prefix/");
@@ -528,6 +529,7 @@ mod tests {
                 min_delay_ms: 50,
                 max_delay_ms: 500,
             },
+            resource_alias: None,
         };
         // The RetryLayer wraps successfully — operator builds without panic
         // even with non-default retry config. (Behaviour assertions about the
@@ -546,6 +548,7 @@ mod tests {
             prefix: String::new(),
             credentials: Default::default(),
             retry: Default::default(),
+            resource_alias: None,
         };
         let (_, prefix) = build_operator_with_prefix(&config).unwrap();
         assert_eq!(prefix, "");

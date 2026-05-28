@@ -13,7 +13,8 @@ use crate::effect_tokens::{
     ExecutorStatusSignal, ExecutorSubmitInput, ExecutorSubmitted, HumanCancelInput,
     HumanTaskAssigned, HumanTaskCancelled, HumanTaskResponse, ProcessStartConfig, ProcessStarted,
     SchedulerCancelInput, SchedulerCancelled, SchedulerStatusSignal, SchedulerSubmitInput,
-    SchedulerSubmitted, TimerCancelInput, TimerCancelled, TimerInput, TimerScheduled,
+    SchedulerSubmitted, SubWorkflowCancelInput, SubWorkflowCancelled, TimerCancelInput,
+    TimerCancelled, TimerInput, TimerScheduled,
 };
 use crate::place::PlaceHandle;
 use crate::token::DynamicToken;
@@ -148,6 +149,24 @@ pub struct TimerCancel<'a> {
     pub timer: &'a PlaceHandle<TimerCancelInput>,
     /// Output: place receiving cancellation acknowledgment.
     pub cancelled: &'a PlaceHandle<TimerCancelled>,
+    /// Error output: place receiving effect handler failures.
+    pub errors: &'a PlaceHandle<EffectError>,
+}
+
+// ---------------------------------------------------------------------------
+// Subworkflow
+// ---------------------------------------------------------------------------
+
+/// Full contract for a `subworkflow_cancel` effect transition.
+///
+/// Used by the Timeout node's body-cancellation post-pass: when the timer
+/// wins, one `subworkflow_cancel` is fired per SubWorkflow body child to
+/// terminate the running child net.
+pub struct SubWorkflowCancel<'a> {
+    /// Input: place holding the cancel request (`child_net_id`).
+    pub cancel: &'a PlaceHandle<SubWorkflowCancelInput>,
+    /// Output: place receiving cancellation acknowledgment.
+    pub cancelled: &'a PlaceHandle<SubWorkflowCancelled>,
     /// Error output: place receiving effect handler failures.
     pub errors: &'a PlaceHandle<EffectError>,
 }

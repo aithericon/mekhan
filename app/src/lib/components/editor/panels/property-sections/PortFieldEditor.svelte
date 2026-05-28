@@ -152,11 +152,22 @@
 			{#if field.kind === 'select'}
 				<div class="space-y-1.5">
 					<Label class="text-sm text-muted-foreground">Options</Label>
+					<!--
+						The wire shape is `{value, label}` per option, but this
+						editor only exposes `value`; labels default to the
+						value when the editor reconstructs them. Rich-label
+						authoring goes through hand-edited JSON / a future
+						dual-column editor.
+					-->
 					<StringListEditor
-						items={field.options ?? []}
+						items={(field.options ?? []).map((o) => o.value)}
 						{readonly}
 						placeholder="Option value"
-						onchange={(options) => onchange({ ...field, options })}
+						onchange={(values) =>
+							onchange({
+								...field,
+								options: values.map((v) => ({ value: v, label: v }))
+							})}
 					/>
 				</div>
 			{/if}

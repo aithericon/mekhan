@@ -14,11 +14,22 @@ const BINARY_EXTENSIONS: &[&str] = &[
     "pdf", "zip", "tar", "gz", "whl",
 ];
 
-/// Metadata file (.mekhan.json) stored in the template directory.
+/// Filename of the per-checkout metadata file (lockfile-style: machine-managed,
+/// commit-by-default — sibling of `Cargo.lock` / `package-lock.json`).
+pub const META_FILENAME: &str = "mekhan.lock.json";
+
+/// Metadata file (`mekhan.lock.json`) stored in the template directory.
+/// Lockfile-shaped: not intended for hand editing; written by `init`/`pull`
+/// and refreshed (`lastPull` timestamp only) by `apply`. Committed to VCS so
+/// the checkout's identity travels with the source.
+///
+/// `baseTemplateId` is the chain root — stable across `mekhan apply` version
+/// bumps. CLI commands that need a specific row (the latest published
+/// version) call `GET /api/v1/templates/{id}/latest` to resolve it on demand.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MekhanJson {
-    pub template_id: String,
+    pub base_template_id: String,
     pub server_url: String,
     pub last_pull: String,
     #[serde(default = "default_format")]
@@ -34,7 +45,7 @@ fn default_format() -> String {
 /// Layout:
 /// ```
 /// dir/
-///   .mekhan.json
+///   mekhan.lock.json
 ///   workflow.yaml | workflow.hcl | graph.json
 ///   nodes/
 ///     {node_id}/
@@ -44,23 +55,21 @@ pub fn export_to_dir(
     dir: &Path,
     graph: &WorkflowGraph,
     files: &HashMap<String, HashMap<String, String>>,
-    template_id: &str,
+    base_template_id: &str,
     server_url: &str,
     format: WorkflowFormat,
 ) -> Result<()> {
     // Create the directory
     std::fs::create_dir_all(dir).context("failed to create output directory")?;
 
-    // Write .mekhan.json
+    // Write the lock file
     let meta = MekhanJson {
-        template_id: template_id.to_string(),
+        base_template_id: base_template_id.to_string(),
         server_url: server_url.to_string(),
         last_pull: chrono::Utc::now().to_rfc3339(),
         format: format.to_string(),
     };
-    let meta_path = dir.join(".mekhan.json");
-    let meta_json = serde_json::to_string_pretty(&meta)?;
-    std::fs::write(&meta_path, meta_json).context("failed to write .mekhan.json")?;
+    write_meta(dir, &meta)?;
 
     // Write workflow file in the specified format
     formats::write_workflow(dir, format, graph)?;
@@ -74,6 +83,7 @@ pub fn export_to_dir(
 /// Read a directory into graph + files.
 ///
 /// Returns (metadata, graph, files).
+#[allow(clippy::type_complexity)]
 pub fn import_from_dir(
     dir: &Path,
 ) -> Result<(
@@ -81,11 +91,7 @@ pub fn import_from_dir(
     WorkflowGraph,
     HashMap<String, HashMap<String, String>>,
 )> {
-    // Read .mekhan.json
-    let meta_path = dir.join(".mekhan.json");
-    let meta_str = std::fs::read_to_string(&meta_path)
-        .context("failed to read .mekhan.json — is this a mekhan directory?")?;
-    let meta: MekhanJson = serde_json::from_str(&meta_str).context("invalid .mekhan.json")?;
+    let meta = read_meta(dir)?;
 
     // Detect and read workflow format
     let format = formats::detect_format(dir)?;
@@ -95,6 +101,30 @@ pub fn import_from_dir(
     let files = read_node_files(dir)?;
 
     Ok((meta, graph, files))
+}
+
+/// Path to the lock file inside a template directory.
+pub fn meta_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(META_FILENAME)
+}
+
+/// Read and parse `mekhan.lock.json` from a template directory.
+pub fn read_meta(dir: &Path) -> Result<MekhanJson> {
+    let path = meta_path(dir);
+    let raw = std::fs::read_to_string(&path).with_context(|| {
+        format!("failed to read {META_FILENAME} — is this a mekhan directory?")
+    })?;
+    serde_json::from_str(&raw).with_context(|| format!("invalid {META_FILENAME}"))
+}
+
+/// Write `mekhan.lock.json` to a template directory (pretty-printed JSON,
+/// trailing newline so it diffs cleanly).
+pub fn write_meta(dir: &Path, meta: &MekhanJson) -> Result<()> {
+    let path = meta_path(dir);
+    let mut json = serde_json::to_string_pretty(meta)?;
+    json.push('\n');
+    std::fs::write(&path, json)
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Check if a filename is a binary asset based on extension.
@@ -276,7 +306,7 @@ mod tests {
         // Write text file
         std::fs::write(node_dir.join("main.py"), "print('hello')").unwrap();
         // Write binary file (fake PNG header)
-        std::fs::write(node_dir.join("screenshot.png"), &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+        std::fs::write(node_dir.join("screenshot.png"), [0x89, 0x50, 0x4E, 0x47]).unwrap();
         // Write another text file
         std::fs::write(node_dir.join("config.json"), "{}").unwrap();
 
@@ -297,7 +327,7 @@ mod tests {
         // Write text file
         std::fs::write(node_dir.join("main.py"), "print('hello')").unwrap();
         // Write binary files
-        std::fs::write(node_dir.join("screenshot.png"), &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+        std::fs::write(node_dir.join("screenshot.png"), [0x89, 0x50, 0x4E, 0x47]).unwrap();
         std::fs::write(node_dir.join("diagram.svg"), "<svg></svg>").unwrap();
 
         let assets = read_node_assets(tmp.path()).unwrap();
@@ -316,8 +346,8 @@ mod tests {
 
         std::fs::write(node_dir.join("main.py"), "import os").unwrap();
         std::fs::write(node_dir.join("requirements.txt"), "requests").unwrap();
-        std::fs::write(node_dir.join("input.png"), &[0x89, 0x50]).unwrap();
-        std::fs::write(node_dir.join("report.pdf"), &[0x25, 0x50]).unwrap();
+        std::fs::write(node_dir.join("input.png"), [0x89, 0x50]).unwrap();
+        std::fs::write(node_dir.join("report.pdf"), [0x25, 0x50]).unwrap();
 
         let text_files = read_node_files(tmp.path()).unwrap();
         let binary_files = read_node_assets(tmp.path()).unwrap();

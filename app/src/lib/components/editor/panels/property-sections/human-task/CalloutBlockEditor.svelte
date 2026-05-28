@@ -3,12 +3,15 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import InsertRefButton from '../InsertRefButton.svelte';
 
 	type Props = {
 		severity: 'info' | 'warning' | 'error' | 'success';
 		title?: string;
 		content: string;
 		readonly?: boolean;
+		scope?: ScopeEntry[];
 		onchange: (block: {
 			severity: 'info' | 'warning' | 'error' | 'success';
 			title?: string;
@@ -22,9 +25,14 @@
 		title,
 		content,
 		readonly = false,
+		scope = [],
 		onchange,
 		onremove
 	}: Props = $props();
+
+	function appendToContent(snippet: string) {
+		onchange({ severity, title, content: content ? `${content} ${snippet}` : snippet });
+	}
 
 	// ui-allow: semantic callout severity colors — no theme token for info/warning/success
 	const borderColors: Record<string, string> = {
@@ -118,5 +126,8 @@
 				})}
 			rows={3}
 		/>
+		{#if scope.length > 0}
+			<InsertRefButton {scope} disabled={readonly} oninsert={appendToContent} />
+		{/if}
 	</div>
 </div>

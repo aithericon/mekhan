@@ -80,6 +80,7 @@ impl LlmTestKit for LlmTestKitImpl {
                 "prompt": "Reply with exactly the word 'hello' and nothing else.",
                 "base_url": self.ollama_url,
             }),
+                config_ref: None,
         }
     }
 
@@ -107,6 +108,7 @@ impl LlmTestKit for LlmTestKitImpl {
                     }
                 }
             }),
+                config_ref: None,
         }
     }
 
@@ -125,6 +127,7 @@ impl LlmTestKit for LlmTestKitImpl {
                     "schema": null
                 }
             }),
+                config_ref: None,
         }
     }
 
@@ -134,6 +137,7 @@ impl LlmTestKit for LlmTestKitImpl {
             inputs: vec![],
             outputs: vec![],
             config: serde_json::json!({ "bad": "config" }),
+            config_ref: None,
         }
     }
 
@@ -148,6 +152,7 @@ impl LlmTestKit for LlmTestKitImpl {
                 "prompt": "Hello",
                 "base_url": self.ollama_url,
             }),
+                config_ref: None,
         }
     }
 }

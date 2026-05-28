@@ -1,19 +1,24 @@
 #![allow(dead_code)]
 
 pub mod auth;
+pub mod backends;
 pub mod catalogue;
 pub mod causality;
 pub mod compiler;
 
 pub mod config;
 pub mod db;
+pub mod demos;
 pub mod handlers;
 pub mod lifecycle;
 pub mod models;
 pub mod nats;
+pub mod nodes;
+pub mod observability;
 pub mod openapi;
 pub mod petri;
 pub mod process;
+pub mod projections;
 pub mod query;
 pub mod s3;
 pub mod triggers;
@@ -78,22 +83,52 @@ pub struct AppState {
     /// unless an introspection API credential is configured — then the
     /// Bearer path in `require_auth_middleware` is disabled.
     pub introspection: Option<Arc<crate::auth::IntrospectionVerifier>>,
-    /// Zitadel Management broker for the embedded `/api/auth/tokens` feature
+    /// Zitadel Management broker for the embedded `/api/v1/auth/tokens` feature
     /// (per-user automation PATs). `None` unless `auth.broker_pat` is
     /// configured — then those endpoints 503 and the SPA hides the section.
     pub zitadel_mgmt: Option<Arc<crate::auth::ZitadelMgmt>>,
     pub triggers: Arc<TriggerDispatcher>,
     /// In-flight WaitForResult waiters, shared with the lifecycle consumer.
     pub result_waiters: Arc<crate::triggers::ResultWaiters>,
+    /// Phase B.9 — write-side secret backend used by the Resource CRUD
+    /// handlers. `VaultResourceStore` when `VAULT_ADDR`/`VAULT_TOKEN` are
+    /// set; `InMemoryResourceStore` (dev/test fallback) otherwise. The
+    /// engine's wrap path still reads through the existing `SecretStore`
+    /// path — this trait is write-only by design.
+    pub resource_store: Arc<dyn aithericon_resources::ResourceSecretStore>,
+    /// Publish-time resource resolver. Reads workspace resources +
+    /// per-version public config, runs ACL + audit, and returns the JSON
+    /// envelope the publish handler splices into the AIR before
+    /// persistence. The launcher never touches this — instances run against
+    /// already-spliced AIR.
+    pub resource_resolver: Arc<crate::petri::resource_resolver::ResourceResolver>,
 }
 
-/// Build the `OpenApiRouter` containing every `#[utoipa::path]`-annotated
-/// handler. Single source of truth for both [`build_router`] (runtime mount +
-/// swagger-ui) and [`openapi_spec`] (CLI dump for frontend codegen).
-fn build_openapi_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
-        // Health
+/// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
+///
+/// Currently only the `/healthz` liveness probe. Anything that load balancers,
+/// uptime monitors, or container orchestrators need to reach without a session
+/// cookie belongs here.
+fn build_public_openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::<AppState>::new()
         .routes(routes!(handlers::health::liveness))
+}
+
+/// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
+/// requires authentication. Mounted behind `require_auth_middleware`.
+fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::<AppState>::with_openapi(ApiDoc::openapi())
+        // Backend registry — drives the editor's AutomatedStep panel
+        // (picker labels/icons, default config seed, default output port).
+        // `derive-output` is the config→Port hook for `Derived` backends
+        // (LLM today); the editor calls it on every step config change so
+        // the read-only port section reflects the actual runtime envelope.
+        .routes(routes!(handlers::backends::list_backends))
+        .routes(routes!(handlers::backends::derive_backend_output))
+        // Node-type registry — drives the editor's palette + property-panel
+        // dispatch. Companion to `/api/v1/backends`; the Svelte component
+        // map and Lucide icons stay frontend-only.
+        .routes(routes!(handlers::node_types::list_node_types))
         // Auth tokens — embedded per-user PAT management. Cookie-only by
         // construction (the `AuthUser` arg re-runs the cookie authenticator,
         // so a Bearer PAT behind `require_auth_middleware` can't reach these
@@ -119,15 +154,30 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
             handlers::templates::update_template,
             handlers::templates::delete_template
         ))
+        .routes(routes!(handlers::templates::get_template_bundle))
         .routes(routes!(handlers::templates::publish_template))
         .routes(routes!(handlers::templates::new_version))
         .routes(routes!(handlers::templates::apply_template))
         .routes(routes!(handlers::templates::list_versions))
+        .routes(routes!(handlers::templates::get_latest))
         .routes(routes!(handlers::templates::get_air))
         .routes(routes!(handlers::templates::compile_preview))
         .routes(routes!(handlers::templates::io_stubs))
         .routes(routes!(handlers::templates::compile_graph))
         .routes(routes!(handlers::templates::analyze_graph))
+        // Template tests
+        .routes(routes!(
+            handlers::template_tests::list_tests,
+            handlers::template_tests::create_test
+        ))
+        .routes(routes!(
+            handlers::template_tests::update_test,
+            handlers::template_tests::delete_test
+        ))
+        .routes(routes!(handlers::template_tests::run_one))
+        .routes(routes!(handlers::template_tests::run_all))
+        .routes(routes!(handlers::template_tests::list_runs))
+        .routes(routes!(handlers::template_tests::promote_instance_to_test))
         // Instances
         .routes(routes!(
             handlers::instances::list_instances,
@@ -139,6 +189,7 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::instances::get_instance_state))
         .routes(routes!(handlers::instances::get_instance_events))
+        .routes(routes!(handlers::instances::list_step_executions))
         .routes(routes!(handlers::instances::stream_instance))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
@@ -183,6 +234,22 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         // since utoipa-axum doesn't expose per-route layers here)
         .routes(routes!(handlers::files::upload_file))
         .routes(routes!(handlers::files::get_file))
+        // Resources (Phase B.9) — typed credential CRUD. Read paths hit
+        // the DB only; write paths (POST/PUT/rotate/delete) also touch the
+        // configured `ResourceSecretStore` (Vault in prod, in-memory in
+        // dev/test). The `/types` introspection route powers the picker.
+        .routes(routes!(
+            handlers::resources::list_resources,
+            handlers::resources::create_resource
+        ))
+        .routes(routes!(handlers::resources::list_resource_types))
+        .routes(routes!(
+            handlers::resources::get_resource,
+            handlers::resources::update_resource,
+            handlers::resources::delete_resource
+        ))
+        .routes(routes!(handlers::resources::rotate_resource))
+        .routes(routes!(handlers::resources::list_resource_audit))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))
@@ -192,28 +259,65 @@ fn build_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::triggers::preview_cron))
         .routes(routes!(handlers::triggers::trigger_metrics))
         .routes(routes!(handlers::triggers::trigger_source_scope))
+        .routes(routes!(handlers::observability::list_silent_drops))
+        // Workspaces (Phase A2) — membership-keyed tenant boundary.
+        // Creation is out-of-band (seed / Zitadel-auto-provision);
+        // these endpoints manage *members* of existing workspaces.
+        .routes(routes!(handlers::workspaces::list_workspaces))
+        .routes(routes!(handlers::workspaces::get_workspace))
+        .routes(routes!(
+            handlers::workspaces::list_members,
+            handlers::workspaces::add_member
+        ))
+        .routes(routes!(handlers::workspaces::remove_member))
+        // Projects (Phase A2) — M:N grouping of templates within a
+        // workspace. Not an ACL boundary.
+        .routes(routes!(
+            handlers::projects::list_projects,
+            handlers::projects::create_project
+        ))
+        .routes(routes!(handlers::projects::delete_project))
+        .routes(routes!(handlers::projects::attach_template))
+        .routes(routes!(handlers::projects::detach_template))
+        // Template tags + visibility (Phase A2).
+        .routes(routes!(handlers::projects::set_template_tags))
+        .routes(routes!(handlers::projects::set_template_visibility))
 }
 
 pub fn build_router(state: AppState) -> Router {
     let frontend_dir = state.config.frontend_dir.clone();
     let cors_config = state.config.clone();
 
-    // Every #[utoipa::path]-annotated handler is registered via OpenApiRouter
-    // so the spec stays in sync with the runtime mounts. The Yjs WebSocket is
-    // out-of-band (binary protocol, not OpenAPI-modeled).
-    let (api_router, api_spec) = build_openapi_router().split_for_parts();
+    // Versioning policy:
+    //   - JSON API surface lives under `/api/v1/*` (path attrs embed the
+    //     version directly).
+    //   - `/healthz` sits at the root, outside auth, k8s-conventional.
+    //   - The unversioned siblings (`/api/auth/*` OAuth bootstrap,
+    //     `/api/yjs/{template_id}` WS, `/api/triggers/webhook/{slug}`) are
+    //     NOT OpenAPI-modeled and have external contracts mekhan does not
+    //     control.
+    //
+    // The protected OpenApiRouter holds every authenticated handler; the
+    // public one holds only `/healthz`. Both contribute to the same
+    // `api_spec` so the published OpenAPI document stays a single document.
+    let (protected_router, mut api_spec) =
+        build_protected_openapi_router().split_for_parts();
+    let (public_router, public_spec) = build_public_openapi_router().split_for_parts();
+    api_spec.merge(public_spec);
 
     // The auth middleware gates every JSON API route. The WS endpoint is
     // mounted OUTSIDE this layer because it isn't OpenAPI-modeled — it
     // authenticates inside the handler via the same `mekhan_session` cookie
     // (which rides the same-origin WS upgrade) through the `Authenticator`.
-    let protected: Router = api_router
+    let protected: Router = protected_router
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::extractor::require_auth_middleware,
         ))
         .with_state(state.clone());
+
+    let public: Router = public_router.with_state(state.clone());
 
     let ws_router: Router = Router::new()
         .route(
@@ -277,23 +381,32 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(handlers::triggers::webhook_receiver)
                 .delete(handlers::triggers::webhook_receiver),
         )
-        .with_state(state);
+        .with_state(state.clone());
+
+    // Engine reverse proxy: `/petri/*` → `config.petri_lab_url`. Gives the
+    // SPA a single-origin posture in prod (no separate engine ingress) and
+    // closes the dev/prod parity gap the Vite proxy used to paper over.
+    // Inside `protected` so session-cookie auth gates engine access too.
+    let petri_proxy = petri::proxy::router(state);
 
     let protected = protected
         .merge(ws_router)
         .merge(webhook_router)
         .merge(auth_router)
-        .merge(cloud_layer_router);
+        .merge(cloud_layer_router)
+        .merge(petri_proxy);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);
 
+    // Public surface (unauthenticated): `/healthz` first, then everything
+    // else gated by auth. SPA fallback comes last so handler routes win.
     let app = if let Some(dir) = frontend_dir {
         let path = PathBuf::from(dir);
         let index = path.join("index.html");
         let spa = ServeDir::new(&path).fallback(ServeFile::new(&index));
-        protected.merge(swagger).fallback_service(spa)
+        public.merge(protected).merge(swagger).fallback_service(spa)
     } else {
-        protected.merge(swagger)
+        public.merge(protected).merge(swagger)
     };
 
     app.layer(build_cors_layer(&cors_config))
@@ -336,8 +449,12 @@ fn build_cors_layer(cfg: &AppConfig) -> CorsLayer {
 }
 
 /// Build the OpenAPI document without booting any state — used by the CLI's
-/// `mekhan openapi` subcommand to dump the spec for codegen pipelines.
+/// `mekhan openapi` subcommand to dump the spec for codegen pipelines. Merges
+/// the public (`/healthz`) and protected halves so the published spec is a
+/// single document.
 pub fn openapi_spec() -> utoipa::openapi::OpenApi {
-    let (_, api) = build_openapi_router().split_for_parts();
+    let (_, mut api) = build_protected_openapi_router().split_for_parts();
+    let (_, public) = build_public_openapi_router().split_for_parts();
+    api.merge(public);
     api
 }

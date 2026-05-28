@@ -117,7 +117,7 @@ fn child_graph(tag: &str) -> WorkflowGraph {
     WorkflowGraph {
         nodes: vec![start(&s), end(&e)],
         edges: vec![edge("ce", &s, &e)],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     }
 }
 
@@ -133,7 +133,7 @@ fn parent_graph(child_family: Uuid, pin: VersionPin) -> WorkflowGraph {
             edge("pe1", "pstart", "sub"),
             edge("pe2", "sub", "pend"),
         ],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     }
 }
 
@@ -147,7 +147,7 @@ async fn create_with_graph(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/templates")
+                .uri("/api/v1/templates")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -172,7 +172,7 @@ async fn publish(app: &axum::Router, id: Uuid) -> Value {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{id}/publish"))
+                .uri(format!("/api/v1/templates/{id}/publish"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -232,7 +232,7 @@ async fn subworkflow_pins_child_at_parent_publish() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/templates/{child_v1}/new-version"))
+                .uri(format!("/api/v1/templates/{child_v1}/new-version"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -272,7 +272,7 @@ async fn subworkflow_pins_child_at_parent_publish() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/templates/{parent}/air"))
+                .uri(format!("/api/v1/templates/{parent}/air"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -369,7 +369,7 @@ async fn subworkflow_spawns_child_and_completes() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
@@ -412,4 +412,271 @@ async fn subworkflow_spawns_child_and_completes() {
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
+}
+
+// ---------------------------------------------------------------------------
+// 3. SubWorkflow as a parked producer — `<sub_slug>.<field>` borrow round-trip
+// ---------------------------------------------------------------------------
+
+/// Like `create_with_graph`, but takes an already-shaped JSON graph so the
+/// child + parent can declare custom Start input fields, End result mappings,
+/// and a slug on the SubWorkflow node without rebuilding the typed helpers.
+async fn create_with_graph_json(
+    app: &axum::Router,
+    name: &str,
+    graph: &Value,
+) -> Uuid {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": name,
+                        "graph": graph,
+                        "author_id": Uuid::new_v4(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create {name}");
+    let created = body_json(resp.into_body()).await;
+    created["id"].as_str().unwrap().parse().unwrap()
+}
+
+/// SubWorkflow becomes a parked producer: `<sub_slug>.<field>` resolves
+/// downstream via the same read-arc pipeline as HumanTask/AutomatedStep.
+///
+/// The compile-time shape is asserted by
+/// `subworkflow_slug_borrow_and_join_unwraps_exit_code` in
+/// `service/src/compiler/compile.rs` (read-arc on `p_sub_data`, `sub.greeting`
+/// rewritten to `d_sub.greeting`, join unwraps `exit_code.value`). This test
+/// closes the runtime side end-to-end:
+///
+///   - child End stamps `exit_code.value.greeting` on the reply token
+///   - parent `t_sub_join` unwraps that envelope and parks `{greeting}` into
+///     `p_sub_data` via `split_outputs`
+///   - parent End read-arcs `p_sub_data`, projects `d_sub.greeting` into the
+///     success envelope (`result.value.greeting`)
+///
+/// Without any one of those steps the assertion fails — the borrow either
+/// returns null or vanishes through the executor envelope.
+#[tokio::test]
+async fn subworkflow_borrows_child_output_field() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev up`",
+            engine_url()
+        );
+    }
+
+    let engine_nats_url =
+        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) =
+        common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+
+    // Lifecycle listener — without this the instance status never advances
+    // past `running` in Postgres even though the engine completes the net.
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let kv = listener_nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("kv");
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
+    let listener_db = db.clone();
+    tokio::spawn(async move {
+        start_lifecycle_listener(
+            listener_nats,
+            listener_db,
+            sub_mgr,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+        .await;
+    });
+
+    // Child: Start(name: text) → End(greeting = "Hello, " + input.name)
+    // The End's `resultMapping` is what the child's terminal reply carries,
+    // nested at `exit_code.value.greeting` per lower_end's result_shape.
+    let child = json!({
+        "nodes": [
+            { "id": "cstart", "type": "start", "position": { "x": 0, "y": 0 },
+              "data": {
+                  "type": "start", "label": "Child Start",
+                  "initial": {
+                      "id": "in", "label": "Input",
+                      "fields": [
+                          { "name": "name", "label": "Name",
+                            "kind": "text", "required": true }
+                      ]
+                  }
+              } },
+            { "id": "cend", "type": "end", "position": { "x": 240, "y": 0 },
+              "data": {
+                  "type": "end", "label": "Child End",
+                  "resultMapping": [
+                      { "targetField": "greeting",
+                        "expression": "\"Hello, \" + input.name" }
+                  ]
+              } }
+        ],
+        "edges": [
+            { "id": "ce", "source": "cstart", "target": "cend",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    });
+    let child_id = create_with_graph_json(&app, "Borrow Child", &child).await;
+    publish(&app, child_id).await;
+
+    // Parent: Start(name) → SubWorkflow(slug=sub, output.greeting) → End(greeting = sub.greeting)
+    //
+    // - `slug: "sub"` makes `sub.<field>` references in downstream Rhai
+    //   resolvable by the read-arc synthesis pipeline.
+    // - SubWorkflow's `output.fields = [greeting]` switches `lower_subworkflow`'s
+    //   `join_logic` from opaque pass-through to declared-field projection;
+    //   the joined token at `p_<sub>_output` becomes `{output: {greeting: ...}}`.
+    //   `split_outputs` then parks `{greeting}` into `p_sub_data`.
+    // - End's mapping `greeting = sub.greeting` triggers `apply_control_data_foundation`'s
+    //   read-arc synthesis: rewrites to `d_sub.greeting`, takes a read-arc on
+    //   `p_sub_data` (port `d_sub`).
+    let parent = json!({
+        "nodes": [
+            { "id": "pstart", "type": "start", "position": { "x": 0, "y": 0 },
+              "data": {
+                  "type": "start", "label": "Parent Start",
+                  "initial": {
+                      "id": "in", "label": "Input",
+                      "fields": [
+                          { "name": "name", "label": "Name",
+                            "kind": "text", "required": true }
+                      ]
+                  }
+              } },
+            { "id": "sub", "type": "sub_workflow", "slug": "sub",
+              "position": { "x": 240, "y": 0 },
+              "data": {
+                  "type": "sub_workflow", "label": "Call Child",
+                  "templateId": child_id,
+                  "versionPin": { "mode": "latest" },
+                  "inputMapping": [],
+                  "output": {
+                      "id": "out", "label": "Out",
+                      "fields": [
+                          { "name": "greeting", "label": "Greeting",
+                            "kind": "text", "required": true }
+                      ]
+                  }
+              } },
+            { "id": "pend", "type": "end", "position": { "x": 480, "y": 0 },
+              "data": {
+                  "type": "end", "label": "Parent End",
+                  "resultMapping": [
+                      { "targetField": "greeting",
+                        "expression": "sub.greeting" }
+                  ]
+              } }
+        ],
+        "edges": [
+            { "id": "pe1", "source": "pstart", "target": "sub",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "pe2", "source": "sub", "target": "pend",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    });
+    let parent_id = create_with_graph_json(&app, "Borrow Parent", &parent).await;
+    publish(&app, parent_id).await;
+
+    // Instantiate with `{name: "world"}` — the child's End computes
+    // `"Hello, world"`, the parent's End should surface it via `sub.greeting`.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "template_id": parent_id,
+                        "created_by": Uuid::new_v4(),
+                        "metadata": { "e2e": "subworkflow_borrow" },
+                        "start_tokens": [{
+                            "start_block_id": "pstart",
+                            "token": { "name": "world" },
+                        }],
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let inst_status = resp.status();
+    let instance = body_json(resp.into_body()).await;
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
+    let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(instance["status"], "running");
+
+    let deadline = Duration::from_secs(30);
+    let started = std::time::Instant::now();
+    loop {
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+                .bind(instance_id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        if status == "completed" {
+            break;
+        }
+        if status == "failed" {
+            let result: Option<Value> = sqlx::query_scalar(
+                "SELECT result FROM workflow_instances WHERE id = $1",
+            )
+            .bind(instance_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            panic!("parent instance failed (result: {result:?})");
+        }
+        if started.elapsed() > deadline {
+            panic!("parent did not complete within {deadline:?} (status: {status})");
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    let result: Value =
+        sqlx::query_scalar::<_, Option<Value>>(
+            "SELECT result FROM workflow_instances WHERE id = $1",
+        )
+        .bind(instance_id)
+        .fetch_one(&db)
+        .await
+        .unwrap()
+        .expect("result column was null — End's resultMapping produced no envelope");
+
+    assert_eq!(
+        result["ok"], json!(true),
+        "expected success envelope on parent, got: {result}"
+    );
+    assert_eq!(
+        result["value"]["greeting"], json!("Hello, world"),
+        "parent End should borrow `sub.greeting` from the child via read-arc \
+         on p_sub_data. Got: {result}. If null/missing, the parked envelope \
+         isn't reaching the End — check t_sub_join's exit_code.value unwrap \
+         and split_outputs' parking shape."
+    );
 }

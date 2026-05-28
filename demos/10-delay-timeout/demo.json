@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000021",
+  "name": "10 · Delay & Timeout",
+  "description": "Step 10 of the learning path — the timer primitives. A Timeout node wraps a HumanTask review; whoever wins the race decides the branch. Fire the response inside the window → `done` (the parent Timeout cancels its pending timer). Let the timer expire → `timeout` (the body HumanTask is drained via `human_cancel`, so it disappears from the inbox automatically). Set the durationMsExpr lower to feel it in seconds. See `engine/sdk/examples/expense_approval_net.rs` for the same shape in raw SDK form."
+}

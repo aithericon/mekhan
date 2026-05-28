@@ -79,7 +79,7 @@ fn simple_graph() -> WorkflowGraph {
             label: None,
             edge_type: "sequence".to_string(),
         }],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     }
 }
 
@@ -156,7 +156,7 @@ async fn create_instance_engine_down_returns_502_and_cleans_db() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -205,7 +205,7 @@ async fn cancel_instance_engine_down_still_cancels_in_db() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/api/instances/{instance_id}"))
+                .uri(format!("/api/v1/instances/{instance_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -353,7 +353,7 @@ async fn instance_state_engine_unavailable_shows_events() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri(format!("/api/instances/{instance_id}/state"))
+                .uri(format!("/api/v1/instances/{instance_id}/state"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -444,7 +444,7 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
             label: None,
             edge_type: "sequence".to_string(),
         }],
-        viewport: None,
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "typed-template", "", &std::collections::HashMap::new())
         .expect("compile AIR");
@@ -477,7 +477,7 @@ async fn create_instance_rejects_missing_start_tokens_for_typed_start() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -518,7 +518,7 @@ async fn create_instance_rejects_missing_required_field() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({
@@ -553,7 +553,7 @@ async fn create_instance_rejects_unknown_start_block_id() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/instances")
+                .uri("/api/v1/instances")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&json!({

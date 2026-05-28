@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage, ToolSchema};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -21,45 +22,6 @@ pub trait CompletionPort: Send + Sync {
     fn name(&self) -> &str;
 }
 
-/// A tool the LLM may invoke during a completion.
-///
-/// MCP-spec compatible field names (`input_schema`). Per-provider adapters
-/// normalize to/from provider dialects (`parameters` for Ollama/OpenAI) at
-/// the adapter boundary — internal representation always uses `input_schema`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    /// MCP-spec field name. Adapters normalize to provider dialects at the boundary.
-    pub input_schema: serde_json::Value,
-}
-
-/// A tool call emitted by the LLM.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    /// Unique identifier for this call instance. Adapters generate a UUID when
-    /// the provider doesn't emit one (e.g., Ollama).
-    pub call_id: String,
-    pub name: String,
-    pub args: serde_json::Value,
-}
-
-/// Error returned when a tool invocation fails.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolError {
-    pub message: String,
-    pub kind: ToolErrorKind,
-}
-
-/// Classification of tool failure modes.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolErrorKind {
-    ExecutionFailed,
-    Timeout,
-    NotFound,
-}
-
 /// Provider-agnostic completion request.
 pub struct CompletionRequest {
     pub model: String,
@@ -67,8 +29,9 @@ pub struct CompletionRequest {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub response_format: ResponseFormat,
-    /// Tools the LLM may invoke. Empty Vec = no tools available.
-    pub tools: Vec<ToolDefinition>,
+    /// Tools the LLM may call. Empty for non-agent single-shot calls.
+    /// Adapters serialize these into provider-specific tool blocks.
+    pub tools: Vec<ToolSchema>,
 }
 
 /// A single message in the conversation.
@@ -93,41 +56,15 @@ pub struct ImageData {
 #[derive(Debug)]
 pub struct CompletionResponse {
     pub content: String,
-    pub usage: TokenUsage,
+    pub usage: LlmUsage,
     pub model: String,
-    pub finish_reason: FinishReason,
+    pub stop_reason: LlmStopReason,
     /// Parsed JSON when response_format was JsonSchema.
     pub structured_output: Option<serde_json::Value>,
-    /// Tool calls emitted by the LLM. Empty Vec = LLM produced a terminal response.
-    pub tool_calls: Vec<ToolCall>,
-}
-
-/// Token usage metrics from the LLM provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub total_tokens: u64,
-}
-
-/// Why the LLM stopped generating.
-#[derive(Debug, Clone)]
-pub enum FinishReason {
-    Stop,
-    Length,
-    ContentFilter,
-    Other(String),
-}
-
-impl std::fmt::Display for FinishReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FinishReason::Stop => write!(f, "stop"),
-            FinishReason::Length => write!(f, "length"),
-            FinishReason::ContentFilter => write!(f, "content_filter"),
-            FinishReason::Other(s) => write!(f, "{s}"),
-        }
-    }
+    /// Tool invocations the LLM emitted this turn. Empty for plain
+    /// text/structured-output responses or providers that don't surface
+    /// tool calls.
+    pub tool_calls: Vec<LlmToolCall>,
 }
 
 /// Errors from LLM provider operations.
@@ -141,6 +78,26 @@ pub enum LlmError {
 
     #[error("response parse error: {0}")]
     Parse(String),
+}
+
+/// Error returned when a tool invocation fails inside the agent loop.
+///
+/// Fork-local — no upstream domain equivalent. Used by `agent_loop.rs`
+/// to surface dispatch failures back to the LLM as structured tool
+/// results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolError {
+    pub message: String,
+    pub kind: ToolErrorKind,
+}
+
+/// Classification of tool failure modes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorKind {
+    ExecutionFailed,
+    Timeout,
+    NotFound,
 }
 
 impl CompletionRequest {
@@ -182,13 +139,7 @@ impl CompletionRequest {
             temperature: config.temperature,
             max_tokens: config.max_tokens,
             response_format,
-            tools: vec![],
+            tools: config.tools.clone(),
         }
-    }
-}
-
-impl serde::Serialize for FinishReason {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_string())
     }
 }

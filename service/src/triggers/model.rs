@@ -74,6 +74,12 @@ pub enum FireOutcome {
     NoTargets,
     /// Concurrency policy dropped the fire (`Skip`/`DedupKey`).
     Dropped { reason: String },
+    /// `SingleActiveCoalesce`: a sibling instance is still running, so this
+    /// fire was *coalesced* — recorded as missed, and the dispatcher will
+    /// dispatch exactly one follow-up fire after the active instance
+    /// terminates. Distinct from `Dropped` because the workflow does see
+    /// the missed observation (eventually).
+    Coalesced { active_instance_id: Uuid },
 }
 
 /// Wrap an outcome with metadata the history endpoint records on every fire.

@@ -9,6 +9,7 @@ use crate::diff;
 use crate::doc_ops;
 use crate::formats;
 use crate::fs_ops;
+use crate::tests_fs;
 use crate::ws_client;
 
 pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
@@ -23,11 +24,17 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
     // Read binary assets
     let local_assets = fs_ops::read_node_assets(&dir)?;
 
-    // Use server from .mekhan.json
+    // Use server from the lock file
     let server_url = &meta.server_url;
-    let template_id = &meta.template_id;
+    let base_id = &meta.base_template_id;
 
-    println!("Connecting to template {}...", template_id);
+    // Resolve chain head — push targets the latest row's Y.Doc. (If that row
+    // is already published the eventual asset/test sync calls will fail
+    // cleanly; published rows are immutable.)
+    let latest = crate::http::resolve_latest(server_url, base_id).await?;
+    let template_id = latest.id.as_str();
+
+    println!("Connecting to template {} (v{})...", template_id, latest.version);
 
     // Connect and get remote state
     let mut handle = ws_client::connect_and_sync(server_url, template_id).await?;
@@ -82,11 +89,27 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
         upload_assets(server_url, template_id, &local_assets).await?;
     }
 
+    // Reconcile template tests in the bundle's `tests/` directory with the
+    // server. Name-keyed: POST new, PATCH changed, DELETE missing. Runs
+    // after the graph/file push so the test fixtures are validated against
+    // the version the user just authored.
+    let local_tests = tests_fs::read_tests(&dir)?;
+    if !local_tests.is_empty() || dir.join("tests").exists() {
+        let (created, updated, deleted) =
+            tests_fs::sync_to_server(server_url, template_id, &local_tests).await?;
+        if created + updated + deleted > 0 {
+            println!(
+                "  tests: {} created, {} updated, {} deleted",
+                created, updated, deleted
+            );
+        }
+    }
+
     println!("Done.");
     Ok(())
 }
 
-/// Upload binary asset files via POST /api/templates/{id}/files/{node_id}.
+/// Upload binary asset files via POST /api/v1/templates/{id}/files/{node_id}.
 /// Shared with `mekhan apply`. Sends a Bearer token from `MEKHAN_CLI_TOKEN`
 /// when set, so it works against a BFF-protected server.
 pub(crate) async fn upload_assets(
@@ -99,7 +122,7 @@ pub(crate) async fn upload_assets(
 
     for (node_id, node_assets) in assets {
         for (filename, content) in node_assets {
-            let url = format!("{}/api/templates/{}/files/{}", base, template_id, node_id);
+            let url = format!("{}/api/v1/templates/{}/files/{}", base, template_id, node_id);
 
             let content_type = mime_from_ext(filename);
             let part = reqwest::multipart::Part::bytes(content.clone())

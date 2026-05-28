@@ -8,8 +8,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     Json,
 };
-use futures::stream::Stream;
-use futures::StreamExt;
+use futures::stream::{self, Stream, StreamExt};
 use petri_domain::{DomainEvent, PersistedEvent};
 use serde_json::json;
 use uuid::Uuid;
@@ -20,16 +19,16 @@ use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
 };
-use crate::models::responses::InstanceEventsResponse;
+use crate::models::responses::{InstanceEventsResponse, StepExecutionResponse};
 use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
 use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
 use crate::AppState;
 
-/// POST /api/instances
+/// POST /api/v1/instances
 #[utoipa::path(
     post,
-    path = "/api/instances",
+    path = "/api/v1/instances",
     request_body = CreateInstanceRequest,
     responses(
         (status = 201, description = "Instance created and deployed to engine", body = WorkflowInstance),
@@ -74,6 +73,24 @@ pub async fn create_instance(
     let net_id = format!("mekhan-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 
+    // Categorize the run. `test_run` is reserved for the template-test runner
+    // and rejected from the public endpoint; anything else falls back to
+    // `live`.
+    let mode = match req.mode.as_deref() {
+        None | Some("live") => "live",
+        Some("draft") => "draft",
+        Some("test_run") => {
+            return Err(ApiError::bad_request(
+                "mode 'test_run' is reserved for the template-test runner",
+            ));
+        }
+        Some(other) => {
+            return Err(ApiError::bad_request(format!(
+                "unknown instance mode: {other}"
+            )));
+        }
+    };
+
     // Parameterize → insert row (before deploy, for the lifecycle listener) →
     // deploy → roll back the row on deploy failure. The launcher owns that
     // sequence; here we only translate its failures to HTTP statuses:
@@ -91,6 +108,8 @@ pub async fn create_instance(
             air_json: &air_json,
             graph: &graph,
             start_tokens: &req.start_tokens,
+            mode: Some(mode),
+            test_id: None,
             // User POST path does not surface ablation today; #126.2's
             // ablation surface lives at the trigger boundary (research
             // harness drives via fire_trigger). Plain create-instance →
@@ -111,10 +130,10 @@ pub async fn create_instance(
     Ok((StatusCode::CREATED, Json(instance)))
 }
 
-/// GET /api/instances
+/// GET /api/v1/instances
 #[utoipa::path(
     get,
-    path = "/api/instances",
+    path = "/api/v1/instances",
     params(ListInstancesQuery),
     responses(
         (status = 200, description = "Paginated list of instances", body = PaginatedResponse<InstanceListItem>),
@@ -127,17 +146,30 @@ pub async fn list_instances(
 ) -> Json<PaginatedResponse<InstanceListItem>> {
     let offset = (params.page - 1) * params.per_page;
 
-    // Build WHERE clause based on filter parameters
-    let mut conditions = Vec::new();
+    // Resolve the `mode` filter. Missing/empty ⇒ default to live-only (the
+    // historical view). `any`/`all` returns everything. Anything else is an
+    // explicit category filter and binds as-is.
+    let mode_filter: Option<&str> = match params.mode.as_deref() {
+        None | Some("") => Some("live"),
+        Some("any") | Some("all") => None,
+        Some(other) => Some(other),
+    };
+
+    // Build WHERE clause based on filter parameters. Bind index tracks the
+    // next $N placeholder so each filter slots in without colliding.
+    let mut conditions: Vec<String> = Vec::new();
+    let mut bind_index: u8 = 1;
     if params.template_id.is_some() {
-        conditions.push("wi.template_id = $1");
+        conditions.push(format!("wi.template_id = ${bind_index}"));
+        bind_index += 1;
     }
     if params.status.is_some() {
-        conditions.push(if params.template_id.is_some() {
-            "wi.status = $2"
-        } else {
-            "wi.status = $1"
-        });
+        conditions.push(format!("wi.status = ${bind_index}"));
+        bind_index += 1;
+    }
+    if mode_filter.is_some() {
+        conditions.push(format!("wi.mode = ${bind_index}"));
+        bind_index += 1;
     }
     let where_clause = if conditions.is_empty() {
         String::new()
@@ -145,16 +177,14 @@ pub async fn list_instances(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    let next_param = 1 + params.template_id.is_some() as u8 + params.status.is_some() as u8;
-
     let list_sql = format!(
         "SELECT wi.*, wt.name as template_name \
          FROM workflow_instances wi \
          JOIN workflow_templates wt ON wt.id = wi.template_id AND wt.version = wi.template_version \
          {} ORDER BY wi.created_at DESC LIMIT ${} OFFSET ${}",
         where_clause,
-        next_param,
-        next_param + 1
+        bind_index,
+        bind_index + 1
     );
     let count_sql = format!(
         "SELECT COUNT(*) FROM workflow_instances wi {}",
@@ -171,6 +201,10 @@ pub async fn list_instances(
     if let Some(ref status) = params.status {
         list_query = list_query.bind(status);
         count_query = count_query.bind(status);
+    }
+    if let Some(mode) = mode_filter {
+        list_query = list_query.bind(mode);
+        count_query = count_query.bind(mode);
     }
     list_query = list_query.bind(params.per_page).bind(offset);
 
@@ -189,10 +223,10 @@ pub async fn list_instances(
     })
 }
 
-/// GET /api/instances/:id
+/// GET /api/v1/instances/:id
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}",
+    path = "/api/v1/instances/{id}",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "Instance", body = WorkflowInstance),
@@ -217,7 +251,7 @@ pub async fn get_instance(
     Ok(Json(instance))
 }
 
-/// GET /api/instances/{id}/stream
+/// GET /api/v1/instances/{id}/stream
 ///
 /// SSE stream of the instance's domain events, replayed from the start
 /// (`DeliverPolicy::All`) then live, terminated by a final `result` event
@@ -226,7 +260,7 @@ pub async fn get_instance(
 /// consistent with `get_instance` (auth middleware gates the route).
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}/stream",
+    path = "/api/v1/instances/{id}/stream",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "SSE stream of domain events + final result", content_type = "text/event-stream"),
@@ -257,19 +291,41 @@ pub async fn stream_instance(
         status.as_str(),
         "completed" | "cancelled" | "failed" | "archived"
     );
-    let nats = state.nats.clone();
 
-    let stream = async_stream::stream! {
-        yield Ok(Event::default().event("connected").data(net_id.clone()));
-
-        // Already finished (or events purged by the cleanup sweep): emit the
-        // persisted result envelope and close — no point replaying history.
+    // Compose with plain stream::chain instead of wrapping in another
+    // async_stream — nested generator state machines blow the test thread
+    // stack and aren't free in prod either.
+    let prelude = stream::iter(vec![Ok::<_, Infallible>(
+        Event::default().event("connected").data(net_id.clone()),
+    )]);
+    let body: futures::stream::BoxStream<'static, Result<Event, Infallible>> =
         if already_terminal {
+            // Already finished (or events purged by the cleanup sweep): emit
+            // the persisted result envelope and close — no point replaying.
             let payload = db_result.unwrap_or(serde_json::Value::Null);
-            yield Ok(Event::default().event("result").data(payload.to_string()));
-            return;
-        }
+            Box::pin(stream::iter(vec![Ok(Event::default()
+                .event("result")
+                .data(payload.to_string()))]))
+        } else {
+            Box::pin(instance_jetstream_events(state.nats.clone(), net_id))
+        };
+    let stream = prelude.chain(body);
 
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+}
+
+/// Bare JetStream-backed event stream for a single instance — no `connected`
+/// preamble, no DB existence check, no terminal short-circuit. Replays from
+/// the beginning (`DeliverPolicy::All`) then follows live, emits one SSE
+/// event per `PersistedEvent` (event name = domain event `type`), and closes
+/// after emitting a final `result` envelope when it sees `NetCompleted` /
+/// `NetCancelled`. Shared by `stream_instance` (GET) and the `Sse` arm of
+/// `fire_trigger` (POST) — both want identical event semantics.
+pub(crate) fn instance_jetstream_events(
+    nats: crate::nats::MekhanNats,
+    net_id: String,
+) -> impl Stream<Item = Result<Event, Infallible>> + Send + 'static {
+    async_stream::stream! {
         let stream_h = match nats.jetstream().get_stream("PETRI_GLOBAL").await {
             Ok(s) => s,
             Err(e) => {
@@ -353,18 +409,16 @@ pub async fn stream_instance(
                 }
             }
         }
-    };
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+    }
 }
 
-/// GET /api/instances/:id/state
+/// GET /api/v1/instances/:id/state
 ///
 /// Returns instance state with marking projected from JetStream events (source
 /// of truth) and best-effort engine status for enabled transitions / run mode.
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}/state",
+    path = "/api/v1/instances/{id}/state",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "Instance state with marking + engine status", body = InstanceStateResponse),
@@ -443,12 +497,12 @@ pub async fn get_instance_state(
     }))
 }
 
-/// GET /api/instances/:id/events
+/// GET /api/v1/instances/:id/events
 ///
 /// Returns the full event log for an instance from JetStream.
 #[utoipa::path(
     get,
-    path = "/api/instances/{id}/events",
+    path = "/api/v1/instances/{id}/events",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "JetStream events for this instance", body = InstanceEventsResponse),
@@ -490,10 +544,106 @@ pub async fn get_instance_events(
     }))
 }
 
-/// DELETE /api/instances/:id
+/// GET /api/v1/instances/:id/step-executions
+///
+/// Returns one row per workflow node × execution iteration for an instance.
+/// Materialized by the step-executions projection consumer; the frontend
+/// overlays this data on the canvas node cards.
+#[utoipa::path(
+    get,
+    path = "/api/v1/instances/{id}/step-executions",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "Per-step execution rows for this instance", body = Vec<StepExecutionResponse>),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
+#[allow(clippy::type_complexity)]
+pub async fn list_step_executions(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<StepExecutionResponse>>, ApiError> {
+    // Existence check so the 404 path is honest (the projection may have no
+    // rows for a brand-new instance that hasn't fired any transitions yet).
+    let instance_exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    if instance_exists.is_none() {
+        return Err(ApiError::not_found("instance not found"));
+    }
+
+    let rows: Vec<(
+        String,
+        i32,
+        String,
+        String,
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<serde_json::Value>,
+    )> = sqlx::query_as(
+        "SELECT node_id, iteration_index, node_kind, status, \
+                inputs, outputs, branch_taken, \
+                started_at, completed_at, error \
+         FROM step_execution \
+         WHERE instance_id = $1 \
+         ORDER BY started_at NULLS LAST, node_id, iteration_index",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let response: Vec<StepExecutionResponse> = rows
+        .into_iter()
+        .map(
+            |(
+                node_id,
+                iteration_index,
+                node_kind,
+                status,
+                inputs,
+                outputs,
+                branch_taken,
+                started_at,
+                completed_at,
+                error,
+            )| {
+                let duration_ms = match (started_at, completed_at) {
+                    (Some(s), Some(c)) => Some((c - s).num_milliseconds()),
+                    _ => None,
+                };
+                StepExecutionResponse {
+                    node_id,
+                    iteration_index,
+                    node_kind,
+                    status,
+                    inputs,
+                    outputs,
+                    branch_taken,
+                    started_at,
+                    completed_at,
+                    duration_ms,
+                    error,
+                }
+            },
+        )
+        .collect();
+
+    Ok(Json(response))
+}
+
+/// DELETE /api/v1/instances/:id
 #[utoipa::path(
     delete,
-    path = "/api/instances/{id}",
+    path = "/api/v1/instances/{id}",
     params(("id" = Uuid, Path, description = "Instance id")),
     responses(
         (status = 200, description = "Instance cancelled", body = WorkflowInstance),

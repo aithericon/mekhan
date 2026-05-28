@@ -126,6 +126,11 @@ impl JobExecutor {
             run_dir,
             timeout,
             env: Default::default(),
+            resolved_env: Default::default(),
+            resolved_config: None,
+            resolved_input_storage: Default::default(),
+            resolved_output_storage: Default::default(),
+            resolved_inline_inputs: Default::default(),
             metadata: job.metadata.clone(),
             staged_inputs: Default::default(),
             expected_outputs: Default::default(),
@@ -183,6 +188,14 @@ impl JobExecutor {
         // The child_exited token tells the sidecar to stop waiting for a connection
         // if the child exits without ever connecting (e.g., immediate crash).
         let child_exited = tokio_util::sync::CancellationToken::new();
+        // Clone the StreamContext Arc so both the IPC sidecar (for child-
+        // process SDK logs) AND in-process backends (LLM, http, file_ops)
+        // share the same sequence counter + emitter. Sharing is intentional:
+        // a hypothetical LLM step that ALSO spawns a child would interleave
+        // their log events on one ordered stream.
+        let stream_ctx_for_backend = stream_ctx
+            .clone()
+            .map(|sc| sc as std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>);
         let sidecar_handle = match start_ipc_sidecar(
             run_context.run_dir.ipc_socket.clone(),
             execution_id.clone(),
@@ -210,7 +223,9 @@ impl JobExecutor {
             .callback_for(execution_id.clone(), job.metadata.clone());
 
         // Execute
-        let result = backend.execute(&run_context, status_cb, cancel).await;
+        let result = backend
+            .execute(&run_context, status_cb, stream_ctx_for_backend, cancel)
+            .await;
 
         // Signal sidecar that the child has exited. If the child never connected,
         // this unblocks the accept loop. If it did connect, background artifact
@@ -333,11 +348,20 @@ impl JobExecutor {
                         {
                             let local_path = run_context.run_dir.outputs_dir.join(path_rel);
                             if local_path.exists() {
+                                // Prefer the resolved storage config from the
+                                // PlanSecretsHook side-channel; the
+                                // `upload_config.storage` view still carries
+                                // `{{secret:KEY}}` templates.
+                                let resolved_storage = run_context
+                                    .resolved_output_storage
+                                    .get(&decl.name)
+                                    .cloned();
                                 match upload_output(
                                     &local_path,
                                     &decl.name,
                                     &execution_id,
                                     upload_config,
+                                    resolved_storage.as_ref(),
                                 )
                                 .await
                                 {
@@ -484,30 +508,16 @@ impl JobExecutor {
                     }
                 }
 
-                if let Some(ref logs) = exec_result.logs {
-                    if logs.total_entries > 0 {
-                        let warn_error_count = logs
-                            .count_by_level
-                            .iter()
-                            .filter(|(k, _)| k.as_str() == "warn" || k.as_str() == "error")
-                            .map(|(_, v)| v)
-                            .sum::<u64>();
-                        let event = ExecutionEvent {
-                            execution_id: execution_id.clone(),
-                            category: EventCategory::Log,
-                            detail: StatusDetail::LogsForwarded {
-                                count: logs.total_entries,
-                                warn_error_count,
-                            },
-                            metadata: job.metadata.clone(),
-                            source: self.reporter.source().to_string(),
-                            timestamp: Utc::now(),
-                            sequence: event_seq,
-                        };
-                        self.reporter.emit_event(&event).await;
-                        event_seq += 1;
-                    }
-                }
+                // LogsForwarded summary event intentionally not emitted: the
+                // per-message log path (IPC sidecar's `LogMessage` events
+                // for child processes, the EventStream trait for in-process
+                // backends) already lands every individual entry in
+                // hpi_logs. A trailing "logs_forwarded count=N" envelope
+                // shows up in the process view on every successful execution
+                // — pure UI noise with no incremental signal. The
+                // `LogSummary` is still returned on `ExecutionResult` for
+                // sinks/diagnostics; just don't broadcast it as a user-
+                // facing event.
 
                 // Flush metric sink for this execution
                 if let Some(ref sink) = self.metric_sink {
@@ -609,19 +619,39 @@ impl JobExecutor {
 }
 
 /// Upload an output file to a per-output storage destination via OpenDAL.
+///
+/// `resolved_storage`, when `Some`, carries the post-`PlanSecretsHook` view of
+/// `config.storage` with `{{secret:KEY}}` templates substituted to plaintext.
+/// We use it in preference to `config.storage` (which still carries the
+/// unresolved templates) for the actual OpenDAL operator build.
 #[cfg(feature = "opendal")]
 async fn upload_output(
     local_path: &std::path::Path,
     output_name: &str,
     execution_id: &str,
     config: &aithericon_executor_domain::OutputUploadConfig,
+    resolved_storage: Option<&serde_json::Value>,
 ) -> Result<String, ExecutorError> {
+    let resolved_storage_owned: Option<aithericon_executor_storage::StorageConfig> =
+        if let Some(json) = resolved_storage {
+            Some(serde_json::from_value(json.clone()).map_err(|e| {
+                ExecutorError::StagingFailed(format!(
+                    "deserialize resolved storage config for output '{output_name}': {e}"
+                ))
+            })?)
+        } else {
+            None
+        };
+    let effective_storage = resolved_storage_owned.as_ref().unwrap_or(&config.storage);
+
     let (operator, prefix) =
-        aithericon_executor_storage::build_operator_with_prefix(&config.storage).map_err(|e| {
-            ExecutorError::StagingFailed(format!(
-                "storage operator for output '{output_name}': {e}"
-            ))
-        })?;
+        aithericon_executor_storage::build_operator_with_prefix(effective_storage).map_err(
+            |e| {
+                ExecutorError::StagingFailed(format!(
+                    "storage operator for output '{output_name}': {e}"
+                ))
+            },
+        )?;
 
     let destination = match &config.destination_path {
         Some(dest) => format!("{}{}", prefix, dest),

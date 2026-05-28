@@ -155,6 +155,257 @@ pub enum CompileError {
     /// not a useful primitive; use a dedicated Delay node if/when needed).
     #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
     LoopEmpty { node_id: String },
+
+    /// A node wired as an agent tool (target of an edge with
+    /// `source_handle == "tools"`) has an incoming `WorkflowEdge` from
+    /// somewhere other than the agent's tools handle. Tools are dispatched
+    /// by the agent compiler via the tools-handle edge index — any other
+    /// incoming edge would let the tool fire outside the agent's control
+    /// loop. This catches the case where an author drags an extra sequence
+    /// edge into a tool node by mistake.
+    #[error(
+        "node '{child_id}' is a tool of agent '{agent_id}' and must not have incoming edges \
+         from anywhere except the agent's tools handle (offending edge: '{edge_id}')"
+    )]
+    ToolChildHasIncomingEdge {
+        agent_id: String,
+        child_id: String,
+        edge_id: String,
+    },
+
+    // --- Python AutomatedStep output-field guards (sibling of the
+    //     direct-slug-access input borrows). Declared output.fields[].name is
+    //     swept from Python globals after exec() — if the name collides with a
+    //     reserved runner global or an upstream slug borrowed by this node,
+    //     the runtime would either silently lose the assignment or
+    //     accidentally re-emit borrowed input as output. Reject at compile.
+    /// Declared output field name matches a reserved runner global (`token`,
+    /// `input`, `set_output`, etc — mirror of the runner.rs `_RESERVED_GLOBALS`
+    /// set). Rename the field.
+    #[error(
+        "node '{node_id}': output field '{field_name}' shadows a reserved runner global — rename the field"
+    )]
+    OutputFieldShadowsReserved {
+        node_id: String,
+        field_name: String,
+    },
+
+    /// Declared output field name matches a slug bound as a Python global on
+    /// this node (an upstream producer the user's source borrows as
+    /// `<slug>.<attr>`). Without the guard the input global would silently
+    /// re-export as this step's output.
+    #[error(
+        "node '{node_id}': output field '{field_name}' collides with borrowed input '{upstream_slug}' from upstream node '{upstream_node_id}' — rename the output field"
+    )]
+    OutputFieldShadowsInput {
+        node_id: String,
+        field_name: String,
+        upstream_slug: String,
+        upstream_node_id: String,
+    },
+
+    // --- LLM / Kreuzberg upstream-producer refs (sibling of Python direct
+    //     slug access and HumanTask placeholders). The `{{}}` syntax is
+    //     unambiguous so unlike Python's silent-ignore semantics, an
+    //     unknown slug or field is a typo — hard-reject at compile.
+    /// `{{<slug>.<field>}}` references an unknown slug, or `<field>` is
+    /// not declared on the producer's output port. `backend` is `"llm"` or
+    /// `"kreuzberg"`; `site` names the offending config field (e.g.
+    /// `"prompt"`, `"system_prompt"`, `"file"`, `"images[0].path"`).
+    #[error(
+        "node '{node_id}' ({backend}): {site} references unknown {kind} '{name}' in `{{{{{slug}.{field}}}}}` (available {kind}s: {available:?})"
+    )]
+    BackendRefUnresolved {
+        node_id: String,
+        backend: String,
+        site: String,
+        slug: String,
+        field: String,
+        /// `"slug"` when the head doesn't match any graph slug; `"field"`
+        /// when the head is known but the attr isn't on its output port.
+        kind: String,
+        /// The unknown name (== `slug` when kind="slug", == `field` when
+        /// kind="field"). Surfaced separately so the editor can highlight
+        /// just the failing part of the path.
+        name: String,
+        /// Candidate names the author might have meant — slugs in the
+        /// graph (kind="slug") or fields on the producer (kind="field").
+        available: Vec<String>,
+    },
+
+    /// `{{<slug>.<field>}}` references a producer that lives downstream of
+    /// (or at) the consumer in the graph topology — a borrow cycle. The
+    /// `{{}}` syntax pre-binds the field at compile time, so circular
+    /// references aren't physically realizable.
+    #[error(
+        "node '{node_id}' ({backend}): {site} borrows '{{{{{slug}.{field}}}}}' from producer '{producer_node_id}' which is not strictly upstream"
+    )]
+    BackendRefNotUpstream {
+        node_id: String,
+        backend: String,
+        site: String,
+        slug: String,
+        field: String,
+        producer_node_id: String,
+    },
+
+    /// Malformed `{{...}}` placeholder body — not a dotted-identifier path.
+    /// Surfaces early from `validate_and_transform` so the author sees a
+    /// precise syntax error instead of a downstream "unresolved input".
+    #[error(
+        "node '{node_id}' ({backend}): {site} contains malformed placeholder '{{{{{body}}}}}' — expected `<slug>.<field>`"
+    )]
+    BackendPlaceholderSyntax {
+        node_id: String,
+        backend: String,
+        site: String,
+        body: String,
+    },
+
+    /// LLM `images[i].path` references an upstream producer field whose
+    /// declared kind is not `file`. Unlike Kreuzberg (which can stage text
+    /// as a temp file), LLM vision needs actual image bytes.
+    #[error(
+        "node '{node_id}' (llm): {site} requires a file-kind upstream field; '{{{{{slug}.{field}}}}}' resolves to kind '{actual_kind}'"
+    )]
+    LlmImageRefNotFileKind {
+        node_id: String,
+        site: String,
+        slug: String,
+        field: String,
+        actual_kind: String,
+    },
+
+    // --- Direct-mode resource validation. The compiler scans Python
+    //     source for `<head>.<field>` patterns and validates each `<head>`
+    //     against the workspace's resource list at publish time. The
+    //     variants below are kept under their original "alias" names for
+    //     the editor's error-discriminant wire format (the picker still
+    //     reads them); semantically `alias` now means "resource path
+    //     authored as a Python identifier".
+    /// A resource whose `path` references a type that isn't registered in
+    /// the `aithericon_resources` registry. Usually a database state
+    /// mismatch — a resource row exists with a type the server build
+    /// doesn't know about (e.g. older binary running against a newer DB).
+    #[error(
+        "resource '{alias}' references unknown resource type '{type_name}' — \
+         expected one of the built-in types in `aithericon_resources`"
+    )]
+    ResourceTypeUnknown { alias: String, type_name: String },
+
+    /// A resource path equals a step's explicit slug — `<path>.<field>`
+    /// would be ambiguous between the staged resource envelope and the
+    /// producer's parked envelope. Rename either the resource or the slug.
+    #[error(
+        "resource '{alias}' collides with a step slug of the same name — \
+         rename the resource or the step"
+    )]
+    ResourceAliasCollidesWithSlug { alias: String },
+
+    /// A resource path collides with a reserved control-token field
+    /// (`_instance_id`, `_template_id`, …). At runtime the system field
+    /// would shadow the resource binding (or vice versa) silently.
+    #[error(
+        "resource '{alias}' collides with a reserved control-token field — \
+         pick a non-underscore-prefixed path"
+    )]
+    ResourceAliasCollidesWithToken { alias: String },
+
+    /// A step explicitly declared `resource_alias: "<alias>"` (via the
+    /// backend's `resource_alias_paths`), but the workspace has no
+    /// resource at that path. Without this hard fail at publish time the
+    /// AIR would still build — minus the resource borrow — and the SMTP /
+    /// LLM / FileOps backend would crash at run time with "compiler must
+    /// emit a ResourceEnvelope borrow". This variant points the operator
+    /// at the right fix (create the resource at `/resources`).
+    #[error(
+        "node '{node_id}': resource_alias '{alias}' is not defined in this workspace — \
+         create it at /resources before publishing"
+    )]
+    WorkspaceResourceUnknown { node_id: String, alias: String },
+
+    /// `executionSpec.config` (or a nested value) carries a
+    /// `{"$ref": "#/definitions/<name>"}` that the workflow-level
+    /// `definitions` map can't resolve — unknown name, cycle,
+    /// unsupported pointer shape, etc. Surfaced before lowering by the
+    /// `validate_schema_refs` pass so the editor can highlight the node.
+    /// `path` is the JSON pointer to the offending `$ref` inside the
+    /// node's `executionSpec.config`.
+    #[error(
+        "node '{node_id}': schema ref at config{path}: {message}"
+    )]
+    SchemaRefUnresolved {
+        node_id: String,
+        path: String,
+        message: String,
+    },
+
+    // --- Repeater block validation (Feature B). A HumanTask
+    //     `TaskBlockConfig::Repeater` carries a structured `<slug>.<field>[*]…`
+    //     reference into an upstream array. The compiler validates the ref
+    //     syntax, resolution, array shape, and the Repeater's own
+    //     `output_slug` at publish time.
+    /// `items_ref` (or `item_label_ref`) does not parse as
+    /// `<slug>.<field>[*]…` with exactly one `[*]` iteration boundary.
+    /// Covers nested `[*]` (v1 rejects with `NestedIterationUnsupported`
+    /// wording) and missing boundaries.
+    #[error(
+        "human task '{node_id}': Repeater {site} '{ref_value}' is malformed: {message}"
+    )]
+    RepeaterRefMalformed {
+        node_id: String,
+        site: String,
+        ref_value: String,
+        message: String,
+    },
+
+    /// `items_ref` parses cleanly but its `<slug>` doesn't match any
+    /// graph slug, OR the pre-`[*]` path doesn't land on a field on the
+    /// resolved producer's outbound shape.
+    #[error(
+        "human task '{node_id}': Repeater items_ref '{ref_value}' is unresolved (slug: '{slug}', candidates: {available:?})"
+    )]
+    RepeaterRefUnresolved {
+        node_id: String,
+        ref_value: String,
+        slug: String,
+        available: Vec<String>,
+    },
+
+    /// The pre-`[*]` path resolves to a non-array shape on the upstream
+    /// producer. `[*]` only makes sense over an Array — a Scalar/Object
+    /// is a hard reject. `Any`/`Opaque` are accepted (deferred to runtime).
+    #[error(
+        "human task '{node_id}': Repeater items_ref '{ref_value}' resolves to {actual_kind}, not an array — iteration boundary `[*]` requires an array"
+    )]
+    RepeaterItemsRefNotArray {
+        node_id: String,
+        ref_value: String,
+        actual_kind: String,
+    },
+
+    /// `output_slug` is missing/empty, or not a valid Rhai identifier
+    /// (`[A-Za-z_][A-Za-z0-9_]*`). Required because downstream consumers
+    /// address the Repeater's typed array as `<human_task_slug>.<output_slug>`.
+    #[error(
+        "human task '{node_id}': Repeater output_slug '{output_slug}' is invalid — must be a non-empty Rhai identifier ([A-Za-z_][A-Za-z0-9_]*)"
+    )]
+    RepeaterOutputSlugInvalid {
+        node_id: String,
+        output_slug: String,
+    },
+
+    /// A `Repeater` block was found inside another Repeater's `blocks`.
+    /// v1 forbids nested iteration — the typed array output schema can
+    /// only describe one level of `[*]`, and the runtime renderer assumes
+    /// a single row-iteration scope per Repeater.
+    #[error(
+        "human task '{node_id}': Repeater '{output_slug}' nests another Repeater — nested iteration is not supported"
+    )]
+    RepeaterNested {
+        node_id: String,
+        output_slug: String,
+    },
 }
 
 impl CompileError {
@@ -184,6 +435,23 @@ impl CompileError {
             Self::SubWorkflowCycle { .. } => "subworkflow_cycle",
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
+            Self::ToolChildHasIncomingEdge { .. } => "tool_child_has_incoming_edge",
+            Self::OutputFieldShadowsReserved { .. } => "output_field_shadows_reserved",
+            Self::OutputFieldShadowsInput { .. } => "output_field_shadows_input",
+            Self::BackendRefUnresolved { .. } => "backend_ref_unresolved",
+            Self::BackendRefNotUpstream { .. } => "backend_ref_not_upstream",
+            Self::BackendPlaceholderSyntax { .. } => "backend_placeholder_syntax",
+            Self::LlmImageRefNotFileKind { .. } => "llm_image_ref_not_file_kind",
+            Self::ResourceTypeUnknown { .. } => "resource_type_unknown",
+            Self::ResourceAliasCollidesWithSlug { .. } => "resource_alias_collides_with_slug",
+            Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
+            Self::WorkspaceResourceUnknown { .. } => "workspace_resource_unknown",
+            Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
+            Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
+            Self::RepeaterRefUnresolved { .. } => "repeater_ref_unresolved",
+            Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
+            Self::RepeaterOutputSlugInvalid { .. } => "repeater_output_slug_invalid",
+            Self::RepeaterNested { .. } => "repeater_nested",
         }
     }
 
@@ -194,6 +462,7 @@ impl CompileError {
             | Self::UnknownTargetPort { edge_id, .. }
             | Self::EdgeTypeMismatch { edge_id, .. } => Some(edge_id),
             Self::TriggerIsEdgeTarget { edge_id, .. } => Some(edge_id),
+            Self::ToolChildHasIncomingEdge { edge_id, .. } => Some(edge_id),
             _ => None,
         }
     }
@@ -216,7 +485,23 @@ impl CompileError {
             | Self::TriggerEmptyMappingRequiredFields { node_id, .. }
             | Self::SubWorkflowUnresolved { node_id, .. }
             | Self::SubWorkflowDepthExceeded { node_id, .. }
-            | Self::LoopEmpty { node_id } => Some(node_id),
+            | Self::LoopEmpty { node_id }
+            | Self::ToolChildHasIncomingEdge {
+                child_id: node_id, ..
+            }
+            | Self::OutputFieldShadowsReserved { node_id, .. }
+            | Self::OutputFieldShadowsInput { node_id, .. }
+            | Self::BackendRefUnresolved { node_id, .. }
+            | Self::BackendRefNotUpstream { node_id, .. }
+            | Self::BackendPlaceholderSyntax { node_id, .. }
+            | Self::LlmImageRefNotFileKind { node_id, .. }
+            | Self::SchemaRefUnresolved { node_id, .. }
+            | Self::RepeaterRefMalformed { node_id, .. }
+            | Self::RepeaterRefUnresolved { node_id, .. }
+            | Self::RepeaterItemsRefNotArray { node_id, .. }
+            | Self::RepeaterOutputSlugInvalid { node_id, .. }
+            | Self::RepeaterNested { node_id, .. }
+            | Self::WorkspaceResourceUnknown { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use aithericon_executor_backend::{ExecutionBackend, PythonBackend, PythonConfig};
+use aithericon_executor_backend::ExecutionBackend;
+use aithericon_executor_python::{PythonBackend, PythonConfig};
 use aithericon_executor_domain::{ExecutionSpec, InputSource, RunContext, RunDirectory};
 
 use super::kit::BackendTestKit;
@@ -95,9 +96,13 @@ impl BackendTestKit for PythonTestKit {
         let user_code_path = run_dir.inputs_dir.join(&config.script);
 
         let runner_path = run_dir.root.join("__runner__.py");
-        aithericon_executor_backend::python::runner::write_runner(&runner_path, &user_code_path)
-            .await
-            .unwrap();
+        aithericon_executor_python::runner::write_runner(
+            &runner_path,
+            &user_code_path,
+            &[],
+        )
+        .await
+        .unwrap();
 
         let backend_state = serde_json::json!({
             "python_bin": config.python,
@@ -110,6 +115,11 @@ impl BackendTestKit for PythonTestKit {
             run_dir,
             timeout,
             env,
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),

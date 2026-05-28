@@ -207,8 +207,8 @@ pub use effect_tokens::{
     ExecutorSubmitInput, ExecutorSubmitted, HumanCancelInput, HumanTaskAssigned,
     HumanTaskCancelled, HumanTaskResponse, ProcessMetadata, ProcessStartConfig, ProcessStarted,
     ProcessStepDef, ProcessUpdate, ProcessUpdateType, SchedulerCancelInput, SchedulerCancelled,
-    SchedulerStatusSignal, SchedulerSubmitInput, SchedulerSubmitted, TimerCancelInput,
-    TimerCancelled, TimerInput, TimerScheduled,
+    SchedulerStatusSignal, SchedulerSubmitInput, SchedulerSubmitted, SubWorkflowCancelInput,
+    SubWorkflowCancelled, TimerCancelInput, TimerCancelled, TimerInput, TimerScheduled,
 };
 
 // Re-export typed signal tokens for external signal sources
@@ -216,8 +216,8 @@ pub use signal_tokens::{CatalogueArtifact, CatalogueSignalToken};
 
 // Re-export domain human task types for typed form definitions
 pub use petri_domain::human::{
-    CalloutSeverity, DownloadItem, HumanTaskRequest, TableAlignment, TaskBlock, TaskField,
-    TaskFieldKind, TaskStep,
+    CalloutSeverity, DownloadItem, HumanTaskRequest, SelectOption, TableAlignment, TaskBlock,
+    TaskField, TaskFieldKind, TaskStep,
 };
 
 // Re-export executor domain types for typed execution specs, status, and results
@@ -309,8 +309,8 @@ pub mod prelude {
 
     // Re-export domain human task types for typed form definitions
     pub use petri_domain::human::{
-        CalloutSeverity, DownloadItem, HumanTaskRequest, TableAlignment, TaskBlock, TaskField,
-        TaskFieldKind, TaskStep,
+        CalloutSeverity, DownloadItem, HumanTaskRequest, SelectOption, TableAlignment, TaskBlock,
+        TaskField, TaskFieldKind, TaskStep,
     };
 
     // Re-export executor domain types for typed execution specs

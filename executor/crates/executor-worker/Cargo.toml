@@ -46,4 +46,5 @@ opendal = ["aithericon-executor-storage/opendal"]
 url-inputs = ["dep:reqwest"]
 
 [dev-dependencies]
+aithericon-executor-process = { workspace = true }
 tempfile = "3"

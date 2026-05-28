@@ -89,15 +89,6 @@ variable "traefik_enabled" {
   default     = true
 }
 
-# ── mekhan-service runtime config ───────────────────────────────────────────
-# These point at infra deployed by sibling HetznerCluster layers:
-#   Postgres  — layer 06b (service: postgres.service.consul:5432)
-#   NATS      — layer 04c (service: nats.service.consul:4222)
-#   rustfs/S3 — Hetzner Object Storage (fsn1.your-objectstorage.com)
-#   Zitadel   — layer 06d/e (id.dev.aithericon.eu)
-
-# ── Postgres admin (for `CREATE ROLE/DATABASE` at apply time) ────────────────
-
 variable "postgres_admin_host" {
   description = "Patroni primary as resolvable from the OPERATOR's machine. Uses the Consul alt-domain so it doesn't clash with any local .service.consul. From HetznerCluster env.hcl: postgres-primary.service.consul.aithericon"
   type        = string
@@ -119,6 +110,12 @@ variable "postgres_admin_password" {
 variable "nats_url" {
   description = "NATS URL the dev mekhan-service connects to (the cluster's shared NATS, layer 04c)"
   type        = string
+}
+
+variable "vault_addr" {
+  description = "Vault server address as resolvable from inside a Nomad alloc. Nomad's `vault {}` stanza already injects VAULT_TOKEN via workload-identity exchange; VAULT_ADDR is rendered here so mekhan-service's VaultResourceStore, the engine's secret-wrapping path, and the executor's unwrap call all reach the same server. HetznerCluster Vault: http://10.20.0.20:8200."
+  type        = string
+  default     = "http://10.20.0.20:8200"
 }
 
 variable "petri_lab_url" {
@@ -214,9 +211,15 @@ variable "executor_memory_mb" {
 }
 
 variable "executor_concurrency" {
-  description = "EXECUTOR_CONCURRENCY env var — number of parallel work items the executor processes."
+  description = "EXECUTOR_CONCURRENCY env var — number of parallel work items a single executor alloc processes."
   type        = number
   default     = 4
+}
+
+variable "executor_count" {
+  description = "How many executor allocs to run. The executor is its own Nomad job (split out of mekhan-service so it scales independently); bump this to fan work-pickup out across more nodes."
+  type        = number
+  default     = 1
 }
 
 # ── Engine (separate Nomad job; reached via engine.service.consul:3030) ─────

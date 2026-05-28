@@ -3,7 +3,8 @@
 //! (retry, merge, join, human-task injection).
 
 use crate::models::template::{
-    BackoffKind, MergeStrategy, RetryPolicy, WorkflowNode, WorkflowNodeData,
+    BackoffKind, MergeStrategy, RetryPolicy, TaskBlockConfig, TaskStepConfig, WorkflowNode,
+    WorkflowNodeData,
 };
 use aithericon_sdk::{
     effects, Context, DynamicToken, EffectError, ExecutorSubmitInput, PlaceHandle, TimerInput,
@@ -74,6 +75,26 @@ if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { 
 return (); \
 } __r } ";
 
+/// Deep-set helper prepended to HumanTask injection logic when a step
+/// carries one or more Repeater blocks. Walks `segs` from `idx`, ensuring
+/// every intermediate is a map (rewriting non-map sentinels to `#{}`),
+/// then writes `value` at the leaf and returns the rewritten root. Pairs
+/// with `__pluck`: each Repeater emits
+/// `d.payload = __set_path(d.payload, [<head>, ...<pre>], 0, __pluck(input, [...]))`,
+/// which the borrow rewrite then retargets at `d_<producer>`.
+pub(crate) const SET_PATH_HELPER: &str = "fn __set_path(__m, __segs, __idx, __v) { \
+let __cur = if type_of(__m) == \"map\" { __m } else { #{} }; \
+if __idx >= __segs.len() { return __v; } \
+let __k = __segs[__idx]; \
+if __idx == __segs.len() - 1 { \
+__cur[__k] = __v; \
+} else { \
+let __child = if __cur.keys().contains(__k) && type_of(__cur[__k]) == \"map\" { __cur[__k] } else { #{} }; \
+__cur[__k] = __set_path(__child, __segs, __idx + 1, __v); \
+} \
+__cur \
+} ";
+
 /// Prepend [`PLUCK_HELPER`] to `logic` iff it actually calls `__pluck(`.
 ///
 /// Centralizes the brittle `contains("__pluck(")` check that the Start,
@@ -88,16 +109,32 @@ pub(crate) fn with_pluck_prelude(logic: &str) -> String {
     }
 }
 
-/// Validate a `{{ … }}` placeholder body and turn it into a safe, null-safe
-/// Rhai accessor rooted at the workflow token (`input`).
+/// One segment of a parsed `{{ … }}` placeholder path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PathSegment {
+    /// `.<identifier>` — `[A-Za-z_][A-Za-z0-9_]*`.
+    Field(String),
+    /// `[<n>]` — non-negative integer.
+    Index(usize),
+    /// `[*]` — the iteration boundary marker introduced by Feature B. In
+    /// ref grammars (`<slug>.tasks[*].title`) this says "the consumer
+    /// iterates the parked array here; the segments that follow address
+    /// each element". `IndexAll` is **deliberately not lowerable** by
+    /// `__pluck` — it is a structural annotation for borrow planning, not a
+    /// runtime accessor — so `placeholder_to_accessor` rejects any path
+    /// containing it.
+    IndexAll,
+}
+
+/// Validate a `{{ … }}` placeholder body and return its parsed path
+/// segments, or `None` for inputs that aren't a dotted identifier path
+/// (optionally with numeric indices). This is deliberately *not* a Rhai
+/// expression evaluator: arbitrary expressions are rejected so a template
+/// author can never inject executable Rhai through a task block string.
 ///
-/// Only dotted identifier paths with optional numeric indices are accepted —
-/// e.g. `invoice_file.url`, `items[0].amount`. This is deliberately *not* a
-/// Rhai expression evaluator: arbitrary expressions are rejected (returns
-/// `None`) so a template author can never inject executable Rhai through a
-/// task block string. The accepted path is emitted as a [`PLUCK_HELPER`]
-/// call so a misaimed placeholder degrades to `()` rather than hard-erroring.
-pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
+/// The first segment is always [`PathSegment::Field`] — a leading `[0]`
+/// is illegal.
+pub(crate) fn parse_placeholder_segments(inner: &str) -> Option<Vec<PathSegment>> {
     let s = inner.trim();
     if s.is_empty() {
         return None;
@@ -116,15 +153,12 @@ pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
         *i > start
     }
 
-    // Collect path segments as Rhai literals: identifiers (validated to
-    // `[A-Za-z0-9_]`, so safe unquoted-escaped) become quoted string keys,
-    // `[n]` becomes a bare integer index. Emitted as `__pluck(input, [..])`.
-    let mut segs: Vec<String> = Vec::new();
+    let mut segs: Vec<PathSegment> = Vec::new();
     let first = i;
     if !ident(bytes, &mut i) {
         return None;
     }
-    segs.push(format!("\"{}\"", &s[first..i]));
+    segs.push(PathSegment::Field(s[first..i].to_string()));
 
     while i < bytes.len() {
         match bytes[i] {
@@ -134,10 +168,23 @@ pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if !ident(bytes, &mut i) {
                     return None;
                 }
-                segs.push(format!("\"{}\"", &s[seg_start..i]));
+                segs.push(PathSegment::Field(s[seg_start..i].to_string()));
             }
             b'[' => {
                 i += 1;
+                // Feature B: `[*]` — iteration boundary. Distinct from a
+                // numeric `[<n>]` index; structurally annotates the path
+                // and is rejected by `placeholder_to_accessor` (text
+                // interpolation can't iterate).
+                if i < bytes.len() && bytes[i] == b'*' {
+                    i += 1;
+                    if i >= bytes.len() || bytes[i] != b']' {
+                        return None;
+                    }
+                    segs.push(PathSegment::IndexAll);
+                    i += 1; // consume ']'
+                    continue;
+                }
                 let num_start = i;
                 while i < bytes.len() && bytes[i].is_ascii_digit() {
                     i += 1;
@@ -145,13 +192,40 @@ pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
                 if i == num_start || i >= bytes.len() || bytes[i] != b']' {
                     return None;
                 }
-                segs.push(s[num_start..i].to_string());
+                let n: usize = s[num_start..i].parse().ok()?;
+                segs.push(PathSegment::Index(n));
                 i += 1; // consume ']'
             }
             _ => return None,
         }
     }
-    Some(format!("__pluck(input, [{}])", segs.join(", ")))
+    Some(segs)
+}
+
+/// Validate a `{{ … }}` placeholder body and turn it into a safe, null-safe
+/// Rhai accessor rooted at the workflow token (`input`).
+///
+/// Only dotted identifier paths with optional numeric indices are accepted —
+/// e.g. `invoice_file.url`, `items[0].amount`. The accepted path is emitted as
+/// a [`PLUCK_HELPER`] call so a misaimed placeholder degrades to `()` rather
+/// than hard-erroring. See [`parse_placeholder_segments`] for the parser.
+pub(crate) fn placeholder_to_accessor(inner: &str) -> Option<String> {
+    let segs = parse_placeholder_segments(inner)?;
+    // `[*]` is a structural iteration boundary for ref grammars, not a
+    // runtime accessor — text interpolation can't iterate. Reject the
+    // whole placeholder so the source string is left literal.
+    if segs.iter().any(|s| matches!(s, PathSegment::IndexAll)) {
+        return None;
+    }
+    let rendered: Vec<String> = segs
+        .iter()
+        .map(|s| match s {
+            PathSegment::Field(f) => format!("\"{f}\""),
+            PathSegment::Index(n) => n.to_string(),
+            PathSegment::IndexAll => unreachable!("rejected above"),
+        })
+        .collect();
+    Some(format!("__pluck(input, [{}])", rendered.join(", ")))
 }
 
 /// Turn a raw string that may contain `{{ path }}` placeholders into a Rhai
@@ -219,8 +293,12 @@ pub(crate) fn interpolate_to_rhai_expr(raw: &str) -> String {
 }
 
 /// Like [`json_to_rhai_literal`] but every string is run through
-/// [`interpolate_to_rhai_expr`], so `{{ token.path }}` placeholders anywhere
-/// in a human task's steps resolve against the runtime token.
+/// [`interpolate_to_rhai_expr`], so `{{ <slug>.<field> }}` (or root-level
+/// `{{ field }}`) placeholders anywhere in a human task's steps resolve
+/// against the runtime token. Slug-qualified placeholders are rewritten
+/// post-merge in [`crate::compiler::compile`]'s `(c3)` phase to pluck
+/// against the read-arc-bound producer envelope; bare placeholders stay
+/// rooted in the slim control token.
 pub(crate) fn json_to_rhai_interpolated(value: &Value) -> String {
     match value {
         Value::String(s) => interpolate_to_rhai_expr(s),
@@ -383,17 +461,40 @@ pub(crate) fn build_merge_logic(state_var: &str, signal_var: &str) -> String {
     )
 }
 
-/// Rhai for a `ParallelJoin` that folds the tokens arriving on `port_names`
-/// (`in_0`, `in_1`, …) into a single `output` token.
+/// Rhai for a `Join { mode: Any }` branch: single-input passthrough whose
+/// output token is the inbound payload and whose `data` output mirrors it
+/// (so the parked `p_<id>_data` place holds the same payload). Used per
+/// transition by `lower_join` in `Any` mode.
+pub(crate) fn build_join_passthrough_logic(port_name: &str) -> String {
+    format!("#{{ output: {port_name}, data: {port_name} }}")
+}
+
+/// Rhai for a `Join { mode: All }` that folds the tokens arriving on
+/// `port_names` (`in_0`, `in_1`, …) into a single `output` token plus a
+/// mirror `data` token deposited at the parked `p_<id>_data` place. When
+/// `also_stage_data` is false the `data` output is omitted.
 ///
 /// One input → straight pass-through. `ShallowLastWins` copies top-level keys
-/// left-to-right so the last branch wins on a collision (the historical
-/// intent — the old code emitted an unregistered `merge_maps`, so this also
-/// fixes a latent runtime bug). `DeepMerge` recursively merges nested object
-/// values via a script-local helper.
-pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrategy) -> String {
+/// left-to-right so the last branch wins on a collision. `DeepMerge`
+/// recursively merges nested object values via a script-local helper.
+pub(crate) fn build_join_merge_logic_full(
+    port_names: &[String],
+    strategy: MergeStrategy,
+    also_stage_data: bool,
+) -> String {
+    let tail = if also_stage_data {
+        "#{ output: result, data: result }"
+    } else {
+        "#{ output: result }"
+    };
+
     if port_names.len() == 1 {
-        return format!("#{{ output: {} }}", port_names[0]);
+        let only = &port_names[0];
+        return if also_stage_data {
+            format!("let result = {only}; {tail}")
+        } else {
+            format!("#{{ output: {only} }}")
+        };
     }
 
     let first = &port_names[0];
@@ -405,7 +506,7 @@ pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrat
             for name in rest {
                 s.push_str(&format!("for k in {name}.keys() {{ result[k] = {name}[k]; }} "));
             }
-            s.push_str("#{ output: result }");
+            s.push_str(tail);
             s
         }
         MergeStrategy::DeepMerge => {
@@ -426,7 +527,7 @@ pub(crate) fn build_join_merge_logic(port_names: &[String], strategy: MergeStrat
             for name in rest {
                 s.push_str(&format!("result = __deep_merge(result, {name}); "));
             }
-            s.push_str("#{ output: result }");
+            s.push_str(tail);
             s
         }
     }
@@ -446,16 +547,578 @@ pub(crate) fn build_human_task_injection_logic(target_node: &WorkflowNode) -> St
             interpolate_to_rhai_expr(instructions_mdsvex.as_deref().unwrap_or(""));
         let title_expr = interpolate_to_rhai_expr(task_title);
 
+        // Feature B: stage every Repeater block's resolved upstream array
+        // into `d.payload[<head>][...<pre>]` so the renderer's
+        // `getAtPath(taskData, [head, ...pre])` resolves to the array at
+        // task-display time. Each emission carries one `__pluck(input,
+        // ["<head>", "<pre[0]>", ...])` whose `apply_human_task_borrows`
+        // substring-rewrite retargets to `d_<producer>` once the read-arc
+        // is wired. Placeholder-free, Repeater-free tasks stay byte-identical.
+        let payload_block = build_repeater_payload_block(steps);
+
         // Only prepend the helper when an interpolation actually emitted a
         // `__pluck(` call, so placeholder-free human tasks stay byte-identical.
-        with_pluck_prelude(&format!(
+        let body = format!(
             "let d = input; \
              d.title = {title_expr}; \
              d.instructions_mdsvex = {instructions_expr}; \
              d.steps = {steps_rhai}; \
+             {payload_block}\
              #{{ output: d }}"
-        ))
+        );
+        let with_pluck = with_pluck_prelude(&body);
+        // SET_PATH_HELPER only appears when a Repeater contributed an
+        // injection; keep it gated so non-Repeater tasks stay byte-identical.
+        if body.contains("__set_path(") {
+            format!("{SET_PATH_HELPER}{with_pluck}")
+        } else {
+            with_pluck
+        }
     } else {
         "#{ output: input }".to_string()
+    }
+}
+
+/// Parse a Repeater `items_ref` into `(head, pre)` — the slug + the
+/// pre-`[*]` path segments. Mirrors the frontend's `parseRepeaterRef`
+/// (`app/src/lib/components/tasks/task-form-values.svelte.ts`) and the
+/// compiler-side validator's `parse_repeater_ref` (validate.rs); returns
+/// `None` for malformed inputs so the injection silently degrades — the
+/// validator surfaces a typed error before lowering reaches this point.
+fn parse_repeater_items_ref(raw: &str) -> Option<(String, Vec<String>)> {
+    let trimmed = raw.trim();
+    let star = trimmed.find("[*]")?;
+    let before = &trimmed[..star];
+    let dot = before.find('.')?;
+    let head = before[..dot].to_string();
+    if head.is_empty() {
+        return None;
+    }
+    let pre_str = &before[dot + 1..];
+    if pre_str.is_empty() {
+        return None;
+    }
+    let pre: Vec<String> = pre_str.split('.').map(str::to_string).collect();
+    if pre.iter().any(|s| s.is_empty()) {
+        return None;
+    }
+    Some((head, pre))
+}
+
+/// Walk every Repeater block in `steps` and emit one `d.payload = __set_path(...)`
+/// statement per unique `(head, pre)` `items_ref` path. Empty when there are no
+/// Repeater blocks, preserving the existing byte-identical output for legacy
+/// HumanTasks.
+fn build_repeater_payload_block(steps: &[TaskStepConfig]) -> String {
+    let mut seen: std::collections::BTreeSet<(String, Vec<String>)> =
+        std::collections::BTreeSet::new();
+    let mut emissions: Vec<String> = Vec::new();
+    for step in steps {
+        for block in &step.blocks {
+            let TaskBlockConfig::Repeater { items_ref, .. } = block else {
+                continue;
+            };
+            let Some((head, pre)) = parse_repeater_items_ref(items_ref) else {
+                continue;
+            };
+            if !seen.insert((head.clone(), pre.clone())) {
+                continue;
+            }
+            let mut segs: Vec<String> = Vec::with_capacity(1 + pre.len());
+            segs.push(head.clone());
+            segs.extend(pre.iter().cloned());
+            let segs_literal = segs
+                .iter()
+                .map(|s| format!("\"{}\"", rhai_str_escape(s)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let pluck_segs = segs_literal.clone();
+            emissions.push(format!(
+                "d.payload = __set_path(d.payload, [{segs_literal}], 0, __pluck(input, [{pluck_segs}])); ",
+            ));
+        }
+    }
+    if emissions.is_empty() {
+        return String::new();
+    }
+    // Ensure d.payload starts as a map even when the engine projection
+    // emitted `null` / `()` (Option<Value>::None at the wire). __set_path
+    // also defends against this internally, but a clean preamble keeps
+    // the generated Rhai readable when authors inspect compiled AIR.
+    let mut out =
+        String::from("if type_of(d.payload) != \"map\" { d.payload = #{}; } ");
+    for e in emissions {
+        out.push_str(&e);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    //! HumanTask interpolation contract.
+    //!
+    //! These lock down the path from authored `{{ … }}` placeholders in a
+    //! HumanTask's title / instructions / step blocks all the way to the
+    //! Rhai script the wire-edge transition runs. They also pin the known
+    //! asymmetry vs. the Python AutomatedStep clean-cut model: at the
+    //! HumanTask wire-edge, the `input` Rhai variable is the *single
+    //! upstream slim token* on the inbound arc — there is no merged
+    //! `<slug>` namespace. So `{{start.invoice_id}}` parses to
+    //! `__pluck(input, ["start", "invoice_id"])` and resolves to `()` at
+    //! runtime unless the upstream literally exposes a `start` map. The
+    //! `dotted_slug_path_*` cases below codify that gap.
+    use super::*;
+    use crate::models::template::{
+        CalloutSeverity, Position, TaskBlockConfig, TaskStepConfig, WorkflowNode,
+        WorkflowNodeData,
+    };
+
+    fn ht_node(
+        task_title: &str,
+        instructions_mdsvex: Option<&str>,
+        steps: Vec<TaskStepConfig>,
+    ) -> WorkflowNode {
+        WorkflowNode {
+            id: "ht1".to_string(),
+            node_type: "human_task".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::HumanTask {
+                label: "Task".to_string(),
+                description: None,
+                task_title: task_title.to_string(),
+                instructions_mdsvex: instructions_mdsvex.map(str::to_string),
+                steps,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    // ----- placeholder_to_accessor -----
+
+    #[test]
+    fn placeholder_simple_ident() {
+        assert_eq!(
+            placeholder_to_accessor("invoice_id"),
+            Some(r#"__pluck(input, ["invoice_id"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_dotted_path_parses_without_namespace_awareness() {
+        // The parser happily accepts `start.invoice_id`. Whether `input`
+        // actually has a `start` key at runtime is the runtime's problem
+        // — and at the HumanTask wire-edge it does NOT (the inbound arc
+        // carries the slim token directly, not a `<slug>`-keyed wrapper).
+        assert_eq!(
+            placeholder_to_accessor("start.invoice_id"),
+            Some(r#"__pluck(input, ["start", "invoice_id"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_array_index() {
+        assert_eq!(
+            placeholder_to_accessor("items[0].amount"),
+            Some(r#"__pluck(input, ["items", 0, "amount"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_segments_parses_wildcard_index() {
+        // Feature B: `[*]` is the iteration boundary marker — accepted by
+        // the parser so ref grammars can carry it through, but rejected by
+        // `placeholder_to_accessor` (the text interpolator can't iterate).
+        let segs = parse_placeholder_segments("tasks[*].title").expect("parse");
+        assert_eq!(
+            segs,
+            vec![
+                PathSegment::Field("tasks".to_string()),
+                PathSegment::IndexAll,
+                PathSegment::Field("title".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn placeholder_to_accessor_rejects_wildcard() {
+        // `[*]` is structural; emitting a runtime accessor would silently
+        // pick a single element. The whole placeholder is rejected so the
+        // literal text survives — same fail-soft contract as a malformed
+        // body.
+        assert_eq!(placeholder_to_accessor("tasks[*].title"), None);
+        assert_eq!(placeholder_to_accessor("tasks[*]"), None);
+    }
+
+    #[test]
+    fn placeholder_segments_unterminated_wildcard_fails() {
+        // `[*` without `]` is malformed; parser returns None per the
+        // existing contract for unterminated bracket forms.
+        assert_eq!(parse_placeholder_segments("tasks[*"), None);
+        assert_eq!(parse_placeholder_segments("tasks[*x]"), None);
+    }
+
+    #[test]
+    fn placeholder_trims_whitespace() {
+        assert_eq!(
+            placeholder_to_accessor("   invoice_id   "),
+            Some(r#"__pluck(input, ["invoice_id"])"#.to_string())
+        );
+    }
+
+    #[test]
+    fn placeholder_rejects_empty_and_expressions() {
+        assert_eq!(placeholder_to_accessor(""), None);
+        assert_eq!(placeholder_to_accessor("   "), None);
+        // Arbitrary Rhai is rejected so a placeholder can never inject
+        // executable code.
+        assert_eq!(placeholder_to_accessor("a + b"), None);
+        assert_eq!(placeholder_to_accessor("foo()"), None);
+        assert_eq!(placeholder_to_accessor("a.b c"), None);
+        assert_eq!(placeholder_to_accessor("1abc"), None); // leading digit
+        assert_eq!(placeholder_to_accessor("items[]"), None);
+        assert_eq!(placeholder_to_accessor("items[a]"), None); // non-numeric idx
+    }
+
+    // ----- interpolate_to_rhai_expr -----
+
+    #[test]
+    fn interpolate_no_placeholders_emits_plain_literal() {
+        // Regression guard: a placeholder-free string must round-trip to
+        // the exact same Rhai literal `json_to_rhai_literal` would emit,
+        // so byte-identical AIR is preserved for non-templated content.
+        assert_eq!(
+            interpolate_to_rhai_expr("Hello, world!\nNext line"),
+            json_to_rhai_literal(&Value::String("Hello, world!\nNext line".into()))
+        );
+    }
+
+    #[test]
+    fn interpolate_mixed_text_and_one_placeholder() {
+        // `""` seed forces string-context concatenation regardless of the
+        // plucked value's type.
+        assert_eq!(
+            interpolate_to_rhai_expr("Hello {{ name }}!"),
+            r#"("" + "Hello " + (__pluck(input, ["name"])) + "!")"#
+        );
+    }
+
+    #[test]
+    fn interpolate_invalid_placeholder_left_as_literal_text() {
+        // `{{ a + b }}` isn't a legal path → the `{{ }}` survive as plain
+        // characters; the surrounding text is untouched and no pluck call
+        // is emitted (so the prelude won't be prepended either).
+        let out = interpolate_to_rhai_expr("Sum is {{ a + b }} today");
+        assert!(!out.contains("__pluck("));
+        assert!(out.contains("{{ a + b }}"));
+    }
+
+    #[test]
+    fn interpolate_unterminated_brace_keeps_raw_text() {
+        let out = interpolate_to_rhai_expr("Stray {{ never closed");
+        assert!(!out.contains("__pluck("));
+        assert!(out.contains("Stray {{ never closed"));
+    }
+
+    #[test]
+    fn interpolate_two_placeholders_chain_concat() {
+        assert_eq!(
+            interpolate_to_rhai_expr("{{a}}/{{b}}"),
+            r#"("" + (__pluck(input, ["a"])) + "/" + (__pluck(input, ["b"])))"#
+        );
+    }
+
+    // ----- build_human_task_injection_logic -----
+
+    #[test]
+    fn injection_no_placeholders_skips_pluck_helper() {
+        // Regression guard for `with_pluck_prelude`: a HumanTask without
+        // any `{{ }}` must produce a script that does NOT carry the
+        // helper, so existing static HumanTasks stay byte-identical.
+        let node = ht_node("Review the invoice", Some("Open the file"), vec![]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            !script.contains("__pluck("),
+            "placeholder-free script should not include __pluck helper, got: {script}"
+        );
+        assert!(script.contains("d.title = \"Review the invoice\""));
+    }
+
+    #[test]
+    fn injection_with_placeholder_prepends_pluck_once() {
+        let node = ht_node("Review {{ vendor_name }}", None, vec![]);
+        let script = build_human_task_injection_logic(&node);
+        // PLUCK_HELPER appears exactly once (deduped via with_pluck_prelude).
+        assert_eq!(
+            script.matches("fn __pluck(").count(),
+            1,
+            "expected exactly one pluck helper definition, got: {script}"
+        );
+        // And the title field interpolates.
+        assert!(
+            script.contains(r#"__pluck(input, ["vendor_name"])"#),
+            "title placeholder did not lower to a pluck call: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_interpolates_title_instructions_and_step_block_content() {
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Confirm {{ vendor_name }}".into(),
+            description_mdsvex: Some("for invoice {{ invoice_id }}".into()),
+            blocks: vec![
+                TaskBlockConfig::Mdsvex {
+                    content: "Amount: {{ amount }}".into(),
+                },
+                TaskBlockConfig::Callout {
+                    severity: CalloutSeverity::Info,
+                    title: Some("Vendor {{ vendor_name }}".into()),
+                    content: "Please check {{ vendor_name }}".into(),
+                },
+            ],
+        };
+        let node = ht_node(
+            "Review {{ vendor_name }}",
+            Some("See {{ invoice_id }} for details"),
+            vec![step],
+        );
+        let script = build_human_task_injection_logic(&node);
+
+        // Title + instructions go through `interpolate_to_rhai_expr` and
+        // each becomes its own concat expression.
+        assert!(script.contains(r#"__pluck(input, ["vendor_name"])"#));
+        assert!(script.contains(r#"__pluck(input, ["invoice_id"])"#));
+        // Step block contents go through `json_to_rhai_interpolated` —
+        // mdsvex blocks and callout title/content interpolate too.
+        assert!(script.contains(r#"__pluck(input, ["amount"])"#));
+        // Helper is still injected exactly once even though many calls
+        // are emitted across title/instructions/step blocks.
+        assert_eq!(script.matches("fn __pluck(").count(), 1);
+    }
+
+    #[test]
+    fn injection_dotted_slug_path_resolves_against_root_input_not_a_namespace() {
+        // Codifies the known gap: a HumanTask placeholder of
+        // `{{ start.invoice_id }}` is lowered to a pluck against the
+        // root `input` — NOT against a `<slug>`-keyed map. At runtime,
+        // the wire-edge transition feeding the HumanTask binds `input`
+        // to the upstream slim token directly (no merged `<slug>`
+        // wrapper), so `__pluck(input, ["start", "invoice_id"])`
+        // degrades to `()` unless the upstream literally produced a
+        // `start` map field.
+        //
+        // This is the asymmetry vs. the Python AutomatedStep clean-cut
+        // model, where the compiler's borrow planner stages each
+        // referenced upstream node's outputs as `<slug>.json` files. If
+        // HumanTask interpolation later adopts that same model (read-arc
+        // to each referenced producer's `p_<slug>_data` place), this
+        // assertion is the one that flips.
+        let node = ht_node("Pay {{ start.invoice_id }} now", None, vec![]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            script.contains(r#"__pluck(input, ["start", "invoice_id"])"#),
+            "expected dotted path to lower against root `input`, got: {script}"
+        );
+        // And critically — NOT against a slug-namespaced map. If the
+        // model ever changes, this line is what fails first.
+        assert!(
+            !script.contains(r#"__pluck(input.start"#)
+                && !script.contains(r#"__pluck(scopes,"#),
+            "dotted-path lowering should still hit `input` at the root: {script}"
+        );
+    }
+
+    // ----- Repeater payload staging (Feature B) -----
+
+    #[test]
+    fn injection_without_repeater_emits_no_payload_block() {
+        // Byte-identity guard: a HumanTask with no Repeater blocks must
+        // not carry __set_path or a d.payload preamble. Existing static
+        // HumanTasks stay exactly as they were pre-Feature B.
+        let node = ht_node("Review the invoice", Some("Open the file"), vec![]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            !script.contains("__set_path("),
+            "no Repeater → no __set_path helper, got: {script}"
+        );
+        assert!(
+            !script.contains("d.payload"),
+            "no Repeater → no payload preamble, got: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_with_repeater_stages_payload_via_pluck() {
+        // A single Repeater whose items_ref points at `extract.tasks[*]`
+        // must emit a __set_path call that writes
+        // `d.payload.extract.tasks = __pluck(input, ["extract", "tasks"])`.
+        // The borrow rewrite (apply_human_task_borrows) later retargets
+        // the inner __pluck to `d_extract` once the read-arc is wired.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "extract.tasks[*]".into(),
+                item_label_ref: Some("extract.tasks[*].title".into()),
+                blocks: vec![],
+                output_slug: "review_tasks".into(),
+            }],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        // Helper + preamble + single emission.
+        assert_eq!(
+            script.matches("fn __set_path(").count(),
+            1,
+            "expected exactly one __set_path helper: {script}"
+        );
+        assert!(
+            script.contains("if type_of(d.payload) != \"map\""),
+            "missing d.payload preamble: {script}"
+        );
+        assert!(
+            script.contains(
+                r#"d.payload = __set_path(d.payload, ["extract", "tasks"], 0, __pluck(input, ["extract", "tasks"]))"#
+            ),
+            "missing payload-staging emission: {script}"
+        );
+        // Pluck helper also present (this script contains __pluck).
+        assert_eq!(
+            script.matches("fn __pluck(").count(),
+            1,
+            "expected one __pluck helper, got: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_repeaters_with_shared_head_dedupe_paths() {
+        // Two Repeaters pointing at the same items_ref produce a single
+        // payload-staging emission. Distinct items_refs produce distinct
+        // emissions even when the head is shared.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![
+                TaskBlockConfig::Repeater {
+                    items_ref: "extract.tasks[*]".into(),
+                    item_label_ref: None,
+                    blocks: vec![],
+                    output_slug: "review_a".into(),
+                },
+                // Same items_ref — dedupes.
+                TaskBlockConfig::Repeater {
+                    items_ref: "extract.tasks[*]".into(),
+                    item_label_ref: None,
+                    blocks: vec![],
+                    output_slug: "review_b".into(),
+                },
+                // Distinct items_ref — separate emission.
+                TaskBlockConfig::Repeater {
+                    items_ref: "extract.subtasks[*]".into(),
+                    item_label_ref: None,
+                    blocks: vec![],
+                    output_slug: "review_c".into(),
+                },
+            ],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        assert_eq!(
+            script
+                .matches(r#"d.payload = __set_path(d.payload, ["extract", "tasks"]"#)
+                .count(),
+            1,
+            "same items_ref must produce exactly one staging call: {script}"
+        );
+        assert_eq!(
+            script
+                .matches(r#"d.payload = __set_path(d.payload, ["extract", "subtasks"]"#)
+                .count(),
+            1,
+            "distinct items_ref must produce its own staging call: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_repeater_with_deep_pre_path_emits_full_segments() {
+        // items_ref = "foo.bar.baz[*]" → head=foo, pre=["bar","baz"].
+        // The emitted segments must include every pre segment so
+        // __set_path drills the full path before writing the leaf.
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "foo.bar.baz[*]".into(),
+                item_label_ref: None,
+                blocks: vec![],
+                output_slug: "deep".into(),
+            }],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            script.contains(
+                r#"d.payload = __set_path(d.payload, ["foo", "bar", "baz"], 0, __pluck(input, ["foo", "bar", "baz"]))"#
+            ),
+            "deep pre-path not emitted in full: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_repeater_emits_pluck_borrow_needle_for_rewrite() {
+        // The whole point of staging via __pluck(input, ["<slug>", "<attr>"…])
+        // is that `apply_human_task_borrows` rewrites that prefix to
+        // `__pluck(d_<producer>, [<hoist>, "<attr>"…])` after wiring a
+        // read-arc on the upstream parked data. This guards the
+        // contract: the emitted needle must match the rewrite pattern
+        // (slug + trailing `", `).
+        let step = TaskStepConfig {
+            id: "s1".into(),
+            title: "Review".into(),
+            description_mdsvex: None,
+            blocks: vec![TaskBlockConfig::Repeater {
+                items_ref: "extract.tasks[*]".into(),
+                item_label_ref: None,
+                blocks: vec![],
+                output_slug: "review_tasks".into(),
+            }],
+        };
+        let node = ht_node("T", None, vec![step]);
+        let script = build_human_task_injection_logic(&node);
+        assert!(
+            script.contains(r#"__pluck(input, ["extract", "tasks"]"#),
+            "rewrite needle `__pluck(input, [\"extract\", ` missing: {script}"
+        );
+    }
+
+    #[test]
+    fn injection_non_human_task_yields_pass_through() {
+        // Defensive: wiring_logic only invokes us for HumanTask, but the
+        // function still has a fallback branch — keep it documented.
+        let node = WorkflowNode {
+            id: "x".into(),
+            node_type: "start".into(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Start {
+                label: "Start".into(),
+                description: None,
+                initial: crate::models::template::default_initial_port(),
+                process_name: None,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        };
+        assert_eq!(
+            build_human_task_injection_logic(&node),
+            "#{ output: input }"
+        );
     }
 }

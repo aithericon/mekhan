@@ -4,7 +4,7 @@ mod python_venv_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use aithericon_executor_backend::{PythonBackend, PythonConfig};
+    use aithericon_executor_python::{PythonBackend, PythonConfig};
     use aithericon_executor_domain::{
         ExecutionJob, ExecutionStatus, InputDeclaration, InputSource, JobPriority,
         OutputDeclaration,
@@ -199,6 +199,7 @@ mod python_venv_tests {
             name: "answer".into(),
             path: Some("answer.json".into()),
             required: true,
+            kind: None,
             upload_to: None,
         }];
 

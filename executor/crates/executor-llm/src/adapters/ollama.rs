@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
+use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::ollama_subprocess::OllamaSubprocess;
 use crate::port::{
-    CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, ResponseFormat,
-    Role, ToolCall, ToolDefinition, TokenUsage,
+    CompletionPort, CompletionRequest, CompletionResponse, LlmError, ResponseFormat, Role,
 };
 
 /// HTTP-only adapter against an Ollama HTTP endpoint.
@@ -66,8 +66,25 @@ struct OllamaChatRequest<'a> {
     format: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<OllamaToolDefinition>,
+    /// Tool declarations in Ollama's native shape — `{type:"function",
+    /// function:{name,description,parameters}}` — which mirrors OpenAI's
+    /// chat-completions tool format. Omitted entirely when empty so plain
+    /// non-agent chats stay byte-identical to the pre-tool request body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OllamaToolDecl<'a>>>,
+}
+
+#[derive(Serialize)]
+struct OllamaToolDecl<'a> {
+    r#type: &'a str,
+    function: OllamaFunctionDecl<'a>,
+}
+
+#[derive(Serialize)]
+struct OllamaFunctionDecl<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -86,21 +103,6 @@ struct OllamaOptions {
     num_predict: Option<u64>,
 }
 
-/// Ollama tool definition wire shape. Ollama uses `parameters` (not `input_schema`).
-#[derive(Serialize)]
-struct OllamaToolDefinition {
-    r#type: &'static str,
-    function: OllamaToolFunction,
-}
-
-#[derive(Serialize)]
-struct OllamaToolFunction {
-    name: String,
-    description: String,
-    /// Ollama's dialect uses `parameters` where internal representation uses `input_schema`.
-    parameters: serde_json::Value,
-}
-
 #[derive(Deserialize)]
 struct OllamaChatResponse {
     message: OllamaResponseMessage,
@@ -116,21 +118,31 @@ struct OllamaChatResponse {
 
 #[derive(Deserialize)]
 struct OllamaResponseMessage {
-    #[serde(default)]
     content: String,
+    /// Reasoning models (qwen3, deepseek-r1, …) on recent Ollama
+    /// surface their `<think>` block here instead of inlining it into
+    /// `content`. When `content` is empty (e.g. max_tokens hit during
+    /// reasoning) this is the only place output shows up.
     #[serde(default)]
-    tool_calls: Vec<OllamaToolCall>,
+    thinking: Option<String>,
+    /// Native tool-call payload (Ollama 0.3+). One entry per tool the
+    /// model decided to invoke this turn. Empty / absent for plain text
+    /// responses or models that don't support tool calling.
+    #[serde(default)]
+    tool_calls: Vec<OllamaToolCallResp>,
 }
 
-/// Ollama's tool_call wire shape.
 #[derive(Deserialize)]
-struct OllamaToolCall {
-    function: OllamaToolCallFunction,
+struct OllamaToolCallResp {
+    function: OllamaToolCallFn,
 }
 
 #[derive(Deserialize)]
-struct OllamaToolCallFunction {
+struct OllamaToolCallFn {
     name: String,
+    /// Ollama returns `arguments` as a real JSON object (unlike OpenAI,
+    /// which sends a JSON-encoded string). Pass through verbatim.
+    #[serde(default)]
     arguments: serde_json::Value,
 }
 
@@ -142,21 +154,12 @@ fn role_str(role: &Role) -> &'static str {
     }
 }
 
-fn parse_done_reason(reason: Option<&str>) -> FinishReason {
+fn parse_done_reason(reason: Option<&str>) -> LlmStopReason {
     match reason {
-        Some("stop") | None => FinishReason::Stop,
-        Some("length") => FinishReason::Length,
-        Some(other) => FinishReason::Other(other.to_string()),
-    }
-}
-
-fn tool_definition_to_ollama(def: &ToolDefinition) -> OllamaToolDefinition {
-    OllamaToolDefinition {
-        r#type: "function",
-        function: OllamaToolFunction {
-            name: def.name.clone(),
-            description: def.description.clone(),
-            parameters: def.input_schema.clone(),
+        Some("stop") | None => LlmStopReason::EndTurn,
+        Some("length") => LlmStopReason::MaxTokens,
+        Some(other) => LlmStopReason::Other {
+            reason: other.to_string(),
         },
     }
 }
@@ -196,11 +199,28 @@ async fn ollama_complete(
         None
     };
 
-    let tools: Vec<OllamaToolDefinition> = request
-        .tools
-        .iter()
-        .map(tool_definition_to_ollama)
-        .collect();
+    // Build tool declarations from the agent compiler's ToolSchema list.
+    // `None` (not empty array) when the caller declared no tools — keeps
+    // the wire shape byte-identical to pre-tool behaviour for single-shot
+    // LLM calls.
+    let tools = if request.tools.is_empty() {
+        None
+    } else {
+        Some(
+            request
+                .tools
+                .iter()
+                .map(|t| OllamaToolDecl {
+                    r#type: "function",
+                    function: OllamaFunctionDecl {
+                        name: &t.name,
+                        description: &t.description,
+                        parameters: &t.input_schema,
+                    },
+                })
+                .collect(),
+        )
+    };
 
     let body = OllamaChatRequest {
         model: &request.model,
@@ -237,27 +257,45 @@ async fn ollama_complete(
         .await
         .map_err(|e| LlmError::Api(format!("failed to parse Ollama response: {e}")))?;
 
-    let finish_reason = parse_done_reason(resp.done_reason.as_deref());
-
-    let usage = TokenUsage {
+    let usage = LlmUsage {
         input_tokens: resp.prompt_eval_count,
         output_tokens: resp.eval_count,
         total_tokens: resp.prompt_eval_count + resp.eval_count,
     };
 
-    // Ollama doesn't emit call_ids; generate a UUID per call.
-    let tool_calls: Vec<ToolCall> = resp
+    // Ollama 0.3+ surfaces tool invocations in `message.tool_calls` when
+    // the model decided to call one of the declared tools. Each entry
+    // carries `function: {name, arguments}` — arguments is a real JSON
+    // object (not a JSON-encoded string like OpenAI), so we pass it
+    // straight through. Ollama does NOT assign tool-call IDs the way
+    // Anthropic/OpenAI do, so synthesize one per call with a stable
+    // turn-local prefix.
+    let tool_calls: Vec<LlmToolCall> = resp
         .message
         .tool_calls
-        .into_iter()
-        .map(|tc| ToolCall {
-            call_id: uuid_v4(),
-            name: tc.function.name,
-            args: tc.function.arguments,
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| LlmToolCall {
+            id: format!("ollama_tc_{idx}"),
+            name: c.function.name.clone(),
+            arguments: c.function.arguments.clone(),
         })
         .collect();
 
-    // Parse structured output when using json_schema format
+    // Override the model's reported stop reason when we observed at least
+    // one tool call. Older Ollama builds report `done_reason: "stop"` even
+    // for tool-use turns; routing depends on this being ToolUse so the
+    // agent's `t_route_dispatch_<tool>` guard fires.
+    let stop_reason = if !tool_calls.is_empty() {
+        LlmStopReason::ToolUse
+    } else {
+        parse_done_reason(resp.done_reason.as_deref())
+    };
+
+    // Parse structured output when using json_schema format.
+    // Reasoning is hoisted to `message.thinking` by Ollama in this mode
+    // too, so the structured path doesn't need to see the think block —
+    // `content` is already pure JSON.
     let structured_output = match &request.response_format {
         ResponseFormat::JsonSchema { .. } => {
             let parsed: serde_json::Value =
@@ -272,32 +310,159 @@ async fn ollama_complete(
         ResponseFormat::Text => None,
     };
 
+    // For text mode, re-inline the reasoning block into `content` so
+    // downstream consumers see a single text stream — matches the qwen3
+    // native `<think>…</think>` shape Ollama used to emit before
+    // promoting thinking to a structured field. Without this, a run
+    // that hits max_tokens during reasoning returns empty content.
+    let content = match (&request.response_format, resp.message.thinking.as_deref()) {
+        (ResponseFormat::Text, Some(t)) if !t.is_empty() => {
+            format!("<think>{t}</think>{}", resp.message.content)
+        }
+        _ => resp.message.content,
+    };
+
     Ok(CompletionResponse {
-        content: resp.message.content,
+        content,
         usage,
         model: resp.model,
-        finish_reason,
+        stop_reason,
         structured_output,
         tool_calls,
     })
 }
 
-/// Generate a random UUID v4 string for call_ids. Avoids pulling in the `uuid`
-/// crate into a hot path — the value only needs to be unique within a run.
-fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    format!("call_{:08x}_{:08x}", nanos, pseudo_random())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aithericon_executor_domain::ToolSchema;
+    use serde_json::json;
 
-fn pseudo_random() -> u32 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    std::thread::current().id().hash(&mut h);
-    std::time::Instant::now().elapsed().subsec_nanos().hash(&mut h);
-    h.finish() as u32
+    #[test]
+    fn request_omits_tools_field_when_no_tools_declared() {
+        let req = CompletionRequest {
+            model: "qwen2.5:3b".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            response_format: ResponseFormat::Text,
+            tools: vec![],
+        };
+        let body = OllamaChatRequest {
+            model: &req.model,
+            messages: vec![],
+            stream: false,
+            format: None,
+            options: None,
+            tools: None,
+        };
+        let wire = serde_json::to_value(&body).unwrap();
+        assert!(
+            !wire.as_object().unwrap().contains_key("tools"),
+            "wire body must elide `tools` when none declared so single-shot \
+             llm calls stay byte-identical to pre-tool behaviour: {wire}"
+        );
+        let _ = req;
+    }
+
+    #[test]
+    fn request_serializes_tools_in_ollama_native_shape() {
+        let tool = ToolSchema {
+            name: "lookup_order".into(),
+            description: "Look up an order's status by its id.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"order_id": {"type": "string"}},
+                "required": ["order_id"]
+            }),
+        };
+        let decl = OllamaToolDecl {
+            r#type: "function",
+            function: OllamaFunctionDecl {
+                name: &tool.name,
+                description: &tool.description,
+                parameters: &tool.input_schema,
+            },
+        };
+        let body = OllamaChatRequest {
+            model: "qwen2.5:3b",
+            messages: vec![],
+            stream: false,
+            format: None,
+            options: None,
+            tools: Some(vec![decl]),
+        };
+        let wire = serde_json::to_value(&body).unwrap();
+        let tools = wire.get("tools").expect("tools serialized");
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "lookup_order");
+        assert_eq!(tools[0]["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn response_parses_tool_calls_and_overrides_stop_reason() {
+        let raw = json!({
+            "model": "qwen2.5:3b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "lookup_order",
+                        "arguments": {"order_id": "abc123"}
+                    }
+                }]
+            },
+            // Older Ollama: reports "stop" even when tool_calls present.
+            "done_reason": "stop",
+            "prompt_eval_count": 42,
+            "eval_count": 8
+        });
+        let resp: OllamaChatResponse = serde_json::from_value(raw).unwrap();
+        assert_eq!(resp.message.tool_calls.len(), 1);
+        assert_eq!(resp.message.tool_calls[0].function.name, "lookup_order");
+        assert_eq!(
+            resp.message.tool_calls[0].function.arguments,
+            json!({"order_id": "abc123"})
+        );
+
+        // Mirror the override the adapter performs end-to-end.
+        let tcs: Vec<LlmToolCall> = resp
+            .message
+            .tool_calls
+            .iter()
+            .enumerate()
+            .map(|(i, c)| LlmToolCall {
+                id: format!("ollama_tc_{i}"),
+                name: c.function.name.clone(),
+                arguments: c.function.arguments.clone(),
+            })
+            .collect();
+        let stop = if !tcs.is_empty() {
+            LlmStopReason::ToolUse
+        } else {
+            parse_done_reason(resp.done_reason.as_deref())
+        };
+        assert_eq!(stop, LlmStopReason::ToolUse);
+        assert_eq!(tcs[0].id, "ollama_tc_0");
+    }
+
+    #[test]
+    fn response_with_no_tool_calls_keeps_done_reason() {
+        let raw = json!({
+            "model": "qwen2.5:3b",
+            "message": {"role": "assistant", "content": "hi"},
+            "done_reason": "stop",
+            "prompt_eval_count": 5,
+            "eval_count": 1
+        });
+        let resp: OllamaChatResponse = serde_json::from_value(raw).unwrap();
+        assert!(resp.message.tool_calls.is_empty());
+        let stop = if !resp.message.tool_calls.is_empty() {
+            LlmStopReason::ToolUse
+        } else {
+            parse_done_reason(resp.done_reason.as_deref())
+        };
+        assert_eq!(stop, LlmStopReason::EndTurn);
+    }
 }

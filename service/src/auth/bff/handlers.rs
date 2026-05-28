@@ -1,5 +1,5 @@
 //! The `/api/auth/*` endpoints. Mounted UNAUTHENTICATED (the protected
-//! `/api/*` router can't gate the very endpoints that establish a session).
+//! `/api/v1/*` router can't gate the very endpoints that establish a session).
 //!
 //! - `GET /api/auth/login` — 302 to the IdP authorize endpoint (PKCE).
 //! - `GET /api/auth/callback` — code+state → token exchange → DB session →

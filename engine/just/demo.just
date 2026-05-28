@@ -1379,7 +1379,7 @@ human:
 
     echo ""
     echo "2. Building engine + scenario..."
-    cargo build -p core-engine --features human
+    cargo build -p core-engine
     cargo build -p aithericon-sdk --example human_task_net
 
     echo ""
@@ -1389,7 +1389,7 @@ human:
     echo ""
     echo "4. Starting engine with human integration..."
     RUST_LOG=info,petri_nats=debug \
-    cargo run -p core-engine --features human &
+    cargo run -p core-engine &
     ENGINE_PID=$!
     trap 'kill $ENGINE_PID 2>/dev/null; wait $ENGINE_PID 2>/dev/null' ERR
 

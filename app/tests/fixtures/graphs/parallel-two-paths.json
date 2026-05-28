@@ -66,9 +66,9 @@
 		},
 		{
 			"id": "join-1",
-			"type": "parallel_join",
+			"type": "join",
 			"position": { "x": 250, "y": 450 },
-			"data": { "type": "parallel_join", "label": "Join" }
+			"data": { "type": "join", "label": "Join", "mode": "all" }
 		},
 		{
 			"id": "end-1",

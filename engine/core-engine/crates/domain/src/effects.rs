@@ -185,6 +185,16 @@ pub const SPAWN_NET: EffectDescriptor = EffectDescriptor {
     default_output_schema: None,
 };
 
+/// Cancel a running child net (terminate the spawned subworkflow).
+pub const SUBWORKFLOW_CANCEL: EffectDescriptor = EffectDescriptor {
+    handler_id: "subworkflow_cancel",
+    default_input_port: "cancel",
+    default_output_port: "cancelled",
+    category: ServiceCategory::Orchestration,
+    default_input_schema: Some("#/definitions/SubWorkflowCancelInput"),
+    default_output_schema: Some("#/definitions/SubWorkflowCancelled"),
+};
+
 /// Start a process lifecycle (publishes "process started", outputs process token).
 pub const PROCESS_START: EffectDescriptor = EffectDescriptor {
     handler_id: "process_start",
@@ -323,6 +333,7 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &HUMAN_TASK,
     &HUMAN_CANCEL,
     &SPAWN_NET,
+    &SUBWORKFLOW_CANCEL,
     &PROCESS_START,
     &PROCESS_COMPLETE,
     &PROCESS_FAIL,
@@ -388,7 +399,7 @@ mod tests {
 
     #[test]
     fn all_builtin_covers_all_handlers() {
-        assert_eq!(ALL_BUILTIN.len(), 20);
+        assert_eq!(ALL_BUILTIN.len(), 21);
         let ids: Vec<&str> = ALL_BUILTIN.iter().map(|d| d.handler_id).collect();
         assert!(ids.contains(&"scheduler_submit"));
         assert!(ids.contains(&"scheduler_cancel"));
@@ -398,6 +409,7 @@ mod tests {
         assert!(ids.contains(&"timer_cancel"));
         assert!(ids.contains(&"human_task"));
         assert!(ids.contains(&"human_cancel"));
+        assert!(ids.contains(&"subworkflow_cancel"));
         assert!(ids.contains(&"process_start"));
         assert!(ids.contains(&"process_complete"));
         assert!(ids.contains(&"process_fail"));

@@ -1,85 +1,41 @@
 <script lang="ts">
 	// SPDX-License-Identifier: Apache-2.0
-	import DownloadCard from './download-card.svelte';
-	import DataTable from './data-table.svelte';
-	import BlockImage from './block-image.svelte';
-	import BlockPdf from './block-pdf.svelte';
-	import Callout from './callout.svelte';
-	import { getLinkId, withLinkParam } from './link-context';
+	import type { Component } from 'svelte';
+	import MdsvexBlock from './blocks/mdsvex-block.svelte';
+	import DownloadBlock from './blocks/download-block.svelte';
+	import TableBlock from './blocks/table-block.svelte';
+	import ImageBlock from './blocks/image-block.svelte';
+	import CalloutBlock from './blocks/callout-block.svelte';
+	import PdfBlock from './blocks/pdf-block.svelte';
+	import ChartBlock from './blocks/chart-block.svelte';
+	import DividerBlock from './blocks/divider-block.svelte';
 	import type { TaskBlock } from '../types';
 
-	type NonInputBlock = Exclude<TaskBlock, { type: 'input' }>;
+	// Repeater is intentionally NOT a NonInputBlock renderer target —
+	// it carries an interactive sub-form (Feature B). TaskForm.svelte
+	// handles it inline alongside Input blocks, sharing the same
+	// form-state machinery. BlockRenderer is only for display blocks.
+	type NonInputBlock = Exclude<TaskBlock, { type: 'input' } | { type: 'repeater' }>;
 
-	let {
-		block,
-		renderMdsvex,
-		mdsvexClass = ''
-	}: {
-		block: NonInputBlock;
-		/** Optional callback to render mdsvex content to HTML. Falls back to a <pre> tag. */
-		renderMdsvex?: (content: string) => string;
-		/** CSS class applied to the mdsvex wrapper div (e.g. prose styles). */
-		mdsvexClass?: string;
-	} = $props();
+	let { block }: { block: NonInputBlock } = $props();
 
-	const linkId = getLinkId();
+	// `satisfies` enforces exhaustiveness: every NonInputBlock variant must have
+	// a renderer whose `block` prop matches the variant's shape. A missing or
+	// mistyped entry fails to compile.
+	const RENDERERS = {
+		mdsvex: MdsvexBlock,
+		download: DownloadBlock,
+		table: TableBlock,
+		image: ImageBlock,
+		callout: CalloutBlock,
+		pdf: PdfBlock,
+		chart: ChartBlock,
+		divider: DividerBlock
+	} satisfies {
+		[K in NonInputBlock['type']]: Component<{ block: Extract<NonInputBlock, { type: K }> }>;
+	};
+
+	const Renderer = $derived(RENDERERS[block.type] as Component<{ block: NonInputBlock }>);
 </script>
 
-{#if block.type === 'mdsvex'}
-	<div class="{mdsvexClass} py-1" data-testid="step-block-mdsvex">
-		{#if renderMdsvex}
-			<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-			{@html renderMdsvex(block.content)}
-		{:else}
-			<pre class="whitespace-pre-wrap text-sm text-foreground">{block.content}</pre>
-		{/if}
-	</div>
-{:else if block.type === 'download'}
-	<div data-testid="step-block-download">
-		<DownloadCard
-			downloads={linkId
-				? block.downloads.map((d) => ({ ...d, url: withLinkParam(d.url, linkId) }))
-				: block.downloads}
-		/>
-	</div>
-{:else if block.type === 'table'}
-	<div data-testid="step-block-table">
-		<DataTable
-			headers={block.headers}
-			rows={block.rows}
-			alignments={block.alignments}
-			caption={block.caption}
-		/>
-	</div>
-{:else if block.type === 'image'}
-	<div data-testid="step-block-image">
-		<BlockImage url={withLinkParam(block.url, linkId)} alt={block.alt} caption={block.caption} />
-	</div>
-{:else if block.type === 'callout'}
-	<div data-testid="step-block-callout">
-		<Callout severity={block.severity} title={block.title} content={block.content} />
-	</div>
-{:else if block.type === 'pdf'}
-	<div data-testid="step-block-pdf">
-		<BlockPdf
-			url={withLinkParam(block.url, linkId)}
-			filename={block.filename}
-			caption={block.caption}
-			height={block.height}
-		/>
-	</div>
-{:else if block.type === 'chart'}
-	<!-- Chart rendering requires a host-provided component; not included in hpi-ui -->
-	<div data-testid="step-block-chart" class="rounded-xl border border-border bg-card/70 p-4 text-sm text-muted-foreground">
-		Chart: {block.chart_type} ({block.caption ?? 'no caption'})
-	</div>
-{:else if block.type === 'divider'}
-	<hr class="my-4 border-border/50" data-testid="step-block-divider" />
-{:else}
-	<div
-		data-testid="step-block-unknown"
-		class="rounded-xl border border-dashed border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
-	>
-		Unsupported block type: <code class="font-mono">{(block as { type?: string }).type ?? 'unknown'}</code>
-	</div>
-{/if}
+<Renderer {block} />

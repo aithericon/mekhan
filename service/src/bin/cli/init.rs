@@ -9,8 +9,8 @@ use crate::ws_client;
 pub async fn run(server: &str, name: &str, description: Option<&str>, format: WorkflowFormat) -> Result<()> {
     println!("Creating template '{}'...", name);
 
-    // 1. POST /api/templates to create the template
-    let url = format!("{}/api/templates", server);
+    // 1. POST /api/v1/templates to create the template
+    let url = format!("{}/api/v1/templates", server);
     let client = reqwest::Client::new();
     let resp = crate::http::auth(
         client.post(&url).json(&json!({
@@ -41,10 +41,11 @@ pub async fn run(server: &str, name: &str, description: Option<&str>, format: Wo
 
     // 3. Export to directory
     let dir = std::path::PathBuf::from(name);
-    if dir.join(".mekhan.json").exists() {
+    if fs_ops::meta_path(&dir).exists() {
         anyhow::bail!(
-            "directory '{}' already contains a .mekhan.json",
-            dir.display()
+            "directory '{}' already contains a {}",
+            dir.display(),
+            fs_ops::META_FILENAME,
         );
     }
 

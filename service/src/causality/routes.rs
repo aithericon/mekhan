@@ -56,13 +56,13 @@ pub struct ProvenanceResponse {
     pub cross_net_edges: Vec<CrossNetEdge>,
 }
 
-/// GET /api/provenance/{net_id}/{token_id}?depth=10
+/// GET /api/v1/provenance/{net_id}/{token_id}?depth=10
 ///
 /// Recursive CTE walking token ancestry: for a given token, find which events
 /// produced it, what tokens those events consumed, and recurse.
 #[utoipa::path(
     get,
-    path = "/api/provenance/{net_id}/{token_id}",
+    path = "/api/v1/provenance/{net_id}/{token_id}",
     params(
         ("net_id" = String, Path, description = "Net id"),
         ("token_id" = String, Path, description = "Token id to walk ancestry from"),
@@ -79,7 +79,7 @@ pub async fn token_provenance(
     Path((net_id, token_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
 ) -> Result<Json<ProvenanceResponse>, ApiError> {
-    let depth = params.depth.min(50).max(1);
+    let depth = params.depth.clamp(1, 50);
 
     let resp = run_provenance_cte(&state.db, &net_id, &token_id, depth)
         .await
@@ -100,12 +100,12 @@ pub struct CrossLink {
     pub link_type: String,
 }
 
-/// GET /api/provenance/link/{signal_key}
+/// GET /api/v1/provenance/link/{signal_key}
 ///
 /// Look up a cross-net bridge link by signal_key.
 #[utoipa::path(
     get,
-    path = "/api/provenance/link/{signal_key}",
+    path = "/api/v1/provenance/link/{signal_key}",
     params(("signal_key" = String, Path, description = "Signal key identifying the bridge")),
     responses(
         (status = 200, description = "Cross-net link", body = CrossLink),
@@ -134,14 +134,14 @@ pub async fn cross_link(
 
 // ── Provenance from artifact ──────────────────────────────────────────────
 
-/// GET /api/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10
+/// GET /api/v1/provenance/from-artifact/{execution_id}/{artifact_id}?depth=10
 ///
 /// Resolves a catalogue entry to its producing token and returns the full
 /// ancestry chain. Uses `source_event_sequence` for direct lookup when
 /// available, falling back to signal_key → cross-link resolution.
 #[utoipa::path(
     get,
-    path = "/api/provenance/from-artifact/{execution_id}/{artifact_id}",
+    path = "/api/v1/provenance/from-artifact/{execution_id}/{artifact_id}",
     params(
         ("execution_id" = String, Path, description = "Execution id from the catalogue entry"),
         ("artifact_id" = String, Path, description = "Catalogue entry id"),
@@ -159,7 +159,7 @@ pub async fn provenance_from_artifact(
     Path((execution_id, artifact_id)): Path<(String, String)>,
     Query(params): Query<ProvenanceParams>,
 ) -> Result<Json<ProvenanceResponse>, ApiError> {
-    let depth = params.depth.min(50).max(1);
+    let depth = params.depth.clamp(1, 50);
 
     // Look up the catalogue entry by (execution_id, id) — unique key
     let entry: Option<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
@@ -491,14 +491,14 @@ pub struct EventDetail {
     pub signal_dispatch: Option<SignalDispatch>,
 }
 
-/// GET /api/provenance/{net_id}/{event_seq}/detail
+/// GET /api/v1/provenance/{net_id}/{event_seq}/detail
 ///
 /// Returns the full context for a causality event by joining to domain
 /// tables based on effect_handler. Enables rich detail views in the
 /// provenance DAG visualization.
 #[utoipa::path(
     get,
-    path = "/api/provenance/{net_id}/{event_seq}/detail",
+    path = "/api/v1/provenance/{net_id}/{event_seq}/detail",
     params(
         ("net_id" = String, Path, description = "Net id"),
         ("event_seq" = i64, Path, description = "Event sequence number within the net"),

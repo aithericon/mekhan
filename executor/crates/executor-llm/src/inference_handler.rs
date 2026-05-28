@@ -22,6 +22,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use aithericon_executor_domain::ToolSchema;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -31,7 +32,7 @@ use crate::adapters::ollama::base_url_for_subprocess;
 use crate::config::Role;
 use crate::ollama_subprocess::OllamaSubprocess;
 use crate::port::{
-    CompletionPort, CompletionRequest, ImageData, LlmError, Message, ResponseFormat, ToolDefinition,
+    CompletionPort, CompletionRequest, ImageData, LlmError, Message, ResponseFormat,
 };
 
 /// Axum state injected into the inference handler via `.with_state()`.
@@ -163,7 +164,7 @@ pub(crate) async fn run_completion(
     });
 
     let response_format = req.response_format.unwrap_or(ResponseFormat::Text);
-    // Deserialize each opaque-JSON tool spec into the typed `ToolDefinition`
+    // Deserialize each opaque-JSON tool spec into the domain `ToolSchema`
     // the port layer consumes. `HttpInferenceHandler` (engine-side) forwards
     // clinic's `tool_catalogue` here as raw `serde_json::Value`s; this is
     // where they get typed for downstream provider-adapter normalization.
@@ -171,7 +172,7 @@ pub(crate) async fn run_completion(
         .tools
         .into_iter()
         .map(|raw| {
-            serde_json::from_value::<ToolDefinition>(raw).map_err(|e| {
+            serde_json::from_value::<ToolSchema>(raw).map_err(|e| {
                 (
                     StatusCode::BAD_REQUEST,
                     format!("invalid tool definition: {e}"),
@@ -198,7 +199,7 @@ pub(crate) async fn run_completion(
     Ok(InferenceResponse {
         output: completion.content,
         model: completion.model,
-        finish_reason: completion.finish_reason.to_string(),
+        finish_reason: completion.stop_reason.to_string(),
         usage: InferenceUsage {
             input_tokens: completion.usage.input_tokens,
             output_tokens: completion.usage.output_tokens,
@@ -246,9 +247,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::port::{
-        CompletionPort, CompletionRequest, CompletionResponse, FinishReason, LlmError, TokenUsage,
-    };
+    use aithericon_executor_domain::{LlmStopReason, LlmUsage};
+    use crate::port::{CompletionPort, CompletionRequest, CompletionResponse, LlmError};
 
     // ---------------------------------------------------------------------------
     // Mock CompletionPort
@@ -264,8 +264,8 @@ mod tests {
                 result: Ok(CompletionResponse {
                     content: content.to_string(),
                     model: model.to_string(),
-                    finish_reason: FinishReason::Stop,
-                    usage: TokenUsage {
+                    stop_reason: LlmStopReason::EndTurn,
+                    usage: LlmUsage {
                         input_tokens: 10,
                         output_tokens: 20,
                         total_tokens: 30,
@@ -292,7 +292,7 @@ mod tests {
                 Ok(r) => Ok(CompletionResponse {
                     content: r.content.clone(),
                     model: r.model.clone(),
-                    finish_reason: r.finish_reason.clone(),
+                    stop_reason: r.stop_reason.clone(),
                     usage: r.usage.clone(),
                     structured_output: r.structured_output.clone(),
                     tool_calls: r.tool_calls.clone(),
@@ -480,7 +480,7 @@ mod tests {
             .expect("completion succeeds");
         assert_eq!(resp.output, "generated text");
         assert_eq!(resp.model, "test-model-a");
-        assert_eq!(resp.finish_reason, "stop");
+        assert_eq!(resp.finish_reason, "end_turn");
         assert_eq!(resp.usage.input_tokens, 10);
         assert_eq!(resp.usage.output_tokens, 20);
         assert_eq!(resp.usage.total_tokens, 30);

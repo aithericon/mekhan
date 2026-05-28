@@ -11,7 +11,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 rhai = { workspace = true }
-petri-domain = { workspace = true, features = ["human"] }
+petri-domain = { workspace = true }
 aithericon-executor-domain = { workspace = true, features = ["schema"] }
 aithericon-sdk-derive = { path = "../sdk-derive" }
 ureq = { workspace = true }

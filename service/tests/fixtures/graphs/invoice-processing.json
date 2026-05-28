@@ -220,9 +220,9 @@
 		},
 		{
 			"id": "join",
-			"type": "parallel_join",
+			"type": "join",
 			"position": { "x": 1600, "y": 120 },
-			"data": { "type": "parallel_join", "label": "Merge Results" }
+			"data": { "type": "join", "label": "Merge Results", "mode": "all" }
 		},
 		{
 			"id": "end-approved",
@@ -234,12 +234,43 @@
 			"id": "auto-validate",
 			"type": "loop",
 			"position": { "x": 1080, "y": 400 },
+			"width": 420,
+			"height": 220,
 			"data": {
 				"type": "loop",
 				"label": "Auto-Validate",
 				"description": "Retry validation up to 3 times",
 				"maxIterations": 3,
 				"loopCondition": "review.verified != true"
+			}
+		},
+		{
+			"id": "validate-check",
+			"type": "automated_step",
+			"parentId": "auto-validate",
+			"position": { "x": 60, "y": 60 },
+			"data": {
+				"type": "automated_step",
+				"label": "Re-validate",
+				"executionSpec": {
+					"backendType": "python",
+					"entrypoint": "main.py",
+					"config": {
+						"python": "python3",
+						"requirements": [],
+						"virtualenv": false,
+						"sdk": true,
+						"inherit_env": true,
+						"env": {}
+					}
+				},
+				"output": {
+					"id": "out",
+					"label": "Check",
+					"fields": [
+						{ "name": "verified", "label": "Verified", "kind": "bool", "required": true }
+					]
+				}
 			}
 		},
 		{
@@ -323,6 +354,21 @@
 			"target": "end-approved",
 			"targetHandle": "in",
 			"type": "sequence"
+		},
+		{
+			"id": "e-loop-body-in",
+			"source": "auto-validate",
+			"target": "validate-check",
+			"sourceHandle": "body_in",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e-loop-body-out",
+			"source": "validate-check",
+			"target": "auto-validate",
+			"targetHandle": "body_out",
+			"type": "loop_back"
 		},
 		{
 			"id": "e-loop-end",

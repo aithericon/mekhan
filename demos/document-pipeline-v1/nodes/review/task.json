@@ -1,0 +1,76 @@
+[
+  {
+    "id": "step-review",
+    "title": "Review",
+    "blocks": [
+      {
+        "type": "callout",
+        "severity": "info",
+        "title": "Patient {{ patient_id }} — {{ classify.document_class }}",
+        "content": "Classification confidence: **{{ classify.confidence }}**. Reasoning: _{{ classify.reasoning }}_.\n\nCitations failed for **{{ verify.unverified_count }}** of {{ persist.field_count }} extracted field(s)."
+      },
+      {
+        "type": "image",
+        "url": "/api/v1/files/{{ start.document_file.key }}",
+        "alt": "Uploaded document",
+        "caption": "Original document for patient {{ patient_id }}"
+      },
+      {
+        "type": "download",
+        "downloads": [
+          {
+            "url": "/api/v1/files/{{ start.document_file.key }}",
+            "filename": "{{ start.document_file.filename }}",
+            "mime_type": "{{ start.document_file.content_type }}",
+            "description": "Original upload"
+          }
+        ]
+      },
+      {
+        "type": "mdsvex",
+        "content": "### Extracted fields\n\nThe {{ persist.field_count }} field(s) the LLM extracted from the OCR text. Compare each row against the document above; the OCR-span column shows what the LLM cited as supporting evidence.\n\n{{ persist.summary_table }}"
+      },
+      {
+        "type": "callout",
+        "severity": "warning",
+        "title": "Unverified field keys",
+        "content": "**Flagged:** {{ verify.unverified_keys }}\n\nVerification compares each citation's `supporting_text` against the OCR output (lowercased + whitespace collapsed). A field is flagged when its citation is **not a substring** of what kreuzberg actually read.\n\nCommon causes:\n\n- The LLM **silently corrected** an OCR glitch in its citation — e.g. it cites `0.6 - 1.1` when the OCR actually read `@.6- 1.1` for that reference range.\n- The LLM **rephrased** the source span instead of quoting it verbatim.\n- The OCR genuinely doesn't contain the cited value (LLM hallucination).\n\nCompare the citation in the **OCR span** column above against the document image. If the value is correct on the page, approve; if the LLM invented it, reject."
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "decision",
+          "label": "Decision",
+          "kind": "select",
+          "required": true,
+          "options": [
+            { "value": "approve",   "label": "Approve as-extracted" },
+            { "value": "edit",      "label": "Approve with edits"  },
+            { "value": "re_ocr",    "label": "Send back — re-OCR"  },
+            { "value": "reject",    "label": "Reject document"     }
+          ]
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "edits",
+          "label": "Edited fields (JSON, only if Decision = Approve with edits)",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Paste a JSON object overriding any of the extracted field values, e.g. {\"Haemoglobin\": \"14.2 g/dL\"}. Leave blank to accept the extraction as-is."
+        }
+      },
+      {
+        "type": "input",
+        "field": {
+          "name": "note",
+          "label": "Reviewer note (optional)",
+          "kind": "textarea",
+          "required": false,
+          "placeholder": "Anything the next reviewer should know."
+        }
+      }
+    ]
+  }
+]

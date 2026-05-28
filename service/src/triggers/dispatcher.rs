@@ -41,6 +41,29 @@ pub struct TriggerDispatcher {
     /// Per-source-kind fire counter for observability (Phase 5f). Monotonic
     /// since boot; the metrics endpoint exposes raw counts.
     metrics: DashMap<String, FireMetrics>,
+    /// Per-(template_id, version) coalesce state for templates whose graph
+    /// declares `InstanceConcurrencyPolicy::SingleActiveCoalesce`. Lazy: the entry
+    /// is created on the first fire that observes the policy and removed
+    /// when there's nothing left to remember. Wrapping the state in
+    /// `Arc<Mutex<..>>` lets us run an atomic check-and-set without
+    /// holding the DashMap entry lock across an `.await`.
+    concurrency: DashMap<(Uuid, i32), Arc<tokio::sync::Mutex<CoalesceState>>>,
+}
+
+/// Per-template coalesce bookkeeping. See `ConcurrencyPolicy` doc.
+#[derive(Debug, Default)]
+struct CoalesceState {
+    /// The instance id we marked active for this template, if any. Cleared
+    /// when the lifecycle listener calls `on_instance_terminal`.
+    active_instance_id: Option<Uuid>,
+    /// At least one fire arrived while `active_instance_id` was set.
+    /// Cleared after the follow-up fire is dispatched.
+    dirty: bool,
+    /// `(node_id, payload)` of the most recent skipped fire. The follow-up
+    /// re-dispatches with this payload — the workflow's body typically
+    /// re-reads catalogue state anyway, so the most-recent payload is the
+    /// most informative seed.
+    last_skipped: Option<(String, Value)>,
 }
 
 #[derive(Debug, Default, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -62,6 +85,7 @@ impl TriggerDispatcher {
             nats,
             history: DashMap::new(),
             metrics: DashMap::new(),
+            concurrency: DashMap::new(),
         }
     }
 
@@ -85,13 +109,23 @@ impl TriggerDispatcher {
             FireOutcome::Signaled { .. } => entry.signaled += 1,
             FireOutcome::NoTargets => entry.no_targets += 1,
             FireOutcome::Dropped { .. } => entry.dropped += 1,
+            // Coalesced fires count toward the same bucket as Dropped for
+            // metrics purposes: both are "fired but didn't spawn". The
+            // FireResult history records the distinction.
+            FireOutcome::Coalesced { .. } => entry.dropped += 1,
         }
     }
 
     /// Scan every published template and (re)register its triggers. Called
     /// once at startup and after every publish (the templates handler will
     /// invoke `register_template` directly to avoid re-scanning all templates).
-    pub async fn hydrate(&self) -> Result<usize, TriggerError> {
+    ///
+    /// Hydrate explicitly passes `do_backfill = false`: on service restart
+    /// the in-memory trigger map is empty, so a `do_backfill = true` would
+    /// re-walk catalogue history for every backfill-enabled Catalog trigger
+    /// and spawn a flood of duplicate instances. Backfill is a publish-time
+    /// concern, not a startup concern.
+    pub async fn hydrate(self: &Arc<Self>) -> Result<usize, TriggerError> {
         let templates: Vec<WorkflowTemplate> = sqlx::query_as::<_, WorkflowTemplate>(
             "SELECT * FROM workflow_templates WHERE published = true AND is_latest = true",
         )
@@ -101,7 +135,7 @@ impl TriggerDispatcher {
 
         let mut count = 0;
         for tpl in &templates {
-            count += self.register_template(tpl).await;
+            count += self.register_template(tpl, false).await;
         }
         tracing::info!(count, "trigger dispatcher hydrated");
         Ok(count)
@@ -109,7 +143,20 @@ impl TriggerDispatcher {
 
     /// Register every trigger node found in a template's `graph_json`.
     /// Returns the number of triggers registered.
-    pub async fn register_template(&self, template: &WorkflowTemplate) -> usize {
+    ///
+    /// When `do_backfill` is true, any newly-added Catalog trigger whose
+    /// `CatalogTrigger.backfill = true` flag is set has its historical
+    /// matching catalogue entries walked and fired in chronological order
+    /// (via `sources::catalog::backfill_one`, spawned). "Newly added" is
+    /// detected by snapshotting the in-memory trigger node-id set for this
+    /// template+version before the clear-and-reinsert; that's what stops a
+    /// trigger-toggle (which re-registers the same node id with a new
+    /// `enabled` flag) from re-firing backfill. Hydrate passes `false`.
+    pub async fn register_template(
+        self: &Arc<Self>,
+        template: &WorkflowTemplate,
+        do_backfill: bool,
+    ) -> usize {
         let graph: WorkflowGraph = match serde_json::from_value(template.graph.clone()) {
             Ok(g) => g,
             Err(e) => {
@@ -121,6 +168,19 @@ impl TriggerDispatcher {
             }
         };
 
+        // Snapshot the prior trigger node-ids for this template+version so
+        // we can tell "newly added" from "re-registered" after the clear.
+        // Used only to decide which Catalog triggers should backfill.
+        let prior_ids: std::collections::HashSet<String> = self
+            .triggers
+            .iter()
+            .filter(|r| {
+                r.value().template_id == template.id
+                    && r.value().template_version == template.template_version_or_zero()
+            })
+            .map(|r| r.value().node_id.clone())
+            .collect();
+
         // First clear any prior records for this template/version so that
         // editing a trigger in place doesn't leak the old config.
         self.triggers.retain(|_, rec| {
@@ -129,6 +189,7 @@ impl TriggerDispatcher {
         });
 
         let mut registered = 0;
+        let mut to_backfill: Vec<(String, TriggerRecord)> = Vec::new();
         for node in &graph.nodes {
             let WorkflowNodeData::Trigger {
                 source,
@@ -199,6 +260,18 @@ impl TriggerDispatcher {
                 registered_at: Utc::now(),
                 air_target_place_id: None,
             };
+            // Backfill decision: only newly-added, enabled Catalog triggers
+            // with `backfill=true` and only when the caller asked for it.
+            if do_backfill
+                && *enabled
+                && !prior_ids.contains(&node.id)
+                && matches!(
+                    source,
+                    crate::models::template::TriggerSource::Catalog(c) if c.backfill
+                )
+            {
+                to_backfill.push((node.id.clone(), record.clone()));
+            }
             self.triggers.insert(node.id.clone(), record);
             registered += 1;
         }
@@ -209,6 +282,27 @@ impl TriggerDispatcher {
                 "registered triggers for template"
             );
         }
+
+        // Spawn backfill tasks AFTER inserting so the dispatcher fire path
+        // sees the record. Each backfill is a single-page query (capped at
+        // 1000) followed by per-entry fires; bounded work, tokio handles it.
+        for (node_id, rec) in to_backfill {
+            let crate::models::template::TriggerSource::Catalog(cat) = &rec.source else {
+                continue;
+            };
+            let filters = cat.filters.clone();
+            let dispatcher = Arc::clone(self);
+            let db = self.db.clone();
+            tracing::info!(
+                template_id = %template.id,
+                node_id = %node_id,
+                "scheduling catalog trigger backfill"
+            );
+            tokio::spawn(async move {
+                super::sources::catalog::backfill_one(dispatcher, node_id, filters, db).await;
+            });
+        }
+
         registered
     }
 
@@ -224,6 +318,87 @@ impl TriggerDispatcher {
                 template_id = %template_id,
                 removed = before - after,
                 "removed triggers for template"
+            );
+        }
+        // Drop any coalesce state for this template's versions so a future
+        // republish doesn't see stale active/dirty marks.
+        self.concurrency.retain(|(tpl, _), _| *tpl != template_id);
+    }
+
+    /// Called by the lifecycle listener when an instance reaches a terminal
+    /// status (`completed` / `cancelled` / `failed`). For
+    /// `SingleActiveCoalesce` templates this is what closes the loop: if the
+    /// terminating instance is the one we marked active and any fires were
+    /// coalesced while it ran, dispatch exactly one follow-up fire with the
+    /// most-recent skipped payload. A no-op for templates with the default
+    /// `Unlimited` policy.
+    ///
+    /// Looking up the template_id from `net_id` via DB is one cheap query;
+    /// the alternative (passing it through every lifecycle message) would
+    /// bloat the NATS subject scheme for an uncommon path.
+    pub async fn on_instance_terminal(self: &Arc<Self>, net_id: &str) {
+        let row: Option<(Uuid, i32, Uuid)> = match sqlx::query_as(
+            "SELECT template_id, template_version, id FROM workflow_instances WHERE net_id = $1",
+        )
+        .bind(net_id)
+        .fetch_optional(&self.db)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(net_id, "on_instance_terminal: DB lookup failed: {e}");
+                return;
+            }
+        };
+        let Some((template_id, template_version, instance_id)) = row else {
+            return; // Unknown net_id (already cleaned up or never tracked).
+        };
+
+        let Some(entry) = self.concurrency.get(&(template_id, template_version)) else {
+            return; // Template doesn't use coalesce.
+        };
+        let mtx = entry.value().clone();
+        drop(entry);
+
+        let (follow_up_node_id, follow_up_payload) = {
+            let mut state = mtx.lock().await;
+            // Only act if WE marked this instance active. A foreign instance
+            // (e.g. created via direct API) terminating shouldn't dispatch
+            // a coalesced follow-up — that would conflate unrelated runs.
+            if state.active_instance_id != Some(instance_id) {
+                return;
+            }
+            state.active_instance_id = None;
+            if !state.dirty {
+                return;
+            }
+            state.dirty = false;
+            match state.last_skipped.take() {
+                Some(p) => p,
+                None => return, // Dirty but no payload — defensive no-op.
+            }
+        };
+
+        tracing::info!(
+            template_id = %template_id,
+            triggered_node_id = %follow_up_node_id,
+            "single-active-coalesce: dispatching follow-up fire after instance terminal"
+        );
+        // Self-fire on the trigger node. If a fresh fire races us through
+        // the coalesce gate first, that's fine — the gate is atomic and at
+        // worst one fire is recorded as Coalesced (correct).
+        if let Err(e) = self
+            .fire(
+                &follow_up_node_id,
+                follow_up_payload,
+                petri_api_types::DispatchOptions::default(),
+            )
+            .await
+        {
+            tracing::warn!(
+                template_id = %template_id,
+                triggered_node_id = %follow_up_node_id,
+                "single-active-coalesce: follow-up fire failed: {e}"
             );
         }
     }
@@ -544,6 +719,87 @@ impl TriggerDispatcher {
         dispatch_options: petri_api_types::DispatchOptions,
         wait: Option<&ResultWaiters>,
     ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
+        // SingleActiveCoalesce: atomic check-and-set against the per-template
+        // CoalesceState. If active, record (node_id, payload) and return
+        // Coalesced; the lifecycle terminal hook will dispatch one follow-up.
+        // We do this BEFORE the AIR-load / parameterize / deploy sequence so
+        // we don't pay launcher cost for a fire we'll discard.
+        if let crate::models::template::InstanceConcurrencyPolicy::SingleActiveCoalesce =
+            graph.instance_concurrency
+        {
+            // We're the trigger dispatcher — `wait.is_some()` means a caller
+            // (e.g. webhook with reply-wait) is blocking on a real instance.
+            // Coalescing in that case would leave them waiting on nothing, so
+            // fall through to spawn (race-tolerant: at worst they get a
+            // duplicate; the dispatcher's metrics record what happened).
+            if wait.is_none() {
+                let mtx = self
+                    .concurrency
+                    .entry((template.id, template.version))
+                    .or_default()
+                    .value()
+                    .clone();
+                let mut state = mtx.lock().await;
+                if let Some(active) = state.active_instance_id {
+                    // Sibling running — coalesce.
+                    state.dirty = true;
+                    state.last_skipped = Some((record.node_id.clone(), token));
+                    tracing::info!(
+                        node_id = %record.node_id,
+                        template_id = %template.id,
+                        active_instance = %active,
+                        "single-active-coalesce: fire coalesced into pending follow-up"
+                    );
+                    return Ok((FireOutcome::Coalesced { active_instance_id: active }, None));
+                }
+                // No active sibling — mark ourselves provisionally active
+                // before spawn so a parallel fire racing through this same
+                // check observes us. If the launcher fails below we clear
+                // it again so the next fire isn't permanently blocked.
+                // The instance_id we will use:
+                let placeholder = Uuid::new_v4();
+                state.active_instance_id = Some(placeholder);
+                drop(state);
+                return self
+                    .fire_spawn_active(
+                        record,
+                        template,
+                        graph,
+                        token,
+                        dispatch_options,
+                        wait,
+                        placeholder,
+                    )
+                    .await;
+            }
+        }
+
+        self.fire_spawn_active(
+            record,
+            template,
+            graph,
+            token,
+            dispatch_options,
+            wait,
+            Uuid::new_v4(),
+        )
+        .await
+    }
+
+    /// Inner spawn — assumes any coalesce gate has already been passed and
+    /// the placeholder instance id has been marked active (if applicable).
+    /// On failure with `SingleActiveCoalesce`, clears the active mark so
+    /// the next fire isn't permanently locked out.
+    async fn fire_spawn_active(
+        &self,
+        record: &TriggerRecord,
+        template: &WorkflowTemplate,
+        graph: &WorkflowGraph,
+        token: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
+        wait: Option<&ResultWaiters>,
+        instance_id: Uuid,
+    ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let air_json = template
             .air_json
             .clone()
@@ -555,7 +811,6 @@ impl TriggerDispatcher {
         // Synthetic principal — see proposal §9.3. Stable per trigger so audit
         // queries can attribute fires.
         let created_by = synthetic_principal_for_trigger(&record.node_id);
-        let instance_id = Uuid::new_v4();
         let net_id = format!("mekhan-{instance_id}");
 
         // Audit metadata: who triggered this and which template version.
@@ -571,7 +826,7 @@ impl TriggerDispatcher {
         // `PreAir` variant and seed the named AIR place directly; graph-edge
         // resolved triggers stay on the `Templated` path.
         let launcher = InstanceLauncher::new(&self.db, &self.petri);
-        let launch_result = match &record.air_target_place_id {
+        let launch_outcome = match &record.air_target_place_id {
             Some(place_id) => {
                 launcher
                     .launch(LaunchSpec::PreAir {
@@ -604,12 +859,40 @@ impl TriggerDispatcher {
                         air_json: &air_json,
                         graph,
                         start_tokens: &start_tokens,
+                        mode: None,
+                        test_id: None,
                         dispatch_options,
                     })
                     .await
             }
         };
-        let instance = launch_result.map_err(|e| TriggerError::InstanceFailed(e.to_string()))?;
+        let launch_result = launch_outcome.map_err(|e| TriggerError::InstanceFailed(e.to_string()));
+
+        // Active-mark unwinding: if we provisionally marked ourselves active
+        // for SingleActiveCoalesce and the launcher failed, clear the mark
+        // so the next fire isn't permanently locked out. Use the *intended*
+        // instance_id (not the launched one) since the launcher rolled back.
+        if launch_result.is_err()
+            && matches!(
+                graph.instance_concurrency,
+                crate::models::template::InstanceConcurrencyPolicy::SingleActiveCoalesce
+            )
+        {
+            if let Some(entry) = self.concurrency.get(&(template.id, template.version)) {
+                let mtx = entry.value().clone();
+                drop(entry);
+                let mut state = mtx.lock().await;
+                if state.active_instance_id == Some(instance_id) {
+                    state.active_instance_id = None;
+                    tracing::warn!(
+                        template_id = %template.id,
+                        instance_id = %instance_id,
+                        "single-active-coalesce: launcher failed, cleared provisional active mark"
+                    );
+                }
+            }
+        }
+        let instance = launch_result?;
 
         // WaitForResult: register the waiter, then close the
         // create→deploy→terminal race. The net may already be terminal (the

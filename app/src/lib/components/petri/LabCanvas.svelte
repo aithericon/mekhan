@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import {
 		SvelteFlow,
 		Background,
@@ -7,6 +6,7 @@
 		MiniMap
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
+	import { mode } from 'mode-watcher';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type {
 		PetriNet,
@@ -59,15 +59,6 @@
 	let showReadArcs = $state(true);
 	let collapseGroups = $state(false);
 
-	let darkMode = $state(false);
-	onMount(() => {
-		const mq = window.matchMedia('(prefers-color-scheme: dark)');
-		darkMode = mq.matches;
-		const handler = (e: MediaQueryListEvent) => { darkMode = e.matches; };
-		mq.addEventListener('change', handler);
-		return () => mq.removeEventListener('change', handler);
-	});
-
 	const nodeTypes = {
 		place: PlaceNode,
 		transition: TransitionNode,
@@ -108,7 +99,7 @@
 </script>
 
 <div id="lab-canvas" class="lab-canvas w-full h-full relative">
-	<SvelteFlow {nodes} {edges} {nodeTypes} fitView colorMode={darkMode ? 'dark' : 'light'} minZoom={0.05}>
+	<SvelteFlow {nodes} {edges} {nodeTypes} fitView colorMode={mode.current ?? 'system'} minZoom={0.05}>
 		<CanvasController {spotlight} />
 		<Background />
 		{#if !presentationMode}

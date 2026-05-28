@@ -55,6 +55,7 @@ fn make_spec(config: Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 
@@ -82,6 +83,11 @@ fn make_run_context(spec: ExecutionSpec, timeout: Duration) -> RunContext {
         run_dir: RunDirectory::new(&std::env::temp_dir(), &id),
         timeout,
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -130,7 +136,7 @@ async fn single_txt_extraction() {
 
     let (cb, log) = tracking_callback();
     let result = backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -147,11 +153,12 @@ async fn single_txt_extraction() {
         "content should contain 'Hello', got: {content}"
     );
 
-    // Standard output keys should be present.
-    assert!(result.outputs.contains_key("word_count"));
-    assert!(result.outputs.contains_key("char_count"));
-    assert!(result.outputs.contains_key("tables"));
+    // Native kreuzberg ExtractionResult fields should be present.
+    // (`detected_languages`, `chunks`, etc. are skip_serializing_if=None.)
+    assert!(result.outputs.contains_key("content"));
     assert!(result.outputs.contains_key("mime_type"));
+    assert!(result.outputs.contains_key("tables"));
+    assert!(result.outputs.contains_key("metadata"));
 
     // Metrics should be populated.
     let metrics = result.metrics.as_ref().expect("missing metrics");
@@ -164,12 +171,6 @@ async fn single_txt_extraction() {
         metrics
             .latest_values
             .contains_key("kreuzberg/content_length")
-    );
-    assert!(metrics.latest_values.contains_key("kreuzberg/word_count"));
-    assert!(
-        metrics
-            .latest_values
-            .contains_key("kreuzberg/table_count")
     );
 
     // Status callback should have been called with Running.
@@ -191,7 +192,7 @@ async fn single_extraction_with_explicit_file_name() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -213,7 +214,7 @@ async fn single_extraction_sole_input_auto_resolved() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -244,7 +245,7 @@ async fn batch_extraction_all_inputs() {
 
     let (cb, log) = tracking_callback();
     let result = backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -262,10 +263,12 @@ async fn batch_extraction_all_inputs() {
     let results_arr = result.outputs["results"].as_array().unwrap();
     assert_eq!(results_arr.len(), 2);
 
-    // Each result should have content.
+    // Each entry is a native ExtractionResult + a `file` tag.
     for entry in results_arr {
+        assert!(entry["file"].is_string());
         assert!(entry["content"].is_string());
-        assert!(entry["word_count"].is_number());
+        assert!(entry["mime_type"].is_string());
+        assert!(entry["tables"].is_array());
     }
 
     // Progress should be complete.
@@ -309,7 +312,7 @@ async fn batch_extraction_filtered_files() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -336,7 +339,7 @@ async fn batch_partial_failure() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -373,7 +376,7 @@ async fn batch_total_failure_is_backend_error() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -405,7 +408,7 @@ async fn single_nonexistent_file_returns_backend_error() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -441,7 +444,7 @@ async fn cancellation_returns_cancelled_outcome() {
     let cancel = CancellationToken::new();
     cancel.cancel();
 
-    let result = backend.execute(&ctx, noop_callback(), cancel).await.unwrap();
+    let result = backend.execute(&ctx, noop_callback(), None, cancel).await.unwrap();
 
     assert!(matches!(result.outcome, ExecutionOutcome::Cancelled));
 }
@@ -525,7 +528,7 @@ async fn writes_expected_output_files() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -556,7 +559,7 @@ async fn success_populates_info_log() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -581,7 +584,7 @@ async fn failure_populates_error_log() {
 
     let ctx = backend.prepare(&job, ctx).await.unwrap();
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

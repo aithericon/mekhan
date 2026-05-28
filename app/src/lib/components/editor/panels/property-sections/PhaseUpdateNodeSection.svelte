@@ -4,10 +4,12 @@
 	// `config.progress.phases`. Only effective downstream of a Start that
 	// registered a process (`processName`); otherwise a silent no-op.
 	import type { PhaseUpdateNodeData } from '$lib/types/editor';
+	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { FormField } from '$lib/components/ui/form-field';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
+	import InsertRefButton from './InsertRefButton.svelte';
 
 	type Status = NonNullable<PhaseUpdateNodeData['status']>;
 
@@ -22,11 +24,22 @@
 		data: PhaseUpdateNodeData;
 		readonly?: boolean;
 		onchange: (data: PhaseUpdateNodeData) => void;
+		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { data, readonly = false, onchange, scope = [] }: Props = $props();
 
 	const status = $derived((data.status ?? 'running') as Status);
+
+	function appendToPhaseName(snippet: string) {
+		const curr = data.phaseName ?? '';
+		onchange({ ...data, phaseName: curr ? `${curr} ${snippet}` : snippet });
+	}
+
+	function appendToMessage(snippet: string) {
+		const curr = data.message ?? '';
+		onchange({ ...data, message: curr ? `${curr} ${snippet}` : snippet });
+	}
 </script>
 
 <FormField label="Phase name" for="phase-name">
@@ -40,6 +53,15 @@
 		oninput={(e) =>
 			onchange({ ...data, phaseName: (e.currentTarget as HTMLInputElement).value })}
 	/>
+	{#if scope.length > 0}
+		<div class="mt-1.5">
+			<InsertRefButton
+				{scope}
+				disabled={readonly}
+				oninsert={appendToPhaseName}
+			/>
+		</div>
+	{/if}
 </FormField>
 
 <FormField label="Status" for="phase-status">
@@ -75,8 +97,14 @@
 			onchange({ ...data, message: v === '' ? undefined : v });
 		}}
 	/>
+	{#if scope.length > 0}
+		<div class="mt-1.5">
+			<InsertRefButton {scope} disabled={readonly} oninsert={appendToMessage} />
+		</div>
+	{/if}
 	<p class="mt-1 text-sm text-muted-foreground">
-		Supports <code>{'{{ field }}'}</code> placeholders resolved against the inbound token.
+		<code>{'{{ ref }}'}</code> placeholders interpolate fields from this node's input scope —
+		use the picker above for the in-scope set.
 	</p>
 </FormField>
 

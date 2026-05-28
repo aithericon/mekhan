@@ -114,6 +114,36 @@ def test_set_output_noop_without_env(monkeypatch):
     set_output("result", 42)
 
 
+def test_set_output_writes_file_even_when_ipc_connected(monkeypatch):
+    """Regression: the runner template's required-output check reads
+    ``{AITHERICON_OUTPUTS_DIR}/{name}.json``. When the SDK was connected
+    over IPC it used to skip the file write, which silently failed any
+    script that called ``set_output(...)`` instead of bare globals — the
+    runner then exited with ``missing required output(s)`` even though
+    the IPC call succeeded. Both writes must happen now."""
+    calls = []
+
+    class FakeStub:
+        def SetOutput(self, request):
+            calls.append((request.name, request.value_json))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        monkeypatch.setenv("AITHERICON_OUTPUTS_DIR", tmp)
+        import aithericon._client as client_mod
+        monkeypatch.setattr(client_mod, "_stub", FakeStub())
+
+        set_output("result", {"score": 99})
+
+        # File is the durable contract.
+        path = os.path.join(tmp, "result.json")
+        assert os.path.exists(path), "set_output must write the file even when IPC is up"
+        with open(path) as f:
+            assert json.load(f) == {"score": 99}
+
+        # IPC is still called for streaming.
+        assert calls == [("result", json.dumps({"score": 99}))]
+
+
 # ── init / is_connected ─────────────────────────────────────────────
 
 def test_init_without_socket(monkeypatch):

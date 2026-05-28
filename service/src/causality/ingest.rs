@@ -13,6 +13,7 @@ use crate::catalogue::model::CatalogueRegisterCommand;
 use crate::catalogue::subscriptions::SubscriptionManager;
 use crate::causality::live::LiveBroadcasts;
 use crate::nats::MekhanNats;
+use crate::observability::record_silent_drop_with;
 use crate::triggers::TriggerDispatcher;
 
 /// Slim serde type for CrossNetTokenTransfer messages on `petri.bridge.>`.
@@ -110,7 +111,12 @@ async fn process_bridge_transfer(
     let transfer: CrossNetTokenTransfer = match serde_json::from_slice(payload) {
         Ok(t) => t,
         Err(e) => {
-            tracing::warn!("causality: failed to deserialize bridge transfer: {e}");
+            record_silent_drop_with(
+                "bridge_transfer",
+                &e,
+                serde_json::json!({ "subject": subject }),
+                Some(payload),
+            );
             return Ok(());
         }
     };
@@ -161,7 +167,12 @@ async fn process_domain_event(
     let persisted: PersistedEvent = match serde_json::from_slice(payload) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!("causality: failed to deserialize event: {e}");
+            record_silent_drop_with(
+                "event_envelope",
+                &e,
+                serde_json::json!({ "subject": subject, "net_id": net_id }),
+                Some(payload),
+            );
             return Ok(());
         }
     };
@@ -901,7 +912,10 @@ async fn enrich_processes_from_start_event(
 /// Mark processes as completed when the process_complete effect fires.
 ///
 /// Resolves process IDs from the consumed/read tokens and sets their status
-/// to "completed" with the completion timestamp.
+/// to "completed" with the completion timestamp. Any phase still in
+/// `Running` is closed to `Completed` and stamped with `ended_at` — leaving
+/// a phase pulsing "running" on a finished process is a visual lie, since
+/// the workflow has reached its End and no further PhaseUpdate will fire.
 async fn complete_processes(
     db: &PgPool,
     consumed_ids: &[String],
@@ -918,10 +932,39 @@ async fn complete_processes(
         .execute(db)
         .await?;
 
+        close_running_phases(db, pid, PhaseStatus::Completed, ts).await?;
+
         tracing::info!(
             process_id = %pid,
             "marked process as completed",
         );
+    }
+    Ok(())
+}
+
+/// Close any `Running` phases on a process by promoting them to `final_status`
+/// (Completed/Failed) and stamping `ended_at = ts`. Phases already in a
+/// terminal status (Completed/Failed/Skipped) and still-`Pending` phases are
+/// left untouched: a Pending phase was declared but never reached, which is
+/// honest to keep visible.
+async fn close_running_phases(
+    db: &PgPool,
+    process_id: &str,
+    final_status: PhaseStatus,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    let mut progress = load_progress(db, process_id, ts).await?;
+    let mut changed = false;
+    for ph in progress.phases.iter_mut() {
+        if ph.status == PhaseStatus::Running {
+            ph.status = final_status;
+            ph.ended_at = Some(ts);
+            changed = true;
+        }
+    }
+    if changed {
+        progress.updated_at = ts;
+        write_progress(db, process_id, &progress, ts).await?;
     }
     Ok(())
 }
@@ -1474,7 +1517,13 @@ async fn register_catalogue_entry(
     let cmd: CatalogueRegisterCommand = match serde_json::from_value(effect_result.clone()) {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("catalogue_register: failed to deserialize effect_result: {e}");
+            let payload_bytes = serde_json::to_vec(effect_result).ok();
+            record_silent_drop_with(
+                "catalogue_register",
+                &e,
+                serde_json::json!({ "net_id": net_id, "event_seq": event_seq }),
+                payload_bytes.as_deref(),
+            );
             return Ok(());
         }
     };

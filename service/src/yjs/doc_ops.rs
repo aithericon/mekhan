@@ -105,6 +105,9 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
             Some(yrs::Out::Any(Any::Number(n))) => Some(n),
             _ => None,
         };
+        // `toolMeta` was removed from WorkflowNode — agent tool naming now
+        // derives from the node's own `data.label` / `data.description`.
+        // Old YDocs may still carry the field; we just ignore it on read.
 
         nodes.push(WorkflowNode {
             id: node_id.to_string(),
@@ -160,10 +163,35 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         Some(Viewport { x, y, zoom })
     });
 
+    // -- instance_concurrency: read the top-level Y.Map written by
+    // graph_to_doc_with_files. Absent → default (Unlimited).
+    let instance_concurrency = txn
+        .get_map("instanceConcurrency")
+        .and_then(|m| {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in m.iter(&txn) {
+                obj.insert(k.to_string(), yrs_value_to_json(&v, &txn));
+            }
+            if obj.is_empty() {
+                return None;
+            }
+            serde_json::from_value::<crate::models::template::InstanceConcurrencyPolicy>(
+                serde_json::Value::Object(obj),
+            )
+            .ok()
+        })
+        .unwrap_or_default();
+
     Ok(WorkflowGraph {
         nodes,
         edges,
         viewport,
+        instance_concurrency,
+        // YJS read path does not yet carry workflow-level `definitions`
+        // (no editor surface; see `compiler::schema_refs`). Templates that
+        // need definitions are loaded from JSON-on-disk via the demo
+        // seeder — that path uses serde and populates the field correctly.
+        definitions: Default::default(),
     })
 }
 
@@ -239,6 +267,14 @@ pub fn graph_to_doc_with_files(
                 node_map.insert(&mut txn, "description", desc.to_string());
             }
 
+            // Author-facing `<slug>.<field>` namespace. Round-tripped through
+            // Y.Doc so seed paths (new_version fork, demo seed, GitOps apply)
+            // don't drop the user-set slug and silently rename downstream
+            // borrow refs to the placeholder derived from the node id.
+            if let Some(ref s) = node.slug {
+                node_map.insert(&mut txn, "slug", s.clone());
+            }
+
             // position as Any::Map (plain object, not a Y.Map)
             let pos: HashMap<String, Any> = HashMap::from([
                 ("x".to_string(), Any::Number(node.position.x)),
@@ -256,6 +292,10 @@ pub fn graph_to_doc_with_files(
             if let Some(h) = node.height {
                 node_map.insert(&mut txn, "height", h);
             }
+            // `toolMeta` was dropped — tool naming for agent-bound tools
+            // derives from the node's own `data.label` / `data.description`
+            // now. The frontend Y.Doc binding also stops writing the field;
+            // old docs may still contain it (read-side ignores stale entries).
 
             // config as nested Y.Map
             let config_empty: MapPrelim = std::iter::empty::<(&str, Any)>().collect();
@@ -322,178 +362,44 @@ pub fn graph_to_doc_with_files(
             vp_map.insert(&mut txn, "y", vp.y);
             vp_map.insert(&mut txn, "zoom", vp.zoom);
         }
+
+        // -- instance_concurrency: top-level Y.Map ----------------------
+        // Round-trips the template-level policy so publish (which reads the
+        // graph back via doc_to_graph) doesn't silently downgrade
+        // `SingleActiveCoalesce` to the `Unlimited` default. Stored under
+        // `instanceConcurrency` (camelCase to match the frontend's existing
+        // Y.Map key convention). Default elided so legacy docs keep parsing.
+        if !matches!(
+            graph.instance_concurrency,
+            crate::models::template::InstanceConcurrencyPolicy::Unlimited
+        ) {
+            let ic_val = serde_json::to_value(graph.instance_concurrency)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            let ic_map = txn.get_or_insert_map("instanceConcurrency");
+            // Write each key from the tagged enum object directly into the
+            // map (e.g. `mode: "single_active_coalesce"`) so future variants
+            // with additional fields round-trip without code changes here.
+            if let serde_json::Value::Object(obj) = ic_val {
+                for (k, v) in obj {
+                    ic_map.insert(&mut txn, k.as_str(), json_value_to_any(&v));
+                }
+            }
+        }
     }
     doc
 }
 
 /// Write type-specific WorkflowNodeData fields into a yrs config MapRef.
+/// Routes to the registry's per-variant `yjs_encode` fn pointer; the actual
+/// per-field write lives in `service/src/nodes/<variant>.rs`.
 pub fn write_node_config(
     txn: &mut yrs::TransactionMut,
     config: &yrs::MapRef,
     data: &WorkflowNodeData,
 ) {
-    match data {
-        WorkflowNodeData::Start { initial, process_name, .. } => {
-            let initial_val =
-                serde_json::to_value(initial).unwrap_or(serde_json::Value::Object(Default::default()));
-            config.insert(txn, "initial", json_value_to_any(&initial_val));
-            // Opt-in per-instance process name template. Persist it so the
-            // graph→Y.Doc seed path (createTemplate) and publish's Y.Doc
-            // reconstruction don't silently drop it.
-            if let Some(pn) = process_name.as_deref().filter(|s| !s.is_empty()) {
-                config.insert(txn, "processName", pn.to_string());
-            }
-        }
-        WorkflowNodeData::End { result_mapping, .. } => {
-            if !result_mapping.is_empty() {
-                let rm_val = serde_json::to_value(result_mapping)
-                    .unwrap_or(serde_json::Value::Array(vec![]));
-                config.insert(txn, "resultMapping", json_value_to_any(&rm_val));
-            }
-        }
-        WorkflowNodeData::HumanTask {
-            task_title,
-            instructions_mdsvex,
-            steps,
-            ..
-        } => {
-            config.insert(txn, "taskTitle", task_title.clone());
-            if let Some(inst) = instructions_mdsvex {
-                config.insert(txn, "instructionsMdsvex", inst.clone());
-            }
-            let steps_val =
-                serde_json::to_value(steps).unwrap_or(serde_json::Value::Array(vec![]));
-            config.insert(txn, "steps", json_value_to_any(&steps_val));
-        }
-        WorkflowNodeData::AutomatedStep {
-            execution_spec,
-            retry_policy,
-            deployment_model,
-            ..
-        } => {
-            let spec_val = serde_json::to_value(execution_spec).unwrap_or_default();
-            config.insert(txn, "executionSpec", json_value_to_any(&spec_val));
-            // `retry_policy` and `deployment_model` are `#[serde(default)]` on
-            // AutomatedStep, so omitting them here makes the graph→Y.Doc seed
-            // (createTemplate) + publish's Y.Doc→graph reconstruction
-            // (`doc_to_graph`) silently reset them to defaults — losing an
-            // authored retry policy and, critically, collapsing a `Scheduled`
-            // step back to `Inline` (it would never reach scheduler-net).
-            // `input`/`output` are deliberately NOT persisted: they are
-            // re-derived from the backend (see their doc comments).
-            let retry_val = serde_json::to_value(retry_policy).unwrap_or_default();
-            config.insert(txn, "retryPolicy", json_value_to_any(&retry_val));
-            let dm_val = serde_json::to_value(deployment_model).unwrap_or_default();
-            config.insert(txn, "deploymentModel", json_value_to_any(&dm_val));
-        }
-        WorkflowNodeData::Decision {
-            conditions,
-            default_branch,
-            ..
-        } => {
-            let conds_val =
-                serde_json::to_value(conditions).unwrap_or(serde_json::Value::Array(vec![]));
-            config.insert(txn, "conditions", json_value_to_any(&conds_val));
-            if let Some(db) = default_branch {
-                config.insert(txn, "defaultBranch", db.clone());
-            }
-        }
-        WorkflowNodeData::ParallelSplit { .. }
-        | WorkflowNodeData::ParallelJoin { .. }
-        | WorkflowNodeData::Scope { .. } => {}
-        WorkflowNodeData::Loop {
-            max_iterations,
-            loop_condition,
-            ..
-        } => {
-            config.insert(txn, "maxIterations", *max_iterations as f64);
-            config.insert(txn, "loopCondition", loop_condition.clone());
-        }
-        WorkflowNodeData::PhaseUpdate {
-            phase_name,
-            status,
-            message,
-            ..
-        } => {
-            config.insert(txn, "phaseName", phase_name.clone());
-            let status_val = serde_json::to_value(status).unwrap_or_default();
-            config.insert(txn, "status", json_value_to_any(&status_val));
-            if let Some(m) = message {
-                config.insert(txn, "message", m.clone());
-            }
-        }
-        WorkflowNodeData::ProgressUpdate {
-            fraction,
-            message,
-            current_step,
-            total_steps,
-            ..
-        } => {
-            config.insert(txn, "fraction", *fraction);
-            if let Some(m) = message {
-                config.insert(txn, "message", m.clone());
-            }
-            if let Some(cs) = current_step {
-                config.insert(txn, "currentStep", *cs as f64);
-            }
-            if let Some(ts) = total_steps {
-                config.insert(txn, "totalSteps", *ts as f64);
-            }
-        }
-        WorkflowNodeData::Failure {
-            failure_message,
-            error_result_mapping,
-            ..
-        } => {
-            if let Some(m) = failure_message {
-                config.insert(txn, "failureMessage", m.clone());
-            }
-            if !error_result_mapping.is_empty() {
-                let erm_val = serde_json::to_value(error_result_mapping)
-                    .unwrap_or(serde_json::Value::Array(vec![]));
-                config.insert(txn, "errorResultMapping", json_value_to_any(&erm_val));
-            }
-        }
-        WorkflowNodeData::Trigger {
-            source,
-            concurrency,
-            payload_mapping,
-            reply_default,
-            enabled,
-            ..
-        } => {
-            let source_val = serde_json::to_value(source).unwrap_or_default();
-            config.insert(txn, "source", json_value_to_any(&source_val));
-            let concurrency_val = serde_json::to_value(concurrency).unwrap_or_default();
-            config.insert(txn, "concurrency", json_value_to_any(&concurrency_val));
-            let mapping_val =
-                serde_json::to_value(payload_mapping).unwrap_or(serde_json::Value::Array(vec![]));
-            config.insert(txn, "payloadMapping", json_value_to_any(&mapping_val));
-            if let Some(rd) = reply_default {
-                let rd_val = serde_json::to_value(rd).unwrap_or_default();
-                config.insert(txn, "replyDefault", json_value_to_any(&rd_val));
-            }
-            config.insert(txn, "enabled", *enabled);
-        }
-        WorkflowNodeData::SubWorkflow {
-            template_id,
-            version_pin,
-            input_mapping,
-            output,
-            ..
-        } => {
-            config.insert(txn, "templateId", template_id.to_string());
-            let vp_val = serde_json::to_value(version_pin).unwrap_or_default();
-            config.insert(txn, "versionPin", json_value_to_any(&vp_val));
-            if !input_mapping.is_empty() {
-                let im_val = serde_json::to_value(input_mapping)
-                    .unwrap_or(serde_json::Value::Array(vec![]));
-                config.insert(txn, "inputMapping", json_value_to_any(&im_val));
-            }
-            let out_val = serde_json::to_value(output).unwrap_or_default();
-            config.insert(txn, "output", json_value_to_any(&out_val));
-        }
-    }
+    let decl = crate::nodes::lookup_by_variant(data)
+        .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");
+    (decl.yjs_encode)(txn, config, data);
 }
 
 #[cfg(test)]
@@ -538,7 +444,7 @@ mod tests {
                 },
             ],
             edges: vec![],
-            viewport: None,
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
         };
 
         let doc = graph_to_doc(&graph);
@@ -598,7 +504,7 @@ mod tests {
                     height: None,
                 }],
                 edges: vec![],
-                viewport: None,
+                viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
             }
         }
 
@@ -621,6 +527,150 @@ mod tests {
             }
             other => panic!("expected Start, got {other:?}"),
         }
+    }
+
+    /// Locks in that AutomatedStep `output` (and `input`) survive a Y.Doc
+    /// round-trip. Pre-fix the seeder wrote a graph with output ports but
+    /// the Y.Doc init dropped them, so the editor's port panel rendered
+    /// "No declared output fields" against a seeded demo whose disk
+    /// fixture had them set. Catches the silent-default-collapse class of
+    /// regression where a node-data field is `#[serde(default)]` and gets
+    /// quietly omitted from the Y.Doc seed.
+    #[test]
+    fn automated_step_input_output_survive_ydoc_roundtrip() {
+        use crate::models::template::{
+            DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, FieldKind, Port,
+            PortField, RetryPolicy, WorkflowEdge, WorkflowNode,
+        };
+
+        let output_port = Port {
+            id: "out".to_string(),
+            label: "Out".to_string(),
+            fields: vec![
+                PortField {
+                    name: "vendor".to_string(),
+                    label: "Vendor".to_string(),
+                    kind: FieldKind::Text,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                },
+                PortField {
+                    name: "amount".to_string(),
+                    label: "Amount".to_string(),
+                    kind: FieldKind::Number,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                },
+            ],
+        };
+
+        let graph = WorkflowGraph {
+            nodes: vec![WorkflowNode {
+                id: "extract".to_string(),
+                node_type: "automated_step".to_string(),
+                slug: None,
+                position: Position { x: 0.0, y: 0.0 },
+                data: WorkflowNodeData::AutomatedStep {
+                    label: "Extract".to_string(),
+                    description: None,
+                    execution_spec: ExecutionSpecConfig {
+                        backend_type: ExecutionBackendType::Python,
+                        entrypoint: Some("main.py".to_string()),
+                        config: serde_json::json!({"python": "python3"}),
+                    },
+                    input: Port::empty_input(),
+                    output: output_port.clone(),
+                    retry_policy: RetryPolicy::default(),
+                    deployment_model: DeploymentModel::default(),
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            }],
+            edges: Vec::<WorkflowEdge>::new(),
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        match &rt.nodes[0].data {
+            WorkflowNodeData::AutomatedStep { output, .. } => {
+                assert_eq!(
+                    output.fields.len(),
+                    2,
+                    "output.fields must survive Y.Doc round-trip"
+                );
+                let names: Vec<&str> = output.fields.iter().map(|f| f.name.as_str()).collect();
+                assert_eq!(names, vec!["vendor", "amount"]);
+            }
+            other => panic!("expected AutomatedStep, got {other:?}"),
+        }
+    }
+
+    /// Pre-fix the slug write side was missing, so `new_version` (and any
+    /// other graph→Y.Doc seed) silently dropped the user-set slug. The
+    /// reconstructed draft then opened with every node falling back to the
+    /// placeholder derived from the node id, silently breaking every
+    /// `<slug>.<field>` borrow ref authored against the published version.
+    #[test]
+    fn node_slug_survives_ydoc_roundtrip() {
+        let graph = WorkflowGraph {
+            nodes: vec![
+                WorkflowNode {
+                    id: "n_with_slug".to_string(),
+                    node_type: "start".to_string(),
+                    slug: Some("review_step".to_string()),
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Start {
+                        label: "Start".to_string(),
+                        description: None,
+                        initial: Port {
+                            id: "in".to_string(),
+                            label: "Input".to_string(),
+                            fields: vec![],
+                        },
+                        process_name: None,
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                WorkflowNode {
+                    id: "n_no_slug".to_string(),
+                    node_type: "end".to_string(),
+                    slug: None,
+                    position: Position { x: 100.0, y: 0.0 },
+                    data: WorkflowNodeData::End {
+                        label: "End".to_string(),
+                        description: None,
+                        terminal: Port {
+                            id: "in".to_string(),
+                            label: "Terminal".to_string(),
+                            fields: vec![],
+                        },
+                        result_mapping: Vec::new(),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+            ],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        let with_slug = rt.nodes.iter().find(|n| n.id == "n_with_slug").unwrap();
+        assert_eq!(with_slug.slug.as_deref(), Some("review_step"));
+        let no_slug = rt.nodes.iter().find(|n| n.id == "n_no_slug").unwrap();
+        assert_eq!(no_slug.slug, None);
     }
 
     /// Verifies inline files at template creation make it into the Y.Doc as

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { TaskStep, TaskField } from '$lib/hpi/types';
 	import { BlockRenderer } from '$lib/hpi';
-	import BlockChart from '$lib/components/ui/block-chart/block-chart.svelte';
+	import RepeaterBlock from './RepeaterBlock.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -18,8 +18,10 @@
 	import { CalendarDate, getLocalTimeZone } from '@internationalized/date';
 	import { renderMdsvex } from '$lib/mdsvex';
 	import { MDSVEX_CLASS } from '$lib/mdsvex-styles';
-	import { authFetch } from '$lib/auth/fetch';
 	import { toast } from 'svelte-sonner';
+	import Check from '@lucide/svelte/icons/check';
+	import ArrowRight from '@lucide/svelte/icons/arrow-right';
+	import * as Stepper from '$lib/components/ui/stepper';
 	import {
 		getTextValue as _getTextValue,
 		getCheckboxValue as _getCheckboxValue,
@@ -29,9 +31,12 @@
 		buildDateString,
 		parseFileValue,
 		validateFields,
+		validateField,
 		coerceFormData,
 		fieldsForStep,
-		type UploadedFile
+		parseRepeaterRef,
+		getAtPath,
+		asItemsArray
 	} from './task-form-values.svelte.ts';
 
 	interface Props {
@@ -39,14 +44,117 @@
 		onsubmit: (data: Record<string, unknown>) => void;
 		oncancel?: (reason?: string) => void;
 		submitting?: boolean;
+		/** Persist form draft (values + active step) to localStorage under this key. */
+		taskId?: string;
+		/**
+		 * Feature B — upstream data the HumanTask request envelope carries
+		 * for Repeater blocks. Looked up via the Repeater's `items_ref`
+		 * pre-`[*]` path; the renderer iterates the resolved array. When
+		 * omitted (or the path resolves to a non-array), Repeater blocks
+		 * render an empty-state notice instead of crashing.
+		 */
+		taskData?: Record<string, unknown>;
 	}
 
-	let { steps, onsubmit, oncancel, submitting = false }: Props = $props();
+	let { steps, onsubmit, oncancel, submitting = false, taskId, taskData }: Props = $props();
 
 	let formData: Record<string, unknown> = $state({});
 	let errors: Record<string, string> = $state({});
-	let activeStep = $state(0);
+	// 1-based to match Stepper.Root contract
+	let activeStep = $state(1);
 	let datePopoverOpen: Record<string, boolean> = $state({});
+
+	const STORAGE_KEY = $derived(taskId ? `task-draft-${taskId}` : null);
+	let draftLoaded = $state(false);
+
+	$effect(() => {
+		const key = STORAGE_KEY;
+		if (!key || draftLoaded) return;
+		draftLoaded = true;
+		if (typeof localStorage === 'undefined') return;
+		try {
+			const saved = localStorage.getItem(key);
+			if (!saved) return;
+			const draft = JSON.parse(saved) as { formValues?: Record<string, unknown>; step?: number };
+			if (draft.formValues && typeof draft.formValues === 'object') {
+				formData = { ...draft.formValues };
+			}
+			if (typeof draft.step === 'number' && draft.step >= 1 && draft.step <= steps.length) {
+				activeStep = draft.step;
+			}
+		} catch {
+			localStorage.removeItem(key);
+		}
+	});
+
+	$effect(() => {
+		const key = STORAGE_KEY;
+		if (!key || !draftLoaded) return;
+		if (typeof localStorage === 'undefined') return;
+		const snapshot = $state.snapshot(formData);
+		const step = activeStep;
+		const hasValues = Object.keys(snapshot).length > 0;
+		if (!hasValues && step === 1) {
+			localStorage.removeItem(key);
+			return;
+		}
+		try {
+			localStorage.setItem(key, JSON.stringify({ formValues: snapshot, step }));
+		} catch {
+			/* quota or disabled — silently drop */
+		}
+	});
+
+	function clearDraft() {
+		if (!STORAGE_KEY || typeof localStorage === 'undefined') return;
+		localStorage.removeItem(STORAGE_KEY);
+	}
+
+	function setFieldErrorBound(name: string, message: string) {
+		errors = { ...errors, [name]: message };
+	}
+
+	function clearFieldErrorBound(name: string) {
+		if (!(name in errors)) return;
+		const { [name]: _, ...rest } = errors;
+		errors = rest;
+	}
+
+	function focusField(fieldName: string): void {
+		queueMicrotask(() => {
+			document
+				.querySelector<HTMLElement>(`[data-testid="field-${fieldName}"]`)
+				?.focus();
+		});
+	}
+
+	/** Validate one step's fields. Returns the first invalid field name, or null. */
+	function validateStep(stepIdx: number): string | null {
+		const s = steps[stepIdx];
+		if (!s) return null;
+		const fieldFail = validateFields(
+			fieldsForStep(s),
+			formData,
+			setFieldErrorBound,
+			clearFieldErrorBound
+		);
+		if (fieldFail) return fieldFail;
+		return validateRepeaters(s);
+	}
+
+	/** Walk forward from current step toward `targetStep` (1-based, exclusive).
+	 *  Returns 1-based index of first failing step (and focuses its bad field),
+	 *  or null if all steps in [activeStep, targetStep) validate. */
+	function validateUpTo(targetStep: number): number | null {
+		for (let s = activeStep; s < targetStep; s++) {
+			const firstInvalid = validateStep(s - 1);
+			if (firstInvalid) {
+				focusField(firstInvalid);
+				return s;
+			}
+		}
+		return null;
+	}
 
 	// Value accessors bound to formData
 	function getTextValue(name: string): string {
@@ -79,66 +187,169 @@
 			errors = rest;
 		}
 	}
-	function setFieldError(name: string, message: string) {
-		errors = { ...errors, [name]: message };
-	}
-
-	const currentStep = $derived(steps[activeStep]);
-	const isLastStep = $derived(activeStep === steps.length - 1);
+	const currentStep = $derived(steps[activeStep - 1]);
+	const isLastStep = $derived(activeStep === steps.length);
 	const allFields = $derived(steps.flatMap((s) => fieldsForStep(s)));
 
+	// ── Repeater (Feature B) helpers ─────────────────────────────
+	// Repeater state lives at `formData[output_slug]: Array<Record<string, unknown>>`.
+	// Per-row field errors use the key `<output_slug>.<row_index>.<field_name>`
+	// so the existing focusField pattern keeps working for them.
+	function repeaterRows(outputSlug: string): Record<string, unknown>[] {
+		const v = formData[outputSlug];
+		return Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+	}
+
+	function setRepeaterField(
+		outputSlug: string,
+		rowIndex: number,
+		fieldName: string,
+		value: unknown
+	) {
+		const rows = repeaterRows(outputSlug).slice();
+		const cur = (rows[rowIndex] ?? {}) as Record<string, unknown>;
+		rows[rowIndex] = { ...cur, [fieldName]: value };
+		formData = { ...formData, [outputSlug]: rows };
+		const errKey = `${outputSlug}.${rowIndex}.${fieldName}`;
+		if (errors[errKey]) {
+			const { [errKey]: _, ...rest } = errors;
+			errors = rest;
+		}
+	}
+
+	function getRepeaterFieldText(outputSlug: string, rowIndex: number, fieldName: string): string {
+		const rows = repeaterRows(outputSlug);
+		const v = rows[rowIndex]?.[fieldName];
+		if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+		return typeof v === 'string' ? v : '';
+	}
+
+	function getRepeaterFieldBool(outputSlug: string, rowIndex: number, fieldName: string): boolean {
+		const rows = repeaterRows(outputSlug);
+		return rows[rowIndex]?.[fieldName] === true;
+	}
+
+	/**
+	 * Walk a step's Repeater blocks; for each block resolve the upstream
+	 * items array from `taskData` and emit one synthetic field-error key
+	 * per (row, sub-field) on validation failure. Returns the first
+	 * invalid `<output_slug>.<row>.<field>` (mirrors validateFields'
+	 * single-string return).
+	 */
+	function validateRepeaters(step: TaskStep): string | null {
+		let first: string | null = null;
+		for (const block of step.blocks) {
+			if (block.type !== 'repeater') continue;
+			const parsed = parseRepeaterRef(block.items_ref);
+			if (!parsed) continue;
+			const items = asItemsArray(getAtPath(taskData ?? {}, [parsed.head, ...parsed.pre]));
+			const rows = repeaterRows(block.output_slug);
+			// Only Input children contribute to the per-row schema —
+			// display blocks (Mdsvex/Callout/Image/...) render but
+			// have nothing to validate.
+			const inputFields = block.blocks
+				.filter((b): b is Extract<typeof b, { type: 'input' }> => b.type === 'input')
+				.map((b) => b.field);
+			for (let i = 0; i < items.length; i++) {
+				const row = (rows[i] ?? {}) as Record<string, unknown>;
+				for (const subField of inputFields) {
+					const message = validateField(subField, row);
+					const key = `${block.output_slug}.${i}.${subField.name}`;
+					if (message) {
+						setFieldErrorBound(key, message);
+						if (!first) first = key;
+					} else {
+						clearFieldErrorBound(key);
+					}
+				}
+			}
+		}
+		return first;
+	}
+
+	function repeaterBlocks(step: TaskStep) {
+		return step.blocks.filter((b): b is Extract<typeof b, { type: 'repeater' }> =>
+			b.type === 'repeater'
+		);
+	}
+
 	function handleSubmit() {
-		errors = {};
 		const firstInvalid = validateFields(
 			allFields,
 			formData,
-			(name, msg) => (errors = { ...errors, [name]: msg }),
-			(name) => {
-				const { [name]: _, ...rest } = errors;
-				errors = rest;
-			}
+			setFieldErrorBound,
+			clearFieldErrorBound
 		);
-		if (firstInvalid) {
-			// Jump to first step with an error
+		// Repeater rows go through their own per-row validation. A failing
+		// repeater behaves like a failing top-level field: jump to its step.
+		let firstRepeaterInvalid: string | null = null;
+		for (const step of steps) {
+			const r = validateRepeaters(step);
+			if (r && !firstRepeaterInvalid) firstRepeaterInvalid = r;
+		}
+		const blocker = firstInvalid ?? firstRepeaterInvalid;
+		if (blocker) {
+			// Jump to first step containing an error (field-level or
+			// repeater-level — both live in `errors`).
 			for (let i = 0; i < steps.length; i++) {
 				const stepFields = fieldsForStep(steps[i]);
-				if (stepFields.some((f) => errors[f.name])) {
-					activeStep = i;
+				const repBlocks = repeaterBlocks(steps[i]);
+				const hasFieldErr = stepFields.some((f) => errors[f.name]);
+				const hasRepErr = repBlocks.some((rb) =>
+					Object.keys(errors).some((k) => k.startsWith(`${rb.output_slug}.`))
+				);
+				if (hasFieldErr || hasRepErr) {
+					activeStep = i + 1;
+					focusField(blocker);
 					break;
 				}
 			}
 			return;
 		}
+		clearDraft();
 		onsubmit(coerceFormData(allFields, formData));
+	}
+
+	function goToNextStep() {
+		if (activeStep >= steps.length) return;
+		const firstInvalid = validateStep(activeStep - 1);
+		if (firstInvalid) {
+			focusField(firstInvalid);
+			return;
+		}
+		activeStep += 1;
+	}
+
+	function goToPreviousStep() {
+		activeStep = Math.max(1, activeStep - 1);
+	}
+
+	/** Stepper trigger click: backward = free, forward = validate intermediate steps. */
+	function handleStepTriggerClick(target: number, event: MouseEvent) {
+		if (target <= activeStep) return; // backward / same = free
+		event.preventDefault(); // block Stepper's auto-select
+		const failedAt = validateUpTo(target);
+		activeStep = failedAt ?? target;
 	}
 
 	function handleCancel() {
 		const reason = prompt('Reason for cancellation (optional):');
 		if (reason === null) return;
+		clearDraft();
 		oncancel?.(reason || undefined);
 	}
 
-	// File upload handler
-	async function handleUpload(field: TaskField, files: File[]) {
-		for (const file of files) {
-			const fd = new FormData();
-			fd.append('file', file);
-			fd.append('field_name', field.name);
-			try {
-				const res = await authFetch('/api/files/upload', { method: 'POST', body: fd });
-				if (res.ok) {
-					const result = (await res.json()) as UploadedFile;
-					const current = parseFileValue(getTextValue(field.name));
-					current.push(result);
-					setTextValue(field.name, JSON.stringify(current));
-				} else {
-					const err = (await res.json().catch(() => ({}))) as { error?: string };
-					toast.error(err.error ?? 'Upload failed');
-				}
-			} catch {
-				toast.error('Network error — please try again');
-			}
-		}
+	// File upload handler.
+	//
+	// Disabled at runtime: the `/api/v1/files/upload/{template_id}/{node_id}`
+	// route is template-scoped (used by the IDE to attach files to a specific
+	// workflow node). At task-completion time TaskForm only has a `task_id`,
+	// not the originating template/node ids, so it cannot call that route
+	// correctly. Until a dedicated task-scoped upload endpoint exists, file
+	// fields surface as a no-op with an explicit toast rather than firing a
+	// 404 silently.
+	async function handleUpload(_field: TaskField, _files: File[]) {
+		toast.error('File uploads from task forms are not yet supported.');
 	}
 
 	function removeFile(fieldName: string, url: string) {
@@ -156,20 +367,43 @@
 >
 	<!-- Multi-step indicator -->
 	{#if steps.length > 1}
-		<div class="flex gap-1">
-			{#each steps as step, i (step.id)}
-				<button
-					type="button"
-					class="flex-1 rounded-full py-1 text-sm font-medium transition-colors {i === activeStep
-						? 'bg-primary text-primary-foreground'
-						: i < activeStep
-							? 'bg-primary/20 text-primary'
-							: 'bg-muted text-muted-foreground'}"
-					onclick={() => (activeStep = i)}
-				>
-					{step.title}
-				</button>
-			{/each}
+		<Stepper.Root bind:step={activeStep}>
+			<Stepper.Nav class="mb-2 w-full gap-4 overflow-visible" orientation="horizontal">
+				{#each steps as step, i (step.id)}
+					{@const isDone = i + 1 < activeStep}
+					<Stepper.Item id={step.id} class="min-w-0">
+						<Stepper.Trigger
+							class="w-full min-w-0 items-center gap-2 rounded-xl px-2 pt-0 pb-1 text-center transition-colors"
+							onclick={(e) => handleStepTriggerClick(i + 1, e)}
+						>
+							<Stepper.Indicator>
+								{#if isDone}
+									<Check class="size-4" />
+								{:else}
+									{i + 1}
+								{/if}
+							</Stepper.Indicator>
+							<div class="w-full min-w-0">
+								<Stepper.Title
+									class="text-sm leading-tight break-words whitespace-normal group-data-[current=false]/stepper-trigger:text-muted-foreground group-data-[current=true]/stepper-trigger:text-foreground"
+								>
+									{step.title}
+								</Stepper.Title>
+							</div>
+						</Stepper.Trigger>
+						<Stepper.Separator />
+					</Stepper.Item>
+				{/each}
+			</Stepper.Nav>
+		</Stepper.Root>
+
+		<div class="flex items-center justify-between">
+			{#if currentStep}
+				<h3 class="text-sm font-semibold text-foreground">{currentStep.title}</h3>
+			{:else}
+				<span></span>
+			{/if}
+			<span class="text-sm text-muted-foreground">Step {activeStep} of {steps.length}</span>
 		</div>
 	{/if}
 
@@ -224,8 +458,8 @@
 								{/if}
 							</Select.Trigger>
 							<Select.Content>
-								{#each field.options ?? [] as option (option)}
-									<Select.Item value={option} label={option} />
+								{#each field.options ?? [] as option (option.value)}
+									<Select.Item value={option.value} label={option.label} />
 								{/each}
 							</Select.Content>
 						</Select.Root>
@@ -250,7 +484,7 @@
 							maxFileSize={field.max_file_size}
 							fileCount={parseFileValue(getTextValue(field.name)).length}
 							onUpload={(files) => handleUpload(field, files)}
-							onFileRejected={({ reason }) => setFieldError(field.name, reason)}
+							onFileRejected={({ reason }) => setFieldErrorBound(field.name, reason)}
 						>
 							<FileDropZone.Trigger data-testid={`field-${field.name}`} />
 						</FileDropZone.Root>
@@ -288,11 +522,11 @@
 							class="flex flex-col gap-2 py-1"
 							data-testid={`field-${field.name}`}
 						>
-							{#each field.options ?? [] as option, i (option)}
+							{#each field.options ?? [] as option, i (option.value)}
 								{@const optionId = `${field.name}-${i}`}
 								<div class="flex items-center space-x-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-muted/50">
-									<RadioGroup.Item value={option} id={optionId} />
-									<Label for={optionId} class="cursor-pointer font-normal">{option}</Label>
+									<RadioGroup.Item value={option.value} id={optionId} />
+									<Label for={optionId} class="cursor-pointer font-normal">{option.label}</Label>
 								</div>
 							{/each}
 						</RadioGroup.Root>
@@ -417,16 +651,17 @@
 						</p>
 					{/if}
 				</div>
-			{:else if block.type === 'chart'}
-				<BlockChart
-					chart_type={block.chart_type}
-					data={block.data}
-					x={block.x}
-					series={block.series}
-					caption={block.caption}
-					height={block.height}
-					x_label={block.x_label}
-					y_label={block.y_label}
+			{:else if block.type === 'repeater'}
+				<RepeaterBlock
+					items_ref={block.items_ref}
+					item_label_ref={block.item_label_ref}
+					blocks={block.blocks}
+					output_slug={block.output_slug}
+					{taskData}
+					getText={getRepeaterFieldText}
+					getBool={getRepeaterFieldBool}
+					setValue={setRepeaterField}
+					{errors}
 				/>
 			{:else}
 				<BlockRenderer {block} />
@@ -436,26 +671,46 @@
 
 	<!-- Navigation / action bar -->
 	<div class="flex items-center gap-2 border-t border-border pt-4">
-		{#if steps.length > 1 && activeStep > 0}
-			<Button type="button" variant="outline" onclick={() => (activeStep -= 1)} disabled={submitting}>
-				Previous
-			</Button>
-		{/if}
-
-		{#if steps.length > 1 && !isLastStep}
-			<Button type="button" onclick={() => (activeStep += 1)} disabled={submitting}>
-				Next
-			</Button>
-		{:else}
-			<Button type="submit" disabled={submitting}>
-				{submitting ? 'Submitting...' : 'Complete Task'}
-			</Button>
-		{/if}
-
 		{#if oncancel}
-			<Button type="button" variant="outline" onclick={handleCancel} disabled={submitting}>
-				Reject
+			<Button
+				type="button"
+				variant="ghost"
+				class="text-muted-foreground hover:text-red-700"
+				onclick={handleCancel}
+				disabled={submitting}
+			>
+				Reject task
 			</Button>
 		{/if}
+
+		<div class="ml-auto flex items-center gap-2">
+			{#if steps.length > 1 && activeStep > 1}
+				<Button
+					type="button"
+					variant="outline"
+					onclick={goToPreviousStep}
+					disabled={submitting}
+				>
+					Previous
+				</Button>
+			{/if}
+
+			{#if steps.length > 1 && !isLastStep}
+				<Button type="button" onclick={goToNextStep} disabled={submitting}>
+					Next
+				</Button>
+			{:else}
+				<Button
+					type="submit"
+					disabled={submitting}
+					class="group gap-2 shadow-md shadow-primary/20 transition hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30"
+				>
+					{submitting ? 'Submitting...' : 'Complete task'}
+					{#if !submitting}
+						<ArrowRight class="size-4 opacity-70 transition-opacity group-hover:opacity-100" />
+					{/if}
+				</Button>
+			{/if}
+		</div>
 	</div>
 </form>

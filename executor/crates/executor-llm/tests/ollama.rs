@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
 use aithericon_executor_domain::{
-    ExecutionJob, ExecutionOutcome, ExecutionSpec, JobPriority, RunContext, RunDirectory,
+    ExecutionJob, ExecutionOutcome, ExecutionSpec, JobPriority, OutputDeclaration, RunContext,
+    RunDirectory,
 };
 use aithericon_executor_llm::LlmBackend;
 use aithericon_executor_test_harness::ollama::{ollama_model, shared_ollama_base_url};
@@ -35,6 +36,7 @@ fn make_llm_spec(config: serde_json::Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 
@@ -58,6 +60,11 @@ fn make_run_context(spec: ExecutionSpec, timeout: Duration) -> RunContext {
         run_dir: RunDirectory::new(&PathBuf::from("/tmp"), &execution_id),
         timeout,
         env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: HashMap::new(),
         expected_outputs: HashMap::new(),
@@ -223,7 +230,7 @@ async fn ollama_extract_structured_blocks() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -328,7 +335,7 @@ async fn openai_extract_structured_blocks() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -367,6 +374,93 @@ async fn openai_extract_structured_blocks() {
     }
 }
 
+/// When the LLM returns a JSON object and the spec declares multiple output
+/// ports whose names match top-level schema keys, each port should receive its
+/// own key's value — not the whole response envelope. Mirrors the Python
+/// backend's name-based output sweep.
+#[tokio::test]
+async fn ollama_per_key_structured_unpack() {
+    let base_url = shared_ollama_base_url().await;
+    let model = ollama_model();
+
+    if !ollama_model_usable(base_url, model).await {
+        return;
+    }
+
+    let backend = LlmBackend::new();
+    let mut spec = make_llm_spec(serde_json::json!({
+        "provider": "ollama",
+        "model": model,
+        "prompt": "Return x=1 and y=2 as JSON.",
+        "system_prompt": "You output structured JSON. Always set x to 1 and y to 2.",
+        "temperature": 0.0,
+        "base_url": base_url,
+        "response_format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" }
+                },
+                "required": ["x", "y"]
+            }
+        }
+    }));
+    spec.outputs = vec![
+        OutputDeclaration {
+            name: "x".into(),
+            path: None,
+            required: true,
+            kind: Some("number".into()),
+            upload_to: None,
+        },
+        OutputDeclaration {
+            name: "y".into(),
+            path: None,
+            required: true,
+            kind: Some("number".into()),
+            upload_to: None,
+        },
+    ];
+    let job = make_job(spec.clone());
+    let mut ctx = make_run_context(spec, Duration::from_secs(300));
+
+    ctx = backend.prepare(&job, ctx).await.unwrap();
+
+    let result = backend
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(result.outcome, ExecutionOutcome::Success),
+        "expected Success, got {:?}. stderr: {:?}",
+        result.outcome,
+        result.stderr_tail
+    );
+
+    let x = result.outputs.get("x").expect("missing 'x' output");
+    let y = result.outputs.get("y").expect("missing 'y' output");
+
+    // The key assertion: each port carries its own key's scalar value,
+    // not the whole {"x":1,"y":2} envelope.
+    assert!(
+        x.is_number(),
+        "outputs[\"x\"] should be a number, got: {x}"
+    );
+    assert!(
+        y.is_number(),
+        "outputs[\"y\"] should be a number, got: {y}"
+    );
+    assert_eq!(x.as_i64(), Some(1), "outputs[\"x\"] should be 1, got: {x}");
+    assert_eq!(y.as_i64(), Some(2), "outputs[\"y\"] should be 2, got: {y}");
+
+    // The unmapped built-in 'response' still carries the full envelope.
+    let response = result.outputs.get("response").expect("missing 'response' output");
+    assert!(response.is_object(), "response should still be the full object: {response}");
+}
+
 // ---------------------------------------------------------------------------
 // Chat / metrics tests (qwen2.5:3b — small model, fast)
 // ---------------------------------------------------------------------------
@@ -400,7 +494,7 @@ async fn ollama_chat_with_history() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 
@@ -451,7 +545,7 @@ async fn ollama_metrics_always_populated() {
     ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .unwrap();
 

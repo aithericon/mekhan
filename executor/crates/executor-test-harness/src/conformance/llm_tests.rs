@@ -51,7 +51,7 @@ pub async fn test_chat_success<K: LlmTestKit>(kit: &K) {
         .expect("prepare should succeed for chat_spec");
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -87,7 +87,7 @@ pub async fn test_extract_success<K: LlmTestKit>(kit: &K) {
         .expect("prepare should succeed for extract_spec");
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -130,7 +130,7 @@ pub async fn test_extract_schema_conformance<K: LlmTestKit>(kit: &K) {
         .expect("prepare should succeed");
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -217,7 +217,7 @@ pub async fn test_api_error<K: LlmTestKit>(kit: &K) {
         .expect("prepare should succeed (config is valid)");
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute should return Ok with BackendError outcome");
 
@@ -248,7 +248,7 @@ pub async fn test_timeout<K: LlmTestKit>(kit: &K) {
         .expect("prepare should succeed");
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -287,7 +287,7 @@ pub async fn test_cancellation<K: LlmTestKit>(kit: &K) {
     });
 
     let result = backend
-        .execute(&ctx, noop_callback(), cancel)
+        .execute(&ctx, noop_callback(), None, cancel)
         .await
         .expect("execute failed");
 
@@ -319,7 +319,7 @@ pub async fn test_status_callback<K: LlmTestKit>(kit: &K) {
 
     let (cb, log) = tracking_callback();
     backend
-        .execute(&ctx, cb, CancellationToken::new())
+        .execute(&ctx, cb, None, CancellationToken::new())
         .await
         .expect("execute failed");
 
@@ -368,7 +368,7 @@ pub async fn test_duration_tracked<K: LlmTestKit>(kit: &K) {
         .expect("prepare should succeed");
 
     let result = backend
-        .execute(&ctx, noop_callback(), CancellationToken::new())
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("execute failed");
 

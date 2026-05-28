@@ -1,0 +1,6 @@
+{
+  "_comment": "Realistic 'block' case. The subject invents a dose AND a diagnosis that don't appear in the evidence. A well-calibrated critic should raise at least: unsupported_diagnosis (Diabetes), overconfident_dosing (Metformin 1000 mg — no dose in evidence), unsupported_claim (HbA1c value not in evidence).",
+  "subject_kind": "letter",
+  "subject_text": "Sehr geehrter Herr Kollege, Frau Maria Huber (geb. 1965-04-12) leidet an Diabetes mellitus Typ 2 mit einem HbA1c von 8.4%. Wir verordnen Metformin 1000 mg, 1-0-1, taeglich. Naechste Kontrolle in 3 Monaten.",
+  "evidence_text": "Patientin: Maria Huber, geboren am 12.04.1965. Anamnese: seit 6 Monaten erhoehte Blutdruckwerte. Diagnose: arterielle Hypertonie ICD-10 I10. Therapieplan: Ramipril 5 mg, Einnahme morgens. Kontrolltermin in 4 Wochen."
+}

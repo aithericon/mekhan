@@ -1,0 +1,117 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Fanout",
+        "initial": {
+          "id": "in",
+          "label": "Input",
+          "fields": [
+            { "name": "subject", "label": "Subject", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "split",
+      "type": "parallel_split",
+      "position": { "x": 260, "y": 160 },
+      "data": { "type": "parallel_split", "label": "Fork" }
+    },
+    {
+      "id": "work_a",
+      "type": "automated_step",
+      "position": { "x": 460, "y": 60 },
+      "data": {
+        "type": "automated_step",
+        "label": "Branch A — Uppercase",
+        "description": "Uppercases the subject. Runs concurrently with Branch B.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "shouted", "label": "Uppercased", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "work_b",
+      "type": "automated_step",
+      "position": { "x": 460, "y": 260 },
+      "data": {
+        "type": "automated_step",
+        "label": "Branch B — Reverse",
+        "description": "Reverses the subject. Runs concurrently with Branch A.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "reversed", "label": "Reversed", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "join",
+      "type": "join",
+      "position": { "x": 700, "y": 160 },
+      "data": {
+        "type": "join",
+        "label": "Join",
+        "mode": "all",
+        "mergeStrategy": "shallow_last_wins"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 920, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "shouted",  "expression": "work_a.shouted" },
+          { "targetField": "reversed", "expression": "work_b.reversed" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_split",  "source": "start",  "target": "split",  "targetHandle": "in", "type": "sequence" },
+    { "id": "e_split_a",      "source": "split",  "target": "work_a", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_split_b",      "source": "split",  "target": "work_b", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_a_join",       "source": "work_a", "target": "join",   "targetHandle": "in", "type": "sequence" },
+    { "id": "e_b_join",       "source": "work_b", "target": "join",   "targetHandle": "in", "type": "sequence" },
+    { "id": "e_join_end",     "source": "join",   "target": "end",    "targetHandle": "in", "type": "sequence" }
+  ]
+}

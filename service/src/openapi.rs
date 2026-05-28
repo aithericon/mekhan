@@ -10,9 +10,15 @@ use utoipa::OpenApi;
                        saved state), instances (running workflows), processes (HPI observability\
                        over running instances), catalogue (artifact registry), and provenance\
                        (token-level causality across nets).\n\n\
-                       The Yjs WebSocket endpoint at `/api/yjs/{template_id}` carries the\
-                       collaborative editor's binary CRDT protocol and is intentionally not\
-                       modeled here."
+                       The JSON API lives under `/api/v1/*`; `/healthz` is the unauthenticated\
+                       liveness probe. The Yjs WebSocket endpoint at `/api/yjs/{template_id}`\
+                       carries the collaborative editor's binary CRDT protocol and is\
+                       intentionally not modeled here."
+    ),
+    servers(
+        (url = "/", description = "Same-origin BFF (production single-origin posture)."),
+        (url = "http://localhost:3100", description = "Local mekhan-service direct."),
+        (url = "http://localhost:5173", description = "SvelteKit dev server (proxies /api/* to mekhan).")
     ),
     components(
         // SSE event payload types — not referenced from any handler signature
@@ -24,6 +30,28 @@ use utoipa::OpenApi;
             crate::causality::live::LiveArtifactEvent,
             crate::models::template::ReplyMode,
             crate::triggers::TerminalOutcome,
+            // Backend registry DTOs — referenced via Vec<_> in the
+            // GET /api/v1/backends handler so utoipa's auto-discovery
+            // misses the nested types. Frontend codegen needs both.
+            crate::backends::BackendDescriptor,
+            crate::backends::DispatchMode,
+            crate::backends::ResourceChannel,
+            crate::backends::OutputAuthoring,
+            // Node-type registry DTO — referenced via Vec<_> in the
+            // GET /api/v1/node-types handler.
+            crate::nodes::NodeDescriptor,
+            // Phase B.9 — Resource CRUD DTOs. The handler bodies refer to
+            // these directly but utoipa's auto-discovery only walks the
+            // handler signature; nested types (e.g. ResourceTypeInfo
+            // appears only inside Vec<_>) need explicit registration so
+            // frontend codegen emits matching TS types.
+            crate::models::resource::ResourceSummary,
+            crate::models::resource::ResourceDetail,
+            crate::models::resource::ResourceTypeInfo,
+            crate::models::resource::CreateResourceRequest,
+            crate::models::resource::UpdateResourceRequest,
+            crate::models::resource::RotateResourceRequest,
+            crate::models::resource::ResourceAuditEntry,
         ),
     ),
     tags(
@@ -37,6 +65,9 @@ use utoipa::OpenApi;
         (name = "files", description = "Per-template file upload/download (50 MB limit, S3-backed)."),
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
+        (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
+        (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
+        (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),
         (name = "health", description = "Liveness probe."),
     ),
 )]

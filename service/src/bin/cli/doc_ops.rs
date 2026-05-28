@@ -9,6 +9,7 @@ use mekhan_service::yjs::doc_ops;
 /// Read a Y.Doc into a graph + file map.
 ///
 /// Combines the shared `doc_to_graph()` with file extraction.
+#[allow(clippy::type_complexity)]
 pub fn read_doc(doc: &Doc) -> Result<(WorkflowGraph, HashMap<String, HashMap<String, String>>)> {
     let graph = doc_ops::doc_to_graph(doc).map_err(|e| anyhow::anyhow!(e))?;
     let files = doc_ops::extract_files_from_doc(doc);

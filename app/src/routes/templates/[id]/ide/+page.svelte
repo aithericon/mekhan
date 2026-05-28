@@ -8,6 +8,7 @@
 	import EditorTabs from '$lib/components/ide/EditorTabs.svelte';
 	import NodeConfigPanel from '$lib/components/ide/NodeConfigPanel.svelte';
 	import HumanTaskFormEditor from '$lib/components/ide/HumanTaskFormEditor.svelte';
+	import LlmStepIdeEditor from '$lib/components/ide/LlmStepIdeEditor.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
@@ -17,10 +18,13 @@
 		createNewVersion,
 		uploadFile,
 		updateTemplate,
-		getStepScopes,
-		type Template,
-		type StepScopeField
+		type Template
 	} from '$lib/api/client';
+	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import type { CodeEditorApi } from '$lib/components/editor/panels/shared/CollabCodeEditor.svelte';
+	import type { components } from '$lib/api/schema';
+
+	type GuardDiagnosticDto = components['schemas']['GuardDiagnosticDto'];
 
 	const templateId = $derived(page.params.id!);
 
@@ -28,22 +32,36 @@
 	let error = $state<string | null>(null);
 	let runDialogOpen = $state(false);
 
-	// Per-node input scope for the step reference panel, plus a diagnostic so
-	// an empty panel can explain itself. Derived server-side from the live
-	// Y.Doc graph; getStepScopes never throws.
-	let stepScopes = $state<Record<string, StepScopeField[]>>({});
-	let scopeDiagnostic = $state<string>('ok');
+	// Per-node input scope for the step reference panel + every other panel
+	// that wants a RefPicker (Decision, Loop, HumanTask, AutomatedStep). Same
+	// `POST /api/analyze`-backed loader the canvas-mode property panel uses,
+	// so what the picker shows is exactly what the compiler resolves.
+	let nodeScopes = $state<Map<string, ScopeEntry[]>>(new Map());
 	let scopeBusy = $state(false);
+	// Surfaced from the analyzer so an empty picker can explain itself: when
+	// `graphOk` is false (dangling edge, missing End, …) or the request
+	// failed, the IDE renders a banner instead of letting the user wonder why
+	// no refs appear.
+	let graphOk = $state(true);
+	let scopeRequestFailed = $state(false);
+	let scopeDiagnostics = $state<GuardDiagnosticDto[]>([]);
 	async function refreshScopes() {
 		scopeBusy = true;
 		try {
-			const res = await getStepScopes(templateId);
-			stepScopes = res.scopes;
-			scopeDiagnostic = res.diagnostic;
+			const result = await fetchNodeScopes(binding.graph);
+			nodeScopes = result.scopes;
+			graphOk = result.graphOk;
+			scopeRequestFailed = result.requestFailed;
+			scopeDiagnostics = result.diagnostics;
 		} finally {
 			scopeBusy = false;
 		}
 	}
+
+	// Active editor's insert-at-cursor API. Re-registered on each tab switch
+	// (each tab mounts a fresh CollabCodeEditor via {#key activeTab}). When
+	// null, the reference panel disables its "insert" affordance.
+	let editorApi = $state<CodeEditorApi | null>(null);
 
 	// Yjs session
 	const session = getSession(templateId);
@@ -62,6 +80,12 @@
 	);
 	const showHumanTaskEditor = $derived(
 		selectedNodeData?.type === 'human_task' && !activeTabKey
+	);
+	const showLlmStepEditor = $derived(
+		selectedNodeData?.type === 'automated_step' &&
+			(selectedNodeData as { executionSpec?: { backendType?: string } })?.executionSpec?.backendType ===
+				'llm' &&
+			!activeTabKey
 	);
 
 	function tabKey(nodeId: string, filename: string): string {
@@ -90,7 +114,11 @@
 		if (!template || !template.published) return;
 		try {
 			const next = await createNewVersion(template.id);
-			goto(`/templates/${next.id}/ide`);
+			// Full document load (not `goto`): the Yjs session + binding are
+			// created once at script top from the initial templateId, so a
+			// param-only nav would leave the IDE pinned to the published
+			// version's doc. See TemplateVersionMenu.select for the same reason.
+			window.location.assign(`/templates/${next.id}/ide`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to create new version';
 		}
@@ -131,9 +159,13 @@
 	function handleSelectNode(nodeId: string) {
 		selectedNodeId = nodeId;
 		selectedFile = undefined;
-		// Clear active tab so center panel shows node-specific editor (e.g. human task form)
+		// Clear active tab so center panel shows node-specific editor (human task form / LLM step).
 		const nodeData = binding.graph.nodes.find((n) => n.id === nodeId)?.data;
-		if (nodeData?.type === 'human_task') {
+		const isLlmStep =
+			nodeData?.type === 'automated_step' &&
+			(nodeData as { executionSpec?: { backendType?: string } })?.executionSpec?.backendType ===
+				'llm';
+		if (nodeData?.type === 'human_task' || isLlmStep) {
 			activeTabKey = null;
 		}
 		syncUrlState();
@@ -224,9 +256,14 @@
 
 		if (nodeParam) {
 			selectedNodeId = nodeParam;
-			// If it's a human_task node and no file param, show form editor
+			// If it's a human_task or LLM step and no file param, show the
+			// node-specific center editor.
 			const nodeData = binding.graph.nodes.find((n) => n.id === nodeParam)?.data;
-			if (nodeData?.type === 'human_task' && !fileParam) {
+			const isLlmStep =
+				nodeData?.type === 'automated_step' &&
+				(nodeData as { executionSpec?: { backendType?: string } })?.executionSpec?.backendType ===
+					'llm';
+			if ((nodeData?.type === 'human_task' || isLlmStep) && !fileParam) {
 				activeTabKey = null;
 			}
 		}
@@ -241,12 +278,12 @@
 		load();
 	});
 
-	// Keep the step reference panel fresh. io-stubs derives scope from the
-	// live Y.Doc, so *any* edit — including adding a port field on another
-	// node — can change a step's scope. Refetch debounced after edits settle
-	// (not just on node switch, which is why a freshly added field looked
-	// like it "didn't show up"). The first post-sync update also corrects the
-	// initial fetch if it raced ahead of the doc.
+	// Keep every panel's scope fresh. /api/analyze derives scope from the live
+	// graph, so *any* edit — including adding a port field on another node —
+	// can change a step's scope. Refetch debounced after edits settle (not
+	// just on node switch, which is why a freshly added field looked like it
+	// "didn't show up"). The first post-sync update also corrects the initial
+	// fetch if it raced ahead of the doc.
 	let scopeTimer: ReturnType<typeof setTimeout> | undefined;
 	function scheduleScopeRefresh() {
 		clearTimeout(scopeTimer);
@@ -288,6 +325,46 @@
 		</div>
 	{/if}
 
+	<!-- Analyzer status: surfaced so an empty reference panel is explained.
+	     `graphOk: false` is a compiler verdict (dangling edge, missing End,
+	     cycle, …); `scopeRequestFailed` is a transport-level fault. -->
+	{#if !scopeBusy && (!graphOk || scopeRequestFailed)}
+		<div
+			class="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-sm text-amber-900"
+			data-testid="ide-analyzer-banner"
+		>
+			<span>
+				{#if scopeRequestFailed}
+					<strong>Variable references unavailable</strong> — the analyzer didn't
+					respond. Click Refresh in the Reference panel to retry.
+				{:else}
+					<strong>Variable references unavailable</strong> — the graph isn't a
+					complete flow yet
+					{#if scopeDiagnostics.length > 0}
+						({scopeDiagnostics.length} diagnostic{scopeDiagnostics.length === 1 ? '' : 's'})
+					{/if}.
+					Wire every node to a Start/End, resolve dangling edges, then it
+					recomputes automatically.
+				{/if}
+			</span>
+			{#if scopeDiagnostics.length > 0}
+				<details class="text-sm">
+					<summary class="cursor-pointer underline">Show diagnostics</summary>
+					<ul class="mt-1 space-y-0.5">
+						{#each scopeDiagnostics as d, i (`${d.node_id}:${i}`)}
+							<li>
+								<code class="font-mono">{d.kind}</code> · {d.message}
+								{#if d.node_id}
+									<span class="text-muted-foreground">({d.node_id})</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</details>
+			{/if}
+		</div>
+	{/if}
+
 	<div class="flex flex-1 overflow-hidden">
 		<div class="w-[200px] shrink-0">
 			<FileTree
@@ -310,6 +387,13 @@
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
 				/>
+			{:else if showLlmStepEditor && selectedNodeId}
+				<LlmStepIdeEditor
+					{binding}
+					nodeId={selectedNodeId}
+					readonly={template?.published ?? false}
+					scope={nodeScopes.get(selectedNodeId) ?? []}
+				/>
 			{:else}
 				<EditorTabs
 					tabs={openTabs}
@@ -319,6 +403,7 @@
 					provider={session.provider}
 					onCloseTab={handleCloseTab}
 					onSelectTab={handleSelectTab}
+					onEditorReady={(api) => (editorApi = api)}
 				/>
 			{/if}
 		</div>
@@ -329,10 +414,10 @@
 					{binding}
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
-					scopeFields={stepScopes[selectedNodeId] ?? []}
-					{scopeDiagnostic}
+					scope={nodeScopes.get(selectedNodeId) ?? []}
 					scopeBusy={scopeBusy}
 					onRefreshScope={refreshScopes}
+					oninsertref={editorApi ? (s) => editorApi?.insertAtCursor(s) : undefined}
 				/>
 			{:else}
 				<div class="flex h-full items-center justify-center border-l border-border bg-card text-sm text-muted-foreground">

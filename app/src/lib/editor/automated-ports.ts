@@ -1,67 +1,23 @@
-// Backend-defaulted output port shape for AutomatedStep, mirroring
-// `service/src/models/template.rs::default_output_port`. Keeping a TS twin so
-// the editor can offer a "Reset to backend default" affordance without an API
-// round-trip.
+// Backend-defaulted output port shape for AutomatedStep, sourced from the
+// `GET /api/v1/backends` registry cache. `+layout.svelte` warms the cache on
+// app mount so synchronous callers (the "Reset to backend default" button)
+// see populated data on first paint.
+//
+// If the registry hasn't loaded yet (deep-link before +layout.onMount
+// resolves, or a fetch error), `defaultOutputPort` returns an empty port
+// — the user sees the reset button briefly emit nothing instead of the
+// canonical fields. AutomatedStepSection.svelte fires `loadBackends()`
+// in its own onMount as a safety net, so this window is short.
 
 import type { components } from '$lib/api/schema';
+import { getCachedBackend } from './backend-registry.svelte';
 
 type Port = components['schemas']['Port'];
-type PortField = components['schemas']['PortField'];
-type FieldKind = components['schemas']['FieldKind'];
 type ExecutionBackendType = components['schemas']['ExecutionBackendType'];
 
-function f(name: string, label: string, kind: FieldKind): PortField {
-	return { name, label, kind, required: false };
-}
-
 export function defaultOutputPort(backend: ExecutionBackendType): Port {
-	let fields: PortField[];
-	switch (backend) {
-		case 'python':
-			fields = [f('result', 'Result', 'json')];
-			break;
-		case 'process':
-			fields = [
-				f('stdout', 'Stdout', 'textarea'),
-				f('stderr', 'Stderr', 'textarea'),
-				f('exit_code', 'Exit Code', 'number')
-			];
-			break;
-		case 'docker':
-			fields = [
-				f('stdout', 'Stdout', 'textarea'),
-				f('stderr', 'Stderr', 'textarea'),
-				f('exit_code', 'Exit Code', 'number'),
-				f('image', 'Image', 'text')
-			];
-			break;
-		case 'http':
-			fields = [
-				f('status_code', 'Status Code', 'number'),
-				f('body', 'Body', 'json'),
-				f('headers', 'Headers', 'json')
-			];
-			break;
-		case 'llm':
-			fields = [f('text', 'Text', 'textarea'), f('usage', 'Usage', 'json')];
-			break;
-		case 'file_ops':
-			fields = [f('files', 'Files', 'json')];
-			break;
-		case 'kreuzberg':
-			fields = [f('text', 'Text', 'textarea'), f('metadata', 'Metadata', 'json')];
-			break;
-		case 'catalogue_query':
-			fields = [
-				f('artifacts', 'Artifacts', 'json'),
-				f('total_count', 'Total', 'number'),
-				f('source_process_ids', 'Source Process IDs', 'json')
-			];
-			break;
-		default:
-			fields = [];
-	}
-	return { id: 'out', label: 'Output', fields };
+	const descriptor = getCachedBackend(backend);
+	return descriptor?.defaultOutputPort ?? emptyOutputPort();
 }
 
 export function emptyOutputPort(): Port {

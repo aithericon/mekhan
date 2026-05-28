@@ -22,7 +22,7 @@ struct InstanceState {
 }
 
 pub async fn run(server: &str, instance_id: &str, tail: Option<usize>) -> Result<()> {
-    let url = format!("{}/api/instances/{}/state", server, instance_id);
+    let url = format!("{}/api/v1/instances/{}/state", server, instance_id);
     let resp = crate::http::auth(reqwest::Client::new().get(&url))
         .send()
         .await

@@ -5,19 +5,15 @@
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::compiler::lower::{NodePorts, PlaceMerge, PostProcess};
-use crate::compiler::rhai_gen::build_human_task_injection_logic;
-use crate::models::template::{WorkflowEdge, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{WorkflowEdge, WorkflowNode};
+use crate::nodes::lookup_by_variant;
 use aithericon_sdk::scenario::ScenarioDefinition;
 use aithericon_sdk::{Context, DynamicToken, PlaceHandle};
 use std::collections::{HashMap, HashSet};
 
-/// Returns `Some(script)` if an edge targeting this node needs a data-transforming
-/// wiring transition, or `None` if the wiring is a pure pass-through.
-fn wiring_logic(target_node: &WorkflowNode) -> Option<String> {
-    match &target_node.data {
-        WorkflowNodeData::HumanTask { .. } => Some(build_human_task_injection_logic(target_node)),
-        _ => None,
-    }
+fn decl_of(node: &WorkflowNode) -> &'static crate::nodes::NodeDecl {
+    lookup_by_variant(&node.data)
+        .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES")
 }
 
 pub(crate) fn wire_edge(
@@ -27,9 +23,22 @@ pub(crate) fn wire_edge(
     ctx: &mut Context,
     fixups: &mut PostProcess,
 ) -> Result<(), CompileError> {
-    // Edges from Trigger nodes are pre-compile dispatcher concerns — they don't
-    // exist in AIR. Skip silently so the rest of the graph still wires up.
-    if matches!(wg.node(&edge.source).data, WorkflowNodeData::Trigger { .. }) {
+    // Edges from Trigger nodes are pre-compile dispatcher concerns — they
+    // don't exist in AIR. Skip silently so the rest of the graph still wires
+    // up. Trigger is the only variant with `lowers_to_air: false`.
+    if !decl_of(wg.node(&edge.source)).lowers_to_air {
+        return Ok(());
+    }
+
+    // Tools-handle edges are agent-loop bindings, not sequence arcs: the
+    // orchestrator pre-indexes them into `cx.agent_tools` and `lower_agent`
+    // mints the per-tool dispatch/invoke/collect transitions via the
+    // `apply_agent_tool_wirings` fixup. Treating them as regular edges here
+    // would (a) inject a stray `t_edge_*` pass-through between the agent's
+    // ctrl place and the tool's input, breaking the loop topology, and
+    // (b) double-count the tool's incoming-edge degree so the agent edge
+    // couldn't merge with a real upstream caller. Skip silently.
+    if edge.source_handle.as_deref() == Some("tools") {
         return Ok(());
     }
 
@@ -42,19 +51,20 @@ pub(crate) fn wire_edge(
 
     let source_node = wg.node(&edge.source);
     let target_node = wg.node(&edge.target);
+    let target_decl = decl_of(target_node);
 
     // Determine source output place
     let source_place = find_output_place(source_ports, edge)?;
 
     // Determine target input place
-    let actual_target = if matches!(target_node.data, WorkflowNodeData::ParallelJoin { .. }) {
+    let actual_target = if target_decl.is_join {
         target_ports
             .input_places
             .get(&edge.id)
             .cloned()
             .ok_or_else(|| {
                 CompileError::Compilation(format!(
-                    "parallel join '{}' has no input place for edge '{}'",
+                    "join '{}' has no input place for edge '{}'",
                     edge.target, edge.id
                 ))
             })?
@@ -74,7 +84,7 @@ pub(crate) fn wire_edge(
         target_ports.input_place.clone()
     };
 
-    let logic = wiring_logic(target_node);
+    let logic = target_decl.wiring_logic.map(|f| f(target_node));
 
     if let Some(script) = logic {
         // Real transformation — must keep this transition
@@ -92,8 +102,7 @@ pub(crate) fn wire_edge(
             .done();
     } else {
         // Pure pass-through — try to merge places instead of creating a transition
-        let is_join = matches!(target_node.data, WorkflowNodeData::ParallelJoin { .. });
-        let can_merge = is_join || wg.incoming(&edge.target).len() == 1;
+        let can_merge = target_decl.is_join || wg.incoming(&edge.target).len() == 1;
 
         if can_merge {
             fixups.merges.push(PlaceMerge {

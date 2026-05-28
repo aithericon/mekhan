@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000016",
+  "name": "06 · SubWorkflow (Flow-in-Flow)",
+  "description": "Step 6 of the learning path. Embeds 01-hello-world as a child via a SubWorkflow node. inputMapping bridges parent token → child Start; the child's terminal result is mapped onto the declared output port and read by the parent End. Requires 01-hello-world to be seeded first (alphabetical order guarantees this)."
+}

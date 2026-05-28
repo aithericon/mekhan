@@ -10,11 +10,14 @@
 		type Connection
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
+	import { mode } from 'mode-watcher';
 
+	import { setContext } from 'svelte';
 	import { nodeTypes } from './nodes';
 	import { edgeTypes } from './edges';
 	import NodePalette from './NodePalette.svelte';
 	import DropHandler from './DropHandler.svelte';
+	import { RESIZE_REPORT_CONTEXT_KEY, type ResizeReport } from './nodes/resize-context';
 	import {
 		createDefaultNodeData,
 		type WorkflowNodeData,
@@ -28,7 +31,21 @@
 		graph: WorkflowGraph;
 		readonly?: boolean;
 		onchange?: (graph: WorkflowGraph) => void;
+		/**
+		 * Fires whenever xyflow's selection set changes — including reactive
+		 * re-emits triggered by `store.nodes` being reassigned (e.g. when
+		 * `updateNodeInternals` updates dimensions during a runtime data
+		 * refresh). Suitable for the template editor's "selected node →
+		 * property panel" flow where keyboard selection should also count.
+		 * For "user clicked a node, open a drawer" flows, prefer
+		 * `onNodeClick` + `onPaneClick` — those fire only on real pointer
+		 * events and won't be re-emitted by dimension churn.
+		 */
 		onselect?: (nodeId: string | null) => void;
+		/** User-click on a node. Distinct from `onselect` — see above. */
+		onNodeClick?: (nodeId: string) => void;
+		/** User-click on the empty pane (i.e. outside any node/edge). */
+		onPaneClick?: () => void;
 		onAddNode?: (id: string, type: WorkflowNodeType, position: { x: number; y: number }, data: WorkflowNodeData, opts?: { parentId?: string; width?: number; height?: number }) => void;
 		onRemoveNodes?: (ids: string[]) => void;
 		onMoveNodes?: (moves: Array<{ id: string; position: { x: number; y: number } }>) => void;
@@ -43,11 +60,57 @@
 		) => void;
 		onAddEdge?: (edge: WorkflowEdge) => void;
 		onRemoveEdges?: (ids: string[]) => void;
+		/**
+		 * Emitted when a resizable container node (Scope, Loop) finishes a
+		 * resize gesture. `position` is only set when the gesture moved the
+		 * node's top-left corner (top/left-edge resize); pure bottom-right
+		 * resizes omit it.
+		 */
+		onResizeNodes?: (
+			changes: Array<{
+				id: string;
+				width: number;
+				height: number;
+				position?: { x: number; y: number };
+			}>
+		) => void;
 	};
 
-	let { graph, readonly = false, onchange, onselect, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges }: Props = $props();
+	let { graph, readonly = false, onchange, onselect, onNodeClick, onPaneClick, onAddNode, onRemoveNodes, onMoveNodes, onReparentNodes, onAddEdge, onRemoveEdges, onResizeNodes }: Props = $props();
 
-	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges));
+	const useGranular = $derived(!!(onAddNode || onRemoveNodes || onMoveNodes || onReparentNodes || onAddEdge || onRemoveEdges || onResizeNodes));
+
+	// Container nodes report resize gesture-end through this context. xyflow's
+	// NodeResizer has already mutated the bound `nodes` array with the new
+	// dims/pos by the time `onResizeEnd` fires, so the canvas just forwards
+	// the change to the granular sink or runs the bulk serializer.
+	//
+	// Context is registered only when editable. On readonly canvases the
+	// children see `undefined` and `NodeResizer.isVisible` collapses to false,
+	// so the handles never render — without this gate the resizer would draw,
+	// xyflow would mutate the local nodes array on drag, but persistence
+	// would silently no-op, leaving the user with a phantom resize.
+	if (!readonly) {
+		const reportResize: ResizeReport = (id, params) => {
+			const change = {
+				id,
+				width: params.width,
+				height: params.height,
+				// Position only travels with the change when xyflow moved it
+				// (top/left-edge resize). For bottom-right resizes x/y match the
+				// node's pre-gesture position, but we still pass them through
+				// since the binding writes `position` only when present and the
+				// extra write is a no-op against an unchanged value.
+				position: { x: params.x, y: params.y }
+			};
+			if (useGranular && onResizeNodes) {
+				onResizeNodes([change]);
+			} else {
+				serializeAndEmit();
+			}
+		};
+		setContext<ResizeReport>(RESIZE_REPORT_CONTEXT_KEY, reportResize);
+	}
 
 	// Track graph identity to avoid re-syncing our own changes
 	let lastGraphRef: WorkflowGraph | null = graph;
@@ -66,6 +129,23 @@
 		if (isContainer(a.type) && !isContainer(b.type)) return -1;
 		if (!isContainer(a.type) && isContainer(b.type)) return 1;
 		return 0;
+	}
+
+	// World position of a node, walking up the parent chain. Used by drop
+	// hit-testing AND the drag-stop reparent logic — keep it module-local so
+	// both call sites agree on the coordinate system.
+	function worldPosOf(n: { position: { x: number; y: number }; parentId?: string }): { x: number; y: number } {
+		let x = n.position.x;
+		let y = n.position.y;
+		let pid = n.parentId;
+		while (pid) {
+			const p = nodes.find((m) => m.id === pid);
+			if (!p) break;
+			x += p.position.x;
+			y += p.position.y;
+			pid = p.parentId;
+		}
+		return { x, y };
 	}
 
 	/**
@@ -101,20 +181,6 @@
 			}
 		}
 
-		function worldPos(n: Node): { x: number; y: number } {
-			let x = n.position.x;
-			let y = n.position.y;
-			let pid = n.parentId;
-			while (pid) {
-				const p = nodes.find((m) => m.id === pid);
-				if (!p) break;
-				x += p.position.x;
-				y += p.position.y;
-				pid = p.parentId;
-			}
-			return { x, y };
-		}
-
 		let best: Node | null = null;
 		for (const n of nodes) {
 			if (!isContainer(n.type)) continue;
@@ -122,7 +188,7 @@
 			const w = n.width;
 			const h = n.height;
 			if (w == null || h == null) continue;
-			const { x, y } = worldPos(n);
+			const { x, y } = worldPosOf(n);
 			if (flowPos.x >= x && flowPos.x <= x + w && flowPos.y >= y && flowPos.y <= y + h) {
 				// Prefer the deepest container at this point (innermost
 				// matches win) — naive depth via parent-chain length.
@@ -159,7 +225,11 @@
 			type: n.type,
 			position: n.position,
 			data: n.data,
-			...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
+			// NOTE: no `extent: 'parent'` — that locks a child inside its
+			// container's bounds, which kills the drag-OUT gesture. Children
+			// still follow their parent on parent-drag because their
+			// `position` is parent-relative regardless of `extent`.
+			...(n.parentId ? { parentId: n.parentId } : {}),
 			...(n.width != null ? { width: n.width } : {}),
 			...(n.height != null ? { height: n.height } : {})
 		}));
@@ -192,7 +262,7 @@
 					type: n.type,
 					position: existing?.position ?? n.position,
 					data: n.data,
-					...(n.parentId ? { parentId: n.parentId, extent: 'parent' as const } : {}),
+					...(n.parentId ? { parentId: n.parentId } : {}),
 					...(n.width != null ? { width: n.width } : {}),
 					...(n.height != null ? { height: n.height } : {}),
 					...(existing?.selected != null ? { selected: existing.selected } : {})
@@ -234,6 +304,12 @@
 	function onConnect(connection: Connection) {
 		if (readonly) return;
 		const edgeId = `e-${connection.source}-${connection.target}-${Date.now()}`;
+		// Tools-handle source → agent-binding edge (not a sequence arc):
+		// the compiler discovers tools via these edges and mints the
+		// dispatch/collect transitions itself. Stamp the on-wire `type`
+		// accordingly so the engine + visualisation can render it
+		// distinctly from a regular data flow.
+		const isToolsEdge = connection.sourceHandle === 'tools';
 		const newEdge: Edge = {
 			id: edgeId,
 			source: connection.source!,
@@ -254,7 +330,7 @@
 				// wire. Fall back to "in" when xyflow returns null (user dropped
 				// on the node body without a specific handle).
 				targetHandle: connection.targetHandle ?? 'in',
-				type: 'sequence'
+				type: isToolsEdge ? 'tools' : 'sequence'
 			});
 		} else {
 			serializeAndEmit();
@@ -270,10 +346,13 @@
 	}
 
 	function handleNodeDragStop({ nodes: draggedNodes }: { nodes: Node[] }) {
-		// Detect drag-into-container: a node that isn't itself a container
-		// might have crossed into (or out of) one. With `extent: 'parent'`,
-		// a child can't leave its current parent via dragging — so today
-		// reparenting only happens for previously-unparented nodes.
+		// On drag-stop we re-hit-test every dragged non-container node against
+		// the container set:
+		//   - new container == current parent → pure move (no reparent)
+		//   - new container != current parent → reparent (covers drag-IN
+		//     from top level, drag-OUT to top level, and drag-across between
+		//     containers in a single branch)
+		// Containers themselves never auto-reparent today (no nesting UX).
 		const reparents: Array<{
 			id: string;
 			parentId: string | null;
@@ -281,43 +360,48 @@
 		}> = [];
 		const moves: Array<{ id: string; position: { x: number; y: number } }> = [];
 		for (const n of draggedNodes) {
-			if (isContainer(n.type) || n.parentId) {
-				// Containers move freely; already-parented children are
-				// locked by `extent: 'parent'`. Both cases are pure moves.
+			if (isContainer(n.type)) {
 				moves.push({ id: n.id, position: n.position });
 				continue;
 			}
-			// `position` for a top-level node is already in world coordinates.
-			const container = findContainerAt(n.position, n.id);
-			if (container) {
-				// Reparent: store the child's position relative to the parent
-				// (Svelte Flow convention). Update both nodes[] and emit.
-				const containerWorld = (() => {
-					let x = container.position.x;
-					let y = container.position.y;
-					let pid = container.parentId;
-					while (pid) {
-						const p = nodes.find((m) => m.id === pid);
-						if (!p) break;
-						x += p.position.x;
-						y += p.position.y;
-						pid = p.parentId;
-					}
-					return { x, y };
-				})();
-				const relPos = {
-					x: n.position.x - containerWorld.x,
-					y: n.position.y - containerWorld.y
-				};
-				nodes = nodes.map((m) =>
-					m.id === n.id
-						? { ...m, parentId: container.id, extent: 'parent' as const, position: relPos }
-						: m
-				);
-				reparents.push({ id: n.id, parentId: container.id, position: relPos });
-			} else {
+
+			// Compute the dragged node's current world position. xyflow keeps
+			// `position` parent-relative for parented children and absolute
+			// for top-level nodes, so we resolve through `worldPosOf` either
+			// way.
+			const childWorld = worldPosOf(n);
+			const newContainer = findContainerAt(childWorld, n.id);
+			const oldParentId = n.parentId ?? null;
+			const newParentId = newContainer?.id ?? null;
+
+			if (newParentId === oldParentId) {
 				moves.push({ id: n.id, position: n.position });
+				continue;
 			}
+
+			// Reparent. Position becomes relative when entering a container,
+			// absolute (world) when leaving to top level.
+			let newPosition: { x: number; y: number };
+			if (newContainer) {
+				const containerWorld = worldPosOf(newContainer);
+				newPosition = {
+					x: childWorld.x - containerWorld.x,
+					y: childWorld.y - containerWorld.y
+				};
+			} else {
+				newPosition = childWorld;
+			}
+
+			nodes = nodes.map((m) => {
+				if (m.id !== n.id) return m;
+				// Rebuild without parentId so it's truly cleared on drag-OUT;
+				// a `parentId: undefined` spread won't drop the key.
+				const { parentId: _p, ...rest } = m;
+				return newParentId
+					? { ...rest, parentId: newParentId, position: newPosition }
+					: { ...rest, position: newPosition };
+			});
+			reparents.push({ id: n.id, parentId: newParentId, position: newPosition });
 		}
 
 		if (useGranular) {
@@ -427,7 +511,7 @@
 			type: nodeType,
 			position,
 			data,
-			...(parentId ? { parentId, extent: 'parent' as const } : {}),
+			...(parentId ? { parentId } : {}),
 			...sizeOpts
 		};
 
@@ -465,7 +549,10 @@
 			{edgeTypes}
 			bind:nodes
 			bind:edges
+			colorMode={mode.current ?? 'system'}
 			onconnect={onConnect}
+			onnodeclick={onNodeClick ? ({ node }) => onNodeClick!(node.id) : undefined}
+			onpaneclick={onPaneClick ? () => onPaneClick!() : undefined}
 			onselectionchange={handleSelectionChange}
 			ondelete={handleDelete}
 			onnodedragstop={handleNodeDragStop}

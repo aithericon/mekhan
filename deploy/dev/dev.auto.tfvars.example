@@ -29,6 +29,12 @@ traefik_enabled = true
 nats_url      = "nats://nats.service.consul:4222"
 petri_lab_url = "http://engine.service.consul:3030"
 
+# Vault — VaultResourceStore (mekhan), {{secret:...}} wrap (engine), and
+# wrapping-token unwrap (executor) all reach this address. Default already
+# matches the cluster's internal Vault, so override only if testing against
+# a different server.
+# vault_addr  = "http://10.20.0.20:8200"
+
 # Hetzner Object Storage (same provider as the tfstate bucket).
 s3_endpoint = "https://fsn1.your-objectstorage.com"
 s3_bucket   = "mekhan-artifacts-dev"

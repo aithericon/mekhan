@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000011",
+  "name": "01 · Hello World",
+  "description": "Step 1 of the learning path. The smallest possible workflow: a Start with one input field, a single AutomatedStep that produces a greeting, and an End. Read this first to understand the on-disk shape."
+}
