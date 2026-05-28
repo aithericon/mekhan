@@ -43,6 +43,7 @@
 	const templateId = $derived(page.params.id!);
 
 	let template = $state<Template | null>(null);
+	let ownerName = $state<string | null>(null);
 	let loading = $state(true);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
@@ -70,6 +71,16 @@
 		error = null;
 		try {
 			template = await getTemplate(templateId);
+			// Private sub-workflows carry an owner; resolve its name for the
+			// breadcrumb back to the parent workflow.
+			ownerName = null;
+			if (template?.owner_template_id) {
+				try {
+					ownerName = (await getTemplate(template.owner_template_id)).name;
+				} catch {
+					ownerName = null;
+				}
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
 		} finally {
@@ -295,6 +306,8 @@
 		<EditorToolbar
 			templateName={template?.name ?? 'New Workflow'}
 			templateDescription={template?.description ?? null}
+			ownerId={template?.owner_template_id ?? undefined}
+			{ownerName}
 			published={template?.published ?? false}
 			{saving}
 			{templateId}

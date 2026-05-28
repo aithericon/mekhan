@@ -8,6 +8,7 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
 	import Settings from '@lucide/svelte/icons/settings';
+	import Lock from '@lucide/svelte/icons/lock';
 	import type { Awareness } from 'y-protocols/awareness';
 	import type { MekhanWsProvider } from '$lib/yjs/ws-provider';
 	import AwarenessBar from '../AwarenessBar.svelte';
@@ -20,6 +21,10 @@
 	type Props = {
 		templateName: string;
 		templateDescription?: string | null;
+		/** When this template is a private sub-workflow, the owning parent's
+		 *  family id + name drive a breadcrumb link back to it. */
+		ownerId?: string | null;
+		ownerName?: string | null;
 		published: boolean;
 		saving: boolean;
 		templateId?: string;
@@ -47,6 +52,8 @@
 	let {
 		templateName,
 		templateDescription = null,
+		ownerId = null,
+		ownerName = null,
 		published,
 		saving,
 		templateId,
@@ -132,6 +139,21 @@
 
 <div class="flex h-10 items-center justify-between border-b border-border bg-card px-3" data-testid="editor-toolbar">
 	<div class="flex items-center gap-3">
+		{#if ownerId}
+			<!-- Full-load nav (not goto): the Yjs editor session is pinned at
+			     mount, so switching templates needs a fresh page. -->
+			<a
+				href="/templates/{ownerId}"
+				data-sveltekit-reload
+				class="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+				title="Open the owning workflow"
+				data-testid="toolbar-owner-breadcrumb"
+			>
+				<Lock class="size-3" />
+				<span class="max-w-40 truncate">{ownerName ?? 'Parent workflow'}</span>
+			</a>
+			<span class="text-sm text-muted-foreground/50">/</span>
+		{/if}
 		{#if editing}
 			<Input
 				bind:ref={inputEl}

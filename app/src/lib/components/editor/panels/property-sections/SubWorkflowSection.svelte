@@ -16,8 +16,11 @@
 	import { FormField } from '$lib/components/ui/form-field';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Lock from '@lucide/svelte/icons/lock';
+	import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
+	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import DerivedPortsSection from './DerivedPortsSection.svelte';
 	import RefPicker from './RefPicker.svelte';
+	import ChildWorkflowBrowser from '$lib/components/editor/ChildWorkflowBrowser.svelte';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 	type Port = components['schemas']['Port'];
@@ -41,6 +44,7 @@
 	let loadError = $state<string | null>(null);
 	let creating = $state(false);
 	let privacyBusy = $state(false);
+	let browserOpen = $state(false);
 
 	// The child's derived contract: input fields (from its Start `initial`
 	// port) drive the fixed mapping rows; output (union of its End
@@ -64,7 +68,7 @@
 		Promise.all([
 			listTemplates(1, 100, undefined, true),
 			owner
-				? listTemplates(1, 100, undefined, true, undefined, undefined, owner)
+				? listTemplates(1, 100, undefined, undefined, undefined, undefined, owner)
 				: Promise.resolve({ items: [] as Template[] })
 		])
 			.then(([shared, mine]) => {
@@ -220,6 +224,14 @@
 		onchange({ ...data, templateId: famId });
 	}
 
+	// Open the selected child's editor in a new tab. New-tab (not goto) because
+	// the Yjs editor session is pinned at mount. Prefer the resolved latest row
+	// id; fall back to the family id (its v1 row) if not yet loaded.
+	function openSelectedInTab() {
+		const rowId = selectedTemplate?.id ?? data.templateId;
+		if (rowId) window.open(`/templates/${rowId}`, '_blank');
+	}
+
 	function setPinMode(mode: string) {
 		onchange({
 			...data,
@@ -256,29 +268,31 @@
 	<!-- Template picker -->
 	<div class="space-y-1.5">
 		<span class="text-sm font-medium text-muted-foreground">Child template</span>
-		<Select.Root
-			type="single"
-			value={data.templateId}
-			onValueChange={(v) => {
-				if (v) pickTemplate(v);
-			}}
-			disabled={readonly}
-		>
-			<Select.Trigger disabled={readonly} data-testid="select-subworkflow-template">
-				{selectedName}
-			</Select.Trigger>
-			<Select.Content>
-				{#each templates as t (t.id)}
-					<Select.Item value={familyId(t)} label={t.name} />
-				{/each}
-			</Select.Content>
-		</Select.Root>
+		<div class="flex items-center gap-1.5">
+			<Button
+				variant="outline"
+				class="min-w-0 flex-1 justify-between font-normal"
+				disabled={readonly}
+				onclick={() => (browserOpen = true)}
+				data-testid="btn-open-subworkflow-browser"
+			>
+				<span class="truncate">{selectedName}</span>
+				<ChevronsUpDown class="size-4 shrink-0 opacity-50" />
+			</Button>
+			{#if data.templateId}
+				<Button
+					variant="ghost"
+					size="icon"
+					title="Open child workflow in a new tab"
+					onclick={openSelectedInTab}
+					data-testid="btn-open-subworkflow-child"
+				>
+					<ExternalLink class="size-4" />
+				</Button>
+			{/if}
+		</div>
 		{#if loadError}
 			<p class="text-sm text-destructive">Could not load templates: {loadError}</p>
-		{:else if templates.length === 0}
-			<p class="text-sm text-muted-foreground">
-				No other published templates. Publish a template first to call it here.
-			</p>
 		{/if}
 
 		{#if !readonly && templateId}
@@ -415,3 +429,9 @@
 	<!-- Result: derived from the child's End result mapping, read-only. -->
 	<DerivedPortsSection ports={[outputPort]} title="Result" derivedFrom="Child End" />
 </div>
+
+<ChildWorkflowBrowser
+	bind:open={browserOpen}
+	currentTemplateId={templateId}
+	onselect={(famId) => pickTemplate(famId)}
+/>
