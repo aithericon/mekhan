@@ -255,7 +255,7 @@ async fn write_audit(
 async fn fetch_dynamic_keys(
     db: &sqlx::PgPool,
     rows: &[ResourceRow],
-) -> std::collections::HashMap<Uuid, Vec<String>> {
+) -> Result<std::collections::HashMap<Uuid, Vec<String>>, ApiError> {
     let dynamic_pairs: Vec<(Uuid, i32)> = rows
         .iter()
         .filter_map(|r| {
@@ -265,7 +265,7 @@ async fn fetch_dynamic_keys(
         })
         .collect();
     if dynamic_pairs.is_empty() {
-        return std::collections::HashMap::new();
+        return Ok(std::collections::HashMap::new());
     }
     let ids: Vec<Uuid> = dynamic_pairs.iter().map(|(id, _)| *id).collect();
     let versions: Vec<i32> = dynamic_pairs.iter().map(|(_, v)| *v).collect();
@@ -280,8 +280,7 @@ async fn fetch_dynamic_keys(
     .bind(&ids)
     .bind(&versions)
     .fetch_all(db)
-    .await
-    .unwrap_or_default();
+    .await?;
     let mut out = std::collections::HashMap::with_capacity(rows.len());
     for (id, public_config) in rows {
         let keys = public_config
@@ -295,7 +294,7 @@ async fn fetch_dynamic_keys(
             .unwrap_or_default();
         out.insert(id, keys);
     }
-    out
+    Ok(out)
 }
 
 /// Build `ResourceSummary`s from raw rows + the dynamic-keys side-channel
@@ -329,7 +328,7 @@ pub async fn list_resources(
     State(state): State<AppState>,
     user: AuthUser,
     Query(params): Query<ListResourcesQuery>,
-) -> Json<PaginatedResponse<ResourceSummary>> {
+) -> Result<Json<PaginatedResponse<ResourceSummary>>, ApiError> {
     let workspace_id = params.workspace_id.unwrap_or_else(|| caller_workspace(&user));
     let offset = (params.page - 1) * params.per_page;
 
@@ -344,8 +343,7 @@ pub async fn list_resources(
         .bind(params.per_page)
         .bind(offset)
         .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+        .await?;
         let total: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM resources \
              WHERE workspace_id = $1 AND resource_type = $2 AND deleted_at IS NULL",
@@ -353,8 +351,7 @@ pub async fn list_resources(
         .bind(workspace_id)
         .bind(ty)
         .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+        .await?;
         (rows, total)
     } else {
         let rows = sqlx::query_as::<_, ResourceRow>(
@@ -366,26 +363,24 @@ pub async fn list_resources(
         .bind(params.per_page)
         .bind(offset)
         .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+        .await?;
         let total: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM resources \
              WHERE workspace_id = $1 AND deleted_at IS NULL",
         )
         .bind(workspace_id)
         .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+        .await?;
         (rows, total)
     };
 
-    let dyn_keys = fetch_dynamic_keys(&state.db, &rows).await;
-    Json(PaginatedResponse {
+    let dyn_keys = fetch_dynamic_keys(&state.db, &rows).await?;
+    Ok(Json(PaginatedResponse {
         items: rows_to_summaries(rows, &dyn_keys),
         total,
         page: params.page,
         per_page: params.per_page,
-    })
+    }))
 }
 
 /// `GET /api/v1/resources/types` — registry introspection. Powers the
@@ -729,7 +724,7 @@ pub async fn update_resource(
         new_kv_keys
     } else if lookup(&row.resource_type).map(|d| d.dynamic_fields).unwrap_or(false) {
         fetch_dynamic_keys(&state.db, std::slice::from_ref(&row))
-            .await
+            .await?
             .remove(&row.id)
     } else {
         None
@@ -920,15 +915,13 @@ pub async fn list_resource_audit(
     .bind(params.per_page)
     .bind(offset)
     .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    .await?;
     let total: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM resource_audit WHERE resource_id = $1",
     )
     .bind(id)
     .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    .await?;
 
     Ok(Json(PaginatedResponse {
         items: rows,

@@ -18,3 +18,23 @@ pub mod triggers;
 pub mod users;
 pub mod workspaces;
 pub mod yjs_sync;
+
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::models::error::ApiError;
+use crate::models::template::WorkflowTemplate;
+
+/// Fetch a template row by id, returning a 404 `ApiError` when it doesn't exist.
+///
+/// Collapses the `SELECT * FROM workflow_templates WHERE id = $1` +
+/// `fetch_optional` + error-map + `ok_or_else(not_found)` idiom that was
+/// previously copy-pasted across the template / instance / yjs handlers. DB
+/// errors propagate via `From<sqlx::Error> for ApiError` (→ 500).
+pub(crate) async fn require_template(db: &PgPool, id: Uuid) -> Result<WorkflowTemplate, ApiError> {
+    sqlx::query_as::<_, WorkflowTemplate>("SELECT * FROM workflow_templates WHERE id = $1")
+        .bind(id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("template not found"))
+}
