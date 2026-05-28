@@ -15,6 +15,7 @@ import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
 import FileReference from './FileReference.svelte';
 import TabularArray from './TabularArray.svelte';
 import KeyValueList from './KeyValueList.svelte';
+import StorageRefValue from './StorageRefValue.svelte';
 import PrimitiveValue from './PrimitiveValue.svelte';
 import JsonBlock from './JsonBlock.svelte';
 import type { OutputRenderer, RenderContext } from './types';
@@ -207,6 +208,15 @@ function matchesKeyValue(value: unknown): boolean {
 	return true;
 }
 
+/** An S3 object key the backend serves at `/api/v1/files/{key}` — the agent's
+ *  `history_ref` (`instances/{id}/{node}/turn-N.json`), a config blob, an
+ *  artifact. Must out-rank `matchesPrimitive` (a key is a string). The
+ *  known-prefix anchor + no-whitespace keeps free-text outputs (an LLM
+ *  `response`/`final_response`, a sentence) from matching. */
+function matchesStorageRef(value: unknown): boolean {
+	return typeof value === 'string' && /^(instances|templates|artifacts)\/\S+\.\w+$/.test(value);
+}
+
 /** Strings, numbers, booleans, null. */
 function matchesPrimitive(value: unknown): boolean {
 	return value === null || value === undefined || typeof value !== 'object';
@@ -278,6 +288,12 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Fields',
 		matches: matchesKeyValue,
 		component: KeyValueList
+	},
+	{
+		name: 'storage-ref',
+		label: 'Storage reference',
+		matches: matchesStorageRef,
+		component: StorageRefValue
 	},
 	{
 		name: 'primitive',
