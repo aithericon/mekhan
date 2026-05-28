@@ -510,6 +510,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/active-workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/me/active-workspace
+         * @description Override the resolver's default workspace pick for this session. The
+         *     override rides on an HttpOnly companion cookie and survives until the
+         *     caller explicitly clears it (DELETE) or its membership is revoked.
+         *
+         *     Refuses workspaces the caller isn't a member of — a 403, not a silent
+         *     "did nothing" — so the picker UI can surface the error directly.
+         */
+        post: operations["set_active_workspace"];
+        /**
+         * DELETE /api/v1/me/active-workspace
+         * @description Drop the override — the resolver's pick (or whatever the membership
+         *     default rule chooses on next login) takes over again. Idempotent: a
+         *     missing cookie still returns 204.
+         */
+        delete: operations["clear_active_workspace"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-types": {
         parameters: {
             query?: never;
@@ -1369,7 +1400,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * GET /api/v1/templates/{id}/tags
+         * @description Tags currently on this template's version chain. Read-gated (viewer or
+         *     public): populates the tag editor on the template detail page so a full
+         *     replace via PUT starts from the existing set rather than clobbering it.
+         */
+        get: operations["get_template_tags"];
         /** PUT /api/v1/templates/{id}/tags — full replace. */
         put: operations["set_template_tags"];
         post?: never;
@@ -1675,6 +1712,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/users/resolve
+         * @description Resolves an email address to the OIDC subject used by Mekhan as the
+         *     principal id. Authenticated (any role) — Zitadel does its own ACL on
+         *     the broker PAT; in dev_noop the response is computed locally without
+         *     touching any directory.
+         */
+        post: operations["resolve_user_by_email"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces": {
         parameters: {
             query?: never;
@@ -1771,6 +1831,51 @@ export interface paths {
         put?: never;
         /** POST /api/v1/workspaces/{id}/projects */
         post: operations["create_project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{id}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/workspaces/{id}/tags
+         * @description Distinct tags across every template in the workspace. Drives the tag
+         *     filter chips in the templates list — one round trip, no per-template
+         *     fan-out.
+         */
+        get: operations["list_workspace_tags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json
+         * @description Returns a synthesized OpenAPI 3.0.3 document covering every webhook
+         *     trigger in the project's attached templates. The shape is suitable for
+         *     feeding into `openapi-typescript`, `openapi-generator`, or any OAS3
+         *     viewer.
+         */
+        get: operations["project_openapi_bundle"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3159,6 +3264,18 @@ export interface components {
          * @enum {string}
          */
         ReplyMode: "fire_and_forget" | "wait_for_result" | "sse";
+        ResolveEmailRequest: {
+            email: string;
+        };
+        ResolveEmailResponse: {
+            /** @description Echoed back so the caller can confirm a case-insensitive match. */
+            email: string;
+            /**
+             * @description OIDC `sub` of the matched user. Pass this into
+             *     `POST /api/v1/workspaces/{id}/members.subject`.
+             */
+            subject: string;
+        };
         /** @description One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`. */
         ResourceAuditEntry: {
             action: string;
@@ -3353,6 +3470,13 @@ export interface components {
         SelectOption: {
             label: string;
             value: string;
+        };
+        SetActiveWorkspaceRequest: {
+            /**
+             * Format: uuid
+             * @description Target workspace id. The caller must already be a member.
+             */
+            workspace_id: string;
         };
         SetTagsRequest: {
             tags: string[];
@@ -5436,6 +5560,55 @@ export interface operations {
             };
         };
     };
+    set_active_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetActiveWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Active workspace set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a member of the target workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    clear_active_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Override cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     list_node_types: {
         parameters: {
             query?: never;
@@ -7385,6 +7558,47 @@ export interface operations {
             };
         };
     };
+    get_template_tags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tags on this template */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description No read access */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     set_template_tags: {
         parameters: {
             query?: never;
@@ -8017,6 +8231,57 @@ export interface operations {
             };
         };
     };
+    resolve_user_by_email: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Resolved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveEmailResponse"];
+                };
+            };
+            /** @description Empty / malformed email */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No user matches that email */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Directory backend unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_workspaces: {
         parameters: {
             query?: never;
@@ -8282,6 +8547,81 @@ export interface operations {
             };
             /** @description Slug already exists */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_workspace_tags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Distinct workspace tags */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    project_openapi_bundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+                /** @description Project id */
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project OpenAPI bundle */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Not a member */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Project not found or not in workspace */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

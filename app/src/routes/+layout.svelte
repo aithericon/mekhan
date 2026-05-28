@@ -5,6 +5,7 @@
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { ModeWatcher } from 'mode-watcher';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import WorkspacePicker from '$lib/components/WorkspacePicker.svelte';
 	import User from '@lucide/svelte/icons/user';
 	import { auth } from '$lib/auth/store.svelte';
 	import { ensureAuthInitialized, requireSession } from '$lib/auth/guard';
@@ -67,6 +68,10 @@
 				Processes
 			</Button>
 			<div class="ml-auto flex items-center gap-1">
+				{#if auth.isAuthenticated}
+					<WorkspacePicker />
+					<span class="h-4 w-px bg-border" aria-hidden="true"></span>
+				{/if}
 				<ThemeToggle />
 				{#if auth.isAuthenticated}
 					<span class="h-4 w-px bg-border" aria-hidden="true"></span>

@@ -249,12 +249,25 @@ fn lower_agent_loop(
     // has no attribute 'X'` at the first tool-call turn. With no declared
     // fields, the LLM gets a permissive `{type: object}` so it can call
     // but the platform doesn't pretend to validate.
+    let sub_air = cx.sub_air;
     let tool_schemas: Vec<serde_json::Value> = tool_meta
         .iter()
         .zip(tool_children.iter())
         .map(|((name, description), child)| {
-            let input_port = child.data.input_ports().into_iter().next();
-            let input_schema = match input_port {
+            // The tool contract comes from the callee's input boundary, not
+            // its node kind. A leaf AutomatedStep declares it on its own
+            // input port; a SubWorkflow declares it on its child's Start node
+            // — carried on the resolved child as `input_contract` (extracted
+            // in `resolve_subworkflow_air`). An unresolved SubWorkflow (no
+            // `sub_air` entry, e.g. the back-compat `compile_to_air` path)
+            // degrades to the permissive fallback.
+            let contract_port = match &child.data {
+                WorkflowNodeData::SubWorkflow { .. } => {
+                    sub_air.get(&child.id).map(|rc| rc.input_contract.clone())
+                }
+                other => other.input_ports().into_iter().next(),
+            };
+            let input_schema = match contract_port {
                 Some(port) if !port.fields.is_empty() => port_to_input_schema(&port),
                 _ => serde_json::json!({
                     "type": "object",

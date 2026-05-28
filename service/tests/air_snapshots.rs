@@ -10,9 +10,10 @@
 //! diffs pretty-printed JSON against `tests/snapshots/air/<demo>.json`.
 //! Set `UPDATE_SNAPSHOTS=1` to (re)write the golden files.
 //!
-//! `06-subworkflow` is skipped: it references a child template by id
-//! that the bare `compile_to_air` entry-point can't resolve (the publish
-//! handler runs the resolver). The snapshot would just be the
+//! `06-subworkflow` and `09-agent-tool-loop` are skipped: both reference a
+//! child template by id that the bare `compile_to_air` entry-point can't
+//! resolve (the publish handler runs the resolver) — 09's `lookup_order`
+//! tool is a SubWorkflow. The snapshot would just be the
 //! `SubWorkflowChildMissing` error string, which adds no signal.
 
 use aithericon_executor_domain::InputSource;
@@ -224,7 +225,12 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     numbered.sort();
 
     let covered: std::collections::HashSet<&str> = SNAPSHOT_DEMOS.iter().copied().collect();
-    let documented_skip: std::collections::HashSet<&str> = ["06-subworkflow"].into_iter().collect();
+    // Both skipped for the same reason: they reference a child template by id
+    // that the bare `compile_to_air` entry-point can't resolve (the publish
+    // handler runs the resolver). 09's `lookup_order` tool is a SubWorkflow
+    // (the 08a-order-lookup child), so it joins 06 here.
+    let documented_skip: std::collections::HashSet<&str> =
+        ["06-subworkflow", "09-agent-tool-loop"].into_iter().collect();
 
     for d in &numbered {
         let s = d.as_str();

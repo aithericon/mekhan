@@ -23,7 +23,7 @@ use crate::compiler::{
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
-    ExecutionBackendType, VersionPin, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+    ExecutionBackendType, Port, VersionPin, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::petri::resource_resolver::splice_resources_into_air;
 use crate::AppState;
@@ -566,12 +566,29 @@ pub async fn resolve_subworkflow_air(
         let air = serde_json::to_value(&child_def)
             .map_err(|e| ApiError::internal(format!("serialize child AIR: {e}")))?;
 
+        // The child's Start `initial` Port is its user-declared input
+        // contract. When this child is referenced as an agent tool, these
+        // fields become the LLM-facing tool `input_schema`. Best-effort:
+        // a graph parse miss or absent Start degrades to an empty contract
+        // (the agent then emits a permissive object schema) rather than
+        // failing resolution.
+        let input_contract = serde_json::from_value::<WorkflowGraph>(child.graph.clone())
+            .ok()
+            .and_then(|g| {
+                g.nodes.into_iter().find_map(|n| match n.data {
+                    WorkflowNodeData::Start { initial, .. } => Some(initial),
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(Port::empty_input);
+
         out.insert(
             node.id.clone(),
             ResolvedChild {
                 air,
                 resolved_version: child.version,
                 template_id: child.id.to_string(),
+                input_contract,
             },
         );
     }

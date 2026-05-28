@@ -2,8 +2,8 @@
  * Shared helpers for full-stack E2E integration tests.
  *
  * These helpers call real APIs against the running infrastructure:
- *   - mekhan-service (http://localhost:3100)
- *   - petri-lab      (http://localhost:3030)
+ *   - mekhan-service (http://localhost:13100)
+ *   - petri-lab      (http://localhost:13030)
  *   - HPI            (http://localhost:5188)
  */
 
@@ -13,8 +13,8 @@ import { expect } from '@playwright/test';
 // Config
 // ---------------------------------------------------------------------------
 
-export const BACKEND = 'http://localhost:3100';
-export const PETRI = 'http://localhost:3030';
+export const BACKEND = 'http://localhost:13100';
+export const PETRI = 'http://localhost:13030';
 export const HPI = 'http://localhost:5188';
 
 /** A well-known author id (arbitrary UUID) used for all test requests. */

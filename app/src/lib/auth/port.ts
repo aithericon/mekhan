@@ -15,6 +15,12 @@ export interface AuthUser {
 	roles: string[];
 	/** Zitadel org the principal belongs to, when the IdP asserts one. */
 	orgId?: string;
+	/**
+	 * Mekhan workspace the session is currently scoped to. Populated by the
+	 * resolver from `workspace_members`, optionally overridden per-session
+	 * via the `mekhan_active_workspace` cookie set by `POST /api/v1/me/active-workspace`.
+	 */
+	workspaceId?: string;
 }
 
 export interface AuthSession {

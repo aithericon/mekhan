@@ -5,7 +5,7 @@
 //!
 //! Requires:
 //! - `just -f aithericon-test-infra/justfile up` (NATS)
-//! - A petri-lab engine running on localhost:3030 connected to NATS
+//! - A petri-lab engine running on localhost:13030 connected to NATS
 
 use petri_api_types::{RunMode, StateResponse, TopologyResponse};
 use mekhan_service::petri::client::PetriClient;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 /// Engine URL — use TEST_ENGINE_URL env var to override.
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
 }
 
 /// Check if the engine is reachable. Skip tests if not.

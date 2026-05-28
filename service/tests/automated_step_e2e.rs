@@ -5,7 +5,7 @@
 //! `main.py` is staged to rustfs S3 at publish), creates an instance, and
 //! asserts the real executor runs the Python job and the net completes.
 //!
-//! Requires the full `just dev up` stack (engine :3030, executor, rustfs S3
+//! Requires the full `just dev up` stack (engine :13030, executor, rustfs S3
 //! :9005 sharing the dev NATS broker). Run serially (`--test-threads=1`) —
 //! it shares the live engine/executor.
 
@@ -143,7 +143,7 @@ set_output("answer", 42)
 "#;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
 }
 
 async fn engine_available() -> bool {

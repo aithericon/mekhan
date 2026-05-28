@@ -14,11 +14,11 @@
       "description": "Same-origin BFF (production single-origin posture)."
     },
     {
-      "url": "http://localhost:3100",
+      "url": "http://localhost:13100",
       "description": "Local mekhan-service direct."
     },
     {
-      "url": "http://localhost:5173",
+      "url": "http://localhost:15173",
       "description": "SvelteKit dev server (proxies /api/* to mekhan)."
     }
   ],
@@ -1303,6 +1303,54 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/me/active-workspace": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "POST /api/v1/me/active-workspace",
+        "description": "Override the resolver's default workspace pick for this session. The\noverride rides on an HttpOnly companion cookie and survives until the\ncaller explicitly clears it (DELETE) or its membership is revoked.\n\nRefuses workspaces the caller isn't a member of — a 403, not a silent\n\"did nothing\" — so the picker UI can surface the error directly.",
+        "operationId": "set_active_workspace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetActiveWorkspaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Active workspace set"
+          },
+          "403": {
+            "description": "Not a member of the target workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "DELETE /api/v1/me/active-workspace",
+        "description": "Drop the override — the resolver's pick (or whatever the membership\ndefault rule chooses on next login) takes over again. Idempotent: a\nmissing cookie still returns 204.",
+        "operationId": "clear_active_workspace",
+        "responses": {
+          "204": {
+            "description": "Override cleared"
           }
         }
       }
@@ -4143,6 +4191,61 @@
       }
     },
     "/api/v1/templates/{id}/tags": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/tags",
+        "description": "Tags currently on this template's version chain. Read-gated (viewer or\npublic): populates the tag editor on the template detail page so a full\nreplace via PUT starts from the existing set rather than clobbering it.",
+        "operationId": "get_template_tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tags on this template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No read access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "tags": [
           "templates"
@@ -5043,6 +5146,68 @@
         }
       }
     },
+    "/api/v1/users/resolve": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "POST /api/v1/users/resolve",
+        "description": "Resolves an email address to the OIDC subject used by Mekhan as the\nprincipal id. Authenticated (any role) — Zitadel does its own ACL on\nthe broker PAT; in dev_noop the response is computed locally without\ntouching any directory.",
+        "operationId": "resolve_user_by_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveEmailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty / malformed email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No user matches that email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Directory backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces": {
       "get": {
         "tags": [
@@ -5402,6 +5567,115 @@
           },
           "409": {
             "description": "Slug already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{id}/tags": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/tags",
+        "description": "Distinct tags across every template in the workspace. Drives the tag\nfilter chips in the templates list — one round trip, no per-template\nfan-out.",
+        "operationId": "list_workspace_tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Distinct workspace tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json",
+        "description": "Returns a synthesized OpenAPI 3.0.3 document covering every webhook\ntrigger in the project's attached templates. The shape is suitable for\nfeeding into `openapi-typescript`, `openapi-generator`, or any OAS3\nviewer.",
+        "operationId": "project_openapi_bundle",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project OpenAPI bundle",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found or not in workspace",
             "content": {
               "application/json": {
                 "schema": {
@@ -8968,6 +9242,34 @@
           "sse"
         ]
       },
+      "ResolveEmailRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveEmailResponse": {
+        "type": "object",
+        "required": [
+          "subject",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Echoed back so the caller can confirm a case-insensitive match."
+          },
+          "subject": {
+            "type": "string",
+            "description": "OIDC `sub` of the matched user. Pass this into\n`POST /api/v1/workspaces/{id}/members.subject`."
+          }
+        }
+      },
       "ResourceAuditEntry": {
         "type": "object",
         "description": "One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.",
@@ -9339,6 +9641,19 @@
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "SetActiveWorkspaceRequest": {
+        "type": "object",
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Target workspace id. The caller must already be a member."
           }
         }
       },
@@ -11976,6 +12291,22 @@
     {
       "name": "health",
       "description": "Liveness probe."
+    },
+    {
+      "name": "workspaces",
+      "description": "Tenant boundaries — membership + member admin (Phase A2)."
+    },
+    {
+      "name": "projects",
+      "description": "Workspace-scoped template grouping + tag/visibility surface + per-project OpenAPI bundle."
+    },
+    {
+      "name": "me",
+      "description": "Per-session preferences — active workspace switcher."
+    },
+    {
+      "name": "users",
+      "description": "Directory lookups — email → OIDC subject resolver for member admin."
     }
   ]
 }

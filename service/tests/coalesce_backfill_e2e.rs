@@ -42,7 +42,7 @@
 //! - Backfill ran at all — that's the wiring of `CatalogTrigger.backfill`
 //! - Both instances reached `completed` — no spurious lockout
 //!
-//! Requires `just dev up` (engine :3030 sharing the dev NATS broker).
+//! Requires `just dev up` (engine :13030 sharing the dev NATS broker).
 //! Run serially (`--test-threads=1`) — the lifecycle listener writes
 //! back to the shared `workflow_instances` table.
 
@@ -71,7 +71,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
 }
 
 async fn engine_available() -> bool {

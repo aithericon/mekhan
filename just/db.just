@@ -5,7 +5,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # Connection string for local dev — overridable via env
-db_url := env_var_or_default("MEKHAN__DATABASE_URL", "postgres://mekhan:mekhan@localhost:5439/mekhan")
+db_url := env_var_or_default("MEKHAN__DATABASE_URL", "postgres://mekhan:mekhan@localhost:15439/mekhan")
 
 # Drop into a psql shell against the local DB
 psql:

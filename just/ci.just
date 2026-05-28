@@ -98,7 +98,7 @@ test-e2e-zitadel:
     docker compose up -d
     echo "▶ waiting for zitadel…"
     for _ in $(seq 1 90); do
-      curl -fsS http://localhost:8080/debug/ready >/dev/null 2>&1 && break
+      curl -fsS http://localhost:18080/debug/ready >/dev/null 2>&1 && break
       sleep 2
     done
     echo "▶ waiting for postgres…"
@@ -109,8 +109,8 @@ test-e2e-zitadel:
     echo "▶ bootstrap zitadel (idempotent)…"
     bash deploy/zitadel/bootstrap.sh
     echo "▶ running gated e2e…"
-    TEST_POSTGRES_URL="postgres://mekhan:mekhan@localhost:5439/mekhan" \
-    TEST_NATS_URL="nats://localhost:4333" \
+    TEST_POSTGRES_URL="postgres://mekhan:mekhan@localhost:15439/mekhan" \
+    TEST_NATS_URL="nats://localhost:14333" \
     TEST_S3_ENDPOINT="http://localhost:9099" \
     MEKHAN_E2E_ZITADEL=1 \
       cargo test --test zitadel_e2e -- --test-threads=1 --nocapture

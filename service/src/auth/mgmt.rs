@@ -212,6 +212,34 @@ impl ZitadelMgmt {
         Ok(())
     }
 
+    /// Resolve an email address to the Zitadel user id (OIDC `sub`). Used
+    /// by the workspace member admin: ops want to add "alice@corp.com"
+    /// without first looking up her opaque user id. Returns `Ok(None)`
+    /// when no user matches — the handler maps to 404. Multiple matches
+    /// (very rare in Zitadel — email uniqueness is the default org
+    /// policy) returns the first hit; the admin endpoint can iterate if
+    /// that ever becomes a real problem.
+    pub async fn resolve_subject_by_email(&self, email: &str) -> Result<Option<String>, MgmtError> {
+        let found = self
+            .call(
+                reqwest::Method::POST,
+                "/v2/users",
+                Some(json!({
+                    "queries": [{
+                        "emailQuery": {
+                            "emailAddress": email,
+                            "method": "TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE",
+                        }
+                    }]
+                })),
+            )
+            .await?;
+        let Some(results) = found["result"].as_array() else {
+            return Ok(None);
+        };
+        Ok(results.first().and_then(|u| u["userId"].as_str().map(str::to_string)))
+    }
+
     /// Best-effort PAT expiry for a token's machine user. Any failure (the
     /// list endpoint shape varies across Zitadel versions) → `None`; expiry is
     /// cosmetic, never load-bearing.
