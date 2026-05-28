@@ -133,8 +133,7 @@ impl SmtpConfig {
     }
 
     pub fn from_spec(spec: &ExecutionSpec) -> Result<Self, ExecutorError> {
-        serde_json::from_value(spec.config.clone())
-            .map_err(|e| ExecutorError::Config(format!("invalid smtp backend config: {e}")))
+        crate::from_spec(spec, "smtp")
     }
 
     /// Validate independent of the resolved resource. Recipient counts,

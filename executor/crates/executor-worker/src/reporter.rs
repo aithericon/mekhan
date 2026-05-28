@@ -6,11 +6,13 @@ use async_nats::jetstream;
 use async_nats::jetstream::stream;
 use chrono::Utc;
 use serde_json::Value;
-use tracing::{debug, error};
+use tracing::debug;
 
 use aithericon_executor_domain::{ExecutionEvent, ExecutionStatus, StatusUpdate};
 
-use crate::event_emitter::{EventEmitter, NatsEventEmitter};
+use crate::event_emitter::{
+    publish_event, stream_name_for, subject_for, EventEmitter, NatsEventEmitter,
+};
 
 /// Publishes StatusUpdate and ExecutionEvent messages to NATS JetStream.
 ///
@@ -51,13 +53,8 @@ impl StatusReporter {
         prefix: Option<String>,
     ) -> Result<Self, async_nats::Error> {
         // Status stream
-        let (status_stream_name, status_subjects) = match &prefix {
-            Some(pfx) => (
-                format!("STATUS_{pfx}"),
-                vec![format!("{pfx}.executor.status.>")],
-            ),
-            None => ("EXECUTOR_STATUS".into(), vec!["executor.status.>".into()]),
-        };
+        let status_stream_name = stream_name_for(&prefix, "STATUS", "EXECUTOR_STATUS");
+        let status_subjects = vec![subject_for(&prefix, "executor.status.>".into())];
 
         jetstream
             .get_or_create_stream(stream::Config {
@@ -75,13 +72,8 @@ impl StatusReporter {
         debug!(%status_stream_name, "status stream ready");
 
         // Events stream
-        let (events_stream_name, events_subjects) = match &prefix {
-            Some(pfx) => (
-                format!("EVENTS_{pfx}"),
-                vec![format!("{pfx}.executor.events.>")],
-            ),
-            None => ("EXECUTOR_EVENTS".into(), vec!["executor.events.>".into()]),
-        };
+        let events_stream_name = stream_name_for(&prefix, "EVENTS", "EXECUTOR_EVENTS");
+        let events_subjects = vec![subject_for(&prefix, "executor.events.>".into())];
 
         jetstream
             .get_or_create_stream(stream::Config {
@@ -122,105 +114,31 @@ impl StatusReporter {
             timestamp: Utc::now(),
         };
 
-        let subject = match &self.subject_prefix {
-            Some(pfx) => format!("{pfx}.{}", update.subject()),
-            None => update.subject(),
-        };
-        let msg_id = update.msg_id();
-
-        let payload = match serde_json::to_vec(&update) {
-            Ok(p) => p,
-            Err(e) => {
-                error!(%execution_id, %status, error = %e, "failed to serialize status update");
-                return;
-            }
-        };
-
-        // Publish with deterministic msg_id for dedup + W3C traceparent header
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert("Nats-Msg-Id", msg_id.as_str());
-        if let Some(tp) = metadata.get("traceparent") {
-            headers.insert("traceparent", tp.as_str());
-        }
-
-        let ack = self
-            .jetstream
-            .publish_with_headers(subject.clone(), headers, payload.into())
-            .await;
-
-        match ack {
-            Ok(ack_future) => {
-                // Await the ack to confirm persistence
-                match ack_future.await {
-                    Ok(_) => {
-                        debug!(%execution_id, %status, %subject, "status update published");
-                    }
-                    Err(e) => {
-                        error!(%execution_id, %status, error = %e, "status update ack failed");
-                    }
-                }
-            }
-            Err(e) => {
-                error!(%execution_id, %status, error = %e, "failed to publish status update");
-            }
-        }
+        // Publish with deterministic msg_id for dedup + W3C traceparent header.
+        publish_event(
+            &self.jetstream,
+            subject_for(&self.subject_prefix, update.subject()),
+            update.msg_id().as_str(),
+            metadata.get("traceparent").map(String::as_str),
+            execution_id,
+            "status update",
+            &update,
+        )
+        .await;
     }
 
     /// Publish an execution event to the EXECUTOR_EVENTS stream.
     pub async fn emit_event(&self, event: &ExecutionEvent) {
-        let subject = match &self.subject_prefix {
-            Some(pfx) => format!("{pfx}.{}", event.subject()),
-            None => event.subject(),
-        };
-        let msg_id = event.msg_id();
-
-        let payload = match serde_json::to_vec(event) {
-            Ok(p) => p,
-            Err(e) => {
-                error!(
-                    execution_id = %event.execution_id,
-                    error = %e,
-                    "failed to serialize execution event"
-                );
-                return;
-            }
-        };
-
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert("Nats-Msg-Id", msg_id.as_str());
-        if let Some(tp) = event.metadata.get("traceparent") {
-            headers.insert("traceparent", tp.as_str());
-        }
-
-        match self
-            .jetstream
-            .publish_with_headers(subject.clone(), headers, payload.into())
-            .await
-        {
-            Ok(ack_future) => {
-                if let Err(e) = ack_future.await {
-                    error!(
-                        execution_id = %event.execution_id,
-                        error = %e,
-                        "event ack failed"
-                    );
-                } else {
-                    debug!(
-                        execution_id = %event.execution_id,
-                        category = %event.category,
-                        %subject,
-                        "execution event published"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(
-                    execution_id = %event.execution_id,
-                    error = %e,
-                    "failed to publish execution event"
-                );
-            }
-        }
+        publish_event(
+            &self.jetstream,
+            subject_for(&self.subject_prefix, event.subject()),
+            event.msg_id().as_str(),
+            event.metadata.get("traceparent").map(String::as_str),
+            &event.execution_id,
+            "execution event",
+            event,
+        )
+        .await;
     }
 
     /// Access the source identifier for this reporter.
@@ -235,18 +153,12 @@ impl StatusReporter {
 
     /// Get the status stream name (e.g. `EXECUTOR_STATUS` or `STATUS_{prefix}`).
     pub fn status_stream_name(&self) -> String {
-        match &self.subject_prefix {
-            Some(pfx) => format!("STATUS_{pfx}"),
-            None => "EXECUTOR_STATUS".into(),
-        }
+        stream_name_for(&self.subject_prefix, "STATUS", "EXECUTOR_STATUS")
     }
 
     /// Get the status subject prefix (e.g. `executor.status` or `{prefix}.executor.status`).
     pub fn status_subject_prefix(&self) -> String {
-        match &self.subject_prefix {
-            Some(pfx) => format!("{pfx}.executor.status"),
-            None => "executor.status".into(),
-        }
+        subject_for(&self.subject_prefix, "executor.status".into())
     }
 
     /// Create an `EventEmitter` that publishes to the same EXECUTOR_EVENTS stream.

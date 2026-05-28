@@ -400,7 +400,7 @@ fn default_timeout_secs() -> u64 {
 }
 
 fn default_max_output_bytes() -> usize {
-    65536
+    aithericon_executor_backend::DEFAULT_MAX_OUTPUT_BYTES
 }
 
 fn default_ack_wait_secs() -> u64 {

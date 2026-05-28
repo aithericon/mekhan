@@ -271,23 +271,7 @@ impl FileOpsTestKit for LocalFileOpsKit {
             tokio::fs::create_dir_all(dir).await.unwrap();
         }
 
-        RunContext {
-            execution_id: eid,
-            spec,
-            run_dir,
-            timeout,
-            env: HashMap::new(),
-            resolved_env: HashMap::new(),
-            resolved_config: None,
-            resolved_input_storage: HashMap::new(),
-            resolved_output_storage: HashMap::new(),
-            resolved_inline_inputs: HashMap::new(),
-            metadata: HashMap::new(),
-            staged_inputs: HashMap::new(),
-            expected_outputs: HashMap::new(),
-            staged_events: Vec::new(),
-            backend_state: serde_json::Value::Null,
-        }
+        RunContext::for_test(eid, spec, run_dir, timeout)
     }
 
     async fn cleanup_run_context(&self, ctx: &RunContext) {

@@ -118,7 +118,9 @@ async fn execute_single(
     status_cb: StatusCallback,
     cancel: CancellationToken,
 ) -> Result<ExecutionResult, ExecutorError> {
-    let file_path = resolved.target_file.as_ref().unwrap();
+    let file_path = resolved.target_file.as_ref().ok_or_else(|| {
+        ExecutorError::Config("kreuzberg single mode: target_file missing from resolved config".into())
+    })?;
     let file_name = resolved.target_name.as_deref().unwrap_or("file");
     let extraction_config = resolved.config.build_extraction_config();
     let mime = resolved.config.mime_type.as_deref();
@@ -140,32 +142,20 @@ async fn execute_single(
     // Three-way select: cancellation, timeout, or extraction.
     tokio::select! { biased;
         _ = cancel.cancelled() => {
-            Ok(ExecutionResult {
-                outcome: ExecutionOutcome::Cancelled,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some("execution cancelled".into()),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: None,
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            })
+            Ok(ExecutionResult::cancelled(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some("execution cancelled".into()),
+                None,
+            ))
         },
         _ = tokio::time::sleep(run_context.timeout) => {
-            Ok(ExecutionResult {
-                outcome: ExecutionOutcome::TimedOut,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some(format!("timed out after {:?}", run_context.timeout)),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: None,
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            })
+            Ok(ExecutionResult::timed_out(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some(format!("timed out after {:?}", run_context.timeout)),
+                None,
+            ))
         },
         result = kreuzberg::extract_file(&path_str, mime, &extraction_config) => {
             let duration = start.elapsed();
@@ -281,14 +271,11 @@ async fn execute_batch(
     for (idx, (name, path)) in targets.iter().enumerate() {
         // Check cancellation before each file.
         if cancel.is_cancelled() {
-            return Ok(ExecutionResult {
-                outcome: ExecutionOutcome::Cancelled,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some("execution cancelled".into()),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: Some(Progress {
+            return Ok(ExecutionResult::cancelled(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some("execution cancelled".into()),
+                Some(Progress {
                     fraction: idx as f64 / total as f64,
                     message: Some(format!("cancelled after {idx}/{total} files")),
                     current_step: idx as u64,
@@ -296,22 +283,16 @@ async fn execute_batch(
                     phases: vec![],
                     updated_at: Utc::now(),
                 }),
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            });
+            ));
         }
 
         // Check timeout.
         if start.elapsed() >= run_context.timeout {
-            return Ok(ExecutionResult {
-                outcome: ExecutionOutcome::TimedOut,
-                duration: start.elapsed(),
-                stdout_tail: None,
-                stderr_tail: Some(format!("timed out after {:?}", run_context.timeout)),
-                artifact_manifest: None,
-                outputs: HashMap::new(),
-                progress: Some(Progress {
+            return Ok(ExecutionResult::timed_out(
+                start.elapsed(),
+                Some(run_context.run_dir.clone()),
+                Some(format!("timed out after {:?}", run_context.timeout)),
+                Some(Progress {
                     fraction: idx as f64 / total as f64,
                     message: Some(format!("timed out after {idx}/{total} files")),
                     current_step: idx as u64,
@@ -319,10 +300,7 @@ async fn execute_batch(
                     phases: vec![],
                     updated_at: Utc::now(),
                 }),
-                run_dir: Some(run_context.run_dir.clone()),
-                metrics: None,
-                logs: None,
-            });
+            ));
         }
 
         let path_str = path.to_string_lossy().to_string();
@@ -542,23 +520,12 @@ mod tests {
     fn make_run_context(spec: ExecutionSpec, timeout: Duration) -> RunContext {
         let seq = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let id = format!("kreuzberg-test-{}-{}", std::process::id(), seq);
-        RunContext {
-            execution_id: id.clone(),
+        RunContext::for_test(
+            id.clone(),
             spec,
-            run_dir: RunDirectory::new(&std::env::temp_dir(), &id),
+            RunDirectory::new(&std::env::temp_dir(), &id),
             timeout,
-            env: HashMap::new(),
-            resolved_env: HashMap::new(),
-            resolved_config: None,
-            resolved_input_storage: HashMap::new(),
-            resolved_output_storage: HashMap::new(),
-            resolved_inline_inputs: HashMap::new(),
-            metadata: HashMap::new(),
-            staged_inputs: HashMap::new(),
-            expected_outputs: HashMap::new(),
-            staged_events: Vec::new(),
-            backend_state: serde_json::Value::Null,
-        }
+        )
     }
 
     fn make_spec(config: serde_json::Value) -> ExecutionSpec {
