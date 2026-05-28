@@ -417,7 +417,7 @@ pub(crate) async fn fire_transition<
     let event = events
         .append(DomainEvent::TransitionFired {
             transition_id: transition_id.clone(),
-            transition_name: None,
+            transition_name: Some(transition.name.clone()),
             consumed_tokens: binding.consumed_tokens,
             produced_tokens,
             read_tokens: binding.read_tokens,
