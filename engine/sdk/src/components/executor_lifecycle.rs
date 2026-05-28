@@ -455,7 +455,7 @@ pub fn executor_lifecycle(
     );
 
     ExecutorLifecycleHandles {
-        completed: completed,
+        completed,
         dead_letter,
         effect_errors,
         failed,

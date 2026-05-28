@@ -57,7 +57,7 @@ pub fn run_errors(client: &EngineClient, last: usize) {
                 None => continue,
             };
 
-            if !ERROR_TYPES.iter().any(|et| *et == type_name) {
+            if !ERROR_TYPES.contains(&type_name) {
                 continue;
             }
 

@@ -150,6 +150,8 @@ pub(super) fn wire_read_arc(
             port: var.clone(),
             weight: 1,
             read: true,
+            count_from: None,
+            correlate_on: None,
         });
     }
     Some(var)
@@ -1209,6 +1211,8 @@ fn align_decision_deadends(
                         port: port_name,
                         weight: 1,
                         read: true,
+                        count_from: None,
+                        correlate_on: None,
                     });
                 }
             }

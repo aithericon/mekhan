@@ -61,6 +61,8 @@ fn arc(place: &str, port: &str) -> ScenarioArc {
         port: port.to_string(),
         weight: 1,
         read: false,
+        count_from: None,
+        correlate_on: None,
     }
 }
 

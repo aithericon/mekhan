@@ -83,7 +83,7 @@ impl EffectHandler for HumanTaskHandler {
 
         // Auto-extract process_id from read-arc inputs if not already set.
         if request.process_id.is_none() {
-            for (_port, data) in &input.read_inputs {
+            for data in input.read_inputs.values() {
                 if let Some(pid) = data.get("process_id").and_then(|v| v.as_str()) {
                     request.process_id = Some(pid.to_string());
                     tracing::debug!(

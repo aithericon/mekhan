@@ -75,6 +75,8 @@ impl ScenarioBridge {
             port: arc.port.clone(),
             weight: arc.weight,
             read: arc.read,
+            count_from: arc.count_from.clone(),
+            correlate_on: arc.correlate_on.clone(),
         }
     }
 

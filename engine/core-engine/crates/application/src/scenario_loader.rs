@@ -120,6 +120,11 @@ pub struct ScenarioArcInput {
     pub weight: usize,
     /// If true, this is a read arc (token consumed for evaluation, auto-produced back).
     pub read: bool,
+    /// Gather barrier: reference to a coordinator field supplying the count `K`
+    /// (e.g. `"expected.k"`). `None` = no count-gate (today's behavior).
+    pub count_from: Option<String>,
+    /// Gather barrier: optional correlate field matched against result tokens.
+    pub correlate_on: Option<String>,
 }
 
 /// Input for a scenario transition.
@@ -339,9 +344,15 @@ impl ScenarioParser {
                 let pid = place_ids
                     .get(&input_arc.place)
                     .ok_or_else(|| ScenarioLoadError::UnknownPlace(input_arc.place.clone()))?;
-                let arc = PetriArc::input(pid.clone(), tid.clone(), &input_arc.port)
+                let mut arc = PetriArc::input(pid.clone(), tid.clone(), &input_arc.port)
                     .with_weight(input_arc.weight)
                     .with_read(input_arc.read);
+                if let Some(count_from) = &input_arc.count_from {
+                    arc = arc.with_count_from(count_from.clone());
+                }
+                if let Some(correlate_on) = &input_arc.correlate_on {
+                    arc = arc.with_correlate_on(correlate_on.clone());
+                }
                 arcs.push(arc);
             }
 

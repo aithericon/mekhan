@@ -247,6 +247,18 @@ pub struct ScenarioArc {
     /// If true, this is a read arc: token consumed for evaluation, auto-produced back.
     #[serde(default, skip_serializing_if = "is_false_arc")]
     pub read: bool,
+    /// Gather barrier: a producer-namespaced reference (e.g. `"expected.k"`) to a
+    /// field on a bound coordinator token that supplies the count `K` of result
+    /// tokens this Batch input arc must accumulate before the transition fires.
+    /// `None` (the default) preserves today's non-barrier behavior, so existing
+    /// AIR round-trips byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count_from: Option<String>,
+    /// Gather barrier: the field name on result tokens used to correlate them into
+    /// a single gather group (e.g. `"iteration_id"`), so overlapping loop iterations
+    /// don't mix. `None` (the default) preserves today's behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlate_on: Option<String>,
 }
 
 fn is_false_arc(b: &bool) -> bool {

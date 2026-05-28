@@ -218,8 +218,14 @@ impl TestScenario {
             // Input arcs
             for input_arc in &st.inputs {
                 if let Some(pid) = place_ids.get(&input_arc.place) {
-                    let arc = PetriArc::input(pid.clone(), tid.clone(), &input_arc.port)
+                    let mut arc = PetriArc::input(pid.clone(), tid.clone(), &input_arc.port)
                         .with_weight(input_arc.weight);
+                    if let Some(count_from) = &input_arc.count_from {
+                        arc = arc.with_count_from(count_from.clone());
+                    }
+                    if let Some(correlate_on) = &input_arc.correlate_on {
+                        arc = arc.with_correlate_on(correlate_on.clone());
+                    }
                     net.add_arc(arc);
                 }
             }

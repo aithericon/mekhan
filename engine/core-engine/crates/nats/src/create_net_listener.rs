@@ -163,7 +163,7 @@ impl MessageHandler for CreateNetHandler<'_> {
         self.creator
             .create_and_load(&request)
             .await
-            .map_err(|e| ProcessError::Business(e))?;
+            .map_err(ProcessError::Business)?;
 
         tracing::info!(
             net_id = %request.net_id,
