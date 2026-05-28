@@ -1,0 +1,145 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "HTTP Call",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "intake",
+      "type": "human_task",
+      "slug": "intake",
+      "position": { "x": 280, "y": 120 },
+      "data": {
+        "type": "human_task",
+        "label": "Intake",
+        "description": "Collect a username and topic so the HTTP step has something to interpolate into the request.",
+        "taskTitle": "Request details",
+        "taskDescription": "Enter a username and topic; the next step issues an HTTP request that embeds both values.",
+        "steps": [
+          {
+            "id": "main",
+            "title": "Details",
+            "blocks": [
+              {
+                "type": "input",
+                "field": {
+                  "name": "username",
+                  "label": "Username",
+                  "kind": "text",
+                  "required": true
+                }
+              },
+              {
+                "type": "input",
+                "field": {
+                  "name": "topic",
+                  "label": "Topic",
+                  "kind": "text",
+                  "required": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "httpcall",
+      "type": "automated_step",
+      "slug": "httpcall",
+      "position": { "x": 560, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "HTTP Call",
+        "description": "HTTP backend. The URL path, query param, request header, and JSON body all interpolate `{{ intake.* }}` against the shared Tera context — the compiler synthesizes a read-arc into the intake producer and stages `intake.json` so the executor can render them. `output_mapping` selects fields back out of the echoed JSON response. Target is the local `just dev httpbin-up` echo server.",
+        "executionSpec": {
+          "backendType": "http",
+          "config": {
+            "method": "POST",
+            "url": "http://localhost:13110/anything/{{ intake.username }}",
+            "headers": {
+              "X-Requested-By": "{{ intake.username }}"
+            },
+            "query": {
+              "topic": "{{ intake.topic }}"
+            },
+            "body": {
+              "user": "{{ intake.username }}",
+              "message": "Hello {{ intake.username }}, your topic is {{ intake.topic }}"
+            },
+            "response_mode": "json",
+            "output_mapping": {
+              "echoed_user": "body.json.user",
+              "echoed_url": "body.url"
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Response",
+          "fields": [
+            { "name": "status_code", "label": "Status Code", "kind": "number" },
+            { "name": "body", "label": "Body", "kind": "json" },
+            { "name": "headers", "label": "Headers", "kind": "json" },
+            { "name": "content_type", "label": "Content type", "kind": "text" },
+            { "name": "response_time_ms", "label": "Response time (ms)", "kind": "number" },
+            { "name": "echoed_user", "label": "Echoed user", "kind": "json" },
+            { "name": "echoed_url", "label": "Echoed URL", "kind": "json" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "inline" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 840, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "status_code", "expression": "httpcall.status_code" },
+          { "targetField": "echoed_user", "expression": "httpcall.echoed_user" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_intake",
+      "source": "start",
+      "target": "intake",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_intake_httpcall",
+      "source": "intake",
+      "target": "httpcall",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_httpcall_end",
+      "source": "httpcall",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}
