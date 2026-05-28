@@ -27,8 +27,14 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Server URL (e.g. http://localhost:13100)
-    #[arg(short, long, default_value = "http://localhost:13100", global = true)]
+    /// Server URL (e.g. http://localhost:13100). Falls back to $MEKHAN_CLI_SERVER.
+    #[arg(
+        short,
+        long,
+        env = "MEKHAN_CLI_SERVER",
+        default_value = "http://localhost:13100",
+        global = true
+    )]
     server: String,
 }
 

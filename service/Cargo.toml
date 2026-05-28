@@ -131,7 +131,7 @@ yrs = "0.21"
 dashmap = "6"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 serde_yaml_ng = "0.10"
 hcl-rs = "0.18"
 indexmap = { version = "2", features = ["serde"] }
