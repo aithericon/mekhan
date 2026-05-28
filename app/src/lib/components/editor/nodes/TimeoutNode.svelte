@@ -89,21 +89,29 @@
 		</div>
 	</div>
 
-	<!-- Inner-facing body handles (solid fill to distinguish from perimeter) -->
+	<!--
+		Inner-facing body handles (solid fill to distinguish from perimeter).
+		Their `position` points INWARD toward the body interior where the
+		wrapped children live: body_in uses Position.Right so its connection
+		leaves rightward into the body, body_out uses Position.Left so the
+		return arc enters from the body. The `left/right: auto` overrides keep
+		them pinned to the inner walls (16px) without the position class's
+		default wall-anchor fighting the styled placement.
+	-->
 	<Handle
 		id="body_in"
 		type="source"
-		position={Position.Left}
+		position={Position.Right}
 		class="!h-3 !w-3 !border-2 !border-node-timeout !bg-node-timeout"
-		style="left: 16px; top: 50%;"
+		style="left: 16px; right: auto; top: 50%;"
 		title="Body in — start of watched work"
 	/>
 	<Handle
 		id="body_out"
 		type="target"
-		position={Position.Right}
+		position={Position.Left}
 		class="!h-3 !w-3 !border-2 !border-node-timeout !bg-node-timeout"
-		style="right: 16px; top: 50%;"
+		style="right: 16px; left: auto; top: 50%;"
 		title="Body out — body completion (cancels the timer)"
 	/>
 </div>

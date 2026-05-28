@@ -93,21 +93,28 @@
 		they read as "inside" handles, and styled with a SOLID fill (vs the
 		outline-style outer perimeter handles) so the four ports are
 		visually unambiguous.
+
+		Their `position` points INWARD, not at the wall they sit on: body_in
+		uses Position.Right so its connection leaves toward the body interior
+		(where the children live), and body_out uses Position.Left so the
+		return arc enters from the interior. The `left/right: auto` overrides
+		stop the position class's default wall-anchor from fighting the
+		styled placement.
 	-->
 	<Handle
 		id="body_in"
 		type="source"
-		position={Position.Left}
+		position={Position.Right}
 		class="!h-3 !w-3 !border-2 !border-node-loop !bg-node-loop"
-		style="left: 16px; top: 50%;"
+		style="left: 16px; right: auto; top: 50%;"
 		title="Body in — start of each iteration"
 	/>
 	<Handle
 		id="body_out"
 		type="target"
-		position={Position.Right}
+		position={Position.Left}
 		class="!h-3 !w-3 !border-2 !border-node-loop !bg-node-loop"
-		style="right: 16px; top: 50%;"
+		style="right: 16px; left: auto; top: 50%;"
 		title="Body out — end of each iteration (returns to loop)"
 	/>
 </div>
