@@ -6,6 +6,7 @@
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
+	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 	// NodePropertyPanel is lazy-loaded — its static import drags in 17
@@ -48,6 +49,7 @@
 	let airPreview = $state<object | null>(null);
 	let runDialogOpen = $state(false);
 	let testsPanelOpen = $state(false);
+	let settingsPanelOpen = $state(false);
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 
@@ -303,6 +305,7 @@
 			onnewversion={handleNewVersion}
 			onrun={handleRun}
 			ontests={() => (testsPanelOpen = true)}
+			onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 			onrename={handleRename}
 			ondescriptionchange={handleDescriptionChange}
 		/>
@@ -371,6 +374,15 @@
 		<SheetTitle class="sr-only">Tests</SheetTitle>
 		{#if template}
 			<TestsPanel templateId={template.id} {humanTaskSlugs} {assertionScope} />
+		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<Sheet.Root open={settingsPanelOpen} onOpenChange={(o: boolean) => (settingsPanelOpen = o)}>
+	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
+		<SheetTitle class="sr-only">Template settings</SheetTitle>
+		{#if template}
+			<TemplateSettingsPanel {template} />
 		{/if}
 	</SheetContent>
 </Sheet.Root>

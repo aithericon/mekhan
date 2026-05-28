@@ -17,6 +17,7 @@
 //!
 //! The composition root in `main.rs` chooses adapters from `AuthConfig`.
 
+pub mod active_workspace;
 pub mod authenticator;
 pub mod bff;
 pub mod dev;

@@ -195,14 +195,20 @@ pub async fn callback(
 }
 
 /// `GET /api/auth/session` — the SPA's auth-state probe. 200 + `AuthUser` when
-/// signed in (dev_noop always is), 401 otherwise.
-pub async fn session(State(state): State<AppState>, jar: CookieJar) -> Response {
-    match state
-        .authenticator
-        .authenticate(&axum::http::HeaderMap::new(), &jar)
-        .await
-    {
-        Ok(user) => (StatusCode::OK, Json(user)).into_response(),
+/// signed in (dev_noop always is), 401 otherwise. Threads request headers
+/// through to the authenticator so the active-workspace override cookie
+/// applies on the same call — the SPA polls this endpoint after every
+/// workspace switch to repaint with the new active id.
+pub async fn session(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    jar: CookieJar,
+) -> Response {
+    match state.authenticator.authenticate(&headers, &jar).await {
+        Ok(mut user) => {
+            crate::auth::active_workspace::apply_override(&state.db, &mut user, &headers).await;
+            (StatusCode::OK, Json(user)).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }
