@@ -97,7 +97,10 @@ pub(crate) fn find_valid_binding(
 
     for arc in input_arcs {
         let tokens = marking.tokens_at(&arc.place_id);
-        if tokens.len() < arc.weight {
+        // count_from arcs are gather barriers: the required count K depends on a
+        // coordinator token that is not yet bound here, so the real count check is
+        // deferred to build_binding_for_indices. Skip the weight-based early return.
+        if arc.count_from.is_none() && tokens.len() < arc.weight {
             return None; // Not enough tokens
         }
         arc_sizes.push(tokens.len());
@@ -183,103 +186,213 @@ fn build_binding_for_indices(
     let mut max_created_at: Option<DateTime<Utc>> = None;
     let mut consumed_reply_routing: Option<ReplyRouting> = None;
 
-    for (arc_idx, arc) in input_arcs.iter().enumerate() {
-        let token_idx = indices[arc_idx];
-        let tokens = &arc_tokens[arc_idx];
+    // Two passes: count_from (gather-barrier) arcs depend on a coordinator token
+    // bound by another arc, so they must be processed AFTER the non-count_from
+    // arcs have populated port_inputs. Non-count_from arcs keep today's behavior
+    // exactly; count_from arcs run the counted-gather path below.
+    for pass in 0..2 {
+        for (arc_idx, arc) in input_arcs.iter().enumerate() {
+            let is_gather = arc.count_from.is_some();
+            // pass 0: non-count_from arcs; pass 1: count_from arcs.
+            if (pass == 0) == is_gather {
+                continue;
+            }
 
-        if token_idx >= tokens.len() {
-            return None;
-        }
+            // Get cardinality
+            let port = transition.input_port(&arc.port_name);
+            let cardinality = port
+                .map(|p| &p.cardinality)
+                .unwrap_or(&PortCardinality::Single);
 
-        let token = tokens[token_idx];
+            // ── Gather barrier: count-gated, correlated Batch input ──────────
+            if let Some(count_ref) = &arc.count_from {
+                let tokens = &arc_tokens[arc_idx];
 
-        // Merge reply_routing from consumed tokens (skip read arcs)
-        if !arc.read {
-            if let Some(incoming) = &token.reply_routing {
-                consumed_reply_routing = match consumed_reply_routing {
-                    None => Some(incoming.clone()),
-                    Some(existing) => match merge_reply_routing(existing, incoming) {
-                        Some(merged) => Some(merged),
-                        None => {
-                            tracing::debug!(
-                                arc_port = %arc.port_name,
-                                "reply_routing merge conflict — skipping binding"
-                            );
-                            return None;
-                        }
-                    },
+                // Resolve K from the referenced coordinator port: "expected.k"
+                // → port_inputs["expected"]["k"]. The coordinator must already be
+                // bound (it is a non-count_from arc resolved in pass 0).
+                let (coord_port, count_field) = match count_ref.split_once('.') {
+                    Some((p, f)) => (p, f),
+                    None => return None, // malformed reference
                 };
-            }
-        }
+                let coord_value = port_inputs.get(coord_port)?;
+                let k = coord_value
+                    .get(count_field)
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)?;
 
-        // Get cardinality
-        let port = transition.input_port(&arc.port_name);
-        let cardinality = port
-            .map(|p| &p.cardinality)
-            .unwrap_or(&PortCardinality::Single);
+                // Filter the place's tokens to the matching subset.
+                let matching: Vec<&&Token> = if let Some(field) = &arc.correlate_on {
+                    // Eligible tokens are those whose correlate field equals the
+                    // coordinator token's same-named field.
+                    let want = coord_value.get(field);
+                    tokens
+                        .iter()
+                        .filter(|t| {
+                            let tc = token_color_to_json(&t.color);
+                            tc.get(field) == want
+                        })
+                        .collect()
+                } else {
+                    tokens.iter().collect()
+                };
 
-        // For Single cardinality, we just use the one token at this index
-        // For Batch, we'd need different logic (not changing that behavior)
-        let token_data: JsonValue = match cardinality {
-            PortCardinality::Single => token_color_to_json(&token.color),
-            PortCardinality::Batch => {
-                // For batch, collect ALL tokens from this place
-                let batch_tokens: Vec<JsonValue> = tokens
-                    .iter()
-                    .map(|t| token_color_to_json(&t.color))
-                    .collect();
-                JsonValue::Array(batch_tokens)
-            }
-        };
-
-        // Track consumed or read tokens
-        if arc.read {
-            // Read arc: token is available to script but NOT removed from marking
-            read_port_names.push(arc.port_name.clone());
-            match cardinality {
-                PortCardinality::Single => {
-                    read_tokens.push((arc.place_id.clone(), token.clone()));
-                    max_created_at =
-                        Some(max_created_at.map_or(token.created_at, |t| t.max(token.created_at)));
+                // Barrier: fire only when at least K matching tokens are present.
+                if matching.len() < k {
+                    return None;
                 }
-                PortCardinality::Batch => {
-                    for t in tokens.iter() {
-                        read_tokens.push((arc.place_id.clone(), (*t).clone()));
-                        max_created_at =
-                            Some(max_created_at.map_or(t.created_at, |m| m.max(t.created_at)));
+
+                // Take exactly the first K matching tokens (deterministic order =
+                // marking vector order) as BOTH the script-visible array and the
+                // consumed set.
+                let selected: Vec<&&Token> = matching.into_iter().take(k).collect();
+                let token_data = JsonValue::Array(
+                    selected
+                        .iter()
+                        .map(|t| token_color_to_json(&t.color))
+                        .collect(),
+                );
+
+                for t in &selected {
+                    if !arc.read {
+                        if let Some(incoming) = &t.reply_routing {
+                            consumed_reply_routing = match consumed_reply_routing {
+                                None => Some(incoming.clone()),
+                                Some(existing) => match merge_reply_routing(existing, incoming) {
+                                    Some(merged) => Some(merged),
+                                    None => {
+                                        tracing::debug!(
+                                            arc_port = %arc.port_name,
+                                            "reply_routing merge conflict — skipping binding"
+                                        );
+                                        return None;
+                                    }
+                                },
+                            };
+                        }
                     }
-                }
-            }
-        } else {
-            // Normal arc: token is consumed
-            match cardinality {
-                PortCardinality::Single => {
-                    consumed_tokens.push((arc.place_id.clone(), token.id.clone()));
-                    max_created_at =
-                        Some(max_created_at.map_or(token.created_at, |t| t.max(token.created_at)));
-                }
-                PortCardinality::Batch => {
-                    for t in tokens.iter().skip(token_idx).take(arc.weight) {
+                    if arc.read {
+                        read_tokens.push((arc.place_id.clone(), (***t).clone()));
+                    } else {
                         consumed_tokens.push((arc.place_id.clone(), t.id.clone()));
-                        max_created_at =
-                            Some(max_created_at.map_or(t.created_at, |m| m.max(t.created_at)));
+                    }
+                    max_created_at =
+                        Some(max_created_at.map_or(t.created_at, |m| m.max(t.created_at)));
+                }
+                if arc.read {
+                    read_port_names.push(arc.port_name.clone());
+                }
+
+                // Validate each element against the port schema (item shape) if present.
+                if let Some(registry) = schema_registry {
+                    if let Some(schema_ref) = port.and_then(|p| p.schema_ref.as_ref()) {
+                        for el in selected.iter() {
+                            let ev = token_color_to_json(&el.color);
+                            if registry.validate(schema_ref, &ev).is_err() {
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                port_inputs.insert(arc.port_name.clone(), token_data);
+                continue;
+            }
+
+            // ── Non-count_from arc: exactly today's behavior ─────────────────
+            let token_idx = indices[arc_idx];
+            let tokens = &arc_tokens[arc_idx];
+
+            if token_idx >= tokens.len() {
+                return None;
+            }
+
+            let token = tokens[token_idx];
+
+            // Merge reply_routing from consumed tokens (skip read arcs)
+            if !arc.read {
+                if let Some(incoming) = &token.reply_routing {
+                    consumed_reply_routing = match consumed_reply_routing {
+                        None => Some(incoming.clone()),
+                        Some(existing) => match merge_reply_routing(existing, incoming) {
+                            Some(merged) => Some(merged),
+                            None => {
+                                tracing::debug!(
+                                    arc_port = %arc.port_name,
+                                    "reply_routing merge conflict — skipping binding"
+                                );
+                                return None;
+                            }
+                        },
+                    };
+                }
+            }
+
+            // For Single cardinality, we just use the one token at this index
+            // For Batch, we'd need different logic (not changing that behavior)
+            let token_data: JsonValue = match cardinality {
+                PortCardinality::Single => token_color_to_json(&token.color),
+                PortCardinality::Batch => {
+                    // For batch, collect ALL tokens from this place
+                    let batch_tokens: Vec<JsonValue> = tokens
+                        .iter()
+                        .map(|t| token_color_to_json(&t.color))
+                        .collect();
+                    JsonValue::Array(batch_tokens)
+                }
+            };
+
+            // Track consumed or read tokens
+            if arc.read {
+                // Read arc: token is available to script but NOT removed from marking
+                read_port_names.push(arc.port_name.clone());
+                match cardinality {
+                    PortCardinality::Single => {
+                        read_tokens.push((arc.place_id.clone(), token.clone()));
+                        max_created_at = Some(
+                            max_created_at.map_or(token.created_at, |t| t.max(token.created_at)),
+                        );
+                    }
+                    PortCardinality::Batch => {
+                        for t in tokens.iter() {
+                            read_tokens.push((arc.place_id.clone(), (*t).clone()));
+                            max_created_at =
+                                Some(max_created_at.map_or(t.created_at, |m| m.max(t.created_at)));
+                        }
+                    }
+                }
+            } else {
+                // Normal arc: token is consumed
+                match cardinality {
+                    PortCardinality::Single => {
+                        consumed_tokens.push((arc.place_id.clone(), token.id.clone()));
+                        max_created_at = Some(
+                            max_created_at.map_or(token.created_at, |t| t.max(token.created_at)),
+                        );
+                    }
+                    PortCardinality::Batch => {
+                        for t in tokens.iter().skip(token_idx).take(arc.weight) {
+                            consumed_tokens.push((arc.place_id.clone(), t.id.clone()));
+                            max_created_at =
+                                Some(max_created_at.map_or(t.created_at, |m| m.max(t.created_at)));
+                        }
                     }
                 }
             }
-        }
 
-        // Validate token data against port schema if registry is present
-        if let Some(registry) = schema_registry {
-            if let Some(port) = transition.input_port(&arc.port_name) {
-                if let Some(ref schema_ref) = port.schema_ref {
-                    if registry.validate(schema_ref, &token_data).is_err() {
-                        return None; // Wrong-shaped token — skip this binding
+            // Validate token data against port schema if registry is present
+            if let Some(registry) = schema_registry {
+                if let Some(port) = transition.input_port(&arc.port_name) {
+                    if let Some(ref schema_ref) = port.schema_ref {
+                        if registry.validate(schema_ref, &token_data).is_err() {
+                            return None; // Wrong-shaped token — skip this binding
+                        }
                     }
                 }
             }
-        }
 
-        port_inputs.insert(arc.port_name.clone(), token_data);
+            port_inputs.insert(arc.port_name.clone(), token_data);
+        }
     }
 
     Some(TokenBinding {
@@ -481,6 +594,207 @@ mod tests {
         let arcs: Vec<&PetriArc> = vec![&arc];
         let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None);
         assert!(binding.is_none(), "should not bind when place is empty");
+    }
+
+    // ── Gather barrier: count-gated, correlated Batch input ────────────
+
+    /// Helper: build the gather scenario — a Batch "results" input arc with
+    /// `count_from = "expected.k"` plus a Single read arc "expected" (coordinator).
+    fn gather_setup() -> (
+        TransitionExecutor,
+        Transition,
+        PlaceId,
+        PlaceId,
+        PetriArc,
+        PetriArc,
+    ) {
+        let executor = TransitionExecutor::new();
+        let results_place = PlaceId::named("results");
+        let expected_place = PlaceId::named("expected");
+        let t_id = TransitionId::named("gather");
+
+        let transition =
+            transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
+
+        // coordinator (single, read) bound first; results (batch, count-gated)
+        let expected_arc =
+            PetriArc::input(expected_place.clone(), t_id.clone(), "expected").with_read(true);
+        let results_arc =
+            PetriArc::input(results_place.clone(), t_id, "results").with_count_from("expected.k");
+
+        (
+            executor,
+            transition,
+            results_place,
+            expected_place,
+            expected_arc,
+            results_arc,
+        )
+    }
+
+    #[test]
+    fn gather_barrier_holds_until_k_present() {
+        let (executor, transition, results_place, expected_place, expected_arc, results_arc) =
+            gather_setup();
+
+        let mut marking = Marking::new();
+        marking.add_token(expected_place.clone(), data_token(json!({ "k": 3 })));
+        // Only 2 of 3 results present.
+        for i in 0..2 {
+            marking.add_token(results_place.clone(), data_token(json!({ "v": i })));
+        }
+
+        let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
+        let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None);
+        assert!(
+            binding.is_none(),
+            "barrier must hold while fewer than K results present"
+        );
+    }
+
+    #[test]
+    fn gather_binds_and_consumes_exactly_k() {
+        let (executor, transition, results_place, expected_place, expected_arc, results_arc) =
+            gather_setup();
+
+        let mut marking = Marking::new();
+        marking.add_token(expected_place.clone(), data_token(json!({ "k": 3 })));
+        for i in 0..3 {
+            marking.add_token(results_place.clone(), data_token(json!({ "v": i })));
+        }
+
+        let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
+        let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None)
+            .expect("binding should succeed once K results present");
+
+        // Script sees exactly K results as an array.
+        let results = binding.port_inputs.get("results").expect("results missing");
+        let arr = results.as_array().expect("results should be an array");
+        assert_eq!(arr.len(), 3, "script should see exactly K results");
+
+        // Coordinator was a read arc → not consumed; exactly K results consumed.
+        assert_eq!(
+            binding.consumed_tokens.len(),
+            3,
+            "exactly K result tokens consumed"
+        );
+        for (place_id, _) in &binding.consumed_tokens {
+            assert_eq!(place_id, &results_place, "only results are consumed");
+        }
+    }
+
+    #[test]
+    fn gather_with_more_than_k_takes_first_k() {
+        let (executor, transition, results_place, expected_place, expected_arc, results_arc) =
+            gather_setup();
+
+        let mut marking = Marking::new();
+        marking.add_token(expected_place.clone(), data_token(json!({ "k": 2 })));
+        for i in 0..5 {
+            marking.add_token(results_place.clone(), data_token(json!({ "v": i })));
+        }
+
+        let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
+        let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None)
+            .expect("binding should succeed");
+
+        let arr = binding.port_inputs["results"].as_array().unwrap();
+        assert_eq!(arr.len(), 2, "exactly K taken");
+        // Deterministic marking order → first two tokens (v:0, v:1).
+        assert_eq!(arr[0]["v"], 0);
+        assert_eq!(arr[1]["v"], 1);
+        assert_eq!(binding.consumed_tokens.len(), 2);
+    }
+
+    #[test]
+    fn gather_correlates_on_iteration_id() {
+        let executor = TransitionExecutor::new();
+        let results_place = PlaceId::named("results");
+        let expected_place = PlaceId::named("expected");
+        let t_id = TransitionId::named("gather");
+
+        let transition =
+            transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
+
+        let expected_arc =
+            PetriArc::input(expected_place.clone(), t_id.clone(), "expected").with_read(true);
+        let results_arc = PetriArc::input(results_place.clone(), t_id, "results")
+            .with_count_from("expected.k")
+            .with_correlate_on("iteration_id");
+
+        let mut marking = Marking::new();
+        // Coordinator says iteration A needs k=3.
+        marking.add_token(
+            expected_place.clone(),
+            data_token(json!({ "k": 3, "iteration_id": "A" })),
+        );
+        // 3 tokens of iteration A, 2 of iteration B (interleaved).
+        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A", "v": 0 })));
+        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "B", "v": 100 })));
+        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A", "v": 1 })));
+        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "B", "v": 101 })));
+        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A", "v": 2 })));
+
+        let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
+        let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None)
+            .expect("binding should succeed: 3 A-tokens present");
+
+        // Script sees exactly the 3 A-tokens.
+        let arr = binding.port_inputs["results"].as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        for el in arr {
+            assert_eq!(el["iteration_id"], "A", "only iteration-A tokens gathered");
+        }
+
+        // Exactly the 3 A result tokens consumed; the 2 B-tokens left in place.
+        assert_eq!(binding.consumed_tokens.len(), 3);
+        let consumed_ids: Vec<_> = binding.consumed_tokens.iter().map(|(_, id)| id).collect();
+        let remaining: Vec<_> = marking
+            .tokens_at(&results_place)
+            .iter()
+            .filter(|t| !consumed_ids.contains(&&t.id))
+            .map(|t| token_color_to_json(&t.color))
+            .collect();
+        assert_eq!(remaining.len(), 2, "2 B-tokens remain unconsumed");
+        for r in &remaining {
+            assert_eq!(r["iteration_id"], "B");
+        }
+    }
+
+    #[test]
+    fn gather_correlation_barrier_holds_when_subset_short() {
+        // 5 results total but only 2 of the correlated iteration → barrier holds.
+        let executor = TransitionExecutor::new();
+        let results_place = PlaceId::named("results");
+        let expected_place = PlaceId::named("expected");
+        let t_id = TransitionId::named("gather");
+
+        let transition =
+            transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
+        let expected_arc =
+            PetriArc::input(expected_place.clone(), t_id.clone(), "expected").with_read(true);
+        let results_arc = PetriArc::input(results_place.clone(), t_id, "results")
+            .with_count_from("expected.k")
+            .with_correlate_on("iteration_id");
+
+        let mut marking = Marking::new();
+        marking.add_token(
+            expected_place.clone(),
+            data_token(json!({ "k": 3, "iteration_id": "A" })),
+        );
+        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A" })));
+        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A" })));
+        // 3 B-tokens — irrelevant to iteration A's gather.
+        for _ in 0..3 {
+            marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "B" })));
+        }
+
+        let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
+        let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None);
+        assert!(
+            binding.is_none(),
+            "barrier holds: only 2 of K=3 correlated tokens present"
+        );
     }
 
     // ── Reply routing merge tests ──────────────────────────────────────

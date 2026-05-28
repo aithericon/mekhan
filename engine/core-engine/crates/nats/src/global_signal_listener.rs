@@ -182,7 +182,7 @@ impl MessageHandler for GlobalSignalHandler<'_> {
             .resolver
             .resolve_net(net_id)
             .await
-            .map_err(|e| ProcessError::Business(e))?;
+            .map_err(ProcessError::Business)?;
 
         // Convert signal payload to TokenColor and inject
         let color = json_to_token_color(&signal.payload);

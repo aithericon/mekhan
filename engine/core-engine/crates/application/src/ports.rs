@@ -14,6 +14,9 @@ pub enum EventStoreError {
 
 /// Port for event storage (outbound).
 /// Implementations provide persistence for the event log.
+// `len` here is the storage-order event count used as a projection cursor, not a
+// collection length; an `is_empty` companion would be meaningless for the trait.
+#[allow(clippy::len_without_is_empty)]
 #[async_trait::async_trait]
 pub trait EventRepository: Send + Sync {
     /// Append a new event to the log.

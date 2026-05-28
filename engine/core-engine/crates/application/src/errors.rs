@@ -42,6 +42,9 @@ pub enum ServiceError {
     #[error("No arc connected to output port '{port_name}'")]
     NoArcForPort { port_name: String },
 
+    #[error("batch output port '{port_name}' produced a non-array value")]
+    BatchOutputNotArray { port_name: String },
+
     #[error("No topology loaded")]
     NoTopology,
 
@@ -121,6 +124,7 @@ impl ServiceError {
             | Self::InvalidOperation(_)
             | Self::UnknownOutputPort { .. }
             | Self::NoArcForPort { .. }
+            | Self::BatchOutputNotArray { .. }
             | Self::ScriptError { .. }
             | Self::SchemaValidationFailed { .. }
             | Self::EffectContractError(_)
@@ -157,6 +161,7 @@ impl ServiceError {
             Self::SchemaValidationFailed { .. }
                 | Self::UnknownOutputPort { .. }
                 | Self::NoArcForPort { .. }
+                | Self::BatchOutputNotArray { .. }
                 | Self::ScriptError { .. }
                 | Self::EffectContractError(_)
                 | Self::TransitionNotFound(_)
@@ -186,6 +191,9 @@ mod tests {
             },
             ServiceError::NoArcForPort {
                 port_name: "x".into(),
+            },
+            ServiceError::BatchOutputNotArray {
+                port_name: "items".into(),
             },
             ServiceError::ScriptError {
                 script_type: "guard".into(),

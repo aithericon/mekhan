@@ -307,8 +307,9 @@ async fn main() {
     #[cfg(feature = "nomad")]
     let _nomad_watcher_handle = {
         let nomad_cfg = petri_nomad::NomadConfig::from_env();
-        if nomad_cfg.is_some() && engine_config.scheduler_backend.as_deref() == Some("nomad") {
-            let nomad_cfg = nomad_cfg.unwrap();
+        if let (Some(nomad_cfg), Some("nomad")) =
+            (nomad_cfg, engine_config.scheduler_backend.as_deref())
+        {
             match petri_nomad::NomadWatcher::new(nomad_cfg.clone(), jetstream.clone()).await {
                 Ok(watcher) => {
                     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
@@ -368,11 +369,13 @@ async fn main() {
     // Start ExecutorWatcher if executor is enabled
     #[cfg(feature = "executor")]
     let _executor_watcher_handle = {
-        if executor_nats_client.is_some() && engine_config.is_executor_enabled() {
+        if let (Some(client), true) =
+            (executor_nats_client.as_ref(), engine_config.is_executor_enabled())
+        {
             let executor_config = petri_executor::ExecutorConfig::from_env().unwrap_or_default();
             match petri_executor::ExecutorWatcher::new(
                 executor_config.clone(),
-                async_nats::jetstream::new(executor_nats_client.as_ref().unwrap().clone()),
+                async_nats::jetstream::new(client.clone()),
             )
             .await
             {

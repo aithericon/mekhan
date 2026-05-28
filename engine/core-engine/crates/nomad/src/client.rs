@@ -14,10 +14,6 @@ use petri_scheduler_bridge::RoutingMeta;
 use crate::models::{DispatchJobRequest, DispatchJobResponse, Job, JobStopResponse};
 use crate::status_mapping;
 
-/// Base64 engine for encoding payloads.
-use base64::Engine as _;
-const BASE64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
-
 /// Nomad scheduler client for parameterized job dispatch.
 ///
 /// Constructed per-net with routing context embedded in Nomad job metadata.
