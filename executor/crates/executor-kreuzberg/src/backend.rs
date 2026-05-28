@@ -118,7 +118,9 @@ async fn execute_single(
     status_cb: StatusCallback,
     cancel: CancellationToken,
 ) -> Result<ExecutionResult, ExecutorError> {
-    let file_path = resolved.target_file.as_ref().unwrap();
+    let file_path = resolved.target_file.as_ref().ok_or_else(|| {
+        ExecutorError::Config("kreuzberg single mode: target_file missing from resolved config".into())
+    })?;
     let file_name = resolved.target_name.as_deref().unwrap_or("file");
     let extraction_config = resolved.config.build_extraction_config();
     let mime = resolved.config.mime_type.as_deref();
