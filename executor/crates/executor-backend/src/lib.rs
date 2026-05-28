@@ -20,5 +20,5 @@ pub mod traits;
 pub use resource::{
     load_resource, load_resource_envelope, try_load_resource, try_load_resource_envelope,
 };
-pub use tail::TailBuffer;
+pub use tail::{TailBuffer, DEFAULT_MAX_OUTPUT_BYTES};
 pub use traits::{EventStream, ExecutionBackend, StatusCallback};

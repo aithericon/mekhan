@@ -1,5 +1,12 @@
 use tokio::io::AsyncReadExt;
 
+/// Default cap on captured stdout/stderr tail size (64 KiB).
+///
+/// Shared by every backend that bounds its output via [`TailBuffer`]
+/// (process, docker, python) and by the worker config default, so the
+/// platform-wide default lives in one place.
+pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024;
+
 /// Ring buffer that captures the last `max_bytes` of an async reader.
 ///
 /// Used to capture stdout/stderr tails without unbounded memory growth.

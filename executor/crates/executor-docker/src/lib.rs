@@ -7,12 +7,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_backend::DEFAULT_MAX_OUTPUT_BYTES;
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext,
 };
-
-/// Default max output capture: 64 KB per stream.
-const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// Container-internal mount point for the run directory.
 pub const CONTAINER_RUN_DIR: &str = "/aithericon";
