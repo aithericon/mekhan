@@ -124,7 +124,7 @@
 	// nodes set `parentId == container.id`). Future container kinds (e.g.
 	// SubWorkflow inline) get added here.
 	function isContainer(t: string | undefined): boolean {
-		return t === 'scope' || t === 'loop' || t === 'timeout';
+		return t === 'scope' || t === 'loop' || t === 'timeout' || t === 'map';
 	}
 	function containerSort<T extends { type: string }>(a: T, b: T): number {
 		if (isContainer(a.type) && !isContainer(b.type)) return -1;

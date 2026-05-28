@@ -411,6 +411,7 @@ pub(crate) mod failure;
 pub(crate) mod human_task;
 pub(crate) mod join;
 pub(crate) mod loop_;
+pub(crate) mod map;
 pub(crate) mod parallel_split;
 pub(crate) mod phase_update;
 pub(crate) mod progress_update;

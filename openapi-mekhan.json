@@ -13528,6 +13528,56 @@
           },
           {
             "type": "object",
+            "description": "Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`\ninto N item tokens (one per element), runs a BODY sub-graph of child\nnodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`\nhandle mechanism as Loop) once per element, gathers the N results, and\nreduces them to one collection token parked at `p_<id>_data`. Downstream\nblocks borrow the gathered collection as `<map_slug>[*].<field>` (the\nRepeater `[*]` machinery generalized to any Array-typed parked producer;\n`<map_slug>.<field>` without `[*]` is a hard `MapRefMissingStar` error).\nThe scatter writes the item namespace ONTO each body token (namespace-\non-token, v1) so body guards / Python read `item.<field>` directly.",
+            "required": [
+              "label",
+              "itemsRef",
+              "resultVar",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "itemVar": {
+                "type": "string",
+                "description": "Identifier the per-item element is bound to on each body token.\nBody guards / Python read `<item_var>.<field>`. Defaults to `item`."
+              },
+              "itemsRef": {
+                "type": "string",
+                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`."
+              },
+              "label": {
+                "type": "string"
+              },
+              "output": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Port",
+                    "description": "Declared shape of one gathered element. Empty fields ⇒ `Any`\nelement. Drives the `<map_slug>[*].<field>` borrow surface."
+                  }
+                ]
+              },
+              "resultVar": {
+                "type": "string",
+                "description": "Field on each body output token whose value becomes the gathered\nelement (the per-iteration result the reduce collects)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "map"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Pass-through control node that marks a named phase on the owning HPI\nprocess. Compiles to a shape transition (forwards the workflow token\nunchanged + emits an `executor-phase`-shaped breadcrumb) followed by a\n`process_log_message` effect. The causality consumer projects it into\n`hpi_processes.config.progress.phases`. Effective only when an upstream\nStart registered a process (`processName`); otherwise a silent no-op.",
             "required": [
               "label",

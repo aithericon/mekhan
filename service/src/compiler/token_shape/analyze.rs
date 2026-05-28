@@ -443,6 +443,31 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
     o
 }
 
+/// Map: parks a gathered COLLECTION at `p_<id>_data`, addressed downstream as
+/// `<map_slug>[*].<field>`. The outbound shape adds `<slug>` as an
+/// `Array(<element>)` namespace alongside the passed-through inbound token,
+/// where `<element>` is the declared `output` port shape (or `Any` when no
+/// fields are declared). The `[*]` borrow surface reuses the Repeater Array
+/// machinery (see `is_parked_producer` + `parse_repeater_ref`).
+pub(crate) fn out_shape_map(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::Map { output, .. } = &node.data else {
+        unreachable!("out_shape_map on non-Map variant");
+    };
+    let elem = match output {
+        Some(p) if !p.fields.is_empty() => {
+            port_to_shape(p, node, "map gathered element (declared output port)")
+        }
+        _ => TokenShape::Any,
+    };
+    let mut o = in_shape.clone();
+    o.insert(
+        &node.slug(),
+        TokenShape::Array(Box::new(elem)),
+        Provenance::new(node, "map gathered collection (`<slug>[*].<field>`)"),
+    );
+    o
+}
+
 /// Sub-workflow: `t_*_join` maps the child's terminal result onto the
 /// workflow token via the declared `output` port. With declared fields
 /// downstream sees exactly those; otherwise the child result is opaque
@@ -691,8 +716,20 @@ pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::Start { .. }
                     | WorkflowNodeData::Loop { .. }
                     | WorkflowNodeData::Join { .. }
+                    | WorkflowNodeData::Map { .. }
             )
     })
+}
+
+/// True if `id` names a `WorkflowNodeData::Map` node. A Map parks a gathered
+/// ARRAY at `p_<map>_data`; downstream borrows must iterate it with a `[*]`
+/// boundary (`<map_slug>[*].<field>`). A bare `<map_slug>.<field>` is a hard
+/// `MapRefMissingStar` error (caught in `resolve_ref` → `guard_readarc_plan`).
+pub(crate) fn is_map_node(graph: &WorkflowGraph, id: &str) -> bool {
+    graph
+        .nodes
+        .iter()
+        .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Map { .. }))
 }
 
 /// True if `id` names a `WorkflowNodeData::Loop` node. Loop counters live in a

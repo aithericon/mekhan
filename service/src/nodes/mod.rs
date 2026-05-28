@@ -34,6 +34,7 @@ pub mod failure;
 pub mod human_task;
 pub mod join;
 pub mod loop_;
+pub mod map;
 pub mod parallel_split;
 pub mod phase_update;
 pub mod progress_update;
@@ -165,6 +166,7 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &human_task::HUMAN_TASK_DECL,
     &join::JOIN_DECL,
     &loop_::LOOP_DECL,
+    &map::MAP_DECL,
     &parallel_split::PARALLEL_SPLIT_DECL,
     &phase_update::PHASE_UPDATE_DECL,
     &progress_update::PROGRESS_UPDATE_DECL,
@@ -194,6 +196,7 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::Join { .. } => "join",
         WorkflowNodeData::Loop { .. } => "loop",
         WorkflowNodeData::Scope { .. } => "scope",
+        WorkflowNodeData::Map { .. } => "map",
         WorkflowNodeData::PhaseUpdate { .. } => "phase_update",
         WorkflowNodeData::ProgressUpdate { .. } => "progress_update",
         WorkflowNodeData::Failure { .. } => "failure",
@@ -248,6 +251,7 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
         | WorkflowNodeData::ParallelSplit { .. }
         | WorkflowNodeData::Join { .. }
         | WorkflowNodeData::Scope { .. }
+        | WorkflowNodeData::Map { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
         | WorkflowNodeData::Trigger { .. }
@@ -516,6 +520,33 @@ mod tests {
         assert!(decl.parks_data_envelope);
         assert!(!decl.is_join);
         assert!(decl.lower.is_some());
+    }
+
+    #[test]
+    fn lookup_by_variant_finds_map() {
+        let data = WorkflowNodeData::Map {
+            label: "m".to_string(),
+            description: None,
+            items_ref: "extract.tasks".to_string(),
+            item_var: "item".to_string(),
+            result_var: "result".to_string(),
+            output: None,
+        };
+        let decl = lookup_by_variant(&data).expect("map registered");
+        assert_eq!(decl.wire_name, "map");
+        assert_eq!(decl.kind, NodeKind::Map);
+        assert!(decl.lowers_to_air);
+        // Map parks the gathered collection at p_<id>_data so downstream
+        // `<slug>[*].<field>` borrows resolve via the standard read-arc pipeline.
+        assert!(decl.parks_data_envelope);
+        assert!(!decl.is_join);
+        assert!(decl.lower.is_some());
+        assert!(decl.validate.is_some());
+        // Derived ports mirror Loop: outer in/out + body_in/body_out handles.
+        let ins = (decl.input_ports)(&data);
+        assert!(ins.iter().any(|p| p.id == "body_out"));
+        let outs = (decl.output_ports)(&data);
+        assert!(outs.iter().any(|p| p.id == "body_in"));
     }
 
     #[test]
@@ -841,6 +872,7 @@ mod tests {
             "human_task",
             "join",
             "loop",
+            "map",
             "parallel_split",
             "phase_update",
             "progress_update",

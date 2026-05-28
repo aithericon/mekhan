@@ -367,6 +367,39 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`
+    /// into N item tokens (one per element), runs a BODY sub-graph of child
+    /// nodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`
+    /// handle mechanism as Loop) once per element, gathers the N results, and
+    /// reduces them to one collection token parked at `p_<id>_data`. Downstream
+    /// blocks borrow the gathered collection as `<map_slug>[*].<field>` (the
+    /// Repeater `[*]` machinery generalized to any Array-typed parked producer;
+    /// `<map_slug>.<field>` without `[*]` is a hard `MapRefMissingStar` error).
+    /// The scatter writes the item namespace ONTO each body token (namespace-
+    /// on-token, v1) so body guards / Python read `item.<field>` directly.
+    #[serde(rename = "map")]
+    Map {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Producer-namespaced reference to the array to scatter, carrying
+        /// exactly one `[*]` boundary at iteration time (resolved through the
+        /// Repeater items-ref machinery), e.g. `extract.tasks`.
+        #[serde(rename = "itemsRef")]
+        items_ref: String,
+        /// Identifier the per-item element is bound to on each body token.
+        /// Body guards / Python read `<item_var>.<field>`. Defaults to `item`.
+        #[serde(rename = "itemVar", default = "default_item_var")]
+        item_var: String,
+        /// Field on each body output token whose value becomes the gathered
+        /// element (the per-iteration result the reduce collects).
+        #[serde(rename = "resultVar")]
+        result_var: String,
+        /// Declared shape of one gathered element. Empty fields ⇒ `Any`
+        /// element. Drives the `<map_slug>[*].<field>` borrow surface.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<Port>,
+    },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token
     /// unchanged + emits an `executor-phase`-shaped breadcrumb) followed by a
@@ -624,6 +657,7 @@ impl WorkflowNodeData {
             | Self::Join { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
+            | Self::Map { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
@@ -655,6 +689,7 @@ impl WorkflowNodeData {
             | Self::Join { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
+            | Self::Map { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
@@ -1129,6 +1164,11 @@ pub enum ToolErrorPolicy {
 
 fn default_max_turns() -> u32 {
     1
+}
+
+/// Default `Map.item_var` — body tokens bind the per-element value as `item`.
+fn default_item_var() -> String {
+    "item".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -2439,7 +2479,7 @@ pub mod dsl {
                 // that behaviour but make it explicit per kind so the
                 // round-trip asymmetry is greppable rather than silent.
                 "phase_update" | "progress_update" | "failure" | "trigger" | "delay"
-                | "timeout" => Err(format!(
+                | "timeout" | "map" => Err(format!(
                     "step '{}' has GUI-only type '{}' which the DSL format does not model",
                     key, step.step_type
                 )),
@@ -2604,9 +2644,12 @@ pub mod dsl {
                 | WorkflowNodeData::ProgressUpdate { .. }
                 | WorkflowNodeData::Failure { .. }
                 | WorkflowNodeData::Delay { .. }
-                | WorkflowNodeData::Timeout { .. } => {
-                    // DSL doesn't model the process-control nodes — GUI-authored
-                    // for now. Same lossy-drop behaviour as triggers.
+                | WorkflowNodeData::Timeout { .. }
+                | WorkflowNodeData::Map { .. } => {
+                    // DSL doesn't model the process-control / container nodes —
+                    // GUI-authored for now. Same lossy-drop behaviour as
+                    // triggers. (Map's body sub-graph + itemsRef/resultVar have
+                    // no DSL schema yet.)
                 }
                 WorkflowNodeData::Agent {
                     model,
