@@ -672,6 +672,7 @@ mod tests {
             description: None,
             max_iterations: 3,
             loop_condition: "i < 3".to_string(),
+            accumulators: vec![],
         };
         assert_eq!(guard_rhai_sources(&loop_), vec!["i < 3"]);
 
@@ -721,6 +722,7 @@ mod tests {
             description: None,
             max_iterations: 1,
             loop_condition: "   ".to_string(),
+            accumulators: vec![],
         };
         assert!(guard_rhai_sources(&blank).is_empty());
     }
@@ -750,6 +752,7 @@ mod tests {
                 description: None,
                 max_iterations: 1,
                 loop_condition: "true".to_string(),
+                accumulators: vec![],
             },
             WorkflowNodeData::Delay {
                 label: "d".to_string(),
