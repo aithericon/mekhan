@@ -520,23 +520,12 @@ mod tests {
     fn make_run_context(spec: ExecutionSpec, timeout: Duration) -> RunContext {
         let seq = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let id = format!("kreuzberg-test-{}-{}", std::process::id(), seq);
-        RunContext {
-            execution_id: id.clone(),
+        RunContext::for_test(
+            id.clone(),
             spec,
-            run_dir: RunDirectory::new(&std::env::temp_dir(), &id),
+            RunDirectory::new(&std::env::temp_dir(), &id),
             timeout,
-            env: HashMap::new(),
-            resolved_env: HashMap::new(),
-            resolved_config: None,
-            resolved_input_storage: HashMap::new(),
-            resolved_output_storage: HashMap::new(),
-            resolved_inline_inputs: HashMap::new(),
-            metadata: HashMap::new(),
-            staged_inputs: HashMap::new(),
-            expected_outputs: HashMap::new(),
-            staged_events: Vec::new(),
-            backend_state: serde_json::Value::Null,
-        }
+        )
     }
 
     fn make_spec(config: serde_json::Value) -> ExecutionSpec {

@@ -855,9 +855,9 @@ mod tests {
     }
 
     fn test_context(base_dir: &PathBuf) -> RunContext {
-        RunContext {
-            execution_id: "test-staging".into(),
-            spec: ProcessConfig {
+        RunContext::for_test(
+            "test-staging",
+            ProcessConfig {
                 command: "echo".into(),
                 args: vec!["hello".into()],
                 env: Default::default(),
@@ -865,20 +865,9 @@ mod tests {
                 inherit_env: true,
             }
             .into_spec(),
-            run_dir: RunDirectory::new(base_dir, "test-staging"),
-            timeout: Duration::from_secs(60),
-            env: HashMap::new(),
-            resolved_env: HashMap::new(),
-            resolved_config: None,
-            resolved_input_storage: HashMap::new(),
-            resolved_output_storage: HashMap::new(),
-            resolved_inline_inputs: HashMap::new(),
-            metadata: HashMap::new(),
-            staged_inputs: HashMap::new(),
-            expected_outputs: HashMap::new(),
-            staged_events: vec![],
-            backend_state: serde_json::Value::Null,
-        }
+            RunDirectory::new(base_dir, "test-staging"),
+            Duration::from_secs(60),
+        )
     }
 
     #[test]
