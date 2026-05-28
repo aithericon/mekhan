@@ -135,7 +135,8 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				type: 'loop',
 				label: 'Loop',
 				maxIterations: 3,
-				loopCondition: 'true'
+				loopCondition: 'true',
+				accumulators: []
 			};
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };

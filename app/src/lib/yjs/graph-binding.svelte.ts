@@ -252,7 +252,9 @@ export class YjsGraphBinding {
 					...base,
 					type: 'loop',
 					maxIterations: (config?.maxIterations as number) ?? 3,
-					loopCondition: (config?.loopCondition as string) ?? 'true'
+					loopCondition: (config?.loopCondition as string) ?? 'true',
+					accumulators:
+						(config?.accumulators as { var: string; init: string; mergeExpr: string }[]) ?? []
 				};
 			case 'scope':
 				return { ...base, type: 'scope' };
@@ -735,6 +737,7 @@ export class YjsGraphBinding {
 			case 'loop':
 				config.set('maxIterations', data.maxIterations);
 				config.set('loopCondition', data.loopCondition);
+				config.set('accumulators', data.accumulators ?? []);
 				break;
 			case 'scope':
 				break;
