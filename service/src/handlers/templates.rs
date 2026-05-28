@@ -234,6 +234,18 @@ pub async fn list_templates(
     qb.push_bind(workspace_id);
     qb.push(" OR t.visibility = 'public')");
 
+    // Private sub-workflows are hidden from the catalogue unless explicitly
+    // enumerated by their owning parent family.
+    match params.owner_template_id {
+        Some(owner) => {
+            qb.push(" AND t.owner_template_id = ");
+            qb.push_bind(owner);
+        }
+        None => {
+            qb.push(" AND t.visibility <> 'private'");
+        }
+    };
+
     if let Some(published) = params.published {
         qb.push(" AND t.published = ");
         qb.push_bind(published);
@@ -267,6 +279,15 @@ pub async fn list_templates(
     cqb.push(" WHERE t.is_latest = TRUE AND (t.workspace_id = ");
     cqb.push_bind(workspace_id);
     cqb.push(" OR t.visibility = 'public')");
+    match params.owner_template_id {
+        Some(owner) => {
+            cqb.push(" AND t.owner_template_id = ");
+            cqb.push_bind(owner);
+        }
+        None => {
+            cqb.push(" AND t.visibility <> 'private'");
+        }
+    };
     if let Some(published) = params.published {
         cqb.push(" AND t.published = ");
         cqb.push_bind(published);
@@ -838,8 +859,9 @@ where
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, parent_id, version,
              is_latest, published, published_at, graph, air_json,
-             interface_json, source_ref, author_id)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11)
+             interface_json, source_ref, author_id,
+             workspace_id, visibility, owner_template_id)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *
         "#,
     )
@@ -854,6 +876,9 @@ where
     .bind(interface_json)
     .bind(source_ref)
     .bind(src.author_id)
+    .bind(src.workspace_id)
+    .bind(&src.visibility)
+    .bind(src.owner_template_id)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -953,8 +978,8 @@ pub async fn new_version(
     // Create new version
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
-        INSERT INTO workflow_templates (id, name, description, base_template_id, parent_id, version, is_latest, graph, author_id)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8)
+        INSERT INTO workflow_templates (id, name, description, base_template_id, parent_id, version, is_latest, graph, author_id, workspace_id, visibility, owner_template_id)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9, $10, $11)
         RETURNING *
         "#,
     )
@@ -966,6 +991,9 @@ pub async fn new_version(
     .bind(new_version)
     .bind(&graph_json)
     .bind(existing.author_id)
+    .bind(existing.workspace_id)
+    .bind(&existing.visibility)
+    .bind(existing.owner_template_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
@@ -1724,6 +1752,7 @@ mod apply_mode_tests {
             updated_at: Utc::now(),
             workspace_id: Uuid::nil(),
             visibility: "workspace".into(),
+            owner_template_id: None,
         }
     }
 

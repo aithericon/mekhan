@@ -299,6 +299,72 @@ async fn subworkflow_pins_child_at_parent_publish() {
     );
 }
 
+/// A `private` child may be embedded only by its owning parent family. The
+/// rightful owner publishes; any other parent is rejected at publish with a
+/// `subworkflow_private_ownership_violation` compile error (deterministic —
+/// no engine). This is the borrow-check for the `pub(self)` visibility tier.
+#[tokio::test]
+async fn private_subworkflow_embeddable_only_by_owner() {
+    let (app, _db) = common::test_app().await;
+
+    // Child Start→End, published so it can be embedded.
+    let child = create_with_graph(&app, "Private Child", &child_graph("pc")).await;
+    publish(&app, child).await;
+
+    // The owner references the child and is pinned as the child's sole owner.
+    let owner =
+        create_with_graph(&app, "Owner", &parent_graph(child, VersionPin::Latest)).await;
+
+    // Mark the child private to the owner family via the visibility endpoint.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{child}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "visibility": "private", "owner_template_id": owner.to_string() })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "privatize child");
+
+    // The owner publishes successfully (it embeds its own private child).
+    let owner_pub = publish(&app, owner).await;
+    assert!(owner_pub["air_json"].is_object(), "owner air populated");
+
+    // A stranger parent referencing the same private child is rejected.
+    let stranger =
+        create_with_graph(&app, "Stranger", &parent_graph(child, VersionPin::Latest)).await;
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/templates/{stranger}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "stranger publish must be rejected"
+    );
+    let body = body_json(resp.into_body()).await;
+    assert!(
+        serde_json::to_string(&body)
+            .unwrap()
+            .contains("subworkflow_private_ownership_violation"),
+        "expected private ownership violation, got: {body}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 2. Real spawn / reply / completion against the live engine
 // ---------------------------------------------------------------------------

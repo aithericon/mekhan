@@ -59,6 +59,12 @@ pub async fn create_instance(
         return Err(ApiError::bad_request("template is not published"));
     }
 
+    if template.visibility == "private" {
+        return Err(ApiError::bad_request(
+            "private sub-workflows can't run standalone; they run embedded in their owning workflow",
+        ));
+    }
+
     let air_json = template
         .air_json
         .clone()

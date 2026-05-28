@@ -25,6 +25,7 @@ use crate::AppState;
 
 const VISIBILITY_WORKSPACE: &str = "workspace";
 const VISIBILITY_PUBLIC: &str = "public";
+const VISIBILITY_PRIVATE: &str = "private";
 
 /// GET /api/v1/workspaces/{id}/tags
 ///
@@ -458,10 +459,13 @@ pub async fn set_template_visibility(
     Path(template_id): Path<Uuid>,
     Json(req): Json<SetVisibilityRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if req.visibility != VISIBILITY_WORKSPACE && req.visibility != VISIBILITY_PUBLIC {
+    if req.visibility != VISIBILITY_WORKSPACE
+        && req.visibility != VISIBILITY_PUBLIC
+        && req.visibility != VISIBILITY_PRIVATE
+    {
         return Err(ApiError::bad_request(format!(
-            "visibility must be '{}' or '{}'",
-            VISIBILITY_WORKSPACE, VISIBILITY_PUBLIC
+            "visibility must be '{}', '{}', or '{}'",
+            VISIBILITY_WORKSPACE, VISIBILITY_PUBLIC, VISIBILITY_PRIVATE
         )));
     }
     let workspace_id = template_workspace(&state.db, template_id)
@@ -472,14 +476,43 @@ pub async fn set_template_visibility(
         .map_err(map_to_api_error)?;
 
     let base_id = template_base_id(&state, template_id).await?;
-    // Flip every row in the version chain so reads land consistently
-    // regardless of which version id the caller had handy.
+
+    // `owner_template_id` is meaningful only for `private`: it pins the single
+    // parent family allowed to embed this sub-workflow. Resolve the caller's id
+    // to its family base and require it to live in the same workspace.
+    let owner: Option<Uuid> = if req.visibility == VISIBILITY_PRIVATE {
+        let owner_input = req.owner_template_id.ok_or_else(|| {
+            ApiError::bad_request("owner_template_id is required when visibility is 'private'")
+        })?;
+        let resolved: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT COALESCE(base_template_id, id) FROM workflow_templates \
+              WHERE id = $1 AND workspace_id = $2",
+        )
+        .bind(owner_input)
+        .bind(workspace_id)
+        .fetch_optional(&state.db)
+        .await?;
+        let owner_family = resolved.map(|(b,)| b).ok_or_else(|| {
+            ApiError::bad_request("owner_template_id must reference a template in this workspace")
+        })?;
+        if owner_family == base_id {
+            return Err(ApiError::bad_request("a template cannot be private to itself"));
+        }
+        Some(owner_family)
+    } else {
+        None
+    };
+
+    // Flip every row in the version chain so reads land consistently regardless
+    // of which version id the caller had handy. `owner_template_id` is cleared
+    // for non-private (the CHECK constraint forbids a dangling owner).
     sqlx::query(
         "UPDATE workflow_templates \
-            SET visibility = $1 \
-          WHERE COALESCE(base_template_id, id) = $2",
+            SET visibility = $1, owner_template_id = $2 \
+          WHERE COALESCE(base_template_id, id) = $3",
     )
     .bind(&req.visibility)
+    .bind(owner)
     .bind(base_id)
     .execute(&state.db)
     .await?;

@@ -3053,6 +3053,13 @@ export interface components {
                 interface_json?: unknown;
                 is_latest: boolean;
                 name: string;
+                /**
+                 * Format: uuid
+                 * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
+                 *     only when `visibility == "private"`. A private sub-workflow may be
+                 *     embedded only by this family and never runs standalone.
+                 */
+                owner_template_id?: string | null;
                 /** Format: uuid */
                 parent_id?: string | null;
                 published: boolean;
@@ -3514,7 +3521,14 @@ export interface components {
             enabled: boolean;
         };
         SetVisibilityRequest: {
-            /** @description `workspace` (default) or `public`. */
+            /**
+             * Format: uuid
+             * @description Required when `visibility == "private"`: the owning parent family
+             *     (any version id; resolved to its base). Ignored otherwise. The
+             *     private sub-workflow may then be embedded only by that family.
+             */
+            owner_template_id?: string | null;
+            /** @description `workspace` (default), `public`, or `private`. */
             visibility: string;
         };
         SignalDispatch: {
@@ -4564,6 +4578,13 @@ export interface components {
             interface_json?: unknown;
             is_latest: boolean;
             name: string;
+            /**
+             * Format: uuid
+             * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
+             *     only when `visibility == "private"`. A private sub-workflow may be
+             *     embedded only by this family and never runs standalone.
+             */
+            owner_template_id?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
             published: boolean;
@@ -7035,6 +7056,13 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Restrict to templates carrying this tag in the user's workspace. */
                 tag?: string | null;
+                /**
+                 * @description Enumerate the private sub-workflow children owned by this parent
+                 *     family (`COALESCE(base_template_id, id)`). When supplied, the listing
+                 *     returns *only* those private children (they're otherwise hidden from
+                 *     the catalogue). When absent, private templates are excluded entirely.
+                 */
+                owner_template_id?: string | null;
             };
             header?: never;
             path?: never;
