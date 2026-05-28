@@ -12,6 +12,7 @@
 	import { untrack } from 'svelte';
 	import { portsEqual } from '$lib/editor/port-utils';
 	import { familyId } from '$lib/editor/template-utils';
+	import { createDebouncedFetcher } from '$lib/editor/debounced-fetcher';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
@@ -161,8 +162,7 @@
 	// the editor never derives locally, so this preview can't drift from what
 	// publish freezes. On fetch failure we surface the error and leave the
 	// existing mapping/output untouched (no destructive prune on transients).
-	let deriveTimer: ReturnType<typeof setTimeout> | null = null;
-	let deriveSeq = 0;
+	const contractFetcher = createDebouncedFetcher();
 	$effect(() => {
 		const fam = data.templateId;
 		const version = data.versionPin?.mode === 'pinned' ? data.versionPin.version : undefined;
@@ -171,37 +171,34 @@
 			contractError = null;
 			return;
 		}
-		if (deriveTimer) clearTimeout(deriveTimer);
-		const seq = ++deriveSeq;
-		deriveTimer = setTimeout(() => {
-			getTemplateIoContract(fam, version)
-				.then((c) => {
-					if (seq !== deriveSeq) return;
-					contractError = null;
-					untrack(() => {
-						inputFields = c.input.fields ?? [];
-						const patch: Partial<SubWorkflowNodeData> = {};
-						if (!portsEqual(data.output, c.output)) {
-							patch.output = c.output;
+		contractFetcher.schedule(async (fresh) => {
+			try {
+				const c = await getTemplateIoContract(fam, version);
+				if (!fresh()) return;
+				contractError = null;
+				untrack(() => {
+					inputFields = c.input.fields ?? [];
+					const patch: Partial<SubWorkflowNodeData> = {};
+					if (!portsEqual(data.output, c.output)) {
+						patch.output = c.output;
+					}
+					if (!readonly) {
+						const valid = new Set(inputFields.map((f) => f.name));
+						const pruned = mappings.filter((m) => valid.has(m.targetField));
+						if (pruned.length !== mappings.length) {
+							patch.inputMapping = pruned;
 						}
-						if (!readonly) {
-							const valid = new Set(inputFields.map((f) => f.name));
-							const pruned = mappings.filter((m) => valid.has(m.targetField));
-							if (pruned.length !== mappings.length) {
-								patch.inputMapping = pruned;
-							}
-						}
-						if (Object.keys(patch).length > 0) {
-							onchange({ ...data, ...patch });
-						}
-					});
-				})
-				.catch((e) => {
-					if (seq !== deriveSeq) return;
-					contractError = String(e);
-					inputFields = [];
+					}
+					if (Object.keys(patch).length > 0) {
+						onchange({ ...data, ...patch });
+					}
 				});
-		}, 250);
+			} catch (e) {
+				if (!fresh()) return;
+				contractError = String(e);
+				inputFields = [];
+			}
+		});
 	});
 
 	function pickTemplate(famId: string) {

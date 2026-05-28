@@ -4,6 +4,7 @@
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { onMount, untrack } from 'svelte';
 	import { portsEqual } from '$lib/editor/port-utils';
+	import { createDebouncedFetcher } from '$lib/editor/debounced-fetcher';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -79,34 +80,30 @@
 	// editor don't flood the endpoint. On failure we fall back to the
 	// backend's default port shape from the descriptor rather than
 	// silently keeping a stale `data.output`.
-	let deriveTimer: ReturnType<typeof setTimeout> | null = null;
-	let deriveSeq = 0;
+	const deriveFetcher = createDebouncedFetcher();
 	$effect(() => {
 		if (outputAuthoring !== 'derived' || readonly) return;
 		const backendType = data.executionSpec.backendType;
 		const cfg = data.executionSpec.config;
-		if (deriveTimer) clearTimeout(deriveTimer);
-		const seq = ++deriveSeq;
-		deriveTimer = setTimeout(() => {
-			deriveBackendOutput(backendType, cfg)
-				.then((port) => {
-					if (seq !== deriveSeq) return;
-					untrack(() => {
-						if (!portsEqual(data.output, port)) {
-							onchange({ ...data, output: port });
-						}
-					});
-				})
-				.catch(() => {
-					if (seq !== deriveSeq) return;
-					untrack(() => {
-						const fallback = defaultOutputPort(backendType);
-						if (!portsEqual(data.output, fallback)) {
-							onchange({ ...data, output: fallback });
-						}
-					});
+		deriveFetcher.schedule(async (fresh) => {
+			try {
+				const port = await deriveBackendOutput(backendType, cfg);
+				if (!fresh()) return;
+				untrack(() => {
+					if (!portsEqual(data.output, port)) {
+						onchange({ ...data, output: port });
+					}
 				});
-		}, 250);
+			} catch {
+				if (!fresh()) return;
+				untrack(() => {
+					const fallback = defaultOutputPort(backendType);
+					if (!portsEqual(data.output, fallback)) {
+						onchange({ ...data, output: fallback });
+					}
+				});
+			}
+		});
 	});
 
 	// Fixed-authoring effect: backend owns the canonical shape, so
