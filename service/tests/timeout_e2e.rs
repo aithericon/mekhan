@@ -40,6 +40,7 @@ use mekhan_service::causality::ingest::start_causality_ingest;
 use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
+use mekhan_service::process::cancel_listener::start_human_cancel_listener;
 
 fn engine_nats_url() -> String {
     std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url())
@@ -57,6 +58,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
         ("PETRI_GLOBAL", "mekhan-causality-ingest"),
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
+        ("HUMAN_CANCEL", "mekhan-human-cancel-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
             let _ = stream.delete_consumer(&format!("{prefix}_{base}")).await;
@@ -87,7 +89,10 @@ impl Drop for TaskHandle {
     }
 }
 
-async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, TaskHandle) {
+async fn spawn_consumers(
+    nats: MekhanNats,
+    db: sqlx::PgPool,
+) -> (TaskHandle, TaskHandle, TaskHandle) {
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -103,6 +108,16 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     // test even though the engine has created it.
     let causality = tokio::spawn(async move {
         start_causality_ingest(c_nats, c_db, c_sub, c_live, None).await;
+    });
+
+    // Cancel listener — consumes engine-fired `human.cancel.>` and flips
+    // hpi_tasks rows to `cancelled`. The test's per-prefix consumer means
+    // we get our own durable cursor; the live dev mekhan's listener still
+    // runs but writes to a different DB.
+    let cancel_nats = nats.clone();
+    let cancel_db = db.clone();
+    let cancel = tokio::spawn(async move {
+        start_human_cancel_listener(cancel_nats, cancel_db).await;
     });
 
     let l_nats = nats;
@@ -123,6 +138,7 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     (
         TaskHandle(causality.abort_handle()),
         TaskHandle(lifecycle.abort_handle()),
+        TaskHandle(cancel.abort_handle()),
     )
 }
 
@@ -380,7 +396,7 @@ async fn timeout_body_wins_completes_done_branch() {
         .expect("nats")
         .with_consumer_prefix(prefix);
     let cleanup_nats = nats.clone();
-    let (_causality, _lifecycle) = spawn_consumers(nats, db.clone()).await;
+    let (_causality, _lifecycle, _cancel) = spawn_consumers(nats, db.clone()).await;
 
     let id = publish_and_start(&app, timeout_graph(60_000)).await;
     let net_id = wait_for_net_id(&db, id, Duration::from_secs(10)).await;
@@ -441,7 +457,7 @@ async fn timeout_timer_wins_drains_body_human_task() {
         .expect("nats")
         .with_consumer_prefix(prefix);
     let cleanup_nats = nats.clone();
-    let (_causality, _lifecycle) = spawn_consumers(nats, db.clone()).await;
+    let (_causality, _lifecycle, _cancel) = spawn_consumers(nats, db.clone()).await;
 
     let id = publish_and_start(&app, timeout_graph(500)).await;
     let net_id = wait_for_net_id(&db, id, Duration::from_secs(10)).await;
@@ -462,15 +478,17 @@ async fn timeout_timer_wins_drains_body_human_task() {
         "timer wins should route to `timeout` branch: {result}"
     );
 
-    // The drain DOES run at the engine level on timer-win — verify by
-    // walking the engine event stream for the timer + drain transitions.
-    // The HumanTaskCancelHandler completes successfully and emits a token
-    // into the drain's done place, but causality/ingest's `hpi_tasks`
-    // projection currently only re-statuses a task when the matching
-    // signal_key arrives on the task's signal place (the /complete path).
-    // human_cancel does not currently flow through that projection seam,
-    // so we don't assert on hpi_tasks.status here — separate service-side
-    // gap, tracked outside this test.
+    // Two layers of assertion — they catch different things:
+    //
+    // 1. **Engine event stream** proves the drain mechanic fired (the timer
+    //    won, the drain transition consumed the in-flight HumanTaskAssigned
+    //    token, the human_cancel effect handler completed). This is the
+    //    petri-net-level guarantee.
+    //
+    // 2. **hpi_tasks.status** proves the BFF projection saw the engine's
+    //    `human.cancel.{net_id}.{place}` publish and flipped the task row to
+    //    `cancelled`. Closed by `process::cancel_listener` — without it, the
+    //    drain runs but the task lingers in the UI inbox forever.
     let events_url = format!("{}/api/nets/{}/events?last=200", engine_url(), net_id);
     let events = reqwest::get(&events_url)
         .await
@@ -498,9 +516,30 @@ async fn timeout_timer_wins_drains_body_human_task() {
         "human_cancel effect must have completed"
     );
 
-    // Silence the unused-binding warning for `task_id`; the future fix
-    // will reinstate the status assertion via this variable.
-    let _ = task_id;
+    // Poll the hpi_tasks projection — the cancel_listener runs in the live
+    // dev mekhan (sharing this PG via :5439) and consumes `human.cancel.>`
+    // from JetStream, so there's a small async gap between the engine firing
+    // human_cancel and the row flipping. 5s is conservative.
+    let task_cancelled_within = Duration::from_secs(5);
+    let task_start = std::time::Instant::now();
+    let final_task_status = loop {
+        let st = task_status(&db, &task_id).await;
+        if st != "pending" {
+            break st;
+        }
+        if task_start.elapsed() > task_cancelled_within {
+            panic!(
+                "task {task_id} still pending {task_cancelled_within:?} after engine \
+                 fired human_cancel — is the dev mekhan running with the cancel_listener?"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    };
+    assert_eq!(
+        final_task_status, "cancelled",
+        "timer-wins must flip the body task to `cancelled` via human.cancel.> listener: \
+         got `{final_task_status}`"
+    );
 
     cleanup_durables(&cleanup_nats).await;
 }

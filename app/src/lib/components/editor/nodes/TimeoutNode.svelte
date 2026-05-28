@@ -27,11 +27,22 @@
 <!--
 	Timeout is a body-container that races a wrapped subgraph against a
 	deadline. Body authoring places child nodes inside its bounds with
-	`parentId == timeout.id`. The compiler routes the inbound token in via
-	`body_in` (source handle, interior-right edge) and back via `body_out`
-	(target handle, interior-left edge). Two outer source handles: `out`
-	(default; fires when the body wins the race) and `timeout` (fires when
-	the timer wins).
+	`parentId == timeout.id` (drag-into / drag-out parenting is enabled in
+	WorkflowCanvas's `isContainer` set).
+
+	Port layout — three edges, three semantics:
+	  • LEFT  (in, target)   — entry
+	  • RIGHT (out, source)  — happy path: body finished before deadline
+	  • BOTTOM (timeout, source, amber-tinted) — exception path: timer won
+	The exception output lives on a different EDGE than the happy path so
+	the two race outcomes are visually unambiguous, matching the "fallout"
+	intuition (timeout drops down, not sideways).
+
+	Body wiring (interior handles, solid-filled to distinguish from the
+	outline-style outer perimeter handles):
+	  • body_in  (interior left, source) — start of watched work
+	  • body_out (interior right, target) — body completion (auto-cancels
+	    the parent timer); arrives via `loop_back` edge type to mirror Loop.
 -->
 <NodeResizer
 	isVisible={selected && !!reportResize}
@@ -54,15 +65,13 @@
 	position={Position.Right}
 	class={workflowNodeHandleClass('timeout')}
 	title="Done — body completed in time"
-	style="top: 35%;"
 />
 <Handle
 	id="timeout"
 	type="source"
-	position={Position.Right}
-	class={workflowNodeHandleClass('timeout')}
+	position={Position.Bottom}
+	class="!h-3 !w-3 !rounded-full !border-2 !border-amber-500 !bg-card"
 	title="Timed out — body did not finish before deadline"
-	style="top: 65%;"
 />
 
 <div

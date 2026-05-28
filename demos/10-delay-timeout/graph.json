@@ -77,7 +77,7 @@
     {
       "id": "end_done",
       "type": "end",
-      "position": { "x": 820, "y": 120 },
+      "position": { "x": 820, "y": 200 },
       "data": {
         "type": "end",
         "label": "Done (in SLA)",
@@ -90,7 +90,7 @@
     {
       "id": "end_timeout",
       "type": "end",
-      "position": { "x": 820, "y": 320 },
+      "position": { "x": 480, "y": 580 },
       "data": {
         "type": "end",
         "label": "Done (SLA expired)",

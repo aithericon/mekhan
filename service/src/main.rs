@@ -157,6 +157,17 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // Engine-initiated human task cancellations. When a Timeout's timer wins
+    // the SLA race, the engine fires `human_cancel` and publishes to
+    // `human.cancel.{net_id}.{place}` — without this listener, hpi_tasks
+    // would stay `pending` forever even though the engine moved on.
+    tokio::spawn(
+        mekhan_service::process::cancel_listener::start_human_cancel_listener(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder

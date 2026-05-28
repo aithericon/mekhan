@@ -119,11 +119,12 @@
 	let edges = $state.raw<Edge[]>(toFlowEdges(graph, readonly));
 
 	// Container kinds — must come before their children in the node array so
-	// Svelte Flow can resolve `parentId` on child mount. Currently `scope`
-	// (free-form grouping) and `loop` (body authoring); future container
-	// kinds (e.g. SubWorkflow inline) get added here.
+	// Svelte Flow can resolve `parentId` on child mount. `scope` is free-form
+	// grouping, `loop` and `timeout` are body authoring (the wrapped child
+	// nodes set `parentId == container.id`). Future container kinds (e.g.
+	// SubWorkflow inline) get added here.
 	function isContainer(t: string | undefined): boolean {
-		return t === 'scope' || t === 'loop';
+		return t === 'scope' || t === 'loop' || t === 'timeout';
 	}
 	function containerSort<T extends { type: string }>(a: T, b: T): number {
 		if (isContainer(a.type) && !isContainer(b.type)) return -1;
