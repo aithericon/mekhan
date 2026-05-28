@@ -1,82 +1,44 @@
 //! Tera context construction + render helpers for the SMTP backend.
 //!
-//! The context this builds mirrors the Python backend's `_AccessibleDict`
-//! globals (see executor-python's runner.rs ~lines 152-193): every staged
-//! `<slug>.json` becomes a top-level Tera variable named `<slug>`, with the
-//! JSON object's fields directly addressable as `slug.field` in templates.
-//! Additionally:
+//! The shared builder in `executor-backend::context` does the heavy lifting:
+//! every staged `<slug>.json` becomes a top-level `slug` variable
+//! (`{{ slug.field }}`), env + resolved secrets land under `env`
+//! (`{{ env.KEY }}`), and run metadata under `metadata` /
+//! `aithericon.execution_id`. SMTP layers two extras on top:
 //!
 //! - The resolved SMTP resource's PUBLIC view (host, port, username,
-//!   from_address — never password) is exposed under the workflow's chosen
-//!   resource alias when the compiler supplies it on the config. Templates
-//!   can write `{{ mail.from_address }}` etc.
-//! - Static per-template constants live under `vars` (`{{ vars.support_url }}`).
-//! - Metadata about the run sits under `aithericon.{execution_id, started_at}`.
+//!   from_address — never password) under the workflow's chosen resource
+//!   alias, so templates can write `{{ mail.from_address }}`. The raw
+//!   `<alias>.json` envelope (which carries the password) is excluded from
+//!   the shared sweep via `reserved_slugs` and replaced by this redacted view.
+//! - Static per-template constants under `vars` (`{{ vars.support_url }}`).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
+use aithericon_executor_backend::context as shared_ctx;
 use aithericon_executor_backend_configs::smtp::ResolvedSmtpResource;
-use aithericon_executor_domain::ExecutorError;
-use tera::Tera;
+use aithericon_executor_domain::{ExecutorError, RunContext};
 
 use crate::outcome::SmtpOutcome;
 
 /// Build the rendering context for one SMTP execution.
 ///
-/// Reads every `<slug>.json` in `inputs_dir`, parses each as JSON, and
-/// inserts it under its slug. Files that don't end in `.json` (e.g. raw
-/// attachments) are skipped — they reach the backend via
-/// `RunContext.staged_inputs` instead.
+/// Delegates the slug-envelope / env / metadata sweep to the shared builder,
+/// reserving `resource_alias` so the password-bearing resource envelope is
+/// not exposed raw, then inserts the redacted resource public view and the
+/// static `vars`.
 pub fn build_context(
-    inputs_dir: &PathBuf,
+    run_context: &RunContext,
     resource_alias: Option<&str>,
     resource: &ResolvedSmtpResource,
     vars: &HashMap<String, String>,
-    execution_id: &str,
 ) -> Result<tera::Context, ExecutorError> {
-    let mut ctx = tera::Context::new();
+    let reserved: Vec<&str> = resource_alias.into_iter().collect();
+    let mut ctx = shared_ctx::build_template_context(run_context, &reserved)?;
 
-    // Walk JSON inputs into the context.
-    let read = std::fs::read_dir(inputs_dir).map_err(|e| {
-        ExecutorError::Config(format!(
-            "smtp template: cannot read inputs dir {}: {e}",
-            inputs_dir.display()
-        ))
-    })?;
-    for entry in read.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        let Some(slug) = name.strip_suffix(".json") else {
-            continue;
-        };
-        // Skip attachment payloads even if some upstream named one with a
-        // `.json` extension — the compiler synthesizes their input names with
-        // a `_att_` prefix so the convention is unambiguous.
-        if slug.starts_with("_att_") {
-            continue;
-        }
-        if !is_tera_ident(slug) {
-            tracing::debug!(slug, "skipping non-identifier slug in smtp template context");
-            continue;
-        }
-        let bytes = std::fs::read(&path).map_err(|e| {
-            ExecutorError::Config(format!("smtp template: cannot read {}: {e}", path.display()))
-        })?;
-        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            ExecutorError::Config(format!(
-                "smtp template: input {} is not valid JSON: {e}",
-                path.display()
-            ))
-        })?;
-        ctx.insert(slug, &value);
-    }
-
-    // Resource public view under the workflow's alias.
+    // Resource public view under the workflow's alias — never the password.
     if let Some(alias) = resource_alias {
-        if is_tera_ident(alias) {
+        if shared_ctx::is_tera_ident(alias) {
             let public = serde_json::json!({
                 "host": resource.host,
                 "port": resource.port,
@@ -90,12 +52,6 @@ pub fn build_context(
     // Static per-template vars.
     ctx.insert("vars", vars);
 
-    // Run metadata.
-    let meta = serde_json::json!({
-        "execution_id": execution_id,
-    });
-    ctx.insert("aithericon", &meta);
-
     Ok(ctx)
 }
 
@@ -105,57 +61,55 @@ pub fn render(
     context: &tera::Context,
     label: &str,
 ) -> Result<String, SmtpOutcome> {
-    let mut tera = Tera::default();
-    // Disable auto-escape so text bodies survive unescaped. HTML escaping
-    // is the responsibility of the *.html.tera author (Tera's default
-    // auto-escape only fires on filenames matching a glob anyway).
-    tera.autoescape_on(vec![]);
-    if let Err(e) = tera.add_raw_template(label, source) {
-        return Err(SmtpOutcome::TemplateRender {
-            file: label.into(),
-            error: e.to_string(),
-        });
-    }
-    tera.render(label, context).map_err(|e| SmtpOutcome::TemplateRender {
+    shared_ctx::render(source, context, label).map_err(|error| SmtpOutcome::TemplateRender {
         file: label.into(),
-        // Tera errors wrap a chain (`source`); flatten so the operator sees
-        // both the rendered location and the underlying cause.
-        error: flatten_tera_error(&e),
+        error,
     })
-}
-
-fn flatten_tera_error(err: &tera::Error) -> String {
-    let mut out = err.to_string();
-    let mut cur: &dyn std::error::Error = err;
-    while let Some(src) = cur.source() {
-        out.push_str(" — ");
-        out.push_str(&src.to_string());
-        cur = src;
-    }
-    out
-}
-
-/// Identifier check matching Tera's variable-name grammar: an ASCII letter or
-/// `_` followed by ASCII letters, digits, or `_`. Used to filter slugs from
-/// the inputs dir — anything outside this set would land as an unreachable
-/// variable that workflow authors can't use anyway.
-fn is_tera_ident(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aithericon_executor_domain::{ExecutionSpec, RunDirectory};
+    use std::time::Duration;
     use tempfile::TempDir;
 
-    fn write_json(dir: &TempDir, name: &str, v: serde_json::Value) {
-        let path = dir.path().join(name);
-        std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
+    /// Build a RunContext whose `inputs_dir` lives under `td`, creating it so
+    /// `<slug>.json` files can be written in.
+    fn ctx_with_inputs(td: &TempDir) -> RunContext {
+        let rc = RunContext {
+            execution_id: "exec-1".into(),
+            spec: ExecutionSpec {
+                backend: "smtp".into(),
+                inputs: vec![],
+                outputs: vec![],
+                config: serde_json::json!({}),
+                config_ref: None,
+            },
+            run_dir: RunDirectory::new(td.path(), "exec-1"),
+            timeout: Duration::from_secs(60),
+            env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
+            metadata: HashMap::new(),
+            staged_inputs: HashMap::new(),
+            expected_outputs: HashMap::new(),
+            staged_events: vec![],
+            backend_state: serde_json::Value::Null,
+        };
+        std::fs::create_dir_all(&rc.run_dir.inputs_dir).unwrap();
+        rc
+    }
+
+    fn write_json(rc: &RunContext, name: &str, v: serde_json::Value) {
+        std::fs::write(
+            rc.run_dir.inputs_dir.join(name),
+            serde_json::to_vec(&v).unwrap(),
+        )
+        .unwrap();
     }
 
     fn fake_resource() -> ResolvedSmtpResource {
@@ -170,23 +124,16 @@ mod tests {
 
     #[test]
     fn slugs_become_top_level_variables() {
-        let dir = TempDir::new().unwrap();
-        write_json(&dir, "intake.json", serde_json::json!({"name": "Ada", "email": "ada@x.io"}));
-        write_json(&dir, "review.json", serde_json::json!({"score": 9}));
+        let td = TempDir::new().unwrap();
+        let rc = ctx_with_inputs(&td);
+        write_json(&rc, "intake.json", serde_json::json!({"name": "Ada", "email": "ada@x.io"}));
+        write_json(&rc, "review.json", serde_json::json!({"score": 9}));
 
         let mut vars = HashMap::new();
-        vars.insert("support".into(), "https://help.example.com".into());
+        vars.insert("support".to_string(), "https://help.example.com".to_string());
 
-        let ctx = build_context(
-            &dir.path().to_path_buf(),
-            Some("mail"),
-            &fake_resource(),
-            &vars,
-            "exec-1",
-        )
-        .unwrap();
+        let ctx = build_context(&rc, Some("mail"), &fake_resource(), &vars).unwrap();
 
-        // intake + review + mail (resource alias) + vars + aithericon
         let rendered = render(
             "Hi {{ intake.name }}, score={{ review.score }}, from={{ mail.from_address }}, help={{ vars.support }}",
             &ctx,
@@ -201,42 +148,51 @@ mod tests {
 
     #[test]
     fn password_not_present_in_resource_view() {
-        let dir = TempDir::new().unwrap();
-        let ctx = build_context(
-            &dir.path().to_path_buf(),
-            Some("mail"),
-            &fake_resource(),
-            &HashMap::new(),
-            "exec-1",
-        )
-        .unwrap();
+        let td = TempDir::new().unwrap();
+        let rc = ctx_with_inputs(&td);
+        let ctx = build_context(&rc, Some("mail"), &fake_resource(), &HashMap::new()).unwrap();
+        // The password field doesn't exist in the public view → render fails.
+        let err = render("{{ mail.password }}", &ctx, "evil.tera").unwrap_err();
+        assert!(matches!(err, SmtpOutcome::TemplateRender { .. }));
+    }
 
-        // Rendering an attempt to access the password must fail because
-        // the field doesn't exist in the public view.
+    #[test]
+    fn raw_resource_envelope_not_exposed() {
+        // Even when the resource is *staged* as mail.json (it is, for
+        // load_resource), the shared sweep must skip it because `mail` is
+        // reserved — only the redacted public view is exposed.
+        let td = TempDir::new().unwrap();
+        let rc = ctx_with_inputs(&td);
+        write_json(&rc, "mail.json", serde_json::json!({"password": "DO-NOT-LEAK"}));
+
+        let ctx = build_context(&rc, Some("mail"), &fake_resource(), &HashMap::new()).unwrap();
         let err = render("{{ mail.password }}", &ctx, "evil.tera").unwrap_err();
         assert!(matches!(err, SmtpOutcome::TemplateRender { .. }));
     }
 
     #[test]
     fn attachment_files_skipped_from_context() {
-        let dir = TempDir::new().unwrap();
-        write_json(&dir, "_att_0.json", serde_json::json!({"ignored": true}));
-        write_json(&dir, "intake.json", serde_json::json!({"name": "Bo"}));
+        let td = TempDir::new().unwrap();
+        let rc = ctx_with_inputs(&td);
+        write_json(&rc, "_att_0.json", serde_json::json!({"ignored": true}));
+        write_json(&rc, "intake.json", serde_json::json!({"name": "Bo"}));
 
-        let ctx = build_context(
-            &dir.path().to_path_buf(),
-            None,
-            &fake_resource(),
-            &HashMap::new(),
-            "exec-1",
-        )
-        .unwrap();
-
+        let ctx = build_context(&rc, None, &fake_resource(), &HashMap::new()).unwrap();
         let ok = render("hi {{ intake.name }}", &ctx, "s.tera").unwrap();
         assert_eq!(ok, "hi Bo");
 
-        // _att_0 was excluded; referencing it errors.
         let err = render("{{ _att_0.ignored }}", &ctx, "e.tera").unwrap_err();
         assert!(matches!(err, SmtpOutcome::TemplateRender { .. }));
+    }
+
+    #[test]
+    fn env_secrets_available_in_smtp_templates() {
+        let td = TempDir::new().unwrap();
+        let mut rc = ctx_with_inputs(&td);
+        rc.resolved_env.insert("UNSUB_TOKEN".into(), "tok-123".into());
+
+        let ctx = build_context(&rc, None, &fake_resource(), &HashMap::new()).unwrap();
+        let out = render("unsub: {{ env.UNSUB_TOKEN }}", &ctx, "body.tera").unwrap();
+        assert_eq!(out, "unsub: tok-123");
     }
 }

@@ -206,7 +206,8 @@ export async function listTemplates(
 	search?: string,
 	published?: boolean,
 	projectId?: string,
-	tag?: string
+	tag?: string,
+	ownerTemplateId?: string
 ): Promise<PaginatedTemplateResponse> {
 	return unwrap(
 		await client.GET('/api/v1/templates', {
@@ -217,7 +218,8 @@ export async function listTemplates(
 					search,
 					published,
 					project_id: projectId,
-					tag
+					tag,
+					owner_template_id: ownerTemplateId
 				}
 			}
 		})
@@ -1148,11 +1150,12 @@ export async function setTemplateTags(templateId: string, tags: string[]): Promi
 
 export async function setTemplateVisibility(
 	templateId: string,
-	visibility: 'workspace' | 'public'
+	visibility: 'workspace' | 'public' | 'private',
+	ownerTemplateId?: string
 ): Promise<void> {
 	const res = await client.PATCH('/api/v1/templates/{id}/visibility', {
 		params: { path: { id: templateId } },
-		body: { visibility }
+		body: { visibility, owner_template_id: ownerTemplateId }
 	});
 	if (res.response.ok) return;
 	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);

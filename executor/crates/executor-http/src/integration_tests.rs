@@ -908,8 +908,8 @@ async fn redirect_not_followed_when_disabled() {
 #[tokio::test]
 async fn prepare_resolves_templates() {
     let backend = HttpBackend::new();
-    let mut config = quick_config("http://{{host}}/api");
-    config.headers = HashMap::from([("X-Id".into(), "{{eid}}".into())]);
+    let mut config = quick_config("http://{{ env.host }}/api");
+    config.headers = HashMap::from([("X-Id".into(), "{{ metadata.eid }}".into())]);
 
     let mut run_ctx = make_http_run_context_with_env(
         config,
@@ -979,10 +979,10 @@ async fn prepare_body_from_input_unknown_errors() {
 #[tokio::test]
 async fn prepare_template_unresolved_errors() {
     let backend = HttpBackend::new();
-    let config = quick_config("http://{{undefined}}/api");
+    let config = quick_config("http://{{ env.undefined }}/api");
 
     let run_ctx = make_http_run_context(config, Duration::from_secs(10));
-    // env is empty, no "undefined" variable
+    // env is empty, so `env.undefined` is not in the Tera context.
 
     let job = dummy_job();
     let result = backend.prepare(&job, run_ctx).await;
@@ -990,8 +990,8 @@ async fn prepare_template_unresolved_errors() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("unresolved template variable"),
-        "expected template error, got: {err}"
+        err.contains("http template 'url'"),
+        "expected labelled template error, got: {err}"
     );
 }
 

@@ -3500,6 +3500,19 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "owner_template_id",
+            "in": "query",
+            "description": "Enumerate the private sub-workflow children owned by this parent\nfamily (`COALESCE(base_template_id, id)`). When supplied, the listing\nreturns *only* those private children (they're otherwise hidden from\nthe catalogue). When absent, private templates are excluded entirely.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
@@ -8691,6 +8704,14 @@
                 "name": {
                   "type": "string"
                 },
+                "owner_template_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Owning parent family base id (`COALESCE(base_template_id, id)`), set\nonly when `visibility == \"private\"`. A private sub-workflow may be\nembedded only by this family and never runs standalone."
+                },
                 "parent_id": {
                   "type": [
                     "string",
@@ -9807,9 +9828,17 @@
           "visibility"
         ],
         "properties": {
+          "owner_template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Required when `visibility == \"private\"`: the owning parent family\n(any version id; resolved to its base). Ignored otherwise. The\nprivate sub-workflow may then be embedded only by that family."
+          },
           "visibility": {
             "type": "string",
-            "description": "`workspace` (default) or `public`."
+            "description": "`workspace` (default), `public`, or `private`."
           }
         }
       },
@@ -12270,6 +12299,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "owner_template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owning parent family base id (`COALESCE(base_template_id, id)`), set\nonly when `visibility == \"private\"`. A private sub-workflow may be\nembedded only by this family and never runs standalone."
           },
           "parent_id": {
             "type": [

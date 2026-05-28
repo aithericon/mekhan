@@ -96,13 +96,14 @@ impl ExecutionBackend for SmtpBackend {
             Err(out) => return Ok(failure_result(out, start.elapsed(), run_context)),
         };
 
-        // Build the Tera context. Reads every <slug>.json under inputs_dir.
+        // Build the Tera context via the shared builder (slug envelopes +
+        // env/secrets + metadata), then SMTP layers the resource public view
+        // and `vars` on top.
         let tera_ctx = match template::build_context(
-            &run_context.run_dir.inputs_dir,
+            run_context,
             config.resource_alias.as_deref(),
             &resource,
             &config.vars,
-            &run_context.execution_id,
         ) {
             Ok(c) => c,
             Err(e) => {

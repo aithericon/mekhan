@@ -127,7 +127,8 @@ impl TriggerDispatcher {
     /// concern, not a startup concern.
     pub async fn hydrate(self: &Arc<Self>) -> Result<usize, TriggerError> {
         let templates: Vec<WorkflowTemplate> = sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates WHERE published = true AND is_latest = true",
+            "SELECT * FROM workflow_templates \
+              WHERE published = true AND is_latest = true AND visibility <> 'private'",
         )
         .fetch_all(&self.db)
         .await
@@ -454,6 +455,16 @@ impl TriggerDispatcher {
             node_id: node_id.to_string(),
             target: "template row missing".to_string(),
         })?;
+
+        // Defense-in-depth: private sub-workflows are excluded from hydration
+        // and never register, so this should be unreachable — but a stale
+        // registration must never spawn a standalone run of a private child.
+        if template.visibility == "private" {
+            return Err(TriggerError::TargetMissing {
+                node_id: node_id.to_string(),
+                target: "private sub-workflow cannot be triggered standalone".to_string(),
+            });
+        }
 
         let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
             .map_err(|e| TriggerError::Database(format!("graph parse: {e}")))?;

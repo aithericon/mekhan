@@ -378,6 +378,54 @@ mod tests {
         );
     }
 
+    /// An HTTP AutomatedStep whose `url` references an upstream producer
+    /// (`{{ prev.amount }}`) collects exactly one `Envelope`-shape borrow
+    /// (resolution `PythonEnvelope`, like SMTP) so the producer envelope is
+    /// staged as `prev.json` and the executor can Tera-render the URL. This
+    /// is the full scanner → planner chain for the HTTP backend.
+    #[test]
+    fn http_step_borrows_upstream_slug_in_url() {
+        let prev = r#"{"id":"prev","type":"automated_step","slug":"prev","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Prev",
+                     "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"},
+                     "output":{"id":"out","label":"Output","fields":[{"name":"amount","label":"Amount","kind":"number","required":false}]}}}"#;
+        let http = r#"{"id":"http_step","type":"automated_step","slug":"http_step","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Call",
+                     "executionSpec":{"backendType":"http","config":{"url":"https://api.example.com/invoices/{{ prev.amount }}","method":"GET"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"inline"}}}"#;
+        let nodes = format!(
+            r#"{prev},{http},
+                {{"id":"start","type":"start","position":{{"x":0,"y":0}},"data":{{"type":"start","label":"Start"}}}},
+                {{"id":"end","type":"end","position":{{"x":0,"y":0}},"data":{{"type":"end","label":"End"}}}}"#
+        );
+        let edges = r#"{"id":"e1","source":"start","target":"prev","type":"sequence"},
+            {"id":"e2","source":"prev","target":"http_step","type":"sequence"},
+            {"id":"e3","source":"http_step","target":"end","type":"sequence"}"#;
+        let full = format!(r#"{{"nodes":[{nodes}],"edges":[{edges}]}}"#);
+        let graph: crate::models::template::WorkflowGraph =
+            serde_json::from_str(&full).expect("deser http-step graph");
+
+        let files = std::collections::HashMap::new();
+        let known = KnownResources::new();
+        let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
+
+        let envelope: Vec<&Borrow> = borrows
+            .iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::PythonEnvelope))
+            .collect();
+        assert_eq!(
+            envelope.len(),
+            1,
+            "expected exactly one Envelope borrow for the HTTP step; got: {borrows:?}"
+        );
+        assert_eq!(envelope[0].consumer_node_id, "http_step");
+        assert_eq!(envelope[0].slug, "prev");
+        assert_eq!(envelope[0].producer_node, "prev");
+    }
+
     /// Round-trip equivalence: chaining the five existing planners through
     /// `collect_borrows` produces the same count of borrows the apply phase
     /// would see today (sanity check against silent loss in conversion).

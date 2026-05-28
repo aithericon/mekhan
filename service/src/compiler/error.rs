@@ -147,6 +147,14 @@ pub enum CompileError {
     #[error("sub-workflow cycle detected: {chain:?}")]
     SubWorkflowCycle { chain: Vec<String> },
 
+    #[error(
+        "sub-workflow node '{node_id}' references private template '{template_id}' owned by a different workflow"
+    )]
+    SubWorkflowPrivateOwnershipViolation {
+        node_id: String,
+        template_id: String,
+    },
+
     #[error("sub-workflow nesting too deep (limit {limit}) at node '{node_id}'")]
     SubWorkflowDepthExceeded { node_id: String, limit: usize },
 
@@ -433,6 +441,9 @@ impl CompileError {
             }
             Self::SubWorkflowUnresolved { .. } => "subworkflow_unresolved",
             Self::SubWorkflowCycle { .. } => "subworkflow_cycle",
+            Self::SubWorkflowPrivateOwnershipViolation { .. } => {
+                "subworkflow_private_ownership_violation"
+            }
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
             Self::ToolChildHasIncomingEdge { .. } => "tool_child_has_incoming_edge",
@@ -484,6 +495,7 @@ impl CompileError {
             | Self::TriggerUnresolvedRef { node_id, .. }
             | Self::TriggerEmptyMappingRequiredFields { node_id, .. }
             | Self::SubWorkflowUnresolved { node_id, .. }
+            | Self::SubWorkflowPrivateOwnershipViolation { node_id, .. }
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
             | Self::ToolChildHasIncomingEdge {
