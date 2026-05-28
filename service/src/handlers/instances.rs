@@ -20,7 +20,8 @@ use crate::models::instance::{
     ListInstancesQuery, WorkflowInstance,
 };
 use crate::models::responses::{InstanceEventsResponse, StepExecutionResponse};
-use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
+use crate::handlers::require_template;
+use crate::models::template::{PaginatedResponse, WorkflowGraph};
 use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
 use crate::AppState;
@@ -46,14 +47,7 @@ pub async fn create_instance(
 ) -> Result<(StatusCode, Json<WorkflowInstance>), ApiError> {
     let created_by = user.subject_as_uuid();
     // Fetch the template (must be published)
-    let template = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(req.template_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let template = require_template(&state.db, req.template_id).await?;
 
     if !template.published {
         return Err(ApiError::bad_request("template is not published"));
@@ -143,7 +137,7 @@ pub async fn create_instance(
 pub async fn list_instances(
     State(state): State<AppState>,
     Query(params): Query<ListInstancesQuery>,
-) -> Json<PaginatedResponse<InstanceListItem>> {
+) -> Result<Json<PaginatedResponse<InstanceListItem>>, ApiError> {
     let offset = (params.page - 1) * params.per_page;
 
     // Resolve the `mode` filter. Missing/empty ⇒ default to live-only (the
@@ -208,19 +202,15 @@ pub async fn list_instances(
     }
     list_query = list_query.bind(params.per_page).bind(offset);
 
-    let items = list_query.fetch_all(&state.db).await.unwrap_or_default();
-    let total = count_query
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,))
-        .0;
+    let items = list_query.fetch_all(&state.db).await?;
+    let total = count_query.fetch_one(&state.db).await?.0;
 
-    Json(PaginatedResponse {
+    Ok(Json(PaginatedResponse {
         items,
         total,
         page: params.page,
         per_page: params.per_page,
-    })
+    }))
 }
 
 /// GET /api/v1/instances/:id
@@ -244,8 +234,7 @@ pub async fn get_instance(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     Ok(Json(instance))
@@ -282,8 +271,7 @@ pub async fn stream_instance(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
     let (net_id, status, db_result) =
         row.ok_or_else(|| ApiError::not_found("instance not found"))?;
 
@@ -436,8 +424,7 @@ pub async fn get_instance_state(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     // 1. Fetch events from JetStream (source of truth)
@@ -520,8 +507,7 @@ pub async fn get_instance_events(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     let events = fetch_events(&state.nats, &instance.net_id)
@@ -571,8 +557,7 @@ pub async fn list_step_executions(
         sqlx::query_as("SELECT id FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .await?;
     if instance_exists.is_none() {
         return Err(ApiError::not_found("instance not found"));
     }
@@ -598,8 +583,7 @@ pub async fn list_step_executions(
     )
     .bind(id)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     let response: Vec<StepExecutionResponse> = rows
         .into_iter()
@@ -661,8 +645,7 @@ pub async fn cancel_instance(
     )
     .bind(id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     if instance.status == "completed" || instance.status == "cancelled" {
@@ -688,8 +671,7 @@ pub async fn cancel_instance(
     )
     .bind(id)
     .fetch_one(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     Ok(Json(instance))
 }

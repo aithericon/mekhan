@@ -14,6 +14,7 @@ use crate::compiler::{
     node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
     node_output_fields, TyDescriptor,
 };
+use crate::handlers::require_template;
 use crate::handlers::template_tests::{run_test, RunContext};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
@@ -165,7 +166,7 @@ pub async fn list_templates(
     State(state): State<AppState>,
     user: AuthUser,
     Query(params): Query<ListTemplatesQuery>,
-) -> Json<PaginatedResponse<WorkflowTemplate>> {
+) -> Result<Json<PaginatedResponse<WorkflowTemplate>>, ApiError> {
     let offset = (params.page - 1) * params.per_page;
     let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
 
@@ -186,8 +187,7 @@ pub async fn list_templates(
         .bind(params.per_page)
         .bind(offset)
         .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+        .await?;
 
         let total: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM workflow_templates \
@@ -197,15 +197,14 @@ pub async fn list_templates(
         .bind(base_id)
         .bind(workspace_id)
         .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
+        .await?;
 
-        return Json(PaginatedResponse {
+        return Ok(Json(PaginatedResponse {
             items,
             total: total.0,
             page: params.page,
             per_page: params.per_page,
-        });
+        }));
     }
 
     // Latest-version listing with composable filters. Use QueryBuilder so
@@ -308,21 +307,19 @@ pub async fn list_templates(
     let items: Vec<WorkflowTemplate> = qb
         .build_query_as()
         .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+        .await?;
 
     let total: (i64,) = cqb
         .build_query_as()
         .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
+        .await?;
 
-    Json(PaginatedResponse {
+    Ok(Json(PaginatedResponse {
         items,
         total: total.0,
         page: params.page,
         per_page: params.per_page,
-    })
+    }))
 }
 
 /// GET /api/v1/templates/{id}
@@ -342,17 +339,7 @@ pub async fn get_template(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
-    let template = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to get template: {e}");
-        ApiError::internal(e.to_string())
-    })?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let template = require_template(&state.db, id).await?;
 
     gate_template_read(&state, &user, &template)?;
     Ok(Json(template))
@@ -417,8 +404,7 @@ pub async fn get_io_contract(
         .bind(v),
     }
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     gate_template_read(&state, &user, &child)?;
@@ -456,14 +442,7 @@ pub async fn get_template_bundle(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TemplateBundle>, ApiError> {
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     gate_template_read(&state, &user, &existing)?;
 
@@ -506,14 +485,7 @@ pub async fn update_template(
     Json(req): Json<UpdateTemplateRequest>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     // Check if template exists and is not published
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     gate_template_write(&state, &user, &existing).await?;
 
@@ -569,14 +541,7 @@ pub async fn delete_template(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     gate_template_write(&state, &user, &existing).await?;
 
@@ -591,8 +556,7 @@ pub async fn delete_template(
         )
         .bind(base_id)
         .fetch_one(&state.db)
-        .await
-        .unwrap_or((0,));
+        .await?;
 
         if running_count.0 > 0 {
             return Err(ApiError::conflict(
@@ -607,8 +571,7 @@ pub async fn delete_template(
         )
         .bind(base_id)
         .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
+        .await?;
 
         let purge_events = state.config.cleanup.purge_events;
         for (_instance_id, net_id) in &instances {
@@ -634,8 +597,7 @@ pub async fn delete_template(
         sqlx::query_as("SELECT id FROM workflow_templates WHERE base_template_id = $1")
             .bind(base_id)
             .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
+            .await?;
 
     // Delete all versions in the template chain
     sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1")
@@ -679,14 +641,7 @@ pub async fn publish_template(
     Query(query): Query<PublishQuery>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     let principal_id = user.subject_as_uuid();
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     gate_template_write(&state, &user, &existing).await?;
 
@@ -862,8 +817,7 @@ where
     sqlx::query("UPDATE workflow_templates SET is_latest = FALSE WHERE id = $1")
         .bind(id)
         .execute(exec)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
     Ok(())
 }
 
@@ -968,8 +922,7 @@ async fn latest_in_chain(
     )
     .bind(base_id)
     .fetch_optional(pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("template chain not found"))
 }
 
@@ -990,14 +943,7 @@ pub async fn new_version(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<WorkflowTemplate>), ApiError> {
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     if !existing.published {
         return Err(ApiError::conflict(
@@ -1040,8 +986,7 @@ pub async fn new_version(
     let mut tx = state
         .db
         .begin()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
 
     // Mark old version as not latest
     mark_not_latest(&mut *tx, id).await?;
@@ -1072,9 +1017,7 @@ pub async fn new_version(
         ApiError::internal(e.to_string())
     })?;
 
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit().await?;
 
     // The previous version is now superseded (is_latest = FALSE). Its triggers
     // must stop firing immediately, not linger in the in-memory dispatcher
@@ -1157,14 +1100,7 @@ pub async fn apply_template(
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     // 1. Resolve the chain head and pick the bootstrap branch. Read-only —
     //    nothing is written until the compile has passed.
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     let base_id = existing.base_template_id.unwrap_or(existing.id);
     let latest = latest_in_chain(&state.db, base_id).await?;
@@ -1243,8 +1179,7 @@ pub async fn apply_template(
     let mut tx = state
         .db
         .begin()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
 
     let applied = match mode {
         ApplyMode::Seed => {
@@ -1274,9 +1209,7 @@ pub async fn apply_template(
         }
     };
 
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    tx.commit().await?;
 
     tracing::info!(
         template_id = %applied.id,
@@ -1336,14 +1269,7 @@ pub async fn list_versions(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<WorkflowTemplate>>, ApiError> {
     // First find the base_template_id for this template
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     let base_id = existing.base_template_id.unwrap_or(existing.id);
 
@@ -1352,8 +1278,7 @@ pub async fn list_versions(
     )
     .bind(base_id)
     .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    .await?;
 
     Ok(Json(versions))
 }
@@ -1386,14 +1311,7 @@ pub async fn get_latest(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     let base_id = existing.base_template_id.unwrap_or(existing.id);
     let latest = latest_in_chain(&state.db, base_id).await?;
@@ -1417,14 +1335,7 @@ pub async fn get_air(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     if !existing.published {
         return Err(ApiError::conflict("template is not published"));
@@ -1454,14 +1365,7 @@ pub async fn compile_preview(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     let graph: WorkflowGraph = serde_json::from_value(existing.graph)
         .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
@@ -1521,14 +1425,7 @@ pub async fn io_stubs(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .ok_or_else(|| ApiError::not_found("template not found"))?;
+    let existing = require_template(&state.db, id).await?;
 
     // Prefer the live Y.Doc graph (what the author sees in the IDE). `diagnostic`
     // is surfaced to the editor so an empty scope explains itself instead of
@@ -1755,8 +1652,7 @@ async fn run_publish_gate(
     )
     .bind(family)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     if tests.is_empty() {
         return Ok(Vec::new());

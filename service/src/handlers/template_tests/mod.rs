@@ -47,8 +47,7 @@ pub async fn family_root(db: &PgPool, template_id: Uuid) -> Result<Uuid, ApiErro
     )
     .bind(template_id)
     .fetch_optional(db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
 
     let (base, id) = row.ok_or_else(|| ApiError::not_found("template not found"))?;
     Ok(base.unwrap_or(id))
@@ -68,8 +67,7 @@ async fn latest_published_in_family(
     )
     .bind(family_id)
     .fetch_optional(db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| {
         ApiError::new(
             StatusCode::PRECONDITION_FAILED,
@@ -101,8 +99,7 @@ pub async fn list_tests(
     )
     .bind(family)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
     Ok(Json(rows))
 }
 
@@ -218,8 +215,7 @@ pub async fn update_test(
     .bind(&req.human_answers)
     .bind(&assertions_val)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("test not found"))?;
 
     Ok(Json(updated))
@@ -248,8 +244,7 @@ pub async fn delete_test(
         .bind(test_id)
         .bind(family)
         .execute(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("test not found"));
     }
@@ -285,8 +280,7 @@ pub async fn run_one(
     .bind(test_id)
     .bind(family)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("test not found"))?;
 
     let template = latest_published_in_family(&state.db, family).await?;
@@ -343,8 +337,7 @@ pub async fn list_runs(
             .bind(test_id)
             .bind(family)
             .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .await?;
     if exists.is_none() {
         return Err(ApiError::not_found("test not found"));
     }
@@ -357,8 +350,7 @@ pub async fn list_runs(
     .bind(test_id)
     .bind(limit as i64)
     .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .await?;
     Ok(Json(rows))
 }
 
@@ -408,8 +400,7 @@ pub async fn promote_instance_to_test(
     )
     .bind(instance_id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -417,8 +408,7 @@ pub async fn promote_instance_to_test(
     )
     .bind(instance.template_id)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::internal("source instance references unknown template"))?;
     let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
         .map_err(|e| ApiError::internal(format!("template graph invalid: {e}")))?;
@@ -504,8 +494,7 @@ async fn extract_start_tokens(
         .bind(net_id)
         .bind(&place_id)
         .fetch_optional(db)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
         let Some(token_data) = row.and_then(|(d,)| d) else {
             // No TokenCreated yet on this place — the source instance never
             // started (or was launched against a different graph version).
@@ -570,8 +559,7 @@ async fn extract_human_answers(
         .bind(net_id)
         .bind(&place_id)
         .fetch_optional(db)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
         if let Some((Some(token_data),)) = row {
             // Engine completion shape: { task_id, data, completed_at }. We
             // care about `data`; a bare-token-shaped payload (no `data` key)
@@ -622,8 +610,7 @@ pub async fn run_all(
     let tests = sqlx::query_as::<_, TemplateTest>(sql)
         .bind(family)
         .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .await?;
 
     let mut runs = Vec::with_capacity(tests.len());
     let (mut passed, mut failed, mut errored) = (0, 0, 0);
