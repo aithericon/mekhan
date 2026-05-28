@@ -14,8 +14,18 @@ use tracing::{debug, error, info};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use crate::Subjects;
+
 pub const TIMER_KV_BUCKET: &str = "PETRI_TIMERS";
-pub const SIGNAL_PREFIX: &str = "petri.signal";
+
+/// Build the NATS KV key for a durable timer.
+///
+/// A typo here would make `cancel` look up a different key than `schedule`
+/// wrote, silently turning cancellation into a no-op — so both paths share
+/// this single helper.
+fn timer_kv_key(net_id: &str, place_id: &str, correlation_id: &uuid::Uuid) -> String {
+    format!("timer.{}.{}.{}", net_id, place_id, correlation_id)
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TimerValue {
@@ -56,12 +66,7 @@ impl TimerClient for NatsTimerClient {
         
         let expires_at_ms = now_ms + request.delay_ms;
         
-        let key = format!(
-            "timer.{}.{}.{}",
-            request.net_id,
-            request.place_id,
-            request.correlation_id
-        );
+        let key = timer_kv_key(&request.net_id, &request.place_id, &request.correlation_id);
 
         let value = TimerValue {
             net_id: request.net_id,
@@ -84,10 +89,7 @@ impl TimerClient for NatsTimerClient {
     }
 
     async fn cancel(&self, request: TimerCancelRequest) -> Result<bool, TimerError> {
-        let key = format!(
-            "timer.{}.{}.{}",
-            request.net_id, request.place_id, request.correlation_id
-        );
+        let key = timer_kv_key(&request.net_id, &request.place_id, &request.correlation_id);
 
         // Check if timer exists before deleting
         match self.kv.get(&key).await {
@@ -121,7 +123,7 @@ pub struct Clockmaster {
 
 impl Clockmaster {
     pub async fn new(js: jetstream::Context) -> Result<Self, String> {
-        Self::with_options(js, TIMER_KV_BUCKET, SIGNAL_PREFIX).await
+        Self::with_options(js, TIMER_KV_BUCKET, Subjects::SIGNAL_PREFIX).await
     }
 
     pub async fn with_options(
