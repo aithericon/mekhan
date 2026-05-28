@@ -1,198 +1,187 @@
+//! Tera templating for the HTTP backend.
+//!
+//! URL, header values, query-param values, and an inline JSON body all
+//! support `{{ … }}` interpolation against the shared rendering context
+//! (`executor-backend::context`): upstream node outputs as `{{ slug.field }}`,
+//! resolved env + secrets as `{{ env.KEY }}`, and run metadata under
+//! `{{ metadata.* }}` / `{{ aithericon.execution_id }}`.
+//!
+//! Config-embedded `{{secret:PATH#field}}` patterns are NOT seen here — the
+//! staging pipeline's `PlanSecretsHook` resolves those into
+//! `run_context.resolved_config` before `prepare()` reads the config, so by
+//! the time Tera runs they are already plaintext.
+
 use std::collections::HashMap;
-use std::path::PathBuf;
 
-use aithericon_executor_domain::ExecutorError;
+use aithericon_executor_backend::context as shared_ctx;
+use aithericon_executor_domain::{ExecutorError, RunContext};
+use serde_json::{Map, Value};
+use tera::Context;
 
-/// Resolve `{{variable}}` placeholders in a string.
-///
-/// Lookup order:
-/// 1. `env` — environment variables from RunContext
-/// 2. `staged_inputs` — file contents (read on demand) for inline/raw inputs
-/// 3. `metadata` — job metadata
-///
-/// Returns `ExecutorError::Config` if any placeholder cannot be resolved.
-pub fn resolve(
-    template: &str,
-    env: &HashMap<String, String>,
-    staged_inputs: &HashMap<String, PathBuf>,
-    metadata: &HashMap<String, String>,
-) -> Result<String, ExecutorError> {
-    let mut result = String::with_capacity(template.len());
-    let mut rest = template;
-
-    while let Some(start) = rest.find("{{") {
-        result.push_str(&rest[..start]);
-        let after_open = &rest[start + 2..];
-        let end = after_open
-            .find("}}")
-            .ok_or_else(|| ExecutorError::Config(format!("unclosed template '{{{{' in: {template}")))?;
-
-        let var_name = after_open[..end].trim();
-        if var_name.is_empty() {
-            return Err(ExecutorError::Config(
-                "empty template variable name".into(),
-            ));
-        }
-
-        let value = lookup(var_name, env, staged_inputs, metadata).ok_or_else(|| {
-            ExecutorError::Config(format!("unresolved template variable: {var_name}"))
-        })?;
-        result.push_str(&value);
-        rest = &after_open[end + 2..];
-    }
-    result.push_str(rest);
-    Ok(result)
+/// Build the HTTP backend's Tera context. HTTP binds no resources today, so
+/// nothing is reserved from the slug-envelope sweep.
+pub fn build_context(run_context: &RunContext) -> Result<Context, ExecutorError> {
+    shared_ctx::build_template_context(run_context, &[])
 }
 
-/// Resolve all values in a HashMap of templates.
-pub fn resolve_map(
+/// Render one template string, mapping a Tera failure to `Config`.
+pub fn render(source: &str, ctx: &Context, label: &str) -> Result<String, ExecutorError> {
+    shared_ctx::render(source, ctx, label)
+        .map_err(|e| ExecutorError::Config(format!("http template '{label}': {e}")))
+}
+
+/// Render every value of a string map (header values, query params). Keys are
+/// static and pass through unrendered.
+pub fn render_map(
     map: &HashMap<String, String>,
-    env: &HashMap<String, String>,
-    staged_inputs: &HashMap<String, PathBuf>,
-    metadata: &HashMap<String, String>,
+    ctx: &Context,
+    site: &str,
 ) -> Result<HashMap<String, String>, ExecutorError> {
     map.iter()
-        .map(|(k, v)| Ok((k.clone(), resolve(v, env, staged_inputs, metadata)?)))
+        .map(|(k, v)| Ok((k.clone(), render(v, ctx, &format!("{site}.{k}"))?)))
         .collect()
 }
 
-fn lookup(
-    name: &str,
-    env: &HashMap<String, String>,
-    staged_inputs: &HashMap<String, PathBuf>,
-    metadata: &HashMap<String, String>,
-) -> Option<String> {
-    // 1. Environment variables
-    if let Some(val) = env.get(name) {
-        return Some(val.clone());
-    }
-    // 2. Staged inputs — read file contents for small inline/raw values
-    if let Some(path) = staged_inputs.get(name) {
-        if let Ok(contents) = std::fs::read_to_string(path) {
-            return Some(contents.trim().to_string());
+/// Render `{{ … }}` in every string leaf of a JSON body, recursing through
+/// arrays and objects. Non-string leaves (numbers, bools, null) pass through
+/// untouched. Interpolated values are always strings — a fully-templated
+/// `"{{ slug.count }}"` yields the string `"3"`, not the number `3`.
+pub fn render_body(body: &Value, ctx: &Context) -> Result<Value, ExecutorError> {
+    render_value(body, ctx, "body")
+}
+
+fn render_value(v: &Value, ctx: &Context, label: &str) -> Result<Value, ExecutorError> {
+    match v {
+        Value::String(s) => Ok(Value::String(render(s, ctx, label)?)),
+        Value::Array(items) => {
+            let rendered: Result<Vec<Value>, _> = items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| render_value(item, ctx, &format!("{label}[{i}]")))
+                .collect();
+            Ok(Value::Array(rendered?))
         }
+        Value::Object(obj) => {
+            let mut out = Map::with_capacity(obj.len());
+            for (k, val) in obj {
+                out.insert(k.clone(), render_value(val, ctx, &format!("{label}.{k}"))?);
+            }
+            Ok(Value::Object(out))
+        }
+        other => Ok(other.clone()),
     }
-    // 3. Metadata
-    if let Some(val) = metadata.get(name) {
-        return Some(val.clone());
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use aithericon_executor_domain::{ExecutionSpec, RunDirectory};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    fn ctx_with_inputs(td: &TempDir) -> RunContext {
+        let rc = RunContext {
+            execution_id: "exec-1".into(),
+            spec: ExecutionSpec {
+                backend: "http".into(),
+                inputs: vec![],
+                outputs: vec![],
+                config: serde_json::json!({}),
+                config_ref: None,
+            },
+            run_dir: RunDirectory::new(td.path(), "exec-1"),
+            timeout: Duration::from_secs(60),
+            env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
+            metadata: HashMap::new(),
+            staged_inputs: HashMap::new(),
+            expected_outputs: HashMap::new(),
+            staged_events: vec![],
+            backend_state: serde_json::Value::Null,
+        };
+        std::fs::create_dir_all(&rc.run_dir.inputs_dir).unwrap();
+        rc
+    }
+
+    fn write_slug(rc: &RunContext, name: &str, v: Value) {
+        std::fs::write(
+            rc.run_dir.inputs_dir.join(name),
+            serde_json::to_vec(&v).unwrap(),
+        )
+        .unwrap();
+    }
 
     #[test]
-    fn no_templates() {
-        let env = HashMap::new();
-        let inputs = HashMap::new();
-        let meta = HashMap::new();
+    fn url_resolves_env_and_slug() {
+        let td = TempDir::new().unwrap();
+        let mut rc = ctx_with_inputs(&td);
+        rc.env.insert("API_HOST".into(), "api.example.com".into());
+        write_slug(&rc, "intake.json", serde_json::json!({"id": "u-7"}));
+
+        let ctx = build_context(&rc).unwrap();
         assert_eq!(
-            resolve("https://example.com/api", &env, &inputs, &meta).unwrap(),
-            "https://example.com/api"
+            render("https://{{ env.API_HOST }}/users/{{ intake.id }}", &ctx, "url").unwrap(),
+            "https://api.example.com/users/u-7"
         );
     }
 
     #[test]
-    fn simple_substitution() {
-        let env = HashMap::from([("host".into(), "api.example.com".into())]);
-        let inputs = HashMap::new();
-        let meta = HashMap::new();
-        assert_eq!(
-            resolve("https://{{host}}/v1", &env, &inputs, &meta).unwrap(),
-            "https://api.example.com/v1"
-        );
+    fn header_values_render() {
+        let td = TempDir::new().unwrap();
+        let mut rc = ctx_with_inputs(&td);
+        rc.resolved_env.insert("TOKEN".into(), "sk-1".into());
+        let ctx = build_context(&rc).unwrap();
+
+        let headers = HashMap::from([("Authorization".to_string(), "Bearer {{ env.TOKEN }}".to_string())]);
+        let out = render_map(&headers, &ctx, "headers").unwrap();
+        assert_eq!(out["Authorization"], "Bearer sk-1");
     }
 
     #[test]
-    fn multiple_variables() {
-        let env = HashMap::from([
-            ("host".into(), "api.example.com".into()),
-            ("version".into(), "v2".into()),
-        ]);
-        let inputs = HashMap::new();
-        let meta = HashMap::from([("user_id".into(), "42".into())]);
-        assert_eq!(
-            resolve(
-                "https://{{host}}/{{version}}/users/{{user_id}}",
-                &env,
-                &inputs,
-                &meta,
-            )
-            .unwrap(),
-            "https://api.example.com/v2/users/42"
-        );
+    fn body_string_leaves_render_recursively() {
+        let td = TempDir::new().unwrap();
+        let rc = ctx_with_inputs(&td);
+        write_slug(&rc, "review.json", serde_json::json!({"amount": 42, "vendor": "Acme"}));
+        let ctx = build_context(&rc).unwrap();
+
+        let body = serde_json::json!({
+            "vendor": "{{ review.vendor }}",
+            "lines": ["amount={{ review.amount }}"],
+            "count": 1,
+            "active": true
+        });
+        let out = render_body(&body, &ctx).unwrap();
+        assert_eq!(out["vendor"], "Acme");
+        assert_eq!(out["lines"][0], "amount=42");
+        // Non-string leaves pass through untouched.
+        assert_eq!(out["count"], 1);
+        assert_eq!(out["active"], true);
     }
 
     #[test]
     fn unresolved_variable_errors() {
-        let env = HashMap::new();
-        let inputs = HashMap::new();
-        let meta = HashMap::new();
-        let err = resolve("https://{{host}}/api", &env, &inputs, &meta).unwrap_err();
-        assert!(err.to_string().contains("unresolved template variable: host"));
+        let td = TempDir::new().unwrap();
+        let rc = ctx_with_inputs(&td);
+        let ctx = build_context(&rc).unwrap();
+        let err = render("https://{{ env.MISSING }}/x", &ctx, "url").unwrap_err();
+        assert!(
+            err.to_string().contains("http template 'url'"),
+            "expected labelled template error, got: {err}"
+        );
     }
 
     #[test]
-    fn unclosed_template_errors() {
-        let env = HashMap::new();
-        let inputs = HashMap::new();
-        let meta = HashMap::new();
-        let err = resolve("https://{{host/api", &env, &inputs, &meta).unwrap_err();
-        assert!(err.to_string().contains("unclosed template"));
-    }
-
-    #[test]
-    fn whitespace_trimmed_in_variable_name() {
-        let env = HashMap::from([("host".into(), "example.com".into())]);
-        let inputs = HashMap::new();
-        let meta = HashMap::new();
+    fn plain_url_passes_through() {
+        let td = TempDir::new().unwrap();
+        let rc = ctx_with_inputs(&td);
+        let ctx = build_context(&rc).unwrap();
         assert_eq!(
-            resolve("https://{{ host }}/api", &env, &inputs, &meta).unwrap(),
+            render("https://example.com/api", &ctx, "url").unwrap(),
             "https://example.com/api"
         );
-    }
-
-    #[test]
-    fn staged_input_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("user_id");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(f, "user-42").unwrap();
-
-        let env = HashMap::new();
-        let inputs = HashMap::from([("user_id".into(), path)]);
-        let meta = HashMap::new();
-        assert_eq!(
-            resolve("https://api.example.com/users/{{user_id}}", &env, &inputs, &meta).unwrap(),
-            "https://api.example.com/users/user-42"
-        );
-    }
-
-    #[test]
-    fn lookup_priority_env_first() {
-        let env = HashMap::from([("key".into(), "from_env".into())]);
-        let inputs = HashMap::new();
-        let meta = HashMap::from([("key".into(), "from_meta".into())]);
-        assert_eq!(
-            resolve("{{key}}", &env, &inputs, &meta).unwrap(),
-            "from_env"
-        );
-    }
-
-    #[test]
-    fn resolve_map_works() {
-        let env = HashMap::from([("port".into(), "8080".into())]);
-        let inputs = HashMap::new();
-        let meta = HashMap::new();
-        let map = HashMap::from([
-            ("Host".into(), "{{port}}".into()),
-            ("Static".into(), "value".into()),
-        ]);
-        let resolved = resolve_map(&map, &env, &inputs, &meta).unwrap();
-        assert_eq!(resolved["Host"], "8080");
-        assert_eq!(resolved["Static"], "value");
     }
 }

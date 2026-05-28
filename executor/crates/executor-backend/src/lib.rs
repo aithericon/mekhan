@@ -10,6 +10,7 @@
 //! `executor-python`, `executor-llm`, `executor-kreuzberg`,
 //! `executor-postgres`, `executor-file-ops`.
 
+pub mod context;
 pub mod outputs;
 pub mod resolve;
 pub mod resource;
