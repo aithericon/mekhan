@@ -641,13 +641,22 @@ impl State {
     }
 
     /// On terminal lifecycle, any row still `Pending`/`Running` is closed.
-    /// Maps `NetCompleted` → Completed (the net reached an End), `NetFailed`
-    /// → Failed, `NetCancelled` → Skipped. Started-but-not-finished rows
-    /// get a `completed_at` so duration math works.
+    /// Maps `NetFailed` → Failed; `NetCompleted`/`NetCancelled` → Skipped.
+    ///
+    /// A node still open at `NetCompleted` is in-flight work that a *different*
+    /// branch superseded — e.g. a Timeout drains its body HumanTask when the
+    /// timer wins, then routes to an End and the net completes. That node never
+    /// produced its own output (its normal path marks it `Completed` at the
+    /// data_port/terminal deposit), so it is NOT `Completed` — it was abandoned,
+    /// same as under a whole-net cancel. Without this arm the row stayed stuck
+    /// at `Running` forever (the editor badge never left the spinner).
+    /// Started-but-not-finished rows get a `completed_at` so duration math works.
     fn close_open_rows(&mut self, ev: &DomainEvent, ts: DateTime<Utc>, _seq: u64) {
         let close_status = match ev {
             DomainEvent::NetFailed { .. } => StepStatus::Failed,
-            DomainEvent::NetCancelled { .. } => StepStatus::Skipped,
+            DomainEvent::NetCompleted { .. } | DomainEvent::NetCancelled { .. } => {
+                StepStatus::Skipped
+            }
             _ => return,
         };
         for row in self.rows.values_mut() {
@@ -1327,6 +1336,49 @@ mod tests {
         assert_eq!(a_row.status, StepStatus::Failed);
         // `e` was never reached → Skipped (no entry token, no fire).
         assert_eq!(e_row.status, StepStatus::Skipped);
+    }
+
+    /// Regression: a node left `Running` when the net completes via another
+    /// branch (e.g. a Timeout drains its body HumanTask, then the `timeout`
+    /// branch routes to an End → `NetCompleted`) must be closed as `Skipped`,
+    /// not stuck at `Running` and not falsely `Completed`. Before the fix
+    /// `close_open_rows` returned early on `NetCompleted`, so the editor's
+    /// node badge spun forever.
+    #[test]
+    fn projector_net_completed_closes_open_running_rows_skipped() {
+        let reg = three_node_registry();
+        let events = vec![
+            token_created(0, 100, place("p_s_ready"), unit_token()),
+            fired(
+                1,
+                101,
+                trans("t_s_park"),
+                vec![
+                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    // a.entry — opens a's row (Pending).
+                    (place("p_s_main"), unit_token()),
+                ],
+                vec![],
+            ),
+            // `a` fires an owned transition but never deposits to its data_port
+            // → Pending→Running, never completes (mimics a HumanTask awaiting a
+            // signal that a wrapping Timeout later drains).
+            fired(2, 102, trans("t_a_park"), vec![], vec![]),
+            // The net completes via the other (timeout) branch.
+            net_completed(3, 103),
+        ];
+
+        let rows = project_step_executions(&events, &reg);
+        let a_row = rows.iter().find(|r| r.node_id == "a").expect("a row");
+        assert_eq!(
+            a_row.status,
+            StepStatus::Skipped,
+            "open Running row at NetCompleted must close as Skipped, not stay Running"
+        );
+        assert!(
+            a_row.completed_at.is_some(),
+            "closed row gets completed_at so duration math works"
+        );
     }
 
     #[test]

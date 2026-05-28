@@ -41,6 +41,7 @@ use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::process::cancel_listener::start_human_cancel_listener;
+use mekhan_service::projections::step_executions::start_step_executions_ingest;
 
 fn engine_nats_url() -> String {
     std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url())
@@ -57,6 +58,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
     for (stream_name, base) in [
         ("PETRI_GLOBAL", "mekhan-causality-ingest"),
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
+        ("PETRI_GLOBAL", "mekhan-step-executions"),
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
         ("HUMAN_CANCEL", "mekhan-human-cancel-ingest"),
     ] {
@@ -92,7 +94,7 @@ impl Drop for TaskHandle {
 async fn spawn_consumers(
     nats: MekhanNats,
     db: sqlx::PgPool,
-) -> (TaskHandle, TaskHandle, TaskHandle) {
+) -> (TaskHandle, TaskHandle, TaskHandle, TaskHandle) {
     let kv = nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -120,6 +122,16 @@ async fn spawn_consumers(
         start_human_cancel_listener(cancel_nats, cancel_db).await;
     });
 
+    // Step-executions projection — folds the engine event log into per-node
+    // rows (`step_execution` table) that back the editor's node runtime badge.
+    // This is what proves a drained body node leaves `running` once the net
+    // completes via the timeout branch.
+    let steps_nats = nats.clone();
+    let steps_db = db.clone();
+    let steps = tokio::spawn(async move {
+        start_step_executions_ingest(steps_nats, steps_db).await;
+    });
+
     let l_nats = nats;
     let l_db = db;
     let l_sub = sub_mgr;
@@ -139,6 +151,7 @@ async fn spawn_consumers(
         TaskHandle(causality.abort_handle()),
         TaskHandle(lifecycle.abort_handle()),
         TaskHandle(cancel.abort_handle()),
+        TaskHandle(steps.abort_handle()),
     )
 }
 
@@ -474,7 +487,7 @@ async fn timeout_body_wins_completes_done_branch() {
         .expect("nats")
         .with_consumer_prefix(prefix);
     let cleanup_nats = nats.clone();
-    let (_causality, _lifecycle, _cancel) = spawn_consumers(nats, db.clone()).await;
+    let (_causality, _lifecycle, _cancel, _steps) = spawn_consumers(nats, db.clone()).await;
 
     let id = publish_and_start(&app, timeout_graph(60_000)).await;
     let net_id = wait_for_net_id(&db, id, Duration::from_secs(10)).await;
@@ -535,7 +548,7 @@ async fn timeout_timer_wins_drains_body_human_task() {
         .expect("nats")
         .with_consumer_prefix(prefix);
     let cleanup_nats = nats.clone();
-    let (_causality, _lifecycle, _cancel) = spawn_consumers(nats, db.clone()).await;
+    let (_causality, _lifecycle, _cancel, _steps) = spawn_consumers(nats, db.clone()).await;
 
     let id = publish_and_start(&app, timeout_graph(500)).await;
     let net_id = wait_for_net_id(&db, id, Duration::from_secs(10)).await;
@@ -654,7 +667,7 @@ async fn timeout_drains_mid_body_human_task() {
         .expect("nats")
         .with_consumer_prefix(prefix);
     let cleanup_nats = nats.clone();
-    let (_causality, _lifecycle, _cancel) = spawn_consumers(nats, db.clone()).await;
+    let (_causality, _lifecycle, _cancel, _steps) = spawn_consumers(nats, db.clone()).await;
 
     let id = publish_and_start(&app, timeout_delay_then_human_graph(3_000)).await;
     let net_id = wait_for_net_id(&db, id, Duration::from_secs(10)).await;
@@ -732,6 +745,59 @@ async fn timeout_drains_mid_body_human_task() {
     assert_eq!(
         final_task_status, "cancelled",
         "mid-body review must flip to `cancelled` on timeout: got `{final_task_status}`"
+    );
+
+    // Node runtime projection (the seam behind the editor's per-node badge):
+    // the drained `review` node must NOT stay stuck at `running` once the net
+    // completes via the timeout branch — it closes as `skipped` (superseded
+    // in-flight work). Regression guard for the `close_open_rows` NetCompleted
+    // gap. The step-executions consumer re-projects on each event, so poll
+    // until it has folded the terminal NetCompleted.
+    let node_closed_within = Duration::from_secs(5);
+    let node_start = std::time::Instant::now();
+    let review_status = loop {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/v1/instances/{id}/step-executions"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_success(),
+            "list step-executions: {}",
+            resp.status()
+        );
+        let rows = body_json(resp.into_body()).await;
+        // Latest iteration for `review` (one row here) — mirrors the badge,
+        // which reads the last execution.
+        let status = rows.as_array().and_then(|rs| {
+            rs.iter()
+                .filter(|r| r["node_id"] == json!("review"))
+                .next_back()
+                .and_then(|r| r["status"].as_str().map(str::to_string))
+        });
+        if let Some(s) = &status {
+            if s != "running" {
+                break s.clone();
+            }
+        }
+        if node_start.elapsed() > node_closed_within {
+            panic!(
+                "review node step-execution still `running` (or missing: {status:?}) \
+                 {node_closed_within:?} after NetCompleted — close_open_rows regression?"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    };
+    assert_eq!(
+        review_status, "skipped",
+        "drained body node must close as `skipped` on NetCompleted, not stay `running`: \
+         got `{review_status}`"
     );
 
     cleanup_durables(&cleanup_nats).await;
