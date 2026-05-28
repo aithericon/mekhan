@@ -1,5 +1,9 @@
 {
   "definitions": {
+    "Ctrl__join": {
+      "additionalProperties": true,
+      "type": "object"
+    },
     "Ctrl__start": {
       "additionalProperties": true,
       "type": "object"
@@ -10,6 +14,66 @@
     },
     "Ctrl__work_b": {
       "additionalProperties": true,
+      "type": "object"
+    },
+    "Data__join": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "shouted": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "Data__start": {
@@ -1262,6 +1326,12 @@
       "type": "state"
     },
     {
+      "id": "p_join_data",
+      "name": "Join - Parked data",
+      "token_schema": "#/definitions/Data__join",
+      "type": "state"
+    },
+    {
       "id": "p_join_output",
       "name": "Join - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -2030,7 +2100,7 @@
         }
       ],
       "logic": {
-        "source": "let result = in_0; for k in in_1.keys() { result[k] = in_1[k]; } #{ output: result }",
+        "source": "let result = in_0; for k in in_1.keys() { result[k] = in_1[k]; } #{ output: result, data: result }",
         "type": "rhai"
       },
       "name": "Join - Join",
@@ -2038,6 +2108,11 @@
         {
           "cardinality": "single",
           "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "data",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -2053,6 +2128,11 @@
         {
           "place": "p_join_output",
           "port": "output",
+          "weight": 1
+        },
+        {
+          "place": "p_join_data",
+          "port": "data",
           "weight": 1
         }
       ]

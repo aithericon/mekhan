@@ -38,6 +38,7 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // 06-subworkflow: needs publish-time child resolution; intentionally skipped.
     "07-ocr-classify-extract",
     "08-failure-handling",
+    "10-delay-timeout",
 ];
 
 fn repo_root() -> PathBuf {
@@ -195,6 +196,11 @@ fn snapshot_07_ocr_classify_extract() {
 #[test]
 fn snapshot_08_failure_handling() {
     run("08-failure-handling");
+}
+
+#[test]
+fn snapshot_10_delay_timeout() {
+    run("10-delay-timeout");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
