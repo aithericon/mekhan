@@ -12,7 +12,7 @@ use crate::compiler::validate::{
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
-use crate::models::template::{WorkflowGraph, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowGraph, WorkflowNode, WorkflowNodeData};
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
 use aithericon_sdk::Context;
@@ -169,6 +169,12 @@ pub struct ResolvedChild {
     pub resolved_version: i32,
     /// Stable child template id (spawn label / provenance).
     pub template_id: String,
+    /// The child's Start node `initial` Port — its user-declared input
+    /// contract. When this child is referenced as an agent tool, these
+    /// fields become the LLM-facing `input_schema`. Empty fields ⇒ the
+    /// agent falls back to a permissive object schema. Extracted from the
+    /// child's high-level graph at resolution time (`resolve_subworkflow_air`).
+    pub input_contract: Port,
 }
 
 /// Per-`SubWorkflow`-node resolved child AIR. Empty for every compile path
@@ -4026,6 +4032,7 @@ mod tests {
                 }),
                 resolved_version: 1,
                 template_id: child_id.to_string(),
+                input_contract: Port::empty_input(),
             },
         );
 
