@@ -428,13 +428,18 @@ impl JobExecutor {
 
                 // Agent transcript side-channel: persist the new cumulative
                 // conversation blob off-token. The engine ships the per-turn
-                // write key in the config_ref overlay (`_history_write_key`)
-                // and the base + pending turns as staged inputs (`history`,
-                // `pending`); here we fold in the assistant turn the model
-                // just produced and write `base + pending + [assistant]` to
-                // the per-turn key. The executor is the SOLE transcript writer
-                // (the engine's transition Rhai is replay-sensitive and has no
-                // S3). All generic JSON — no coupling to LLM config types.
+                // write key in the config_ref overlay (`_history_write_key`).
+                // We persist the FULL conversation the model saw this turn —
+                // system + the resolved user prompt + accumulated history +
+                // this turn's pending delta — sourced from the resolved LLM
+                // config the backend stashed in `backend_state` (so
+                // `{{input:...}}` placeholders + the prompt borrow are already
+                // materialised), then fold in the assistant turn it produced.
+                // On turn > 0 the compiler nulls system_prompt/prompt (they
+                // already head `history` from the prior blob), so they land
+                // exactly once. The executor is the SOLE transcript writer
+                // (the engine's transition Rhai is replay-sensitive, no S3).
+                // All generic JSON — no coupling to LLM config types.
                 if matches!(exec_result.outcome, ExecutionOutcome::Success) {
                     if let (Some(store), Some(write_key)) = (
                         self.artifact_store.as_ref(),
@@ -444,26 +449,25 @@ impl JobExecutor {
                             .get("_history_write_key")
                             .and_then(|v| v.as_str()),
                     ) {
+                        let cfg = &run_context.backend_state;
                         let mut transcript: Vec<serde_json::Value> = Vec::new();
-                        for input_name in ["history", "pending"] {
-                            if let Some(path) = run_context.staged_inputs.get(input_name) {
-                                match tokio::fs::read(path).await {
-                                    Ok(bytes) => match serde_json::from_slice(&bytes) {
-                                        Ok(serde_json::Value::Array(items)) => {
-                                            transcript.extend(items)
-                                        }
-                                        Ok(_) | Err(_) => debug!(
-                                            %execution_id,
-                                            input = input_name,
-                                            "transcript input not a JSON array, skipping"
-                                        ),
-                                    },
-                                    Err(e) => debug!(
-                                        %execution_id,
-                                        input = input_name,
-                                        "read transcript input failed: {e}"
-                                    ),
-                                }
+                        if let Some(serde_json::Value::String(sys)) = cfg.get("system_prompt") {
+                            if !sys.is_empty() {
+                                transcript.push(
+                                    serde_json::json!({ "role": "system", "content": sys }),
+                                );
+                            }
+                        }
+                        if let Some(serde_json::Value::String(prompt)) = cfg.get("prompt") {
+                            if !prompt.is_empty() {
+                                transcript.push(
+                                    serde_json::json!({ "role": "user", "content": prompt }),
+                                );
+                            }
+                        }
+                        for field in ["history", "pending"] {
+                            if let Some(serde_json::Value::Array(items)) = cfg.get(field) {
+                                transcript.extend(items.iter().cloned());
                             }
                         }
                         // Build the assistant turn from the LLM result's

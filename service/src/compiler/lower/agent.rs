@@ -316,9 +316,20 @@ fn lower_agent_loop(
     let storage_key_esc = rhai_str_escape(&storage_key);
     let write_key_expr =
         format!(r#""instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json""#);
-    let config_ref_rhai = format!(
-        r#"#{{ "storage_path": "{storage_key_esc}", "overlay": #{{ "history": "{{{{input:history}}}}", "pending": "{{{{input:pending}}}}", "_history_write_key": {write_key_expr} }} }}"#
+    // Build the overlay as a Rhai statement (`ov`) so we can conditionally
+    // null `system_prompt` + `prompt` on turns > 0: by then those two opening
+    // messages already sit at the head of `history` (read back from the prior
+    // turn's cumulative blob), so re-sending them via the static config would
+    // duplicate them. On turn 0 they stand — the conversation's system + user
+    // turns. The worker persists the FULL transcript (system + user + history
+    // + pending + assistant) by reading the resolved config from
+    // `backend_state`, so the blob is the complete conversation, not just the
+    // loop's tool turns.
+    let overlay_build = format!(
+        r#"let ov = #{{ "history": "{{{{input:history}}}}", "pending": "{{{{input:pending}}}}", "_history_write_key": {write_key_expr} }}; if s.turn > 0 {{ ov.system_prompt = (); ov.prompt = ""; }}"#
     );
+    let config_ref_rhai = r#"#{ "storage_path": "STORAGE_KEY", "overlay": ov }"#
+        .replace("STORAGE_KEY", &storage_key_esc);
 
     // Quote the optional stop_when as a Rhai sub-expression. Empty/None
     // canonicalises to `false` so the route guards can blindly OR it in
@@ -448,7 +459,7 @@ fn lower_agent_loop(
     // clear it on the parked state: the worker folds it into the turn-N blob
     // (which next turn reads as its base), so it must not be re-sent.
     .logic_rhai(format!(
-        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ {overlay_build} d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 
