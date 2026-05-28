@@ -10,6 +10,8 @@
 		type Template
 	} from '$lib/api/client';
 	import { untrack } from 'svelte';
+	import { portsEqual } from '$lib/editor/port-utils';
+	import { familyId } from '$lib/editor/template-utils';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
@@ -52,12 +54,6 @@
 	// the borrow resolver / variable picker see the child's true return shape.
 	let inputFields = $state<PortField[]>([]);
 	let contractError = $state<string | null>(null);
-
-	// `listTemplates(published=true)` returns the latest published row per
-	// family; the stable family id we persist is `base_template_id ?? id`.
-	function familyId(t: Template): string {
-		return t.base_template_id ?? t.id;
-	}
 
 	// The picker offers the workspace's public/shared templates PLUS this
 	// workflow's own private children (hidden from the catalogue, so fetched
@@ -207,18 +203,6 @@
 				});
 		}, 250);
 	});
-
-	function portsEqual(a: Port | undefined, b: Port): boolean {
-		if (!a) return false;
-		if (a.id !== b.id || a.label !== b.label) return false;
-		const af = a.fields ?? [];
-		const bf = b.fields ?? [];
-		if (af.length !== bf.length) return false;
-		for (let i = 0; i < af.length; i++) {
-			if (af[i].name !== bf[i].name || af[i].kind !== bf[i].kind) return false;
-		}
-		return true;
-	}
 
 	function pickTemplate(famId: string) {
 		onchange({ ...data, templateId: famId });

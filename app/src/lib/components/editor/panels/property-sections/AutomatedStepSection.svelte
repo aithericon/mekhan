@@ -3,6 +3,7 @@
 	import type { components } from '$lib/api/schema';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { onMount, untrack } from 'svelte';
+	import { portsEqual } from '$lib/editor/port-utils';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
@@ -121,28 +122,6 @@
 			}
 		});
 	});
-
-	function portsEqual(a: Port | undefined, b: Port): boolean {
-		if (!a) return false;
-		if (a.id !== b.id || a.label !== b.label) return false;
-		const af = a.fields ?? [];
-		const bf = b.fields ?? [];
-		if (af.length !== bf.length) return false;
-		for (let i = 0; i < af.length; i++) {
-			const x = af[i];
-			const y = bf[i];
-			if (
-				x.name !== y.name ||
-				x.kind !== y.kind ||
-				x.label !== y.label ||
-				(x.required ?? false) !== (y.required ?? false) ||
-				(x.description ?? null) !== (y.description ?? null)
-			) {
-				return false;
-			}
-		}
-		return true;
-	}
 
 	function handleBackendTypeChange(backendType: ExecutionBackendType) {
 		const decl = getCachedBackend(backendType);
