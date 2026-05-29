@@ -147,6 +147,8 @@ pub(crate) async fn run_completion(
             role: Role::System,
             content: system_prompt.clone(),
             images: vec![],
+            tool_call_id: None,
+            tool_calls: vec![],
         });
     }
     let user_images: Vec<ImageData> = req
@@ -161,6 +163,8 @@ pub(crate) async fn run_completion(
         role: Role::User,
         content: req.prompt.clone(),
         images: user_images,
+        tool_call_id: None,
+        tool_calls: vec![],
     });
 
     let response_format = req.response_format.unwrap_or(ResponseFormat::Text);

@@ -133,6 +133,8 @@ pub async fn run_agent_loop(
             role: Role::Assistant,
             content: assistant_tool_summary,
             images: vec![],
+            tool_call_id: None,
+            tool_calls: vec![],
         });
 
         for (tc, result) in response.tool_calls.iter().zip(dispatch_results.iter()) {
@@ -161,6 +163,8 @@ pub async fn run_agent_loop(
                 role: Role::User,
                 content: format!("[tool_result call_id={} name={}]\n{}", tc.id, tc.name, content),
                 images: vec![],
+                tool_call_id: None,
+                tool_calls: vec![],
             });
 
             sse_emit(sse_resolved);
