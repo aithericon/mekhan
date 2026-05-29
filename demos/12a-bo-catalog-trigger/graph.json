@@ -1,0 +1,93 @@
+{
+  "nodes": [
+    {
+      "id": "trigger-bo-obs",
+      "type": "trigger",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "trigger",
+        "label": "New BO observation",
+        "description": "Fires when a `bo_observation` catalogue entry is published. Projects the entry's payload (the freshly-evaluated point) onto the Start token so the slim re-fit runs against it.",
+        "source": {
+          "kind": "catalog",
+          "filters": { "category": { "eq": "bo_observation" } },
+          "backfill": false
+        },
+        "concurrency": "allow",
+        "payloadMapping": [
+          { "targetField": "observations", "expression": "user_metadata.observations" },
+          { "targetField": "last_z", "expression": "user_metadata.z" }
+        ],
+        "enabled": true
+      }
+    },
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 320, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Seed from catalogue entry",
+        "processName": "BO Catalog Retrain",
+        "initial": {
+          "id": "in",
+          "label": "Observation",
+          "fields": [
+            { "name": "observations", "label": "Accumulated observations", "kind": "json", "required": true },
+            { "name": "last_z", "label": "Latest evaluated z", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "propose",
+      "type": "automated_step",
+      "slug": "propose",
+      "position": { "x": 620, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Single-pass re-fit + propose",
+        "description": "Slim one-shot proposer. Reads the accumulated `start.observations` and the latest `start.last_z` directly by slug (read-arc synthesized), fits a placeholder surrogate, and emits the next candidate point. No Loop/Map — the closed-loop campaign is the 12-bo-loop demo; here the point is the trigger wiring.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Proposal",
+          "fields": [
+            { "name": "next_a", "label": "Next a", "kind": "number", "required": true },
+            { "name": "next_d", "label": "Next d", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 920, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Emit next candidate",
+        "resultMapping": [
+          { "targetField": "next_a", "expression": "propose.next_a" },
+          { "targetField": "next_d", "expression": "propose.next_d" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_trigger_start", "source": "trigger-bo-obs", "target": "start",   "targetHandle": "in", "type": "sequence" },
+    { "id": "e_start_propose", "source": "start",          "target": "propose", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_propose_end",   "source": "propose",        "target": "end",     "targetHandle": "in", "type": "sequence" }
+  ]
+}

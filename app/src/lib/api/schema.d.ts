@@ -442,6 +442,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instances/{id}/children": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/instances/:id/children
+         * @description Lists the sub-workflow child instances this instance spawned. A SubWorkflow
+         *     node runs its child as a separate engine net; the causality ingest
+         *     registers each spawn as a first-class child `workflow_instances` row
+         *     (parent_instance_id = this instance). A SubWorkflow inside a Loop/Map spawns
+         *     one child per iteration, so multiple rows can share `parent_node_id` —
+         *     ordered by `spawn_seq` (spawn/iteration order). The instance graph view
+         *     groups these by `parent_node_id` to offer an "Enter sub-workflow" drill-in
+         *     on each SubWorkflow node.
+         */
+        get: operations["list_instance_children"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/instances/{id}/events": {
         parameters: {
             query?: never;
@@ -2932,6 +2959,50 @@ export interface components {
             path: string;
         };
         /**
+         * @description One spawned sub-workflow child run of a parent instance, returned by
+         *     `GET /api/v1/instances/{id}/children`. A SubWorkflow node runs its child as
+         *     a separate engine net; the causality ingest registers each spawn as a
+         *     first-class child `workflow_instances` row (see migration
+         *     `20240130000000`). A SubWorkflow inside a Loop/Map spawns one child per
+         *     iteration, so multiple rows can share `parent_node_id` — ordered by
+         *     `spawn_seq` (the spawn order, i.e. iteration order).
+         */
+        InstanceChild: {
+            /** Format: date-time */
+            completed_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The child instance id (open `/instances/{id}` to drill in).
+             */
+            id: string;
+            /**
+             * @description The SubWorkflow `WorkflowNode.id` in the parent graph that spawned this
+             *     child. Group children by this to attach them to a node on the canvas.
+             */
+            parent_node_id?: string | null;
+            /**
+             * Format: int64
+             * @description Parent net's spawn-event sequence; orders sibling children of the same
+             *     node (one per Loop/Map iteration).
+             */
+            spawn_seq?: number | null;
+            /** Format: date-time */
+            started_at?: string | null;
+            /** @description `"created" | "running" | "completed" | "failed" | "cancelled"`. */
+            status: string;
+            /**
+             * Format: uuid
+             * @description The child's resolved template id + version (its own graph to render).
+             */
+            template_id: string;
+            /** @description Child template display name (JOINed from `workflow_templates`). */
+            template_name: string;
+            /** Format: int32 */
+            template_version: number;
+        };
+        /**
          * @description Template-level instance concurrency policy. Read by the trigger
          *     dispatcher on fire and the lifecycle listener on instance terminal.
          *
@@ -5007,6 +5078,19 @@ export interface components {
             mode: string;
             net_id: string;
             /**
+             * Format: uuid
+             * @description SubWorkflow hierarchy: the instance that ran the SubWorkflow node whose
+             *     `spawn_net` effect created this child net. NULL for top-level
+             *     instances. See migration `20240130000000`.
+             */
+            parent_instance_id?: string | null;
+            /**
+             * @description The SubWorkflow `WorkflowNode.id` in the parent graph that spawned this
+             *     child (the spawn transition is `t_{parent_node_id}_spawn`). NULL for
+             *     top-level instances.
+             */
+            parent_node_id?: string | null;
+            /**
              * @description Structured result envelope (`{ ok: true, value }` /
              *     `{ ok: false, error: { reason, value } }`) declared by the workflow's
              *     End/Failure result binding. NULL until the instance reaches a terminal
@@ -5015,10 +5099,24 @@ export interface components {
             result?: unknown;
             /**
              * Format: uuid
+             * @description Top-of-tree instance id (the parent's root, or the parent itself), so a
+             *     whole sub-workflow tree is reachable in one query. NULL for top-level
+             *     instances.
+             */
+            root_instance_id?: string | null;
+            /**
+             * Format: uuid
              * @description Set when a test was promoted from this instance — points back at the
              *     instance whose event log seeded the test's fixture. Audit-only.
              */
             source_instance_id?: string | null;
+            /**
+             * Format: int64
+             * @description Parent net's spawn-event sequence; orders sibling children when a
+             *     Loop/Map spawns the same SubWorkflow node multiple times (one child per
+             *     iteration). NULL for top-level instances.
+             */
+            spawn_seq?: number | null;
             /** Format: date-time */
             started_at?: string | null;
             status: string;
@@ -6304,6 +6402,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowInstance"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_instance_children: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Parent instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sub-workflow child instances spawned by this instance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstanceChild"][];
                 };
             };
             /** @description Instance not found */

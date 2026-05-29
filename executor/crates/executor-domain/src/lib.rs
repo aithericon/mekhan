@@ -27,7 +27,7 @@ pub use progress::{Phase, PhaseStatus, Progress};
 pub use result::{ExecutionOutcome, ExecutionResult};
 pub use run_context::RunContext;
 pub use run_dir::RunDirectory;
-pub use status::{ExecutionStatus, StatusUpdate};
+pub use status::{cancel_subject, cancel_subject_filter, ExecutionStatus, StatusUpdate};
 
 /// Serde helper for `Option<Duration>` using human-readable strings.
 mod serde_opt_duration {

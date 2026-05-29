@@ -188,6 +188,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::instances::get_instance_state))
         .routes(routes!(handlers::instances::get_instance_events))
         .routes(routes!(handlers::instances::list_step_executions))
+        .routes(routes!(handlers::instances::list_instance_children))
         .routes(routes!(handlers::instances::stream_instance))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))

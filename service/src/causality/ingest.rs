@@ -302,6 +302,7 @@ async fn process_domain_event(
                     db,
                     net_id,
                     seq,
+                    transition_id: &transition_id.0,
                     consumed_ids: &consumed_ids,
                     read_ids: &read_ids,
                     effect_result,
@@ -605,6 +606,10 @@ struct ProjectorCtx<'a> {
     db: &'a PgPool,
     net_id: &'a str,
     seq: i64,
+    /// The firing transition's id (e.g. `t_{node_id}_spawn`). Carried so the
+    /// `spawn_net` projector can recover which SubWorkflow node spawned a child
+    /// net — the effect_result only has `child_net_id`, not the node id.
+    transition_id: &'a str,
     consumed_ids: &'a [String],
     read_ids: &'a [String],
     effect_result: &'a serde_json::Value,
@@ -780,6 +785,227 @@ impl Projector for CatalogueRegister {
     }
 }
 
+/// Recover the parent SubWorkflow node id from a spawn transition id.
+/// Lowering names the spawn transition `t_{node_id}_spawn`
+/// (`lower_subworkflow`); anything else is not a sub-workflow spawn we can
+/// attribute. Returns `None` (a visible no-op upstream) rather than guessing.
+fn parse_spawn_node_id(transition_id: &str) -> Option<&str> {
+    transition_id
+        .strip_prefix("t_")
+        .and_then(|s| s.strip_suffix("_spawn"))
+        .filter(|id| !id.is_empty())
+}
+
+/// Find the SubWorkflow node `node_id` in a parent graph and return its child
+/// template family id + version pin. `None` if the node is absent or not a
+/// SubWorkflow. Pure (no DB) so the lookup is unit-testable.
+fn subworkflow_child_ref(
+    graph: &crate::models::template::WorkflowGraph,
+    node_id: &str,
+) -> Option<(uuid::Uuid, crate::models::template::VersionPin)> {
+    use crate::models::template::WorkflowNodeData;
+    graph.nodes.iter().find_map(|n| {
+        if n.id == node_id {
+            if let WorkflowNodeData::SubWorkflow {
+                template_id,
+                version_pin,
+                ..
+            } = &n.data
+            {
+                return Some((*template_id, version_pin.clone()));
+            }
+        }
+        None
+    })
+}
+
+/// `spawn_net` effect → register the spawned child as a first-class
+/// `workflow_instances` row so the instance UI can drill into it.
+///
+/// A SubWorkflow node spawns its child as a SEPARATE engine net (random
+/// `child_net_id`) that never flows through the instance launcher, so until
+/// now it had no instance row and mekhan's step-execution projection dropped
+/// every child event. This projector closes that gap: the parent's
+/// `spawn_net` EffectCompleted carries `effect_result.child_net_id`, the
+/// firing transition is `t_{node_id}_spawn`, and the event's net_id is the
+/// parent net — together enough to register the child with full parent
+/// linkage. The instant the child row exists (net_id = child_net_id), the
+/// existing net_id-keyed step-execution + lifecycle projections light up for
+/// the child for free.
+struct SpawnNet;
+#[async_trait]
+impl Projector for SpawnNet {
+    async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
+        let child_net_id = match ctx.effect_result.get("child_net_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        // Recover the parent SubWorkflow node id from `t_{node_id}_spawn`.
+        // Anything else is not a sub-workflow spawn we can attribute — a
+        // visible no-op, not a silent guess (lowering always names it this way;
+        // a rename would surface here rather than mis-link).
+        let parent_node_id = match parse_spawn_node_id(ctx.transition_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(
+                    transition = %ctx.transition_id,
+                    "spawn_net effect on an unrecognized transition id; skipping child registration",
+                );
+                return Ok(());
+            }
+        };
+        register_subworkflow_child(
+            ctx.db,
+            ctx.net_id,
+            parent_node_id,
+            child_net_id,
+            ctx.seq,
+            ctx.ts,
+        )
+        .await
+    }
+}
+
+/// Insert a `workflow_instances` row for a spawned sub-workflow child net.
+///
+/// Resolves the parent instance from the spawning net_id (works for nested
+/// sub-workflows too: a child net's own rows carry net_id = its child_net_id,
+/// so its grandchildren resolve the same way), reads the SubWorkflow node out
+/// of the parent's stored graph to find the child template family + version
+/// pin, resolves the concrete `(template_id, version)` the same way
+/// `resolve_subworkflow_air` does at publish, and inserts the child row keyed
+/// on its `child_net_id`. Idempotent via the `net_id` UNIQUE constraint, which
+/// also makes it safe under the causality consumer's at-least-once redelivery.
+///
+/// Every failure mode below is a *visible no-op* (logged, `Ok(())`): a spawn we
+/// cannot attribute must not wedge the single-threaded causality consumer.
+async fn register_subworkflow_child(
+    db: &PgPool,
+    parent_net_id: &str,
+    parent_node_id: &str,
+    child_net_id: &str,
+    spawn_seq: i64,
+    ts: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    use crate::models::template::{VersionPin, WorkflowGraph};
+
+    // Resolve the parent instance (top-level: net_id = mekhan-{uuid}; nested:
+    // net_id = the parent's own child_net_id).
+    let parent: Option<(uuid::Uuid, uuid::Uuid, i32, String, Option<uuid::Uuid>, uuid::Uuid)> =
+        sqlx::query_as(
+            "SELECT id, template_id, template_version, mode, root_instance_id, created_by \
+             FROM workflow_instances WHERE net_id = $1",
+        )
+        .bind(parent_net_id)
+        .fetch_optional(db)
+        .await?;
+    let Some((parent_id, parent_template_id, _parent_version, mode, parent_root, created_by)) =
+        parent
+    else {
+        tracing::debug!(
+            parent_net = %parent_net_id,
+            child_net = %child_net_id,
+            "spawn_net from a net with no tracked instance row; skipping child registration",
+        );
+        return Ok(());
+    };
+    let root_instance_id = parent_root.unwrap_or(parent_id);
+
+    // Read the SubWorkflow node out of the parent's stored high-level graph.
+    let graph_json: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT graph FROM workflow_templates WHERE id = $1")
+            .bind(parent_template_id)
+            .fetch_optional(db)
+            .await?;
+    let Some(graph_json) = graph_json else {
+        tracing::warn!(template = %parent_template_id, "parent template row missing; skipping child registration");
+        return Ok(());
+    };
+    let graph: WorkflowGraph = match serde_json::from_value(graph_json) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!(template = %parent_template_id, "parent graph did not deserialize: {e}");
+            return Ok(());
+        }
+    };
+    let Some((family_id, version_pin)) = subworkflow_child_ref(&graph, parent_node_id) else {
+        tracing::warn!(
+            node = %parent_node_id,
+            template = %parent_template_id,
+            "no SubWorkflow node matched the spawn transition; skipping child registration",
+        );
+        return Ok(());
+    };
+
+    // Resolve the concrete child row within the family using the same family
+    // selector as `resolve_subworkflow_air` (publish.rs) — `(base_template_id
+    // = $1 OR id = $1)` plus the pin. We additionally require `published`: this
+    // (template_id, version) is display-only metadata (it picks the child
+    // template name/graph shown in the drill-in; the engine runs the AIR frozen
+    // at the parent's publish, not this row), and a runnable parent can only
+    // embed a *published* child, so attributing the child to a published row is
+    // the honest choice. Note `resolve_subworkflow_air` additionally enforces
+    // visibility + cycle guards at publish; those are publish-time admission
+    // checks, irrelevant to after-the-fact display attribution here.
+    let child: Option<(uuid::Uuid, i32)> = match version_pin {
+        VersionPin::Latest => sqlx::query_as(
+            "SELECT id, version FROM workflow_templates \
+             WHERE (base_template_id = $1 OR id = $1) AND is_latest = TRUE AND published = TRUE",
+        )
+        .bind(family_id),
+        VersionPin::Pinned { version } => sqlx::query_as(
+            "SELECT id, version FROM workflow_templates \
+             WHERE (base_template_id = $1 OR id = $1) AND version = $2 AND published = TRUE",
+        )
+        .bind(family_id)
+        .bind(version),
+    }
+    .fetch_optional(db)
+    .await?;
+    let Some((child_template_id, child_version)) = child else {
+        tracing::warn!(
+            family = %family_id,
+            "child template family did not resolve to a concrete row; skipping child registration",
+        );
+        return Ok(());
+    };
+
+    // Insert the child instance row. Idempotent on the net_id UNIQUE
+    // constraint — a redelivered spawn EffectCompleted is a no-op.
+    let inserted = sqlx::query(
+        "INSERT INTO workflow_instances \
+            (template_id, template_version, net_id, status, created_by, created_at, \
+             started_at, metadata, mode, parent_instance_id, parent_node_id, \
+             root_instance_id, spawn_seq) \
+         VALUES ($1, $2, $3, 'running', $4, $5, $5, '{}'::jsonb, $6, $7, $8, $9, $10) \
+         ON CONFLICT (net_id) DO NOTHING",
+    )
+    .bind(child_template_id)
+    .bind(child_version)
+    .bind(child_net_id)
+    .bind(created_by)
+    .bind(ts)
+    .bind(&mode)
+    .bind(parent_id)
+    .bind(parent_node_id)
+    .bind(root_instance_id)
+    .bind(spawn_seq)
+    .execute(db)
+    .await?;
+
+    if inserted.rows_affected() > 0 {
+        tracing::info!(
+            parent_instance = %parent_id,
+            parent_node = %parent_node_id,
+            child_net = %child_net_id,
+            child_template = %child_template_id,
+            child_version,
+            "registered sub-workflow child instance",
+        );
+    }
+    Ok(())
+}
+
 /// Registry: map an `effect_handler_id` to the projector that owns its
 /// causality side-effects, or `None` when no projector handles it.
 ///
@@ -798,6 +1024,7 @@ fn projector_for(effect_handler_id: &str) -> Option<&'static dyn Projector> {
         "process_log_message" => Some(&ProcessLogMessage),
         "human_task" => Some(&HumanTask),
         "catalogue_register" => Some(&CatalogueRegister),
+        "spawn_net" => Some(&SpawnNet),
         _ => None,
     }
 }
@@ -1702,4 +1929,79 @@ async fn register_catalogue_entry(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_spawn_node_id, subworkflow_child_ref};
+    use crate::models::template::{VersionPin, WorkflowGraph};
+
+    /// A minimal graph carrying one SubWorkflow node, built from the on-wire
+    /// JSON shape (so the test also pins the serde field names the production
+    /// path depends on: `sub_workflow` tag, `templateId`, `versionPin`).
+    fn graph_with_subworkflow(
+        node_id: &str,
+        template_id: &str,
+        version_pin: serde_json::Value,
+    ) -> WorkflowGraph {
+        let g = serde_json::json!({
+            "nodes": [{
+                "id": node_id,
+                "type": "sub_workflow",
+                "position": { "x": 0.0, "y": 0.0 },
+                "data": {
+                    "type": "sub_workflow",
+                    "label": "Child",
+                    "templateId": template_id,
+                    "versionPin": version_pin,
+                }
+            }],
+            "edges": []
+        });
+        serde_json::from_value(g).expect("graph fixture deserializes")
+    }
+
+    #[test]
+    fn parse_spawn_node_id_extracts_node() {
+        assert_eq!(parse_spawn_node_id("t_abc_spawn"), Some("abc"));
+        // Node ids can contain underscores — only the fixed prefix/suffix peel.
+        assert_eq!(
+            parse_spawn_node_id("t_node_with_underscores_spawn"),
+            Some("node_with_underscores")
+        );
+        assert_eq!(parse_spawn_node_id("t__spawn"), None); // empty id
+        assert_eq!(parse_spawn_node_id("t_abc_join"), None); // not a spawn transition
+        assert_eq!(parse_spawn_node_id("abc_spawn"), None); // missing t_ prefix
+        assert_eq!(parse_spawn_node_id("spawn"), None);
+    }
+
+    #[test]
+    fn subworkflow_child_ref_reads_family_and_latest_pin() {
+        let fam = uuid::Uuid::new_v4();
+        let g =
+            graph_with_subworkflow("sw1", &fam.to_string(), serde_json::json!({ "mode": "latest" }));
+        let (tid, pin) = subworkflow_child_ref(&g, "sw1").expect("subworkflow node found");
+        assert_eq!(tid, fam);
+        assert!(matches!(pin, VersionPin::Latest));
+    }
+
+    #[test]
+    fn subworkflow_child_ref_reads_pinned_version() {
+        let fam = uuid::Uuid::new_v4();
+        let g = graph_with_subworkflow(
+            "sw1",
+            &fam.to_string(),
+            serde_json::json!({ "mode": "pinned", "version": 7 }),
+        );
+        let (_tid, pin) = subworkflow_child_ref(&g, "sw1").expect("subworkflow node found");
+        assert!(matches!(pin, VersionPin::Pinned { version: 7 }));
+    }
+
+    #[test]
+    fn subworkflow_child_ref_none_for_missing_node() {
+        let fam = uuid::Uuid::new_v4();
+        let g =
+            graph_with_subworkflow("sw1", &fam.to_string(), serde_json::json!({ "mode": "latest" }));
+        assert!(subworkflow_child_ref(&g, "no_such_node").is_none());
+    }
 }

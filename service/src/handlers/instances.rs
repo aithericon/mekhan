@@ -19,7 +19,7 @@ use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
 };
-use crate::models::responses::{InstanceEventsResponse, StepExecutionResponse};
+use crate::models::responses::{InstanceChild, InstanceEventsResponse, StepExecutionResponse};
 use crate::handlers::require_template;
 use crate::models::template::{PaginatedResponse, WorkflowGraph};
 use crate::petri::events::fetch_events;
@@ -153,6 +153,12 @@ pub async fn list_instances(
     // next $N placeholder so each filter slots in without colliding.
     let mut conditions: Vec<String> = Vec::new();
     let mut bind_index: u8 = 1;
+    // Sub-workflow child instances are sub-runs of a parent instance (one per
+    // Loop/Map iteration). They are reachable via the parent's drill-in
+    // (`GET /instances/{parent}/children`) and must not clutter the top-level
+    // instances list or inflate its pagination count. This is a static
+    // predicate (no bind), so it doesn't consume a `$N` slot.
+    conditions.push("wi.parent_instance_id IS NULL".to_string());
     if params.template_id.is_some() {
         conditions.push(format!("wi.template_id = ${bind_index}"));
         bind_index += 1;
@@ -617,6 +623,97 @@ pub async fn list_step_executions(
                     duration_ms,
                     error,
                 }
+            },
+        )
+        .collect();
+
+    Ok(Json(response))
+}
+
+/// GET /api/v1/instances/:id/children
+///
+/// Lists the sub-workflow child instances this instance spawned. A SubWorkflow
+/// node runs its child as a separate engine net; the causality ingest
+/// registers each spawn as a first-class child `workflow_instances` row
+/// (parent_instance_id = this instance). A SubWorkflow inside a Loop/Map spawns
+/// one child per iteration, so multiple rows can share `parent_node_id` —
+/// ordered by `spawn_seq` (spawn/iteration order). The instance graph view
+/// groups these by `parent_node_id` to offer an "Enter sub-workflow" drill-in
+/// on each SubWorkflow node.
+#[utoipa::path(
+    get,
+    path = "/api/v1/instances/{id}/children",
+    params(("id" = Uuid, Path, description = "Parent instance id")),
+    responses(
+        (status = 200, description = "Sub-workflow child instances spawned by this instance", body = Vec<InstanceChild>),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
+#[allow(clippy::type_complexity)]
+pub async fn list_instance_children(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<InstanceChild>>, ApiError> {
+    let instance_exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    if instance_exists.is_none() {
+        return Err(ApiError::not_found("instance not found"));
+    }
+
+    let rows: Vec<(
+        Uuid,
+        Option<String>,
+        Option<i64>,
+        Uuid,
+        i32,
+        String,
+        String,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
+        "SELECT wi.id, wi.parent_node_id, wi.spawn_seq, wi.template_id, \
+                wi.template_version, wt.name, wi.status, wi.created_at, \
+                wi.started_at, wi.completed_at \
+         FROM workflow_instances wi \
+         JOIN workflow_templates wt ON wt.id = wi.template_id \
+         WHERE wi.parent_instance_id = $1 \
+         ORDER BY wi.parent_node_id NULLS LAST, wi.spawn_seq NULLS LAST, wi.created_at",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let response: Vec<InstanceChild> = rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                parent_node_id,
+                spawn_seq,
+                template_id,
+                template_version,
+                template_name,
+                status,
+                created_at,
+                started_at,
+                completed_at,
+            )| InstanceChild {
+                id,
+                parent_node_id,
+                spawn_seq,
+                template_id,
+                template_version,
+                template_name,
+                status,
+                created_at,
+                started_at,
+                completed_at,
             },
         )
         .collect();

@@ -56,8 +56,12 @@ use crate::AppState;
 /// path IS the head — the trailing-segment compromise would silently
 /// break renames and create ambiguity between two resources sharing
 /// the same trailing segment.
-static PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z][a-z0-9_]*$").expect("PATH_REGEX must compile")
+/// Snake_case identifier grammar shared by resource `path`s and `kv` key
+/// names: both are dereferenced as `<head>.<field>` in workflow source and
+/// so must be valid identifiers (lowercase leading letter, then lowercase
+/// letters / digits / underscore).
+static IDENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[a-z][a-z0-9_]*$").expect("IDENT_REGEX must compile")
 });
 
 /// Caller-implicit workspace: falls back to the user's session workspace
@@ -84,14 +88,8 @@ fn descriptor_or_400(
 /// Lists the user-supplied field names so the picker + resolver can
 /// iterate without unwrapping the Vault bundle. Underscore-prefixed so it
 /// can't collide with a real key name (real keys must match the same
-/// `[a-z][a-z0-9_]*` shape as resource paths, see [`KV_KEY_REGEX`]).
+/// `[a-z][a-z0-9_]*` shape as resource paths, see [`IDENT_REGEX`]).
 const KV_KEYS_FIELD: &str = "__kv_keys";
-
-/// Same shape as `PATH_REGEX` — key names must be valid identifiers
-/// because workflow code references them as `<path>.<key>`.
-static KV_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z][a-z0-9_]*$").expect("KV_KEY_REGEX must compile")
-});
 
 /// Split a raw config map into `(public, secret)` JsonMaps based on the
 /// descriptor's field lists. Strays (keys that match neither list) become
@@ -132,7 +130,7 @@ fn split_config(
                     "key '{KV_KEYS_FIELD}' is reserved",
                 )));
             }
-            if !KV_KEY_REGEX.is_match(&k) {
+            if !IDENT_REGEX.is_match(&k) {
                 bad_keys.push(k);
                 continue;
             }
@@ -217,8 +215,71 @@ fn split_config(
 }
 
 /// Compose the launcher-deterministic vault path for a given version.
-fn vault_path_for(workspace_id: Uuid, resource_id: Uuid, version: i32) -> String {
+///
+/// Exposed so integration tests can derive the same path the handlers write
+/// to instead of re-spelling the `aithericon/resources/{ws}/{id}/v{n}` literal.
+pub fn vault_path_for(workspace_id: Uuid, resource_id: Uuid, version: i32) -> String {
     format!("aithericon/resources/{workspace_id}/{resource_id}/v{version}")
+}
+
+/// Persist one resource version: insert the `resource_versions` row, then
+/// write the secret half to the secret backend. If the Vault write fails the
+/// just-inserted version row is rolled back so the parent's `latest_version`
+/// stays consistent with what's actually retrievable.
+///
+/// `extra_rollback` runs additional cleanup on EITHER failure (version-insert
+/// or Vault write) before the error is returned — `create_resource` uses it to
+/// also delete the freshly-laid `resources` row so a retry with the same path
+/// doesn't 409 against a half-created resource. update/rotate pass a no-op.
+async fn write_resource_version<F, Fut>(
+    db: &sqlx::PgPool,
+    secret_store: &dyn aithericon_resources::ResourceSecretStore,
+    resource_id: Uuid,
+    version: i32,
+    vault_path: &str,
+    public: &JsonMap<String, Value>,
+    secret: &JsonMap<String, Value>,
+    principal_id: Uuid,
+    extra_rollback: F,
+) -> Result<(), ApiError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let insert_version = sqlx::query(
+        "INSERT INTO resource_versions \
+            (resource_id, version, vault_path, public_config, created_by) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(resource_id)
+    .bind(version)
+    .bind(vault_path)
+    .bind(Value::Object(public.clone()))
+    .bind(principal_id)
+    .execute(db)
+    .await;
+    if let Err(e) = insert_version {
+        extra_rollback().await;
+        return Err(ApiError::internal(e.to_string()));
+    }
+
+    // Vault write last. On failure roll back the version row (and whatever
+    // `extra_rollback` owns) so the next attempt sees a clean slate.
+    if let Err(e) = secret_store.put_version(vault_path, secret).await {
+        let _ =
+            sqlx::query("DELETE FROM resource_versions WHERE resource_id = $1 AND version = $2")
+                .bind(resource_id)
+                .bind(version)
+                .execute(db)
+                .await;
+        extra_rollback().await;
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("secret backend write failed: {e}"),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Audit-row helper: every successful write goes through this so the
@@ -429,7 +490,7 @@ pub async fn create_resource(
     user: AuthUser,
     Json(req): Json<CreateResourceRequest>,
 ) -> Result<(StatusCode, Json<ResourceSummary>), ApiError> {
-    if !PATH_REGEX.is_match(&req.path) {
+    if !IDENT_REGEX.is_match(&req.path) {
         return Err(ApiError::bad_request(format!(
             "path '{}' must be a snake_case identifier (e.g. `local_pg`): \
              lowercase letter first, then letters / digits / underscores. \
@@ -480,45 +541,26 @@ pub async fn create_resource(
         return Err(ApiError::internal(e.to_string()));
     }
 
-    // Then the v1 row. Failure here would leave a `resources` row with no
-    // matching version — clean up explicitly.
-    let insert_version = sqlx::query(
-        "INSERT INTO resource_versions \
-            (resource_id, version, vault_path, public_config, created_by) \
-         VALUES ($1, $2, $3, $4, $5)",
+    // Then the v1 row + Vault write. On either failure also delete the
+    // `resources` row we just laid so a retry with the same path doesn't get a
+    // 409 from a half-created resource.
+    write_resource_version(
+        &state.db,
+        state.resource_store.as_ref(),
+        resource_id,
+        version,
+        &vault_path,
+        &public,
+        &secret,
+        principal_id,
+        || async {
+            let _ = sqlx::query("DELETE FROM resources WHERE id = $1")
+                .bind(resource_id)
+                .execute(&state.db)
+                .await;
+        },
     )
-    .bind(resource_id)
-    .bind(version)
-    .bind(&vault_path)
-    .bind(Value::Object(public.clone()))
-    .bind(principal_id)
-    .execute(&state.db)
-    .await;
-    if let Err(e) = insert_version {
-        let _ = sqlx::query("DELETE FROM resources WHERE id = $1")
-            .bind(resource_id)
-            .execute(&state.db)
-            .await;
-        return Err(ApiError::internal(e.to_string()));
-    }
-
-    // Finally the Vault write. If this fails the DB rows are rolled back
-    // so the next attempt with the same path doesn't get a 409 from a
-    // half-created resource.
-    if let Err(e) = state.resource_store.put_version(&vault_path, &secret).await {
-        let _ = sqlx::query("DELETE FROM resource_versions WHERE resource_id = $1")
-            .bind(resource_id)
-            .execute(&state.db)
-            .await;
-        let _ = sqlx::query("DELETE FROM resources WHERE id = $1")
-            .bind(resource_id)
-            .execute(&state.db)
-            .await;
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("secret backend write failed: {e}"),
-        ));
-    }
+    .await?;
 
     // Grant the creator `read` so the resolver works out of the box.
     let _ = sqlx::query(
@@ -676,34 +718,18 @@ pub async fn update_resource(
         latest_version = row.latest_version + 1;
         let vault_path = vault_path_for(row.workspace_id, row.id, latest_version);
 
-        sqlx::query(
-            "INSERT INTO resource_versions \
-                (resource_id, version, vault_path, public_config, created_by) \
-             VALUES ($1, $2, $3, $4, $5)",
+        write_resource_version(
+            &state.db,
+            state.resource_store.as_ref(),
+            row.id,
+            latest_version,
+            &vault_path,
+            &public,
+            &secret,
+            principal_id,
+            || async {},
         )
-        .bind(row.id)
-        .bind(latest_version)
-        .bind(&vault_path)
-        .bind(Value::Object(public.clone()))
-        .bind(principal_id)
-        .execute(&state.db)
         .await?;
-
-        if let Err(e) = state.resource_store.put_version(&vault_path, &secret).await {
-            // Roll back the new version row so the parent stays at the
-            // previous `latest_version`.
-            let _ = sqlx::query(
-                "DELETE FROM resource_versions WHERE resource_id = $1 AND version = $2",
-            )
-            .bind(row.id)
-            .bind(latest_version)
-            .execute(&state.db)
-            .await;
-            return Err(ApiError::new(
-                StatusCode::BAD_GATEWAY,
-                format!("secret backend write failed: {e}"),
-            ));
-        }
 
         sqlx::query(
             "UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2",
@@ -823,32 +849,18 @@ pub async fn rotate_resource(
     let new_version = row.latest_version + 1;
     let vault_path = vault_path_for(row.workspace_id, row.id, new_version);
 
-    sqlx::query(
-        "INSERT INTO resource_versions \
-            (resource_id, version, vault_path, public_config, created_by) \
-         VALUES ($1, $2, $3, $4, $5)",
+    write_resource_version(
+        &state.db,
+        state.resource_store.as_ref(),
+        row.id,
+        new_version,
+        &vault_path,
+        &public,
+        &secret,
+        principal_id,
+        || async {},
     )
-    .bind(row.id)
-    .bind(new_version)
-    .bind(&vault_path)
-    .bind(Value::Object(public.clone()))
-    .bind(principal_id)
-    .execute(&state.db)
     .await?;
-
-    if let Err(e) = state.resource_store.put_version(&vault_path, &secret).await {
-        let _ = sqlx::query(
-            "DELETE FROM resource_versions WHERE resource_id = $1 AND version = $2",
-        )
-        .bind(row.id)
-        .bind(new_version)
-        .execute(&state.db)
-        .await;
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("secret backend write failed: {e}"),
-        ));
-    }
 
     sqlx::query(
         "UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2",

@@ -1,0 +1,32 @@
+{
+  "name": "bo-converges",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {
+        "observations": [
+          { "a": 0.5, "d": 0.5, "z": 24.13 },
+          { "a": 0.25, "d": 0.75, "z": 22.3835 },
+          { "a": 0.75, "d": 0.25, "z": 26.6242 },
+          { "a": 0.1, "d": 0.9, "z": 1.1285 }
+        ],
+        "f_best": 1.1285,
+        "max_iterations": 8
+      }
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    {
+      "path": "result.value.iterations",
+      "op": "gte",
+      "value": 8
+    },
+    {
+      "path": "result.value.best_z",
+      "op": "lte",
+      "value": 5.0
+    }
+  ]
+}

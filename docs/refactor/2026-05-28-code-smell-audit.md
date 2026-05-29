@@ -17,10 +17,36 @@ checked every finding against current code. Each item below is tagged:
 - **🟡 PARTIAL** — improved or fixed in some call sites; copies remain.
 - **⬜ OPEN** — unchanged since the baseline.
 
-**Scoreboard:** 5 fixed, 13 partial, 33 open (of 51 findings). The first round
+**Scoreboard (pre-round-2):** 5 fixed, 13 partial, 33 open (of 51 findings). The first round
 was almost entirely service-side query plumbing; the 🔴 wire-type drift and the
 canonical-builder cleanups are still untouched. Line numbers below are refreshed
 to `0f425a2` where a finding moved.
+
+---
+
+## Round 2 outcome (2026-05-29) — branch `refactor/code-smell-round-2-int`
+
+Round 2 ran as a 5-lane agent fan-out (one worktree per workspace) merged into an
+integration branch. **27 findings resolved this round** (mix of DONE / partial-by-design),
+all verified compiling per workspace. See `ROUND-2-PROGRESS.md` for the orchestration log
+and the concurrent-session / branch-move note.
+
+| Lane | Resolved | Notes |
+|---|---|---|
+| **executor** | X1, X2, X3, X4, X5, X7, X8, X9, X10 | all 9; X5/X10 were correctness; X9 (bonus) done |
+| **service** | S2, S4, S5, S9, S10, S11, S13, B1, B3 | S2 was already done by prior sweeps; **S11 partial** (3 of 5 ydoc sites unified — and it surfaced a real latent bug: publish/new_version silently served the stale DB graph column on Y.Doc reconstruct failure); **S6 SKIPPED** (CompileOptions collapse — 150+ caller surface, too risky) |
+| **engine** | E2, E5, E6, E9, E11, B5 | all 6; E6/E9 correctness; E5 full `register_effect_handlers` extraction verified under all feature gates |
+| **frontend** | P1, P2, P4, P5, P6, P7 | all 6; svelte-check 0 errors, 92 vitest pass |
+| **build** | BR1, BR2 | shared `just/cargo.just`; NATS tag aligned |
+| **cross-cut** | **B2** | `cancel_subject`/`cancel_subject_filter` in executor-domain, all 3 sites routed + unit test |
+
+**Still open after round 2:**
+- **S6** (compile_to_air → CompileOptions) — deliberately skipped; needs a dedicated PR for the ~150-site caller migration.
+- **🔴 Batch 4 wire-types (A1, A2, A3)** — NOT attempted this round. It's a 3-binary
+  rebuild/restart/republish change, and a concurrent session was actively editing the exact
+  service/compiler files A2 touches. Deferred — see the handoff at the bottom of this doc.
+- Items previously marked PARTIAL whose *remaining* copies were intentional (S11's 2 divergent
+  sites, S12, E1/E3/E4/E10) — no action, correct as-is.
 
 ---
 
@@ -196,3 +222,42 @@ so it's its own arc, not folded into the above.
 - **P9 `TriggerNodeSection` 707-line split**, **P3 LLM-panel `SchemaForm` migration**,
   and **P11 Svelte-4-ism modernization** are larger frontend refactors — separate
   follow-ups once the small-util extractions land.
+
+---
+
+## Batch 4 handoff — wire-type consolidation (deferred from round 2)
+
+Round 2 deliberately did NOT touch A1/A2/A3. This is the concrete plan for a dedicated PR.
+Do it **after** the `stepsRef` concurrent work and round-2 (`refactor/code-smell-round-2-int`)
+have both landed on main, so the 3-binary state is stable.
+
+**Why it was deferred:** (1) it requires all three binaries rebuilt + restarted + republished
+(the engine's typed `ExecutionSpec` roundtrip silently drops unknown fields, so a mismatch is a
+*runtime* failure, not a compile error); (2) during round 2 a concurrent session was actively
+editing `service/src/compiler/*` and `service/src/models/template.rs` — exactly where A2's
+`PhaseUpdateStatus`/`StepStatus` consolidation lands — so merging blind risked collisions.
+
+**Sequence (one PR, but stage the commits so each compiles):**
+1. **A3 first (smallest, lowest blast radius).** Make `executor-domain` re-export a single
+   `sanitize_subject_token` and have `service/src/observability.rs` use it (or move the canonical
+   one to `shared/`). ⚠️ Behavior change: the executor-domain variant only strips ` `/`>`/`*`,
+   while observability strips everything non-`[A-Za-z0-9_-]` (incl. `.`). Adopting the stricter
+   one changes published subjects for any execution_id containing a `.` — audit live execution_id
+   formats first (UUIDs are unaffected). This also finally lets **B2's `cancel_subject` sanitize**
+   (it's currently intentionally unsanitized to preserve the publish path — see status.rs note).
+2. **A1.** Delete `engine/core-engine/crates/domain/src/executor.rs`'s mirror `ExecutionStatus`;
+   have `petri-domain` re-export `aithericon_executor_domain::ExecutionStatus` (the executor crate
+   already depends on it for other types). Rebuild engine + executor; run the NATS status-stream
+   integration test to confirm no variant drops.
+3. **A2.** Surface `Phase`/`PhaseStatus`/`Progress` through mekhan's OpenAPI (`#[derive(ToSchema)]`
+   + a handler/DTO reference so they appear in `openapi-mekhan.json`), regenerate
+   (`just dev::openapi`), and replace `app/src/lib/types/process.ts`'s hand-mirror with the
+   generated types. Then delete `service`'s `PhaseUpdateStatus` (re-add `Pending`) and fold
+   `StepStatus` (`projections/step_executions/projector.rs`) onto the canonical enum.
+   Verify `just ci::openapi-drift` is clean.
+4. Validation gate: `just ci::check-rust` + `just ci::quality-frontend` + the causality ingest
+   projector test (the consumer that would runtime-fail on an unknown `PhaseStatus` variant).
+
+**Companion (optional, engine-internal, can ride along or defer):** E7 (`std::sync::RwLock` →
+`parking_lot` across the ~44 sites in `application/src/service.rs`) and E8 (drop the two
+`block_in_place(block_on(...))` adapter callbacks). Riskier; only with careful test coverage.

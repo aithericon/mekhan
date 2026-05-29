@@ -85,6 +85,26 @@ impl StatusUpdate {
     }
 }
 
+/// NATS subject a cancel request is published to for a single execution.
+/// Pattern: `executor.cancel.{execution_id}` on core NATS (not JetStream).
+///
+/// NOTE: intentionally NOT run through `sanitize_subject_token`, to preserve the
+/// existing publish path byte-for-byte (the engine `CancelClient` and the test
+/// harness both built this bare format). Aligning cancel/status sanitization is
+/// tracked separately as audit item A3.
+pub fn cancel_subject(execution_id: &str) -> String {
+    format!("executor.cancel.{execution_id}")
+}
+
+/// NATS subscription filter for the worker's cancel listener.
+/// `None` → `executor.cancel.*`; `Some("pfx")` → `pfx.executor.cancel.*`.
+pub fn cancel_subject_filter(prefix: Option<&str>) -> String {
+    match prefix {
+        Some(pfx) => format!("{pfx}.executor.cancel.*"),
+        None => "executor.cancel.*".to_string(),
+    }
+}
+
 /// Replace characters that are invalid in NATS subject tokens.
 pub(crate) fn sanitize_subject_token(s: &str) -> String {
     s.chars()
@@ -145,5 +165,15 @@ mod tests {
         };
         assert_eq!(update.subject(), "executor.status.train-alpha-0.completed");
         assert_eq!(update.msg_id(), "train-alpha-0-completed");
+    }
+
+    #[test]
+    fn cancel_subjects() {
+        assert_eq!(cancel_subject("exec-1"), "executor.cancel.exec-1");
+        assert_eq!(cancel_subject_filter(None), "executor.cancel.*");
+        assert_eq!(
+            cancel_subject_filter(Some("tenant")),
+            "tenant.executor.cancel.*"
+        );
     }
 }

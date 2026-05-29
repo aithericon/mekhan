@@ -145,7 +145,7 @@ impl ArtifactStore {
         node_id: &str,
         content: &[u8],
     ) -> Result<String, ArtifactStoreError> {
-        let key = format!("templates/{template_id}/v{version}/{node_id}/node-config.json");
+        let key = Self::node_config_key(template_id, version, node_id);
 
         self.client
             .put_object()

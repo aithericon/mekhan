@@ -514,7 +514,7 @@ impl ExecutorTestContext {
     pub async fn publish_cancel(&self, execution_id: &str) {
         self.nats_client
             .publish(
-                format!("executor.cancel.{execution_id}"),
+                aithericon_executor_domain::cancel_subject(execution_id),
                 bytes::Bytes::new(),
             )
             .await

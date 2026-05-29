@@ -1640,6 +1640,224 @@ mod tests {
         );
     }
 
+    /// The Bayesian-optimization loop demo (`12-bo-loop`) must parse through
+    /// the same types `/api/v1/templates` accepts. Pins the BO topology: a
+    /// Loop carrying four accumulators (observations / f_best / best_a /
+    /// best_d, none named `iteration`), a Map (`evals`) nested in the loop
+    /// body scattering `propose.candidates`, and the propose/branin/gather
+    /// Python nodes.
+    #[test]
+    fn bo_loop_demo_loads() {
+        use crate::models::template::WorkflowNodeData;
+
+        let dir = repo_root().join("demos/12-bo-loop");
+        let demo = load_demo(&dir).expect("12-bo-loop demo must load");
+        assert_eq!(demo.metadata.name, "12 · Bayesian Optimization Loop");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000c0"
+        );
+
+        // Every load-bearing slug is present on the graph.
+        let slug_of = |id: &str| -> Option<String> {
+            demo.graph
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .and_then(|n| n.slug.clone())
+        };
+        assert_eq!(slug_of("lp").as_deref(), Some("bo"), "loop slug must be `bo`");
+        assert_eq!(slug_of("propose").as_deref(), Some("propose"));
+        assert_eq!(slug_of("mp").as_deref(), Some("evals"), "map slug must be `evals`");
+        assert_eq!(slug_of("branin").as_deref(), Some("branin"));
+        assert_eq!(slug_of("gather").as_deref(), Some("gather"));
+
+        // The Map scatters the proposer's candidate batch.
+        let mp = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "mp")
+            .expect("map node `mp`");
+        match &mp.data {
+            WorkflowNodeData::Map {
+                items_ref,
+                result_var,
+                ..
+            } => {
+                assert_eq!(items_ref, "propose.candidates", "Map itemsRef");
+                assert_eq!(result_var, "obs", "Map resultVar");
+            }
+            other => panic!("`mp` must be a Map, got {other:?}"),
+        }
+        // The Map body lives inside the Loop body (Map-in-Loop): `mp`'s parent
+        // is the loop, `branin`'s parent is the map.
+        assert_eq!(mp.parent_id.as_deref(), Some("lp"), "Map nests in the Loop body");
+
+        // The Loop carries five accumulators, none reserved-named. `budget`
+        // captures `input.max_iterations` at enter and is carried constant, so
+        // the stop condition reads PARKED loop state (`bo.iteration < bo.budget`)
+        // instead of a token-resident `input.max_iterations` — which an
+        // AutomatedStep body (the Map's `gather`) strips off the control token.
+        let lp = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "lp")
+            .expect("loop node `lp`");
+        match &lp.data {
+            WorkflowNodeData::Loop {
+                accumulators,
+                loop_condition,
+                ..
+            } => {
+                assert_eq!(accumulators.len(), 5, "loop must carry 5 accumulators");
+                assert!(
+                    accumulators.iter().all(|a| a.var != "iteration"),
+                    "no accumulator may be named `iteration` (reserved)"
+                );
+                let vars: Vec<&str> = accumulators.iter().map(|a| a.var.as_str()).collect();
+                assert_eq!(
+                    vars,
+                    ["observations", "f_best", "best_a", "best_d", "budget"]
+                );
+                // Stop condition must read parked loop state, not a token leaf
+                // stripped by the AutomatedStep body.
+                assert!(
+                    loop_condition.contains("bo.budget"),
+                    "loop_condition must gate on the parked `bo.budget`, got: {loop_condition}"
+                );
+            }
+            other => panic!("`lp` must be a Loop, got {other:?}"),
+        }
+
+        // Python source for the proposer must be loaded (it borrows the loop
+        // accumulators by slug, driving read-arc synthesis at compile time).
+        let propose = demo
+            .files
+            .get("propose")
+            .expect("propose node must have files");
+        assert!(
+            propose
+                .get("main.py")
+                .is_some_and(|s| s.contains("bo.observations")),
+            "propose/main.py must be loaded and borrow bo.observations"
+        );
+    }
+
+    /// The BO loop demo must compile end-to-end through the full AIR path —
+    /// exercising Map scatter/gather nested inside a Loop body, the four loop
+    /// accumulators (init from the entering `input.*` token, merge from the
+    /// `gather.*` body outputs), the `evals[*].obs` collection borrow, and
+    /// read-arc synthesis for the Python `bo.*` references. A regression in
+    /// any of those layers fails here rather than at seed time.
+    #[test]
+    fn bo_loop_demo_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/12-bo-loop"))
+            .expect("12-bo-loop must load");
+
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, _configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("12-bo-loop must compile (Map-in-Loop + accumulators + collection borrow)");
+    }
+
+    /// Phase 4 of the BO arc (`12a-bo-catalog-trigger`): a catalog Trigger
+    /// node fronting a slim single-pass re-fit body. AIR compilation skips
+    /// Trigger nodes (the dispatcher owns them pre-compile), so this proves
+    /// two things: (1) the `kind: catalog` TriggerSource + its `payloadMapping`
+    /// round-trip through the `WorkflowGraph` types the editor/seeder use, and
+    /// (2) the Start→propose→End body compiles cleanly through the same AIR
+    /// pipeline `publish` uses, with read-arc synthesis for the `start.*`
+    /// borrows in the Python proposer.
+    #[test]
+    fn bo_catalog_trigger_demo_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+        use crate::models::template::{TriggerSource, WorkflowNodeData};
+
+        let demo = load_demo(&repo_root().join("demos/12a-bo-catalog-trigger"))
+            .expect("12a-bo-catalog-trigger must load");
+        assert_eq!(demo.metadata.name, "12a · BO Catalog Trigger");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000c1"
+        );
+
+        // The Trigger node parses as a `catalog` source with the expected
+        // filter + a non-empty payloadMapping projecting the entry onto the
+        // seed token.
+        let trig = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "trigger-bo-obs")
+            .expect("trigger node `trigger-bo-obs`");
+        match &trig.data {
+            WorkflowNodeData::Trigger {
+                source,
+                payload_mapping,
+                ..
+            } => {
+                match source {
+                    TriggerSource::Catalog(cat) => {
+                        assert!(!cat.backfill, "backfill must be false");
+                        let cat_filter = cat
+                            .filters
+                            .get("category")
+                            .expect("filters.category must be present");
+                        assert_eq!(
+                            cat_filter.get("eq").map(String::as_str),
+                            Some("bo_observation"),
+                            "category eq filter"
+                        );
+                    }
+                    other => panic!("trigger source must be Catalog, got {other:?}"),
+                }
+                let targets: Vec<&str> =
+                    payload_mapping.iter().map(|m| m.target_field.as_str()).collect();
+                assert_eq!(
+                    targets,
+                    ["observations", "last_z"],
+                    "payloadMapping projects the catalogue entry onto the seed token"
+                );
+            }
+            other => panic!("`trigger-bo-obs` must be a Trigger, got {other:?}"),
+        }
+
+        // AIR compilation skips the Trigger node; the Start→propose→End body
+        // must compile (read-arc synthesis for the `start.*` Python borrows).
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, _configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("12a-bo-catalog-trigger body must compile (Trigger skipped, Start→propose→End)");
+    }
+
     /// The learning-path demos (`01-` … `06-`) all parse through the same
     /// types the live `/api/v1/templates` consumer expects. A break here
     /// catches a regression in `WorkflowNodeData` shape against the
