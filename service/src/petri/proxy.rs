@@ -182,15 +182,30 @@ async fn gate_petri_instance(
     net_id: &str,
     method: &Method,
 ) -> Result<(), ProxyError> {
-    let (workspace_id, visibility) = instance_workspace(&state.db, net_id)
-        .await
-        .map_err(|err| match err {
-            MembershipError::TemplateNotFound(_) => ProxyError::NotFound,
-            MembershipError::Db(e) => ProxyError::Db(e.to_string()),
-            // `instance_workspace` never returns NotMember /
-            // InsufficientRole; collapse to Db for completeness.
-            other => ProxyError::Db(other.to_string()),
-        })?;
+    let (workspace_id, visibility) = match instance_workspace(&state.db, net_id).await {
+        Ok(v) => v,
+        // The net_id isn't a mekhan-managed workflow instance. That means it's
+        // either a shared INFRA net deployed straight to the engine
+        // (`resource-pool-net`, `scheduler-net`, `executor-net`) or a
+        // non-net engine listing path the extractor optimistically treated as
+        // an id (e.g. `/api/nets/metadata`). None of these enumerate
+        // per-principal instance data, and every genuine user instance lives
+        // in mekhan's DB — so a not-found id is necessarily non-sensitive.
+        // Allow read-only (safe) methods through (this is what powers the
+        // Engine Nets browser and the resource-pool dashboard); deny anything
+        // state-changing.
+        Err(MembershipError::TemplateNotFound(_)) => {
+            return if method.is_safe() {
+                Ok(())
+            } else {
+                Err(ProxyError::NotFound)
+            };
+        }
+        Err(MembershipError::Db(e)) => return Err(ProxyError::Db(e.to_string())),
+        // `instance_workspace` never returns NotMember / InsufficientRole;
+        // collapse to Db for completeness.
+        Err(other) => return Err(ProxyError::Db(other.to_string())),
+    };
 
     let is_safe = method.is_safe();
     if is_safe && visibility == "public" {
