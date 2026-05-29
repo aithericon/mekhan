@@ -61,7 +61,7 @@
           ]
         },
         "retryPolicy": { "maxRetries": 0, "backoff": "immediate", "baseDelayMs": 0 },
-        "deploymentModel": { "mode": "inline" }
+        "deploymentModel": { "mode": "executor" }
       }
     },
     {

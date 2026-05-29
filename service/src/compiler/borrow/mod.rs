@@ -159,7 +159,7 @@ mod tests {
                  "data":{{"type":"automated_step","label":"Step",
                          "executionSpec":{{"backendType":"python","entrypoint":"main.py","config":{{"entrypoint":"main.py","python":"python3","sdk":true}}}},
                          "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
-                         "deploymentModel":{{"mode":"inline"}}}}}},
+                         "deploymentModel":{{"mode":"executor"}}}}}},
                 {{"id":"end","type":"end","position":{{"x":0,"y":0}},
                  "data":{{"type":"end","label":"End"}}}}"#,
             extra = extra_nodes_json,
@@ -312,7 +312,7 @@ mod tests {
              "data":{"type":"automated_step","label":"Prev",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"},
+                     "deploymentModel":{"mode":"executor"},
                      "output":{"id":"out","label":"Output","fields":[{"name":"field","label":"F","kind":"text","required":false}]}}}"#;
         let extra_edges = r#"{"id":"e_start_prev","source":"start","target":"prev","type":"sequence"},
             {"id":"e_prev_step","source":"prev","target":"step","type":"sequence"}"#;
@@ -389,13 +389,13 @@ mod tests {
              "data":{"type":"automated_step","label":"Prev",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"},
+                     "deploymentModel":{"mode":"executor"},
                      "output":{"id":"out","label":"Output","fields":[{"name":"amount","label":"Amount","kind":"number","required":false}]}}}"#;
         let http = r#"{"id":"http_step","type":"automated_step","slug":"http_step","position":{"x":0,"y":0},
              "data":{"type":"automated_step","label":"Call",
                      "executionSpec":{"backendType":"http","config":{"url":"https://api.example.com/invoices/{{ prev.amount }}","method":"GET"}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}}"#;
+                     "deploymentModel":{"mode":"executor"}}}"#;
         let nodes = format!(
             r#"{prev},{http},
                 {{"id":"start","type":"start","position":{{"x":0,"y":0}},"data":{{"type":"start","label":"Start"}}}},

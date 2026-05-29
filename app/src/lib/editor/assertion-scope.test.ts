@@ -53,7 +53,7 @@ function automatedNode(
 				}
 			},
 			retryPolicy: { maxRetries: 0, strategy: { type: 'immediate' } },
-			deploymentModel: { mode: 'inline' },
+			deploymentModel: { mode: 'executor' },
 			output: {
 				id: 'out',
 				label: 'Out',

@@ -440,7 +440,7 @@ fn transition_output_places<'a>(air: &'a Value, tid: &str) -> Vec<&'a str> {
         .unwrap_or_default()
 }
 
-/// A pooled (`Inline { pool: { alias } }`) AutomatedStep lowers to the
+/// A pooled (`Executor { pool: { alias } }`) AutomatedStep lowers to the
 /// claim/register/release handshake against the resolved `token_pool`'s backing
 /// net, and — the load-bearing invariant — BOTH terminal exits (success +
 /// error) arc to `release_out`, so the held capacity token is never stranded
@@ -532,22 +532,22 @@ fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() 
     );
 }
 
-/// Byte-identity guard: a plain-inline AutomatedStep (`deploymentModel` absent
-/// or `{ mode: inline }` with no pool) lowers exactly as today — the inline
-/// executor lifecycle, and NONE of the pool bridge places. (Companion to
-/// `automated_step_inline_unchanged_*` in `compiler_tests.rs`; this one runs
+/// Byte-identity guard: a plain-executor AutomatedStep (`deploymentModel` absent
+/// or `{ mode: executor }` with no pool) lowers exactly as today — the executor
+/// lifecycle, and NONE of the pool bridge places. (Companion to
+/// `automated_step_executor_unchanged_*` in `compiler_tests.rs`; this one runs
 /// through the camelCase JSON path.)
 #[test]
-fn plain_inline_step_emits_no_pool_bridges() {
-    // The step fixture is now plain inline (no pool).
+fn plain_executor_step_emits_no_pool_bridges() {
+    // The step fixture is now plain executor dispatch (no pool).
     let graph = load_graph("resource-pool-step.json");
     let air = compile_to_air(&graph, "t", "", &HashMap::new())
-        .expect("plain-inline step should compile");
+        .expect("plain-executor step should compile");
 
-    // Inline executor lifecycle present (scoped `render/prepare`)...
+    // Executor lifecycle present (scoped `render/prepare`)...
     assert!(
         has_transition(&air, "render/prepare"),
-        "plain inline keeps the inline executor-lifecycle prepare"
+        "plain executor keeps the executor-lifecycle prepare"
     );
     // ...and NONE of the pool bridges.
     for pid in [
@@ -558,11 +558,11 @@ fn plain_inline_step_emits_no_pool_bridges() {
         "p_render_held",
         "p_render_pending",
     ] {
-        assert!(!has_place(&air, pid), "plain inline must not emit {pid}");
+        assert!(!has_place(&air, pid), "plain executor must not emit {pid}");
     }
     assert!(
         !has_transition(&air, "t_render_claim"),
-        "plain inline must not emit the claim transition"
+        "plain executor must not emit the claim transition"
     );
 }
 
@@ -609,7 +609,7 @@ fn compile_aliased(known: &KnownResources) -> Result<Value, CompileError> {
     .map(|(air, _iface)| air)
 }
 
-/// The keystone: an `Inline { pool: { alias } }` step resolves to the
+/// The keystone: an `Executor { pool: { alias } }` step resolves to the
 /// token_pool resource's backing net `pool-<id>`, carries the validated
 /// `request` in the ClaimRequest, declares `Lease__token_pool` in
 /// `definitions`, types the grant inbox with it, stages `lease.json` into the
@@ -734,11 +734,11 @@ fn aliased_pool_resolves_backing_net_and_emits_typed_lease() {
     );
 }
 
-/// A `datacenter` under `Inline.pool` is a CompileError — it's a scheduler
+/// A `datacenter` under `Executor.pool` is a CompileError — it's a scheduler
 /// resource and belongs under `Scheduled`. The consolidation-pivot split:
-/// Inline admission is `token_pool`-only.
+/// executor-pool admission is `token_pool`-only.
 #[test]
-fn datacenter_under_inline_pool_is_compile_error() {
+fn datacenter_under_executor_pool_is_compile_error() {
     let err = compile_aliased(&known_with_prod_gpu("datacenter")).unwrap_err();
     let msg = err.to_string();
     match &err {
@@ -755,16 +755,16 @@ fn datacenter_under_inline_pool_is_compile_error() {
     }
 }
 
-/// Byte-identity: a plain-inline step compiles IDENTICALLY whether or not the
+/// Byte-identity: a plain-executor step compiles IDENTICALLY whether or not the
 /// workspace has pool resources — the manifest is irrelevant to a no-pool step,
 /// and it emits no pool bridges / lease typing. (The well-known-global fallback
-/// is gone; plain inline is the no-admission path now.)
+/// is gone; plain executor dispatch is the no-admission path now.)
 #[test]
-fn plain_inline_is_byte_identical_regardless_of_manifest() {
+fn plain_executor_is_byte_identical_regardless_of_manifest() {
     let graph = load_graph("resource-pool-step.json");
     // Compile with an empty manifest (today's public entry) ...
     let air_empty = compile_to_air(&graph, "t", "", &HashMap::new()).unwrap();
-    // ... and with a populated manifest a plain-inline step ignores.
+    // ... and with a populated manifest a plain-executor step ignores.
     let air_known = compile_to_air_with_subworkflows_and_interfaces(
         &graph,
         "t",
@@ -779,16 +779,16 @@ fn plain_inline_is_byte_identical_regardless_of_manifest() {
 
     assert_eq!(
         air_empty, air_known,
-        "a plain-inline step's AIR must not depend on the resource manifest"
+        "a plain-executor step's AIR must not depend on the resource manifest"
     );
     // No pool bridges, no lease definition.
     assert!(
         !has_place(&air_empty, "p_render_claim_out"),
-        "plain inline must emit no claim bridge"
+        "plain executor must emit no claim bridge"
     );
     assert!(
         air_empty["definitions"].get("Lease__token_pool").is_none(),
-        "plain inline must emit no Lease__ definition"
+        "plain executor must emit no Lease__ definition"
     );
 }
 
@@ -824,7 +824,7 @@ fn aliased_pool_bad_request_is_compile_error() {
     for node in &mut graph.nodes {
         if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
             deployment_model:
-                mekhan_service::models::template::DeploymentModel::Inline { pool: Some(binding) },
+                mekhan_service::models::template::DeploymentModel::Executor { pool: Some(binding) },
             ..
         } = &mut node.data
         {

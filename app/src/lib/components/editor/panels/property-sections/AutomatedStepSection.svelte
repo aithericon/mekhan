@@ -160,10 +160,11 @@
 		return backends.some((b) => b.name === v);
 	}
 
-	// Deployment model — inline (executor lifecycle) vs scheduled (scheduler-net,
-	// Nomad/Slurm GPU). Optional-chained so legacy templates (no field) render
-	// as inline; Rust `#[serde(default)]` covers the wire side.
-	const deploymentMode = $derived(data.deploymentModel?.mode ?? 'inline');
+	// Deployment model — executor (our executor daemon pool over the NATS work
+	// queue) vs scheduled (scheduler-net, Nomad/Slurm GPU). Optional-chained so
+	// legacy templates (no field) render as executor; Rust `#[serde(default)]`
+	// covers the wire side.
+	const deploymentMode = $derived(data.deploymentModel?.mode ?? 'executor');
 	const jobTemplate = $derived(
 		data.deploymentModel?.mode === 'scheduled' ? data.deploymentModel.jobTemplate : ''
 	);
@@ -171,7 +172,7 @@
 	// non-schedulable (engine effects — catalogue_query today).
 	const allowScheduled = $derived(currentBackend?.schedulable ?? true);
 
-	// Switching to scheduled drops any inline pool (pool is an Inline-only
+	// Switching to scheduled drops any executor pool (pool is an Executor-only
 	// admission — a datacenter cluster is bound under Scheduled instead). R5
 	// adds the scheduler alias + submit/lease operation picker; for now
 	// scheduled defaults to operation=submit, scheduler=env-global.
@@ -184,7 +185,7 @@
 							mode: 'scheduled',
 							jobTemplate: jobTemplate || GPU_JOB_TEMPLATES[0].value
 						}
-					: { mode: 'inline' }
+					: { mode: 'executor' }
 		});
 	}
 
@@ -192,31 +193,31 @@
 		onchange({ ...data, deploymentModel: { mode: 'scheduled', jobTemplate: v } });
 	}
 
-	// Inline token-pool admission. The binding lives under
-	// `deploymentModel.Inline.pool` (post-R3 consolidation); presence = "claim a
-	// unit from this token_pool". `alias` is REQUIRED — a pooled step names a
+	// Executor-pool token admission. The binding lives under
+	// `deploymentModel.Executor.pool` (post-R3 consolidation); presence = "claim
+	// a unit from this token_pool". `alias` is REQUIRED — a pooled step names a
 	// token_pool resource (no well-known-global fallback). R5 replaces this text
 	// input with a real alias picker grouped by kind.
 	const poolAlias = $derived(
-		data.deploymentModel?.mode === 'inline' ? (data.deploymentModel.pool?.alias ?? '') : ''
+		data.deploymentModel?.mode === 'executor' ? (data.deploymentModel.pool?.alias ?? '') : ''
 	);
 	const requiresPool = $derived(
-		data.deploymentModel?.mode === 'inline' && data.deploymentModel.pool != null
+		data.deploymentModel?.mode === 'executor' && data.deploymentModel.pool != null
 	);
-	// Pool is intrinsically inline-only now (it lives under Inline.pool), so the
-	// control is simply hidden while scheduled.
-	const poolControlsVisible = $derived(deploymentMode === 'inline');
+	// Pool is intrinsically executor-only now (it lives under Executor.pool), so
+	// the control is simply hidden while scheduled.
+	const poolControlsVisible = $derived(deploymentMode === 'executor');
 
 	function setRequiresPool(on: boolean) {
 		if (on) {
-			onchange({ ...data, deploymentModel: { mode: 'inline', pool: { alias: poolAlias } } });
+			onchange({ ...data, deploymentModel: { mode: 'executor', pool: { alias: poolAlias } } });
 		} else {
-			onchange({ ...data, deploymentModel: { mode: 'inline' } });
+			onchange({ ...data, deploymentModel: { mode: 'executor' } });
 		}
 	}
 
 	function setPoolAlias(alias: string) {
-		onchange({ ...data, deploymentModel: { mode: 'inline', pool: { alias } } });
+		onchange({ ...data, deploymentModel: { mode: 'executor', pool: { alias } } });
 	}
 </script>
 
@@ -269,10 +270,10 @@
 			<Select.Trigger disabled={readonly} data-testid="select-deployment-model">
 				{deploymentMode === 'scheduled'
 					? 'Scheduled (Nomad/Slurm, GPU)'
-					: 'Inline (immediate)'}
+					: 'Executor (worker pool)'}
 			</Select.Trigger>
 			<Select.Content>
-				<Select.Item value="inline" label="Inline (immediate)" />
+				<Select.Item value="executor" label="Executor (worker pool)" />
 				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
 			</Select.Content>
 		</Select.Root>
@@ -304,12 +305,12 @@
 		{/if}
 	{:else}
 		<p class="text-sm text-muted-foreground">
-			Inline only — this backend runs as an engine effect.
+			Executor only — this backend runs as an engine effect.
 		</p>
 	{/if}
 
-	<!-- Inline token-pool admission. Lives under Inline.pool (consolidation
-	     pivot) — only shown for inline steps. A pooled step names a token_pool
+	<!-- Executor-pool token admission. Lives under Executor.pool (consolidation
+	     pivot) — only shown for executor steps. A pooled step names a token_pool
 	     resource by alias (required). R5 swaps the alias text input for a real
 	     alias picker grouped by kind. -->
 	{#if poolControlsVisible}

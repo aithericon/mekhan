@@ -3932,27 +3932,27 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
 }
 
 #[test]
-fn automated_step_inline_unchanged_emits_lifecycle_no_bridge() {
+fn automated_step_executor_unchanged_emits_lifecycle_no_bridge() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
-            automated_node_with_deployment("auto", DeploymentModel::Inline { pool: None }),
+            automated_node_with_deployment("auto", DeploymentModel::Executor { pool: None }),
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
         viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
     };
     let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
-        .expect("inline should compile");
+        .expect("executor dispatch should compile");
 
-    // Inline path = executor lifecycle (scoped "auto/prepare"); no scheduler bridge.
+    // Executor path = executor lifecycle (scoped "auto/prepare"); no scheduler bridge.
     assert!(
         has_transition(&air, "auto/prepare"),
-        "inline keeps the executor-lifecycle prepare"
+        "executor dispatch keeps the executor-lifecycle prepare"
     );
     assert!(
         !has_place(&air, "p_auto_sched_out"),
-        "inline must not emit a scheduler bridge_out"
+        "executor dispatch must not emit a scheduler bridge_out"
     );
 }
 
@@ -5308,10 +5308,10 @@ fn automated_step_success_preserves_control_metadata_leaves() {
 // R1 — registry-resolved pools: schema foundation
 // ---------------------------------------------------------------------------
 
-/// `DeploymentModel` after the consolidation pivot:
-/// - plain inline = `{"mode":"inline"}` (pool skipped) — the default + the shape
-///   every existing template round-trips to;
-/// - `Inline { pool: { alias (required), request? } }`;
+/// `DeploymentModel` after the consolidation pivot + the Executor rename:
+/// - plain executor = `{"mode":"executor"}` (pool skipped) — the default + the
+///   shape every existing template round-trips to;
+/// - `Executor { pool: { alias (required), request? } }`;
 /// - `Scheduled` gained `scheduler?` + `operation` (default submit), both
 ///   skipped/defaulted so today's `{"mode":"scheduled","jobTemplate":...}` is
 ///   byte-identical.
@@ -5321,25 +5321,26 @@ fn deployment_model_surface_round_trips() {
         DeploymentModel, ResourcePoolBinding, ScheduledOperation,
     };
 
-    // Default = plain inline, no pool. Serializes to a bare `{"mode":"inline"}`.
-    let inline_default = DeploymentModel::default();
-    assert_eq!(inline_default, DeploymentModel::Inline { pool: None });
+    // Default = plain executor dispatch, no pool. Serializes to a bare
+    // `{"mode":"executor"}`.
+    let exec_default = DeploymentModel::default();
+    assert_eq!(exec_default, DeploymentModel::Executor { pool: None });
     assert_eq!(
-        serde_json::to_value(&inline_default).unwrap(),
-        json!({ "mode": "inline" })
+        serde_json::to_value(&exec_default).unwrap(),
+        json!({ "mode": "executor" })
     );
-    // A bare `{"mode":"inline"}` deserializes back to no-pool.
-    let parsed: DeploymentModel = serde_json::from_value(json!({ "mode": "inline" })).unwrap();
-    assert_eq!(parsed, DeploymentModel::Inline { pool: None });
+    // A bare `{"mode":"executor"}` deserializes back to no-pool.
+    let parsed: DeploymentModel = serde_json::from_value(json!({ "mode": "executor" })).unwrap();
+    assert_eq!(parsed, DeploymentModel::Executor { pool: None });
 
-    // Inline with a pool binding (alias required).
+    // Executor with a pool binding (alias required).
     let pooled: DeploymentModel = serde_json::from_value(
-        json!({ "mode": "inline", "pool": { "alias": "prod_gpu", "request": { "gpu_count": 2 } } }),
+        json!({ "mode": "executor", "pool": { "alias": "prod_gpu", "request": { "gpu_count": 2 } } }),
     )
-    .expect("inline+pool must parse");
+    .expect("executor+pool must parse");
     assert_eq!(
         pooled,
-        DeploymentModel::Inline {
+        DeploymentModel::Executor {
             pool: Some(ResourcePoolBinding {
                 alias: "prod_gpu".to_string(),
                 request: Some(json!({ "gpu_count": 2 })),
@@ -5348,7 +5349,8 @@ fn deployment_model_surface_round_trips() {
     );
     // alias is REQUIRED: a `pool` without it is a hard deserialize error.
     assert!(
-        serde_json::from_value::<DeploymentModel>(json!({ "mode": "inline", "pool": {} })).is_err(),
+        serde_json::from_value::<DeploymentModel>(json!({ "mode": "executor", "pool": {} }))
+            .is_err(),
         "pool without an alias must fail to deserialize"
     );
 

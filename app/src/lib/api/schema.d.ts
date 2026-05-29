@@ -2548,20 +2548,23 @@ export interface components {
         };
         /**
          * @description Where an `AutomatedStep`'s job runs. Internally tagged on the wire by
-         *     `mode`: `{"mode":"inline", ...}` or `{"mode":"scheduled", ...}`. Keep the
+         *     `mode`: `{"mode":"executor", ...}` or `{"mode":"scheduled", ...}`. Keep the
          *     `mode` strings in lockstep with the `snake_case` derive.
          *
-         *     `inline` vs `scheduled` is the physically-honest local-executor vs
-         *     external-cluster split. Resource admission *is* scheduling, so:
-         *     - a `token_pool` admission lives under [`DeploymentModel::Inline`]'s `pool`
-         *       (the body runs inline holding the typed lease — R1–R3 machinery), and
+         *     `executor` vs `scheduled` is the physically-honest split: our own executor
+         *     daemon pool (jobs dispatched over the NATS work queue and pulled by the
+         *     long-running executor workers) vs an external cluster. Resource admission
+         *     *is* scheduling, so:
+         *     - a `token_pool` admission lives under [`DeploymentModel::Executor`]'s `pool`
+         *       (the body runs on our executor pool holding the typed lease — R1–R3
+         *       machinery), and
          *     - an external cluster is a `datacenter` resource bound under
          *       [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`
          *       selecting submit (today's sbatch/dispatch) vs lease (R4).
          */
         DeploymentModel: {
             /** @enum {string} */
-            mode: "inline";
+            mode: "executor";
             pool?: null | components["schemas"]["ResourcePoolBinding"];
         } | {
             jobTemplate: string;
@@ -4032,13 +4035,13 @@ export interface components {
             memory_bytes?: number | null;
         };
         /**
-         * @description A binding to a `token_pool` resource for inline admission (`docs/14`).
-         *     Lives under [`DeploymentModel::Inline`]'s `pool`; its presence makes the
-         *     compiler wrap the inline executor body with a claim/register/release
-         *     handshake against the pool resource's backing net so the engine's firing
-         *     rule provides admission control + mutual exclusion for free.
+         * @description A binding to a `token_pool` resource for executor-pool admission (`docs/14`).
+         *     Lives under [`DeploymentModel::Executor`]'s `pool`; its presence makes the
+         *     compiler wrap the executor body with a claim/register/release handshake
+         *     against the pool resource's backing net so the engine's firing rule provides
+         *     admission control + mutual exclusion for free.
          *
-         *     `alias` is REQUIRED (the `Option` lives on `Inline.pool`, expressing "no
+         *     `alias` is REQUIRED (the `Option` lives on `Executor.pool`, expressing "no
          *     pool"). It resolves at publish through the resource machinery to a backing
          *     net id + kind + claim/lease schemas; `request` is validated against the
          *     kind's `claim_schema`. The well-known-global fallback from the prototype is
@@ -5246,16 +5249,16 @@ export interface components {
             type: "human_task";
         } | {
             /**
-             * @description Where/how the job is dispatched. `Inline` (default) = the current
-             *     direct executor-lifecycle path, optionally under a `token_pool`
-             *     admission (`Inline.pool`). `Scheduled` = submit/lease through an
+             * @description Where/how the job is dispatched. `Executor` (default) = our executor
+             *     daemon pool over the NATS work queue, optionally under a `token_pool`
+             *     admission (`Executor.pool`). `Scheduled` = submit/lease through an
              *     external cluster (a `datacenter` resource, docs/13; or today's
              *     env-global scheduler-net when `scheduler` is `None`).
-             *     `#[serde(default)]` + the `Inline` default ⇒ every existing template
-             *     round-trips unchanged (same precedent as `retry_policy`).
+             *     `#[serde(default)]` + the `Executor` default ⇒ every existing
+             *     template round-trips unchanged (same precedent as `retry_policy`).
              *
              *     Resource admission *is* scheduling, so the former standalone
-             *     `resourcePool` field folded into `Inline.pool` here (post-R3
+             *     `resourcePool` field folded into `Executor.pool` here (post-R3
              *     consolidation pivot).
              */
             deploymentModel?: components["schemas"]["DeploymentModel"];

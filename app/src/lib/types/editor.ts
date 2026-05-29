@@ -120,7 +120,7 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 					config: {}
 				},
 				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 },
-				deploymentModel: { mode: 'inline' }
+				deploymentModel: { mode: 'executor' }
 			};
 		case 'decision':
 			return {

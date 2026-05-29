@@ -459,7 +459,7 @@ mod scope_reachability_tests {
              "data":{"type":"automated_step","label":"Extract",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -512,7 +512,7 @@ mod scope_reachability_tests {
              "data":{"type":"automated_step","label":"Extract",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -557,7 +557,7 @@ mod scope_reachability_tests {
              "data":{"type":"automated_step","label":"Extract",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -712,7 +712,7 @@ mod scope_reachability_tests {
                  "data":{{"type":"automated_step","label":"OCR",
                          "executionSpec":{{"backendType":"kreuzberg","config":{{"file":"sample.pdf"}}}},
                          "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
-                         "deploymentModel":{{"mode":"inline"}},
+                         "deploymentModel":{{"mode":"executor"}},
                          "output":{{"id":"out","label":"out","fields":[
                            {{"name":"content","label":"Content","kind":"text","required":true}}
                          ]}}}}}},
@@ -723,7 +723,7 @@ mod scope_reachability_tests {
                             "prompt":{prompt}
                          }}}},
                          "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
-                         "deploymentModel":{{"mode":"inline"}},
+                         "deploymentModel":{{"mode":"executor"}},
                          "output":{{"id":"out","label":"out","fields":[
                            {{"name":"klass","label":"K","kind":"text","required":true}}
                          ]}}}}}},
@@ -870,7 +870,7 @@ mod scope_reachability_tests {
              "data":{"type":"automated_step","label":"OCR",
                      "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ uploader.pdf }}"}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -917,7 +917,7 @@ mod scope_reachability_tests {
              "data":{"type":"automated_step","label":"Gen",
                      "executionSpec":{"backendType":"llm","config":{"provider":"openai","model":"x","prompt":"hello"}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"},
+                     "deploymentModel":{"mode":"executor"},
                      "output":{"id":"out","label":"out","fields":[
                        {"name":"narrative","label":"N","kind":"text","required":true}
                      ]}}},
@@ -925,7 +925,7 @@ mod scope_reachability_tests {
              "data":{"type":"automated_step","label":"ReOCR",
                      "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ genreport.narrative }}"}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -967,7 +967,7 @@ mod scope_reachability_tests {
              "data":{"type":"automated_step","label":"OCR",
                      "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ start.document }}"}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],

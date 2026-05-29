@@ -410,10 +410,10 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
     // pipeline. Opaque (not the kind's typed lease schema) because shape
     // analysis has no `known_resources` to resolve the kind here — the leaf is
     // findable + the nested `.field` is appended verbatim, which is all the
-    // borrow resolver needs. Only emitted under `Inline { pool: Some }`; plain
-    // inline stages no lease and stays byte-identical.
+    // borrow resolver needs. Only emitted under `Executor { pool: Some }`; plain
+    // executor dispatch stages no lease and stays byte-identical.
     if let WorkflowNodeData::AutomatedStep {
-        deployment_model: DeploymentModel::Inline { pool: Some(_) },
+        deployment_model: DeploymentModel::Executor { pool: Some(_) },
         ..
     } = &node.data
     {

@@ -67,7 +67,7 @@ fn graph(
              "data":{{"type":"automated_step","label":"Extract",
                      "executionSpec":{{"backendType":"python","config":{{"source":"tasks = []"}}}},
                      "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
-                     "deploymentModel":{{"mode":"inline"}},
+                     "deploymentModel":{{"mode": "executor"}},
                      "output":{{"id":"out","label":"out","fields":[
                        {{"name":"tasks","label":"Tasks","kind":"json","required":true}}
                      ]}}}}}},
@@ -82,7 +82,7 @@ fn graph(
              "data":{{"type":"automated_step","label":"Consumer",
                      "executionSpec":{{"backendType":"python","config":{{"source":"pass"}}}},
                      "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
-                     "deploymentModel":{{"mode":"inline"}},
+                     "deploymentModel":{{"mode": "executor"}},
                      "output":{{"id":"out","label":"out","fields":[]}}}}}},
             {{"id":"end","type":"end","position":{{"x":0,"y":0}},
              "data":{{"type":"end","label":"End"}}}}

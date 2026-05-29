@@ -302,7 +302,7 @@ fn surface_types_emits_nested_tree_for_file_envelope() {
          "data":{"type":"automated_step","label":"OCR",
                   "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ start.document }}"}},
                   "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                  "deploymentModel":{"mode":"inline"}}},
+                  "deploymentModel":{"mode": "executor"}}},
         {"id":"end","type":"end","position":{"x":0,"y":0},
          "data":{"type":"end","label":"End"}}
       ],

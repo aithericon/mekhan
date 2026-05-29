@@ -296,16 +296,16 @@ pub enum WorkflowNodeData {
         /// templates keep their prior semantics without re-authoring.
         #[serde(rename = "retryPolicy", default)]
         retry_policy: RetryPolicy,
-        /// Where/how the job is dispatched. `Inline` (default) = the current
-        /// direct executor-lifecycle path, optionally under a `token_pool`
-        /// admission (`Inline.pool`). `Scheduled` = submit/lease through an
+        /// Where/how the job is dispatched. `Executor` (default) = our executor
+        /// daemon pool over the NATS work queue, optionally under a `token_pool`
+        /// admission (`Executor.pool`). `Scheduled` = submit/lease through an
         /// external cluster (a `datacenter` resource, docs/13; or today's
         /// env-global scheduler-net when `scheduler` is `None`).
-        /// `#[serde(default)]` + the `Inline` default ⇒ every existing template
-        /// round-trips unchanged (same precedent as `retry_policy`).
+        /// `#[serde(default)]` + the `Executor` default ⇒ every existing
+        /// template round-trips unchanged (same precedent as `retry_policy`).
         ///
         /// Resource admission *is* scheduling, so the former standalone
-        /// `resourcePool` field folded into `Inline.pool` here (post-R3
+        /// `resourcePool` field folded into `Executor.pool` here (post-R3
         /// consolidation pivot).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
@@ -1086,26 +1086,32 @@ pub fn default_join_output_port() -> Port {
 }
 
 /// Where an `AutomatedStep`'s job runs. Internally tagged on the wire by
-/// `mode`: `{"mode":"inline", ...}` or `{"mode":"scheduled", ...}`. Keep the
+/// `mode`: `{"mode":"executor", ...}` or `{"mode":"scheduled", ...}`. Keep the
 /// `mode` strings in lockstep with the `snake_case` derive.
 ///
-/// `inline` vs `scheduled` is the physically-honest local-executor vs
-/// external-cluster split. Resource admission *is* scheduling, so:
-/// - a `token_pool` admission lives under [`DeploymentModel::Inline`]'s `pool`
-///   (the body runs inline holding the typed lease — R1–R3 machinery), and
+/// `executor` vs `scheduled` is the physically-honest split: our own executor
+/// daemon pool (jobs dispatched over the NATS work queue and pulled by the
+/// long-running executor workers) vs an external cluster. Resource admission
+/// *is* scheduling, so:
+/// - a `token_pool` admission lives under [`DeploymentModel::Executor`]'s `pool`
+///   (the body runs on our executor pool holding the typed lease — R1–R3
+///   machinery), and
 /// - an external cluster is a `datacenter` resource bound under
 ///   [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`
 ///   selecting submit (today's sbatch/dispatch) vs lease (R4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum DeploymentModel {
-    /// Local executor-lifecycle dispatch (NATS). `pool: None` is plain inline,
-    /// byte-identical to pre-feature behaviour. `pool: Some` wraps the body in
-    /// a `token_pool` claim/register/release handshake so contended local
-    /// infrastructure (GPUs, lab machines, LLM slots) is admission-controlled
-    /// by the Petri firing rule (R3). The bound alias MUST be a `token_pool`
-    /// resource — a `datacenter` belongs under [`DeploymentModel::Scheduled`].
-    Inline {
+    /// Dispatch to our executor daemon pool over the NATS work queue (jobs are
+    /// pulled by the long-running executor workers — NOT in-process). `pool:
+    /// None` is the plain path: our worker pool is currently unbounded (no
+    /// control plane gating concurrency yet), so a job runs as soon as a worker
+    /// is free. `pool: Some` adds BOUNDED admission on top — a `token_pool`
+    /// claim/register/release handshake so contended infrastructure (GPUs, lab
+    /// machines, LLM slots) is admission-controlled by the Petri firing rule
+    /// (R3). The bound alias MUST be a `token_pool` resource — a `datacenter`
+    /// belongs under [`DeploymentModel::Scheduled`].
+    Executor {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pool: Option<ResourcePoolBinding>,
     },
@@ -1133,12 +1139,12 @@ pub enum DeploymentModel {
 }
 
 impl Default for DeploymentModel {
-    /// Plain inline (no pool) — byte-identical to pre-feature behaviour, and the
-    /// shape every existing template round-trips to (a bare
-    /// `{"mode":"inline"}`, or an absent `deploymentModel` via the field's
+    /// Plain executor dispatch (no pool) — byte-identical to pre-feature
+    /// behaviour, and the shape every existing template round-trips to (a bare
+    /// `{"mode":"executor"}`, or an absent `deploymentModel` via the field's
     /// `#[serde(default)]`).
     fn default() -> Self {
-        DeploymentModel::Inline { pool: None }
+        DeploymentModel::Executor { pool: None }
     }
 }
 
@@ -1168,13 +1174,13 @@ pub struct ResourceConfig {
     pub gpu: Option<u32>,
 }
 
-/// A binding to a `token_pool` resource for inline admission (`docs/14`).
-/// Lives under [`DeploymentModel::Inline`]'s `pool`; its presence makes the
-/// compiler wrap the inline executor body with a claim/register/release
-/// handshake against the pool resource's backing net so the engine's firing
-/// rule provides admission control + mutual exclusion for free.
+/// A binding to a `token_pool` resource for executor-pool admission (`docs/14`).
+/// Lives under [`DeploymentModel::Executor`]'s `pool`; its presence makes the
+/// compiler wrap the executor body with a claim/register/release handshake
+/// against the pool resource's backing net so the engine's firing rule provides
+/// admission control + mutual exclusion for free.
 ///
-/// `alias` is REQUIRED (the `Option` lives on `Inline.pool`, expressing "no
+/// `alias` is REQUIRED (the `Option` lives on `Executor.pool`, expressing "no
 /// pool"). It resolves at publish through the resource machinery to a backing
 /// net id + kind + claim/lease schemas; `request` is validated against the
 /// kind's `claim_schema`. The well-known-global fallback from the prototype is

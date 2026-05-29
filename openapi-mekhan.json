@@ -7319,7 +7319,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Local executor-lifecycle dispatch (NATS). `pool: None` is plain inline,\nbyte-identical to pre-feature behaviour. `pool: Some` wraps the body in\na `token_pool` claim/register/release handshake so contended local\ninfrastructure (GPUs, lab machines, LLM slots) is admission-controlled\nby the Petri firing rule (R3). The bound alias MUST be a `token_pool`\nresource — a `datacenter` belongs under [`DeploymentModel::Scheduled`].",
+            "description": "Dispatch to our executor daemon pool over the NATS work queue (jobs are\npulled by the long-running executor workers — NOT in-process). `pool:\nNone` is the plain path: our worker pool is currently unbounded (no\ncontrol plane gating concurrency yet), so a job runs as soon as a worker\nis free. `pool: Some` adds BOUNDED admission on top — a `token_pool`\nclaim/register/release handshake so contended infrastructure (GPUs, lab\nmachines, LLM slots) is admission-controlled by the Petri firing rule\n(R3). The bound alias MUST be a `token_pool` resource — a `datacenter`\nbelongs under [`DeploymentModel::Scheduled`].",
             "required": [
               "mode"
             ],
@@ -7327,7 +7327,7 @@
               "mode": {
                 "type": "string",
                 "enum": [
-                  "inline"
+                  "executor"
                 ]
               },
               "pool": {
@@ -7383,7 +7383,7 @@
             }
           }
         ],
-        "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"inline\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`inline` vs `scheduled` is the physically-honest local-executor vs\nexternal-cluster split. Resource admission *is* scheduling, so:\n- a `token_pool` admission lives under [`DeploymentModel::Inline`]'s `pool`\n  (the body runs inline holding the typed lease — R1–R3 machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
+        "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a `token_pool` admission lives under [`DeploymentModel::Executor`]'s `pool`\n  (the body runs on our executor pool holding the typed lease — R1–R3\n  machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
       },
       "DispatchMode": {
         "oneOf": [
@@ -11042,7 +11042,7 @@
       },
       "ResourcePoolBinding": {
         "type": "object",
-        "description": "A binding to a `token_pool` resource for inline admission (`docs/14`).\nLives under [`DeploymentModel::Inline`]'s `pool`; its presence makes the\ncompiler wrap the inline executor body with a claim/register/release\nhandshake against the pool resource's backing net so the engine's firing\nrule provides admission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Inline.pool`, expressing \"no\npool\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a `token_pool` resource.",
+        "description": "A binding to a `token_pool` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `pool`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.pool`, expressing \"no\npool\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a `token_pool` resource.",
         "required": [
           "alias"
         ],
@@ -13524,7 +13524,7 @@
             "properties": {
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how the job is dispatched. `Inline` (default) = the current\ndirect executor-lifecycle path, optionally under a `token_pool`\nadmission (`Inline.pool`). `Scheduled` = submit/lease through an\nexternal cluster (a `datacenter` resource, docs/13; or today's\nenv-global scheduler-net when `scheduler` is `None`).\n`#[serde(default)]` + the `Inline` default ⇒ every existing template\nround-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Inline.pool` here (post-R3\nconsolidation pivot)."
+                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `token_pool`\nadmission (`Executor.pool`). `Scheduled` = submit/lease through an\nexternal cluster (a `datacenter` resource, docs/13; or today's\nenv-global scheduler-net when `scheduler` is `None`).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.pool` here (post-R3\nconsolidation pivot)."
               },
               "description": {
                 "type": [

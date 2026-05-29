@@ -298,7 +298,7 @@ fn parent_graph(child_family: Uuid) -> Value {
                             ]
                         },
                         "retryPolicy": {},
-                        "deploymentModel": { "mode": "inline" } } },
+                        "deploymentModel": { "mode": "executor" } } },
 
             // End — empty resultMapping because Gap 2 (see module doc) means
             // we can't reach the body's output fields from here. Completion

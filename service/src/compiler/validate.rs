@@ -1389,7 +1389,7 @@ mod repeater_tests {
                  "data":{{"type":"automated_step","label":"Extract",
                          "executionSpec":{{"backendType":"python","config":{{"source":""}}}},
                          "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
-                         "deploymentModel":{{"mode":"inline"}},
+                         "deploymentModel":{{"mode":"executor"}},
                          "output":{{"id":"out","label":"out","fields":[
                            {{"name":"tasks","label":"Tasks","kind":"json","required":true}}
                          ]}}}}}},
@@ -1546,7 +1546,7 @@ mod repeater_tests {
                  "data":{"type":"automated_step","label":"Extract",
                          "executionSpec":{"backendType":"python","config":{"source":""}},
                          "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                         "deploymentModel":{"mode":"inline"},
+                         "deploymentModel":{"mode":"executor"},
                          "output":{"id":"out","label":"out","fields":[
                            {"name":"tasks","label":"Tasks","kind":"json","required":true}
                          ]}}},

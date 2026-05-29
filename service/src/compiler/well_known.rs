@@ -14,7 +14,7 @@ pub const SCHEDULER_NET_ID: &str = "scheduler-net";
 pub const SCHEDULER_JOB_QUEUE: &str = "job_inbox";
 
 /// Deterministic backing-net id for a registry-resolved pool resource. A pooled
-/// AutomatedStep (`Inline { pool: { alias } }`) whose alias resolves to a
+/// AutomatedStep (`Executor { pool: { alias } }`) whose alias resolves to a
 /// `token_pool` resource `<resource_id>` bridges its claim/register/release
 /// handshake to this id. R3 (tokens backend) deploys a net with exactly this id
 /// via `build_token_pool_net`; the resource *kind* decides what that net IS, but

@@ -344,16 +344,16 @@ async fn discover_known_resources(
             declared.push((node.id.clone(), alias));
         }
 
-        // `Inline.pool.alias` is a declared resource binding too, but it lives
+        // `Executor.pool.alias` is a declared resource binding too, but it lives
         // on the node *data* (`deploymentModel.pool`), not inside the backend
         // config the scanner above reads. Collect it the same way — into
         // `heads` (so it resolves to a `KnownResource` the compiler can read)
         // and `declared` (so a missing/unknown alias hard-fails at publish,
-        // like any other declared alias). Plain inline (no pool) contributes
-        // nothing.
+        // like any other declared alias). Plain executor dispatch (no pool)
+        // contributes nothing.
         if let WorkflowNodeData::AutomatedStep {
             deployment_model:
-                crate::models::template::DeploymentModel::Inline { pool: Some(binding) },
+                crate::models::template::DeploymentModel::Executor { pool: Some(binding) },
             ..
         } = &node.data
         {

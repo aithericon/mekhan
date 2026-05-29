@@ -12,13 +12,13 @@
 	const fields = $derived(data.output?.fields ?? []);
 	const hasFields = $derived(fields.length > 0);
 	const outputId = $derived(data.output?.id ?? 'out');
-	// Inline token-pool admission (deploymentModel.Inline.pool) — show a "Pool"
-	// chip on the card.
+	// Executor-pool token admission (deploymentModel.Executor.pool) — show a
+	// "Pool" chip on the card.
 	const requiresPool = $derived(
-		data.deploymentModel?.mode === 'inline' && data.deploymentModel.pool != null
+		data.deploymentModel?.mode === 'executor' && data.deploymentModel.pool != null
 	);
 	const poolAlias = $derived(
-		data.deploymentModel?.mode === 'inline' ? (data.deploymentModel.pool?.alias ?? '') : ''
+		data.deploymentModel?.mode === 'executor' ? (data.deploymentModel.pool?.alias ?? '') : ''
 	);
 
 	const kindBadge: Record<string, string> = {

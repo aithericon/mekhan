@@ -3,7 +3,7 @@
 # Seeded as a plain inline step (the demo seeder provisions templates, not
 # resources). To turn it into the shared-pool admission showcase: create a
 # `token_pool` resource at /resources, then set this step's deploymentModel to
-# `{ mode: "inline", pool: { alias: "<your-pool>" } }`. The compiler then wraps
+# `{ mode: "executor", pool: { alias: "<your-pool>" } }`. The compiler then wraps
 # this body behind a capacity claim against the pool's backing net: the net does
 # not start the body until a unit token is granted, and the grant is returned on
 # every exit. From the body's point of view the unit is simply available —

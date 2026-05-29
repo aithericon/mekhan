@@ -2565,7 +2565,7 @@ mod tests {
              "data":{"type":"automated_step","label":"Extract",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -2705,7 +2705,7 @@ mod tests {
                        }
                      },
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -2821,7 +2821,7 @@ mod tests {
                        }
                      },
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -2927,7 +2927,7 @@ mod tests {
              "data":{"type":"automated_step","label":"Extract",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -3102,7 +3102,7 @@ mod tests {
              "data":{"type":"automated_step","label":"Extract",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -3548,7 +3548,7 @@ mod tests {
                        {"name":"token","label":"Token","kind":"text","required":true}
                      ]},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -3610,7 +3610,7 @@ mod tests {
                        {"name":"review","label":"Review","kind":"json","required":true}
                      ]},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -3678,7 +3678,7 @@ mod tests {
                        {"name":"extracted","label":"Extracted","kind":"bool","required":true}
                      ]},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -3768,7 +3768,7 @@ mod tests {
                         "prompt":"Vendor: {{ review.vendor_name }} — classify"
                      }},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -3872,7 +3872,7 @@ mod tests {
              "data":{"type":"automated_step","label":"OCR",
                      "executionSpec":{"backendType":"kreuzberg","config":{"file":"{{ uploader.pdf }}"}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -3953,7 +3953,7 @@ mod tests {
                        {"name":"stdout","label":"Stdout","kind":"textarea","required":false}
                      ]},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"}}},
+                     "deploymentModel":{"mode":"executor"}}},
             {"id":"end","type":"end","position":{"x":0,"y":0},
              "data":{"type":"end","label":"End"}}
           ],
@@ -4187,7 +4187,7 @@ mod tests {
              "data":{"type":"automated_step","label":"Body",
                      "executionSpec":{"backendType":"python","entrypoint":"main.py","config":{"entrypoint":"main.py","python":"python3","sdk":true}},
                      "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
-                     "deploymentModel":{"mode":"inline"},
+                     "deploymentModel":{"mode":"executor"},
                      "output":{"id":"out","label":"Tick","fields":[
                        {"name":"saw","label":"Iteration","kind":"number","required":true}
                      ]}}},

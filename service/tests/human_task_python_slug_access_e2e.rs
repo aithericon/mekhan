@@ -178,7 +178,7 @@ fn demo_graph() -> Value {
                       }
                   },
                   "retryPolicy": { "maxRetries": 0, "strategy": { "type": "immediate" } },
-                  "deploymentModel": { "mode": "inline" },
+                  "deploymentModel": { "mode": "executor" },
                   "output": {
                       "id": "out", "label": "Out", "fields": [
                           { "name": "vendor", "label": "Vendor", "kind": "text", "required": true },

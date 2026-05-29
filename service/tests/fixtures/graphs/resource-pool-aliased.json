@@ -22,7 +22,7 @@
 					}
 				},
 				"deploymentModel": {
-					"mode": "inline",
+					"mode": "executor",
 					"pool": {
 						"alias": "prod_gpu",
 						"request": { "units": 1 }

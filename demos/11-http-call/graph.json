@@ -102,7 +102,7 @@
           "maxRetries": 0,
           "strategy": { "type": "immediate" }
         },
-        "deploymentModel": { "mode": "inline" }
+        "deploymentModel": { "mode": "executor" }
       }
     },
     {

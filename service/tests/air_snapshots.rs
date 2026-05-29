@@ -41,13 +41,14 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "10-delay-timeout",
     "11-http-call",
     "12-bo-loop",
-    // 13-resource-pool: a plain inline Python step. The shared-pool admission
-    // showcase moved off the well-known global onto a named `token_pool`
-    // RESOURCE bound via `deploymentModel: { mode: "inline", pool: { alias } }`
-    // (consolidation pivot) — and the demo seeder provisions templates, not
-    // resources, so the seeded demo is plain inline. The pooled-lowering AIR
-    // shape is pinned by `compiler_e2e`'s aliased-pool tests instead; the live
-    // pool showcase is an R5 dogfood step.
+    // 13-resource-pool: a plain executor-dispatch Python step. The shared-pool
+    // admission showcase moved off the well-known global onto a named
+    // `token_pool` RESOURCE bound via
+    // `deploymentModel: { mode: "executor", pool: { alias } }` (consolidation
+    // pivot) — and the demo seeder provisions templates, not resources, so the
+    // seeded demo is plain executor dispatch. The pooled-lowering AIR shape is
+    // pinned by `compiler_e2e`'s aliased-pool tests instead; the live pool
+    // showcase is an R5 dogfood step.
     "13-resource-pool",
 ];
 

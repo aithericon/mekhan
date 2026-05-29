@@ -1,7 +1,7 @@
 //! `WorkflowNodeData::AutomatedStep` lowering. Three dispatch arms:
 //!
-//! - `lower_automated_step` (the public entry) — inline executor lifecycle
-//!   for the normal `DeploymentModel::Inline` path; offloads the static
+//! - `lower_automated_step` (the public entry) — executor-pool lifecycle
+//!   for the normal `DeploymentModel::Executor` path; offloads the static
 //!   config to the per-node side-channel and emits a slim `config_ref`
 //!   Rhai literal.
 //! - `lower_automated_step_scheduled` — `DeploymentModel::Scheduled` jobs
@@ -16,13 +16,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // into it). `matches!` drops the borrow immediately so each delegate can
     // take `cx` mutably.
     //
-    //   - Scheduled            → lower_automated_step_scheduled (Submit = today's
-    //                            scheduler-net path, byte-identical; Lease = R4).
-    //   - Inline { pool: Some } → lower_automated_step_pooled (token_pool
-    //                            admission, R2/R3 machinery).
-    //   - Inline { pool: None } → falls through to the plain inline lowering
-    //                            below (BYTE-IDENTICAL — guarded by
-    //                            `automated_step_inline_unchanged`).
+    //   - Scheduled              → lower_automated_step_scheduled (Submit = today's
+    //                              scheduler-net path, byte-identical; Lease = R4).
+    //   - Executor { pool: Some } → lower_automated_step_pooled (token_pool
+    //                              admission, R2/R3 machinery).
+    //   - Executor { pool: None } → falls through to the plain executor lowering
+    //                              below (BYTE-IDENTICAL — guarded by
+    //                              `automated_step_inline_unchanged`).
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
@@ -36,7 +36,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Inline { pool: Some(_) },
+            deployment_model: DeploymentModel::Executor { pool: Some(_) },
             ..
         }
     ) {
@@ -519,7 +519,7 @@ fn sanitize_definition_schema(mut schema: serde_json::Value) -> serde_json::Valu
     schema
 }
 
-/// Pooled (`Inline { pool: Some }`) AutomatedStep: the inline executor-lifecycle
+/// Pooled (`Executor { pool: Some }`) AutomatedStep: the executor-lifecycle
 /// body wrapped in a **claim / register / release** handshake against the
 /// resolved `token_pool` resource's backing net (`well_known::pool_net_id`,
 /// built by `mekhan_service::petri::pool_net::build_token_pool_net`). The pool's
@@ -600,8 +600,8 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     else {
         unreachable!("lower_automated_step_pooled on non-AutomatedStep node")
     };
-    let DeploymentModel::Inline { pool: Some(binding) } = deployment_model else {
-        unreachable!("lower_automated_step_pooled only runs for Inline pool:Some")
+    let DeploymentModel::Executor { pool: Some(binding) } = deployment_model else {
+        unreachable!("lower_automated_step_pooled only runs for Executor pool:Some")
     };
     let label = label.clone();
     let retry_policy = retry_policy.clone();
