@@ -12,13 +12,13 @@
 
 use mekhan_service::compiler::{
     compile_to_air, compile_to_air_with_subworkflows_interfaces_and_configs, ConfigStorage,
-    SubWorkflowAir,
+    ResolvedChild, SubWorkflowAir,
 };
 use mekhan_service::compiler::resource_refs::KnownResources;
 use mekhan_service::models::template::{FieldKind, PortField};
 use mekhan_service::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, ModelRef, Port,
-    Position, RetryPolicy, ToolErrorPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    Position, RetryPolicy, ToolErrorPolicy, VersionPin, WorkflowEdge, WorkflowGraph, WorkflowNode,
     WorkflowNodeData,
 };
 use serde_json::{json, Value};
@@ -353,6 +353,92 @@ fn route_dispatch_guard_bakes_in_max_turns() {
     assert!(
         guard.contains("< 7"),
         "dispatch guard must compare turn against max_turns=7; got: {guard}"
+    );
+}
+
+/// Conversation memory (off-token transcript side-channel): the full
+/// transcript lives in per-turn S3 blobs, NOT on the token. Each turn
+/// `prepare_call` declares the prior cumulative blob + this turn's `pending`
+/// delta as job inputs (resolved into `config.history`/`config.pending` via
+/// `{{input:...}}`), carries the per-turn `_history_write_key` in the
+/// overlay, and CLEARS `s.pending` once shipped. `route_dispatch` only
+/// threads `pending_tool_call_id` + bumps the turn — the assistant turn is
+/// written by the executor worker from the model's `turn_result`. `collect`
+/// stages the `role: "tool"` result as the next `pending` delta (keyed by
+/// the call id). Without this the model never sees the tool result and
+/// re-calls the tool every turn until max_turns.
+#[test]
+fn agent_threads_transcript_off_token_via_inputs() {
+    let air = compile(
+        vec![
+            start_node("s"),
+            agent_node("a"),
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
+    );
+    let logic_of = |id: &str| -> String {
+        air.get("transitions")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("transition {id} present"))
+            .get("logic")
+            .and_then(|l| l.get("source"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{id} has Rhai logic"))
+            .to_string()
+    };
+
+    let prepare = logic_of("t_a_prepare_call");
+    // Transcript I/O rides as declared inputs + the existing overlay; the
+    // full conversation never travels on the token (no `s.history`).
+    assert!(
+        prepare.contains(r#""name": "history""#)
+            && prepare.contains(r#""name": "pending""#),
+        "prepare_call must declare `history` + `pending` job inputs; got: {prepare}"
+    );
+    assert!(
+        prepare.contains("{{input:history}}")
+            && prepare.contains("{{input:pending}}")
+            && prepare.contains("_history_write_key"),
+        "prepare_call overlay must carry the input placeholders + write key; \
+         got: {prepare}"
+    );
+    assert!(
+        prepare.contains("s.pending = []"),
+        "prepare_call must clear s.pending once shipped (the worker folds it \
+         into the turn blob); got: {prepare}"
+    );
+    assert!(
+        !prepare.contains("s.history"),
+        "the transcript must NOT travel on the token; got: {prepare}"
+    );
+
+    let dispatch = logic_of("t_a_route_dispatch_lookup");
+    assert!(
+        dispatch.contains("pending_tool_call_id") && dispatch.contains("s.turn = s.turn + 1"),
+        "dispatch must stash the call id + bump the turn; got: {dispatch}"
+    );
+    assert!(
+        !dispatch.contains(r#"role: "assistant""#),
+        "dispatch must NOT push the assistant turn — the worker writes it from \
+         the model result; got: {dispatch}"
+    );
+
+    let collect = logic_of("t_a_collect_lookup");
+    assert!(
+        collect.contains("s.pending = [")
+            && collect.contains(r#"role: "tool""#)
+            && collect.contains("tool_call_id: s.pending_tool_call_id"),
+        "collect must stage a role:tool result as the pending delta carrying \
+         the tool_call_id; got: {collect}"
     );
 }
 
@@ -866,5 +952,240 @@ fn duplicate_tool_name_is_compile_error() {
     assert!(
         msg.contains("duplicate tool name") && msg.contains("lookup"),
         "expected duplicate tool-name error mentioning 'lookup', got: {msg}"
+    );
+}
+
+// --- SubWorkflow-as-tool: contract comes from the child's Start node ---
+
+/// A SubWorkflow node wired as an agent tool. A SubWorkflow's *own* input
+/// port is a fields-less pass-through (`nodes/sub_workflow.rs::input_ports`),
+/// so the LLM tool schema must come from the child's Start `initial`
+/// contract instead — carried on the resolved child as `input_contract`.
+fn subworkflow_tool(id: &str, label: &str, child_template_id: uuid::Uuid) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "sub_workflow".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::SubWorkflow {
+            label: label.to_string(),
+            description: Some("Look up an order by id.".to_string()),
+            template_id: child_template_id,
+            version_pin: VersionPin::Latest,
+            input_mapping: vec![],
+            output: Port {
+                id: "out".to_string(),
+                label: "Out".to_string(),
+                fields: vec![PortField {
+                    name: "status".to_string(),
+                    label: "Status".to_string(),
+                    kind: FieldKind::Text,
+                    required: true,
+                    options: None,
+                    description: None,
+                    accept: None,
+                }],
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+/// `lower_subworkflow` only clones the resolved child AIR into the spawn
+/// effect config, so an empty scenario shell suffices for compile-level
+/// tests (matches the stub in `compile.rs`'s subworkflow tests).
+fn stub_child_air() -> Value {
+    json!({
+        "name": "child-stub",
+        "places": [],
+        "transitions": [],
+        "groups": [],
+        "mock_adapters": [],
+        "definitions": {},
+        "requirements": [],
+    })
+}
+
+/// A `SubWorkflowAir` carrying one resolved child for `node_id`, with the
+/// given Start `initial` contract — the value `resolve_subworkflow_air`
+/// would extract from the child's published graph at publish time.
+fn sub_air_with_contract(
+    node_id: &str,
+    child_template_id: uuid::Uuid,
+    input_contract: Port,
+) -> SubWorkflowAir {
+    let mut sa = SubWorkflowAir::new();
+    sa.insert(
+        node_id.to_string(),
+        ResolvedChild {
+            air: stub_child_air(),
+            resolved_version: 1,
+            template_id: child_template_id.to_string(),
+            input_contract,
+            output_contract: Port::empty_input(),
+        },
+    );
+    sa
+}
+
+fn compile_with_sub_air(
+    graph: &WorkflowGraph,
+    sub_air: &SubWorkflowAir,
+) -> (Value, Value, std::collections::HashMap<String, Value>) {
+    let inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
+        Default::default();
+    let files = mekhan_service::compiler::node_files_inline(&inline);
+    compile_to_air_with_subworkflows_interfaces_and_configs(
+        graph,
+        "t",
+        "",
+        &files,
+        &inline,
+        sub_air,
+        &KnownResources::new(),
+        ConfigStorage::ephemeral(),
+    )
+    .expect("compile agent with subworkflow tool")
+}
+
+/// The LLM-facing tool `input_schema` for a SubWorkflow tool must reflect
+/// the child template's Start `initial` fields (where the user declares
+/// the tool args), NOT the SubWorkflow reference node's own pass-through
+/// input port. Pins the success shape + the kind-agnostic dispatch wiring.
+#[test]
+fn subworkflow_tool_input_schema_reflects_child_start() {
+    let child_id = uuid::Uuid::new_v4();
+    let sub = subworkflow_tool("sub_lookup", "lookup_order", child_id);
+
+    // The contract the user declared on the child's Start node.
+    let contract = Port {
+        id: "initial".to_string(),
+        label: "Initial".to_string(),
+        fields: vec![
+            PortField {
+                name: "order_id".to_string(),
+                label: "Order ID".to_string(),
+                kind: FieldKind::Text,
+                required: true,
+                options: None,
+                description: Some("The order id to look up.".to_string()),
+                accept: None,
+            },
+            PortField {
+                name: "include_history".to_string(),
+                label: "Include history".to_string(),
+                kind: FieldKind::Bool,
+                required: false,
+                options: None,
+                description: None,
+                accept: None,
+            },
+        ],
+    };
+
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), agent_node("a"), sub, end_node("e")],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_sub", "a", "sub_lookup"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let sub_air = sub_air_with_contract("sub_lookup", child_id, contract);
+    let (air, _iface, configs) = compile_with_sub_air(&graph, &sub_air);
+
+    // (1) Tool schema reflects the child Start contract. The tool name is
+    //     the slugified SubWorkflow label.
+    let tools = configs["a"]["tools"]
+        .as_array()
+        .expect("agent LLM config carries `tools`");
+    let tool = tools
+        .iter()
+        .find(|t| t["name"].as_str() == Some("lookup_order"))
+        .expect("subworkflow tool present by slugified label");
+    let schema = &tool["input_schema"];
+    assert_eq!(schema["type"].as_str(), Some("object"));
+    assert_eq!(
+        schema["additionalProperties"].as_bool(),
+        Some(false),
+        "declared child-Start fields must lock additionalProperties=false so \
+         the LLM can't invent unknown args; got: {schema}"
+    );
+    let props = schema["properties"]
+        .as_object()
+        .expect("input_schema.properties is an object");
+    assert_eq!(props["order_id"]["type"].as_str(), Some("string"));
+    assert_eq!(
+        props["order_id"]["description"].as_str(),
+        Some("The order id to look up.")
+    );
+    assert_eq!(
+        props["include_history"]["type"].as_str(),
+        Some("boolean"),
+        "FieldKind::Bool must map to JSON Schema 'boolean'"
+    );
+    let required: Vec<&str> = schema["required"]
+        .as_array()
+        .expect("required list present")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(required, vec!["order_id"]);
+
+    // (2) AIR-shape pin: the kind-agnostic dispatch wiring reached the
+    //     SubWorkflow boundary. `t_a_invoke_lookup_order` deposits the bare
+    //     LLM args map at the child input; `t_a_collect_lookup_order` pulls
+    //     the child's result back into the loop.
+    let transitions = air["transitions"].as_array().expect("transitions");
+    let invoke = transitions
+        .iter()
+        .find(|t| t["id"].as_str() == Some("t_a_invoke_lookup_order"))
+        .expect("t_a_invoke_lookup_order present");
+    assert!(
+        invoke["logic"]["source"]
+            .as_str()
+            .unwrap_or("")
+            .contains("dispatch.args"),
+        "invoke must deposit the LLM args map: {}",
+        invoke["logic"]["source"]
+    );
+    assert!(
+        transitions
+            .iter()
+            .any(|t| t["id"].as_str() == Some("t_a_collect_lookup_order")),
+        "t_a_collect_lookup_order present (collects the subworkflow result \
+         back into the agent loop)"
+    );
+}
+
+/// A SubWorkflow tool whose child Start declares no fields falls back to
+/// the permissive object schema — identical to a fields-less leaf tool.
+#[test]
+fn subworkflow_tool_empty_child_start_is_permissive() {
+    let child_id = uuid::Uuid::new_v4();
+    let sub = subworkflow_tool("sub_lookup", "lookup_order", child_id);
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), agent_node("a"), sub, end_node("e")],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_sub", "a", "sub_lookup"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let sub_air = sub_air_with_contract("sub_lookup", child_id, Port::empty_input());
+    let (_air, _iface, configs) = compile_with_sub_air(&graph, &sub_air);
+    let schema = configs["a"]["tools"][0]["input_schema"].clone();
+    assert_eq!(
+        schema["additionalProperties"].as_bool(),
+        Some(true),
+        "empty child-Start contract must use the permissive fallback; got: {schema}"
     );
 }

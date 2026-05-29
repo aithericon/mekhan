@@ -130,6 +130,20 @@ export type TokenSummary = components['schemas']['TokenSummary'];
 export type CreatedToken = components['schemas']['CreatedToken'];
 export type CreateTokenRequest = components['schemas']['CreateTokenRequest'];
 
+// ─── Workspaces, projects, tags, visibility (Phase A2 + B) ─────────────────
+export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
+export type WorkspaceMember = components['schemas']['WorkspaceMember'];
+export type AddMemberRequest = components['schemas']['AddMemberRequest'];
+export type Project = components['schemas']['Project'];
+export type CreateProjectRequest = components['schemas']['CreateProjectRequest'];
+export type AttachTemplateRequest = components['schemas']['AttachTemplateRequest'];
+export type SetTagsRequest = components['schemas']['SetTagsRequest'];
+export type SetVisibilityRequest = components['schemas']['SetVisibilityRequest'];
+export type SetActiveWorkspaceRequest =
+	components['schemas']['SetActiveWorkspaceRequest'];
+export type ResolveEmailRequest = components['schemas']['ResolveEmailRequest'];
+export type ResolveEmailResponse = components['schemas']['ResolveEmailResponse'];
+
 // ─── Live events / SSE payloads ─────────────────────────────────────────────
 export type MetricsSeriesResponse = components['schemas']['MetricsSeriesResponse'];
 export type MetricPoint = components['schemas']['MetricPoint'];
@@ -190,12 +204,23 @@ export async function listTemplates(
 	page = 1,
 	perPage = 20,
 	search?: string,
-	published?: boolean
+	published?: boolean,
+	projectId?: string,
+	tag?: string,
+	ownerTemplateId?: string
 ): Promise<PaginatedTemplateResponse> {
 	return unwrap(
 		await client.GET('/api/v1/templates', {
 			params: {
-				query: { page, per_page: perPage, search, published }
+				query: {
+					page,
+					per_page: perPage,
+					search,
+					published,
+					project_id: projectId,
+					tag,
+					owner_template_id: ownerTemplateId
+				}
 			}
 		})
 	);
@@ -204,6 +229,29 @@ export async function listTemplates(
 export async function getTemplate(id: string): Promise<Template> {
 	return unwrap(
 		await client.GET('/api/v1/templates/{id}', { params: { path: { id } } })
+	);
+}
+
+export type TemplateIoContract = components['schemas']['TemplateIoContract'];
+
+/**
+ * Derived SubWorkflow input/output contract for a child template family,
+ * resolved per version pin (latest when `version` omitted). The same
+ * derivation the publish path freezes — see backend `derive_child_io`. The
+ * SubWorkflow editor uses `input.fields` to render fixed per-field mapping
+ * rows and `output` as a read-only derived port.
+ */
+export async function getTemplateIoContract(
+	familyId: string,
+	version?: number
+): Promise<TemplateIoContract> {
+	return unwrap(
+		await client.GET('/api/v1/templates/{id}/io-contract', {
+			params: {
+				path: { id: familyId },
+				query: version != null ? { version } : {}
+			}
+		})
 	);
 }
 
@@ -984,6 +1032,188 @@ export async function revokeAccessToken(id: string): Promise<void> {
 			res.error as Record<string, unknown> | string | undefined
 		);
 	}
+}
+
+// ── Workspaces / projects / tags / visibility / me / users ─────────────────
+
+export async function listWorkspaces(): Promise<WorkspaceSummary[]> {
+	return unwrap(await client.GET('/api/v1/workspaces', {}));
+}
+
+export async function getWorkspace(id: string): Promise<WorkspaceSummary> {
+	return unwrap(
+		await client.GET('/api/v1/workspaces/{id}', { params: { path: { id } } })
+	);
+}
+
+export async function listWorkspaceMembers(id: string): Promise<WorkspaceMember[]> {
+	return unwrap(
+		await client.GET('/api/v1/workspaces/{id}/members', {
+			params: { path: { id } }
+		})
+	);
+}
+
+export async function addWorkspaceMember(
+	id: string,
+	body: AddMemberRequest
+): Promise<WorkspaceMember> {
+	return unwrap(
+		await client.POST('/api/v1/workspaces/{id}/members', {
+			params: { path: { id } },
+			body
+		})
+	);
+}
+
+export async function removeWorkspaceMember(id: string, userId: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/workspaces/{id}/members/{user_id}', {
+		params: { path: { id, user_id: userId } }
+	});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+export async function listWorkspaceTags(workspaceId: string): Promise<string[]> {
+	return unwrap(
+		await client.GET('/api/v1/workspaces/{id}/tags', {
+			params: { path: { id: workspaceId } }
+		})
+	);
+}
+
+export async function listProjects(workspaceId: string): Promise<Project[]> {
+	return unwrap(
+		await client.GET('/api/v1/workspaces/{id}/projects', {
+			params: { path: { id: workspaceId } }
+		})
+	);
+}
+
+export async function createProject(
+	workspaceId: string,
+	body: CreateProjectRequest
+): Promise<Project> {
+	return unwrap(
+		await client.POST('/api/v1/workspaces/{id}/projects', {
+			params: { path: { id: workspaceId } },
+			body
+		})
+	);
+}
+
+export async function updateProject(
+	projectId: string,
+	body: { display_name?: string; description?: string }
+): Promise<Project> {
+	return unwrap(
+		await client.PATCH('/api/v1/projects/{id}', {
+			params: { path: { id: projectId } },
+			body
+		})
+	);
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+	const res = await client.DELETE('/api/v1/projects/{id}', {
+		params: { path: { id: projectId } }
+	});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+export async function attachTemplateToProject(
+	projectId: string,
+	templateId: string
+): Promise<void> {
+	const res = await client.POST('/api/v1/projects/{id}/templates', {
+		params: { path: { id: projectId } },
+		body: { template_id: templateId }
+	});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+export async function detachTemplateFromProject(
+	projectId: string,
+	baseTemplateId: string
+): Promise<void> {
+	const res = await client.DELETE(
+		'/api/v1/projects/{id}/templates/{base_template_id}',
+		{ params: { path: { id: projectId, base_template_id: baseTemplateId } } }
+	);
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+export async function listTemplateProjects(templateId: string): Promise<Project[]> {
+	return unwrap(
+		await client.GET('/api/v1/templates/{id}/projects', {
+			params: { path: { id: templateId } }
+		})
+	);
+}
+
+export async function getTemplateTags(templateId: string): Promise<string[]> {
+	return unwrap(
+		await client.GET('/api/v1/templates/{id}/tags', {
+			params: { path: { id: templateId } }
+		})
+	);
+}
+
+export async function setTemplateTags(templateId: string, tags: string[]): Promise<string[]> {
+	return unwrap(
+		await client.PUT('/api/v1/templates/{id}/tags', {
+			params: { path: { id: templateId } },
+			body: { tags }
+		})
+	);
+}
+
+export async function setTemplateVisibility(
+	templateId: string,
+	visibility: 'workspace' | 'public' | 'private',
+	ownerTemplateId?: string
+): Promise<void> {
+	const res = await client.PATCH('/api/v1/templates/{id}/visibility', {
+		params: { path: { id: templateId } },
+		body: { visibility, owner_template_id: ownerTemplateId }
+	});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+/// POST /api/v1/me/active-workspace — sets the active-workspace cookie.
+/// The picker calls `auth.refresh()` after this resolves so the in-memory
+/// session reflects the new workspace_id on the very next page paint.
+export async function setActiveWorkspace(workspaceId: string): Promise<void> {
+	const res = await client.POST('/api/v1/me/active-workspace', {
+		body: { workspace_id: workspaceId }
+	});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+export async function clearActiveWorkspace(): Promise<void> {
+	const res = await client.DELETE('/api/v1/me/active-workspace', {});
+	if (res.response.ok) return;
+	throw new ApiError(res.response.status, res.error as Record<string, unknown> | string | undefined);
+}
+
+export async function resolveUserByEmail(email: string): Promise<ResolveEmailResponse> {
+	return unwrap(await client.POST('/api/v1/users/resolve', { body: { email } }));
+}
+
+/// GET /api/v1/workspaces/{ws}/projects/{p}/openapi.json — synthesized
+/// webhook spec for the project. Body is a raw OpenAPI 3.0.3 document
+/// (free-form JSON), surfaced via `rawJson` so we don't fight openapi-fetch
+/// over a hand-built schema.
+export async function getProjectOpenApiBundle(
+	workspaceId: string,
+	projectId: string
+): Promise<Record<string, unknown>> {
+	return rawJson(`/workspaces/${workspaceId}/projects/${projectId}/openapi.json`);
 }
 
 // ── Raw-JSON helper for query-DSL endpoints ────────────────────────────────

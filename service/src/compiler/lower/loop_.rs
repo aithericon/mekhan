@@ -2,6 +2,17 @@
 //! `<slug>` in `p_{id}_data` so it survives the AutomatedStep envelope
 //! strip (the workflow token is fair game inside the body). Body children
 //! attach via `sourceHandle: "body_in"` / `targetHandle: "body_out"`.
+//!
+//! Accumulators (fold/scan state) are ADDITIONAL fields in that same parked
+//! `p_{id}_data` envelope — the iteration counter generalized. Each is
+//! `init`-evaluated in the enter transition and `merge_expr`-refolded
+//! write-once-per-iteration in the continue transition, sitting alongside
+//! `iteration: <slug>.iteration + 1`. The continue `merge_expr` references the
+//! prior accumulator value as `<slug>.<var>` and body output as
+//! `<body_slug>.<field>`; the standard (c) read-arc synthesis pass that scans
+//! transition logic rewrites those borrows against the parked place — no
+//! hand-wiring here, exactly as the existing `<slug>.iteration + 1` continue
+//! logic already relies on.
 
 use super::*;
 
@@ -11,6 +22,7 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         label,
         max_iterations,
         loop_condition,
+        accumulators,
         ..
     } = &cx.node.data
     else {
@@ -57,6 +69,22 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     //     and promotes the namespace as a Python global.
     let slug = cx.node.slug();
     let d_slug = format!("d_{}", id.replace('-', "_"));
+
+    // Accumulator fragments for the parked `data` map. Each accumulator adds a
+    // `<var>: (<expr>)` field alongside `iteration`. ENTER uses the user `init`
+    // expr; CONTINUE uses `merge_expr` (which borrows `<slug>.<var>` for the
+    // prior fold value + `<body_slug>.<field>` for the iteration's output —
+    // both resolved by the (c) read-arc synthesis pass, same as the existing
+    // `<slug>.iteration` continue borrow). Parens wrap each expr so author
+    // operator precedence can't bleed across the comma-joined map literal.
+    let acc_enter: String = accumulators
+        .iter()
+        .map(|a| format!(", {}: ({})", a.var, a.init))
+        .collect();
+    let acc_continue: String = accumulators
+        .iter()
+        .map(|a| format!(", {}: ({})", a.var, a.merge_expr))
+        .collect();
     let p_data: PlaceHandle<DynamicToken> = ctx.state(
         format!("p_{id}_data"),
         format!("{label} - Iteration Counter (parked)"),
@@ -83,7 +111,9 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .auto_input("input", &p_input)
         .auto_output("body", &p_body_in)
         .auto_output("data", &p_data)
-        .logic_rhai("#{ body: input, data: #{ iteration: 0 } }".to_string())
+        .logic_rhai(format!(
+            "#{{ body: input, data: #{{ iteration: 0{acc_enter} }} }}"
+        ))
         .done();
 
     // t_{id}_continue — loop back: consume body_out + the parked counter,
@@ -100,7 +130,7 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             "{slug}.iteration < {max_iterations} && ({loop_condition})"
         ))
         .logic_rhai(format!(
-            "#{{ body: input, data: #{{ iteration: {slug}.iteration + 1 }} }}"
+            "#{{ body: input, data: #{{ iteration: {slug}.iteration + 1{acc_continue} }} }}"
         ))
         .done();
 

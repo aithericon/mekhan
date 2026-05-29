@@ -16,6 +16,7 @@
 	import NodeKindBadge, { type NodeKind } from './NodeKindBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 
 	interface Props {
 		events: PersistedEvent[];
@@ -67,6 +68,14 @@
 		const currentSeq = events[currentIndex].sequence;
 		return filteredEvents.findIndex(e => e.sequence === currentSeq);
 	});
+
+	// Serialize the events the user is currently looking at (filters/search
+	// applied) as pretty JSON for pasting into an AI chat. Computed lazily at
+	// click time so the buffer isn't re-serialized on every event that streams
+	// in. When nothing is filtered this is the whole log.
+	function eventsAsJson(): string {
+		return JSON.stringify(filteredEvents.map((e) => e.event), null, 2);
+	}
 
 	function handleFilteredEventClick(filteredIndex: number) {
 		const event = filteredEvents[filteredIndex];
@@ -252,15 +261,24 @@
 </script>
 
 <div class="event-log h-full bg-card border-l border-border overflow-hidden flex flex-col">
-	<div class="px-3 py-2 border-b border-border bg-muted flex items-center justify-between">
+	<div class="px-3 py-2 border-b border-border bg-muted flex items-center justify-between gap-2">
 		<h3 class="font-semibold text-foreground text-sm">Event Log</h3>
-		<span class="text-sm text-muted-foreground tabular-nums">
-			{#if hasFilters}
-				{filteredEvents.length} / {events.length}
-			{:else}
-				{events.length}
+		<div class="flex items-center gap-1.5">
+			<span class="text-sm text-muted-foreground tabular-nums">
+				{#if hasFilters}
+					{filteredEvents.length} / {events.length}
+				{:else}
+					{events.length}
+				{/if}
+			</span>
+			{#if filteredEvents.length > 0}
+				<CopyButton
+					getText={eventsAsJson}
+					label="Copy"
+					title={`Copy ${filteredEvents.length} ${hasFilters ? 'filtered' : 'latest'} event${filteredEvents.length === 1 ? '' : 's'} as JSON`}
+				/>
 			{/if}
-		</span>
+		</div>
 	</div>
 
 	<!-- Filter bar -->

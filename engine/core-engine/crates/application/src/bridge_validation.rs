@@ -303,10 +303,8 @@ fn suggest_closest<S: AsRef<str>>(target: &str, candidates: &[S]) -> Option<Stri
     let mut best: Option<(String, f64)> = None;
     for candidate in candidates {
         let score = strsim::jaro_winkler(target, candidate.as_ref());
-        if score > 0.75 {
-            if best.is_none() || score > best.as_ref().unwrap().1 {
-                best = Some((candidate.as_ref().to_string(), score));
-            }
+        if score > 0.75 && (best.is_none() || score > best.as_ref().unwrap().1) {
+            best = Some((candidate.as_ref().to_string(), score));
         }
     }
     best.map(|(name, _)| name)

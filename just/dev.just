@@ -219,6 +219,22 @@ openapi:
     (cd app && pnpm run openapi:generate)
     echo "✓ openapi spec + schema regenerated"
 
+# Remove every seeded demo workflow (cancels running instances + purges nets).
+# Thin wrapper over `mekhan demos reset` → POST /api/v1/admin/demos/reset.
+# Requires mekhan running (`just dev`); dev_noop needs no token.
+demos-reset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run --quiet --bin mekhan -- --server http://localhost:3100 demos reset
+
+# Reset seeded demos to pristine: remove every seeded family, then re-seed
+# from ./demos. Overwrites any edits made via the editor. Wrapper over
+# `mekhan demos reseed` → POST /api/v1/admin/demos/reseed.
+demos-reseed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run --quiet --bin mekhan -- --server http://localhost:3100 demos reseed
+
 # ── Infra ────────────────────────────────────────────────────────────────────
 
 # Bring docker-compose infra up. Optional `profile` arg passes
@@ -272,7 +288,7 @@ _wait-infra:
     done
     echo "▶ waiting for nats…"
     for _ in $(seq 1 30); do
-      curl -sf http://localhost:8333/healthz >/dev/null 2>&1 && break
+      curl -sf http://localhost:18333/healthz >/dev/null 2>&1 && break
       sleep 1
     done
     echo "▶ waiting for rustfs…"
@@ -417,6 +433,50 @@ mailhog-down:
       echo "  · mailhog not running"
     fi
 
+# ── httpbin (local HTTP echo server) ─────────────────────────────────────────
+#
+# go-httpbin is a tiny static-binary echo service. The HTTP executor backend
+# (and the `11-http-call` demo) point at it so `{{ slug.field }}` borrows in a
+# request URL/headers/query/body can be exercised end-to-end with no internet:
+#   • Host port:  13110  → container :8080
+#   • /anything/<path>   echoes method, url, args, headers, and JSON body back
+#
+# Requires Docker (idempotent: a pre-existing container is detected + reused).
+#
+# Env:
+#   HTTPBIN_TAG  — image tag (default `mccutchen/go-httpbin:v2.15.0`)
+httpbin-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="${HTTPBIN_TAG:-mccutchen/go-httpbin:v2.15.0}"
+    container="mekhan-httpbin"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      echo "  ✓ httpbin already running (container: $container)"
+      echo "    echo   http://localhost:13110/anything/<path>"
+      exit 0
+    fi
+    if docker ps -a --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker start "$container" >/dev/null
+    else
+      echo "▶ starting httpbin (image: $tag) — echo :13110"
+      docker run -d --rm --name "$container" \
+        -p 13110:8080 \
+        "$tag" >/dev/null
+    fi
+    echo "  ✓ httpbin up"
+    echo "    echo   http://localhost:13110/anything/<path>  (used by the 11-http-call demo)"
+
+httpbin-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    container="mekhan-httpbin"
+    if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
+      docker stop "$container" >/dev/null
+      echo "  ✓ httpbin stopped"
+    else
+      echo "  · httpbin not running"
+    fi
+
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 
 up-executor:
@@ -469,7 +529,7 @@ up-executor:
     [cancel]
     nats      = true
     http      = true
-    http_port = 3105
+    http_port = 13105
     EOF
 
     echo "▶ starting executor…"
@@ -990,6 +1050,7 @@ up-mekhan auth_mode="dev_noop":
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
       MEKHAN__NATS_URL="{{nats_url}}" \
+      MEKHAN__PORT="3100" \
       MEKHAN__PETRI_LAB_URL="http://localhost:3030" \
       MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
       MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
@@ -1028,11 +1089,11 @@ up-app:
     # dev user (no redirect, fully offline). Remove any stale env override a
     # previous (pre-BFF) `just dev` may have written so it can't shadow things.
     rm -f app/.env.development.local
-    echo "▶ starting SvelteKit dev server on :5173…"
-    nohup bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0 --port 5173' \
+    echo "▶ starting SvelteKit dev server on :15173…"
+    nohup bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0 --port 15173' \
       > "{{log_dir}}/app.log" 2>&1 &
     echo $! > "{{pid_dir}}/app.pid"
-    echo "  ✓ app (pid $(cat {{pid_dir}}/app.pid))  http://localhost:5173  log: {{log_dir}}/app.log"
+    echo "  ✓ app (pid $(cat {{pid_dir}}/app.pid))  http://localhost:15173  log: {{log_dir}}/app.log"
 
 down-app:
     @just dev::_kill app
@@ -1074,15 +1135,15 @@ _kill name:
 _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""
     @echo "✓ dev stack up:"
-    @echo "  postgres   → localhost:5439              (db: mekhan / user: mekhan / pw: mekhan)"
-    @echo "  nats       → localhost:4333              (http monitor: http://localhost:8333)"
-    @echo "  rustfs     → http://localhost:9005       (console: http://localhost:9006 / admin: rustfsadmin)"
-    @echo "  vault      → http://localhost:8200       (dev mode; root token: root; KV v2 at secret/)"
+    @echo "  postgres   → localhost:5439             (db: mekhan / user: mekhan / pw: mekhan)"
+    @echo "  nats       → localhost:4333             (http monitor: http://localhost:18333)"
+    @echo "  rustfs     → http://localhost:9005      (console: http://localhost:19006 / admin: rustfsadmin)"
+    @echo "  vault      → http://localhost:8200      (dev mode; root token: root; KV v2 at secret/)"
     @echo "  ollama     → http://localhost:11434      (native /api/chat; up if installed, see just/dev.just::up-ollama)"
-    @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:3105)"
+    @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:13105)"
     @echo "  engine     → http://localhost:3030"
     @echo "  mekhan     → http://localhost:3100"
-    @echo "  app (dev)  → http://localhost:5173"
+    @echo "  app (dev)  → http://localhost:15173"
     @echo ""
     @echo "  auth       → {{auth}}"
     @echo ""

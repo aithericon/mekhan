@@ -9,6 +9,7 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import InsertRefButton from '../InsertRefButton.svelte';
+	import ResourcePicker from '../shared/ResourcePicker.svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 
@@ -51,6 +52,27 @@
 		basic: 'Basic Auth',
 		header: 'Custom Header'
 	};
+
+	/// Workspace resource kind that can supply each auth scheme's secret.
+	/// Drives the ResourcePicker filter so only kind-compatible resources
+	/// appear — the executor backfills the selected scheme's secret from
+	/// `<auth_resource>.json` (see `executor-http` `overlay_auth_resource`).
+	const AUTH_RESOURCE_TYPE: Record<string, string | null> = {
+		none: null,
+		bearer: 'http_bearer',
+		basic: 'http_basic',
+		header: 'http_api_key'
+	};
+
+	const authResourceType = $derived(AUTH_RESOURCE_TYPE[authType] ?? null);
+	const authResource = $derived((config.auth_resource as string | undefined) ?? '');
+
+	function setAuthResource(alias: string) {
+		const next = { ...config };
+		if (alias) next.auth_resource = alias;
+		else delete next.auth_resource;
+		onchange(next);
+	}
 
 	const responseModeLabels: Record<string, string> = {
 		auto: 'Auto',
@@ -274,15 +296,18 @@
 			value={authType}
 			onValueChange={(v) => {
 				if (!v) return;
+				// Switching scheme resets auth-specific fields AND the bound
+				// resource — a resource of the prior kind (e.g. http_bearer)
+				// can't satisfy the new scheme, so dropping it avoids a silent
+				// kind↔scheme mismatch at run time.
+				const next: Record<string, unknown> = { ...config };
+				delete next.auth_resource;
 				if (v === 'none') {
-					const next: Record<string, unknown> = { ...config };
 					delete next.auth;
-					onchange(next);
 				} else {
-					// Switching scheme resets auth-specific fields so stale data
-					// (e.g. basic.username) doesn't leak into the next config.
-					onchange({ ...config, auth: { type: v } });
+					next.auth = { type: v };
 				}
+				onchange(next);
 			}}
 			disabled={readonly}
 		>
@@ -299,6 +324,18 @@
 	</FormField>
 </div>
 
+{#if authType !== 'none'}
+	<ResourcePicker
+		resourceType={authResourceType}
+		selected={authResource}
+		onChange={setAuthResource}
+		label="Credentials resource (optional)"
+		{readonly}
+		testId="http-auth-resource-select"
+		typeLabel={authLabels[authType]}
+	/>
+{/if}
+
 {#if auth && authType === 'bearer'}
 	<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
 		<FormField label="Token" for="http-auth-bearer-token">
@@ -306,7 +343,7 @@
 				id="http-auth-bearer-token"
 				type="password"
 				value={(auth.token as string) ?? ''}
-				placeholder="Leave empty to use env var"
+				placeholder={authResource ? 'Inherits from resource' : 'Leave empty to use env var'}
 				disabled={readonly}
 				oninput={(e) => setAuthField('token', (e.currentTarget as HTMLInputElement).value)}
 				class="font-mono"
@@ -340,7 +377,7 @@
 				id="http-auth-basic-pass"
 				type="password"
 				value={(auth.password as string) ?? ''}
-				placeholder="Leave empty to use env var"
+				placeholder={authResource ? 'Inherits from resource' : 'Leave empty to use env var'}
 				disabled={readonly}
 				oninput={(e) => setAuthField('password', (e.currentTarget as HTMLInputElement).value)}
 			/>
@@ -376,7 +413,7 @@
 				id="http-auth-header-value"
 				type="password"
 				value={(auth.value as string) ?? ''}
-				placeholder="Leave empty to use env var"
+				placeholder={authResource ? 'Inherits from resource' : 'Leave empty to use env var'}
 				disabled={readonly}
 				oninput={(e) => setAuthField('value', (e.currentTarget as HTMLInputElement).value)}
 				class="font-mono"

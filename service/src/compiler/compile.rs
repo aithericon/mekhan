@@ -7,12 +7,12 @@ use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, ConfigStorage, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::validate::{
-    validate, validate_edges_typed, validate_guards, validate_repeaters, validate_schema_refs,
-    validate_triggers,
+    validate, validate_edges_typed, validate_guards, validate_maps, validate_repeaters,
+    validate_schema_refs, validate_triggers,
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
-use crate::models::template::{WorkflowGraph, WorkflowNode, WorkflowNodeData};
+use crate::models::template::{Port, WorkflowGraph, WorkflowNode, WorkflowNodeData};
 use aithericon_executor_domain::InputSource;
 use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioGroup};
 use aithericon_sdk::Context;
@@ -150,6 +150,8 @@ pub(super) fn wire_read_arc(
             port: var.clone(),
             weight: 1,
             read: true,
+            count_from: None,
+            correlate_on: None,
         });
     }
     Some(var)
@@ -169,6 +171,21 @@ pub struct ResolvedChild {
     pub resolved_version: i32,
     /// Stable child template id (spawn label / provenance).
     pub template_id: String,
+    /// The child's Start node `initial` Port — its user-declared input
+    /// contract. When this child is referenced as an agent tool, these
+    /// fields become the LLM-facing `input_schema`. Empty fields ⇒ the
+    /// agent falls back to a permissive object schema. Extracted from the
+    /// child's high-level graph at resolution time (`resolve_subworkflow_air`).
+    pub input_contract: Port,
+    /// The child's **output contract** — a `Result` Port whose fields are the
+    /// union of every End node's `result_mapping` target field (Json-typed),
+    /// i.e. exactly what the child returns as `exit_code.value`. Derived (with
+    /// [`input_contract`](Self::input_contract)) via
+    /// [`crate::compiler::derive_child_io`]. The publish path reconciles this
+    /// onto the SubWorkflow node's `output` port so the join, `output_ports`,
+    /// and the borrow resolver all read the true contract; the editor reads it
+    /// via the `io-contract` endpoint. Empty fields ⇒ opaque pass-through.
+    pub output_contract: Port,
 }
 
 /// Per-`SubWorkflow`-node resolved child AIR. Empty for every compile path
@@ -538,6 +555,11 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
 ///   `<slug>.<field>[*]…` ref is well-formed, the producer's array shape
 ///   matches, and the `output_slug` is valid. MUST run after
 ///   `validate_guards` (relies on per-node shapes) and before lowering.
+/// - `validate_maps` (Map node) — each Map's `itemsRef` resolves to an array
+///   on a known parked producer. Needs the per-node shapes (`analyze`) like
+///   `validate_repeaters`, but runs BEFORE `validate_guards` so its precise
+///   `MapItemsRef*` errors win over the guard pass's generic `GuardUnresolved`
+///   (which would otherwise fire first on the itemsRef read-arc).
 fn run_validations(
     graph: &WorkflowGraph,
     wg: &WorkflowDiGraph<'_>,
@@ -545,6 +567,14 @@ fn run_validations(
 ) -> Result<(), CompileError> {
     validate(graph, wg)?;
     validate_edges_typed(graph)?;
+    // `validate_maps` runs BEFORE `validate_guards`: the guard read-arc plan
+    // already scans each Map's `itemsRef` (a synthesized read-arc into the
+    // producer's parked place) and would surface an unknown-slug `itemsRef` as
+    // a generic `GuardUnresolved`. Running the Map-specific pass first yields
+    // the precise `MapItemsRefUnresolved` / `MapItemsRefNotArray` (the latter
+    // is NOT caught by the guard pass at all — it resolves any field, array or
+    // not). It still needs the per-node shapes from `analyze`, available here.
+    validate_maps(graph)?;
     validate_guards(graph, wg)?;
     validate_triggers(graph)?;
     crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;
@@ -1194,6 +1224,8 @@ fn align_decision_deadends(
                         port: port_name,
                         weight: 1,
                         read: true,
+                        count_from: None,
+                        correlate_on: None,
                     });
                 }
             }
@@ -4026,6 +4058,8 @@ mod tests {
                 }),
                 resolved_version: 1,
                 template_id: child_id.to_string(),
+                input_contract: Port::empty_input(),
+                output_contract: Port::empty_input(),
             },
         );
 

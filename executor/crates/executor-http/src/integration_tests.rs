@@ -59,6 +59,7 @@ fn quick_config(url: &str) -> HttpConfig {
         query: HashMap::new(),
         body: None,
         body_from_input: None,
+        auth_resource: None,
         auth: None,
         timeout_secs: None,
         follow_redirects: true,
@@ -115,6 +116,110 @@ fn dummy_job() -> ExecutionJob {
         priority: Default::default(),
         stream_events: None,
         wrapped_secrets: None,
+    }
+}
+
+// ─── Auth-resource overlay ───────────────────────────────────────────────────
+
+/// Build a RunContext whose `<alias>.json` is staged with `envelope`.
+fn ctx_with_resource(config: HttpConfig, alias: &str, envelope: serde_json::Value) -> RunContext {
+    let mut ctx = make_http_run_context(config, Duration::from_secs(10));
+    let path = std::env::temp_dir().join(format!("{}-{alias}.json", ctx.execution_id));
+    std::fs::write(&path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    ctx.staged_inputs.insert(format!("{alias}.json"), path);
+    ctx
+}
+
+fn bearer_config(auth_resource: Option<&str>, token: Option<&str>) -> HttpConfig {
+    let mut c = quick_config("https://example.com");
+    c.auth = Some(AuthConfig::Bearer {
+        token: token.map(str::to_string),
+        token_env: None,
+    });
+    c.auth_resource = auth_resource.map(str::to_string);
+    c
+}
+
+#[test]
+fn overlay_fills_bearer_token_from_resource() {
+    let mut config = bearer_config(Some("api"), None);
+    let ctx = ctx_with_resource(config.clone(), "api", serde_json::json!({ "token": "rsc-tok" }));
+    config.overlay_auth_resource(&ctx).unwrap();
+    match &config.auth {
+        Some(AuthConfig::Bearer { token, .. }) => assert_eq!(token.as_deref(), Some("rsc-tok")),
+        _ => panic!("expected Bearer"),
+    }
+}
+
+#[test]
+fn overlay_does_not_clobber_inline_token() {
+    // Inline value wins over the resource (precedence: inline > resource > env).
+    let mut config = bearer_config(Some("api"), Some("inline-tok"));
+    let ctx = ctx_with_resource(config.clone(), "api", serde_json::json!({ "token": "rsc-tok" }));
+    config.overlay_auth_resource(&ctx).unwrap();
+    match &config.auth {
+        Some(AuthConfig::Bearer { token, .. }) => assert_eq!(token.as_deref(), Some("inline-tok")),
+        _ => panic!("expected Bearer"),
+    }
+}
+
+#[test]
+fn overlay_fills_basic_username_and_password() {
+    let mut config = quick_config("https://example.com");
+    config.auth = Some(AuthConfig::Basic {
+        username: String::new(),
+        password: None,
+        password_env: None,
+    });
+    config.auth_resource = Some("creds".into());
+    let ctx = ctx_with_resource(
+        config.clone(),
+        "creds",
+        serde_json::json!({ "username": "svc", "password": "pw" }),
+    );
+    config.overlay_auth_resource(&ctx).unwrap();
+    match &config.auth {
+        Some(AuthConfig::Basic { username, password, .. }) => {
+            assert_eq!(username, "svc");
+            assert_eq!(password.as_deref(), Some("pw"));
+        }
+        _ => panic!("expected Basic"),
+    }
+}
+
+#[test]
+fn overlay_fills_api_key_header() {
+    let mut config = quick_config("https://example.com");
+    config.auth = Some(AuthConfig::Header {
+        name: String::new(),
+        value: None,
+        value_env: None,
+    });
+    config.auth_resource = Some("key".into());
+    let ctx = ctx_with_resource(
+        config.clone(),
+        "key",
+        serde_json::json!({ "header_name": "X-API-Key", "value": "abc123" }),
+    );
+    config.overlay_auth_resource(&ctx).unwrap();
+    match &config.auth {
+        Some(AuthConfig::Header { name, value, .. }) => {
+            assert_eq!(name, "X-API-Key");
+            assert_eq!(value.as_deref(), Some("abc123"));
+        }
+        _ => panic!("expected Header"),
+    }
+}
+
+#[test]
+fn overlay_noop_without_alias() {
+    // No auth_resource bound → overlay leaves the (env-fallback) auth alone.
+    let mut config = bearer_config(None, None);
+    let ctx = make_http_run_context(config.clone(), Duration::from_secs(10));
+    config.overlay_auth_resource(&ctx).unwrap();
+    match &config.auth {
+        Some(AuthConfig::Bearer { token, .. }) => assert!(token.is_none()),
+        _ => panic!("expected Bearer"),
     }
 }
 
@@ -908,8 +1013,8 @@ async fn redirect_not_followed_when_disabled() {
 #[tokio::test]
 async fn prepare_resolves_templates() {
     let backend = HttpBackend::new();
-    let mut config = quick_config("http://{{host}}/api");
-    config.headers = HashMap::from([("X-Id".into(), "{{eid}}".into())]);
+    let mut config = quick_config("http://{{ env.host }}/api");
+    config.headers = HashMap::from([("X-Id".into(), "{{ metadata.eid }}".into())]);
 
     let mut run_ctx = make_http_run_context_with_env(
         config,
@@ -979,10 +1084,10 @@ async fn prepare_body_from_input_unknown_errors() {
 #[tokio::test]
 async fn prepare_template_unresolved_errors() {
     let backend = HttpBackend::new();
-    let config = quick_config("http://{{undefined}}/api");
+    let config = quick_config("http://{{ env.undefined }}/api");
 
     let run_ctx = make_http_run_context(config, Duration::from_secs(10));
-    // env is empty, no "undefined" variable
+    // env is empty, so `env.undefined` is not in the Tera context.
 
     let job = dummy_job();
     let result = backend.prepare(&job, run_ctx).await;
@@ -990,8 +1095,8 @@ async fn prepare_template_unresolved_errors() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("unresolved template variable"),
-        "expected template error, got: {err}"
+        err.contains("http template 'url'"),
+        "expected labelled template error, got: {err}"
     );
 }
 

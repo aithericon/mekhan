@@ -48,6 +48,19 @@ pub struct Arc {
     /// on PlaceToTransition arcs.
     #[serde(default, skip_serializing_if = "is_false")]
     pub read: bool,
+
+    /// Gather barrier: a producer-namespaced reference (e.g. `"expected.k"`)
+    /// to a field on a bound coordinator token that supplies the count `K` of
+    /// result tokens this Batch input arc must accumulate before the transition
+    /// fires. `None` (the default) preserves today's non-barrier behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count_from: Option<String>,
+
+    /// Gather barrier: the field name on result tokens used to correlate them
+    /// into a single gather group (e.g. `"iteration_id"`), so overlapping loop
+    /// iterations don't mix. `None` (the default) preserves today's behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlate_on: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -73,6 +86,8 @@ impl Arc {
             port_name: port_name.into(),
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
         }
     }
 
@@ -90,6 +105,8 @@ impl Arc {
             port_name: port_name.into(),
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
         }
     }
 
@@ -101,6 +118,20 @@ impl Arc {
 
     pub fn with_weight(mut self, weight: usize) -> Self {
         self.weight = weight;
+        self
+    }
+
+    /// Set the gather-barrier count source (producer-namespaced reference to a
+    /// field on a bound coordinator token supplying `K`).
+    pub fn with_count_from(mut self, count_from: impl Into<String>) -> Self {
+        self.count_from = Some(count_from.into());
+        self
+    }
+
+    /// Set the gather-barrier correlation field (the field on result tokens
+    /// used to group them into a single gather).
+    pub fn with_correlate_on(mut self, correlate_on: impl Into<String>) -> Self {
+        self.correlate_on = Some(correlate_on.into());
         self
     }
 
@@ -168,6 +199,42 @@ mod tests {
         assert_eq!(arc.port_name, deserialized.port_name);
         assert_eq!(arc.weight, deserialized.weight);
         assert_eq!(arc.direction, deserialized.direction);
+    }
+
+    #[test]
+    fn test_arc_without_gather_fields_omits_them_from_json() {
+        // Byte-compat: an arc with no gather fields must not emit the keys, so
+        // existing nets/AIR round-trip identically.
+        let arc = Arc::input(PlaceId::new(), TransitionId::new(), "items");
+        let json = serde_json::to_string(&arc).unwrap();
+
+        assert!(!json.contains("count_from"), "json was: {json}");
+        assert!(!json.contains("correlate_on"), "json was: {json}");
+
+        assert!(arc.count_from.is_none());
+        assert!(arc.correlate_on.is_none());
+
+        let deserialized: Arc = serde_json::from_str(&json).unwrap();
+        assert_eq!(arc, deserialized);
+    }
+
+    #[test]
+    fn test_arc_with_gather_fields_round_trips() {
+        let arc = Arc::input(PlaceId::new(), TransitionId::new(), "results")
+            .with_count_from("expected.k")
+            .with_correlate_on("iteration_id");
+
+        assert_eq!(arc.count_from.as_deref(), Some("expected.k"));
+        assert_eq!(arc.correlate_on.as_deref(), Some("iteration_id"));
+
+        let json = serde_json::to_string(&arc).unwrap();
+        assert!(json.contains("count_from"), "json was: {json}");
+        assert!(json.contains("correlate_on"), "json was: {json}");
+
+        let deserialized: Arc = serde_json::from_str(&json).unwrap();
+        assert_eq!(arc, deserialized);
+        assert_eq!(deserialized.count_from.as_deref(), Some("expected.k"));
+        assert_eq!(deserialized.correlate_on.as_deref(), Some("iteration_id"));
     }
 
     #[test]

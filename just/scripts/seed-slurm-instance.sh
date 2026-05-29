@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Seed a Scheduled-Slurm template + instance through the LIVE mekhan-service
-# (default :3100), so the UI at :5173 has a real workflow to inspect.
+# (default :3100), so the UI at :15173 has a real workflow to inspect.
 #
 # Mirrors the graph in service/tests/scheduled_slurm_e2e.rs but lands the row
 # in the live `mekhan` Postgres (the test uses an ephemeral fixture DB the UI
@@ -144,8 +144,8 @@ echo "  ✓ instance $instance_id ($status)"
 cat <<EOF
 
 Open in UI:
-  http://localhost:5173/instances/$instance_id
-  http://localhost:5173/templates/$template_id
+  http://localhost:15173/instances/$instance_id
+  http://localhost:15173/templates/$template_id
 
 Poll status:
   curl -sf $MEKHAN_URL/api/v1/instances/$instance_id | python3 -m json.tool

@@ -75,6 +75,17 @@ enum AnthropicContentPart {
     Text { text: String },
     #[serde(rename = "image")]
     Image { source: AnthropicImageSource },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -130,7 +141,9 @@ struct AnthropicUsage {
 
 fn role_str(role: &Role) -> &'static str {
     match role {
-        Role::User | Role::System => "user",
+        // Anthropic has no `tool` role — tool results ride a user-role
+        // message as a `tool_result` content block (handled in the loop).
+        Role::User | Role::System | Role::Tool => "user",
         Role::Assistant => "assistant",
     }
 }
@@ -161,30 +174,70 @@ async fn anthropic_complete(
     for msg in &request.messages {
         if matches!(msg.role, Role::System) {
             system_prompt = Some(&msg.content);
-        } else {
-            let content = if msg.images.is_empty() {
-                AnthropicMessageContent::Text(msg.content.clone())
-            } else {
-                let mut parts = Vec::new();
-                for img in &msg.images {
-                    parts.push(AnthropicContentPart::Image {
-                        source: AnthropicImageSource {
-                            r#type: "base64".into(),
-                            media_type: img.media_type.clone(),
-                            data: img.base64.clone(),
-                        },
-                    });
-                }
+            continue;
+        }
+
+        // Tool result: Anthropic carries it as a `tool_result` content
+        // block inside a user-role message, keyed by the tool call's id.
+        if matches!(msg.role, Role::Tool) {
+            let tool_use_id = msg.tool_call_id.clone().unwrap_or_default();
+            messages.push(AnthropicMessage {
+                role: "user".into(),
+                content: AnthropicMessageContent::Parts(vec![
+                    AnthropicContentPart::ToolResult {
+                        tool_use_id,
+                        content: msg.content.clone(),
+                    },
+                ]),
+            });
+            continue;
+        }
+
+        // Assistant turn with tool calls: optional leading text, then one
+        // `tool_use` block per call.
+        if !msg.tool_calls.is_empty() {
+            let mut parts = Vec::new();
+            if !msg.content.is_empty() {
                 parts.push(AnthropicContentPart::Text {
                     text: msg.content.clone(),
                 });
-                AnthropicMessageContent::Parts(parts)
-            };
+            }
+            for tc in &msg.tool_calls {
+                parts.push(AnthropicContentPart::ToolUse {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    input: tc.arguments.clone(),
+                });
+            }
             messages.push(AnthropicMessage {
-                role: role_str(&msg.role).to_string(),
-                content,
+                role: "assistant".into(),
+                content: AnthropicMessageContent::Parts(parts),
             });
+            continue;
         }
+
+        let content = if msg.images.is_empty() {
+            AnthropicMessageContent::Text(msg.content.clone())
+        } else {
+            let mut parts = Vec::new();
+            for img in &msg.images {
+                parts.push(AnthropicContentPart::Image {
+                    source: AnthropicImageSource {
+                        r#type: "base64".into(),
+                        media_type: img.media_type.clone(),
+                        data: img.base64.clone(),
+                    },
+                });
+            }
+            parts.push(AnthropicContentPart::Text {
+                text: msg.content.clone(),
+            });
+            AnthropicMessageContent::Parts(parts)
+        };
+        messages.push(AnthropicMessage {
+            role: role_str(&msg.role).to_string(),
+            content,
+        });
     }
 
     // Tool-use serialization: the response_format JsonSchema mode uses a

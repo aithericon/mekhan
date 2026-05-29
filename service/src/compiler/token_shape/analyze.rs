@@ -190,239 +190,311 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
 /// The token a node emits downstream, given the token arriving at it.
 /// This is the heart of the prototype: each arm encodes the *verified* JSON
 /// transformation the corresponding `lower_*` performs.
+///
+/// Registry-driven: the per-variant transform lives behind
+/// `NodeDecl::token_shape` (one `out_shape_<kind>` free fn per variant, below).
+/// This dispatcher just looks up the decl and calls through. Every variant
+/// declares a `token_shape` hook — a missing one is a `None` here, which is a
+/// hard panic (the `token_shape_hook_declared_for_every_variant` conformance
+/// test in `nodes/mod.rs` makes that a test failure first), NOT a silent
+/// pass-through default.
 fn out_shape(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
-    match &node.data {
-        // Start emits its declared `initial` port + the instance-seeded
-        // `_instance_id`, plus `_process_name` when a process is registered.
-        WorkflowNodeData::Start {
-            initial,
-            process_name,
-            ..
-        } => {
-            let mut o = port_to_shape(initial, node, "Start input field (declared `initial` port)");
-            o.insert(
-                "_instance_id",
-                TokenShape::Scalar(ScalarTy::String),
-                Provenance::new(node, "injected at instance creation (seed)"),
-            );
-            if process_name.is_some() {
-                o.insert(
-                    "_process_name",
-                    TokenShape::Scalar(ScalarTy::String),
-                    Provenance::new(node, "process-name interpolation (t_*_proc_name)"),
-                );
-            }
-            o
-        }
+    let decl = crate::nodes::lookup_by_variant(&node.data)
+        .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");
+    let f = decl.token_shape.unwrap_or_else(|| {
+        panic!(
+            "registry bug: variant `{}` has no token_shape hook (out_shape would silently \
+             default to pass-through)",
+            decl.wire_name
+        )
+    });
+    f(node, in_shape)
+}
 
-        // Human task: `t_*_finalize` runs `build_merge_logic("state","signal")`
-        // = `for k in signal.keys() { result[k] = signal[k] }`. The signal is
-        // a `HumanTaskResponse` whose **form submission is nested under
-        // `.data`** (effect_tokens.rs:365 — "The `data` field contains the
-        // form submission"). So the output is the inbound token PLUS the
-        // response envelope, with the user-entered fields under `data`. This
-        // is the divergence the flat editor model erases.
-        WorkflowNodeData::HumanTask { steps, .. } => {
-            let mut o = in_shape.clone();
-            o.insert(
-                "task_id",
-                TokenShape::Scalar(ScalarTy::String),
-                Provenance::new(node, "human-task correlation id (HumanTaskResponse)"),
-            );
-            o.insert(
-                "status",
-                TokenShape::Scalar(ScalarTy::String),
-                Provenance::new(node, "human-task outcome (HumanTaskResponse.status)"),
-            );
-            let mut form = port_to_shape(
-                &crate::models::template::derive_human_task_output_port(steps),
-                node,
-                "HUMAN-TASK FORM FIELD — nested under `data` (HumanTaskResponse.data)",
-            );
-            // Feature B: each Repeater block in this HumanTask contributes a
-            // typed array `<output_slug>: Array<{<sub_fields>}>` to the
-            // form envelope. Downstream consumers pick
-            // `<human_task_slug>.<output_slug>[*].<sub_field>` via the same
-            // `[*]` synthetic-child picker affordance as any other array.
-            // Validation (collision with form-field names, malformed refs)
-            // runs in `validate_repeaters`; here we just emit the shape
-            // assuming the config is well-formed.
-            for step in steps {
-                for block in &step.blocks {
-                    if let TaskBlockConfig::Repeater {
-                        output_slug,
-                        blocks: repeater_blocks,
-                        ..
-                    } = block
-                    {
-                        let key = output_slug.trim();
-                        if key.is_empty() {
-                            continue;
-                        }
-                        let elem = repeater_element_to_shape(repeater_blocks, node);
-                        form.insert(
-                            key,
-                            TokenShape::Array(Box::new(elem)),
-                            Provenance::new(
-                                node,
-                                "Repeater typed array output — one element per sub-form row",
-                            ),
-                        );
-                    }
-                }
-            }
-            o.insert(
-                "data",
-                form,
-                Provenance::new(
-                    node,
-                    "form submission envelope — every form field lives in here",
-                ),
-            );
-            // The request-injection (`build_human_task_injection_logic`) and
-            // the human result listener also stamp these onto the token; model
-            // them so the derived schema matches the observed live token.
-            for (k, note) in [
-                ("title", "human-task request scaffold"),
-                ("instructions_mdsvex", "human-task request scaffold"),
-                ("place", "human-task response envelope"),
-                ("net_id", "human-task response envelope"),
-                ("response_subject", "human-task response envelope"),
-                ("completed_at", "human-task response envelope"),
-            ] {
-                o.insert(
-                    k,
-                    TokenShape::Scalar(ScalarTy::String),
-                    Provenance::new(node, note),
-                );
-            }
-            o.insert(
-                "steps",
-                TokenShape::Array(Box::new(TokenShape::Any)),
-                Provenance::new(node, "human-task request scaffold"),
-            );
-            o
-        }
+// ── Per-variant outbound shape transforms (registry hooks) ──────────────────
+// One `pub(crate) fn out_shape_<kind>` per variant, referenced by the matching
+// `NodeDecl::token_shape`. Bodies are byte-identical to the pre-refactor
+// `out_shape` match arms; they live here (not in `nodes/<kind>.rs`) because the
+// `pub(super)` shape constructors (`TokenShape::object`/`insert`,
+// `Provenance::new`, `port_to_shape`, `repeater_element_to_shape`) are scoped to
+// this module — the same reason the `lower_*` fns live in `compiler/lower/`.
 
-        // Automated step: `prepare` snapshots the inbound token into
-        // `spec.inputs["input.json"]` and the node forwards the **executor
-        // result envelope** (`executor_lifecycle` → `to_output` = `#{ output:
-        // done }`). The upstream business token is NOT propagated — anything
-        // downstream sees `{ execution_id, job_id, run, status, source,
-        // detail{ outputs, .. } }`. Business output (if the step declares an
-        // output port) is under `detail.outputs`, never flattened back.
-        WorkflowNodeData::AutomatedStep { .. } | WorkflowNodeData::Agent { .. } => {
-            let mut o = TokenShape::object();
-            let p = |n: &str| Provenance::new(node, n);
-            o.insert(
-                "execution_id",
-                TokenShape::Scalar(ScalarTy::String),
-                p("executor envelope"),
-            );
-            o.insert(
-                "job_id",
-                TokenShape::Scalar(ScalarTy::String),
-                p("executor envelope"),
-            );
-            o.insert(
-                "run",
-                TokenShape::Scalar(ScalarTy::Number),
-                p("executor envelope"),
-            );
-            o.insert(
-                "status",
-                TokenShape::Scalar(ScalarTy::String),
-                p("executor envelope"),
-            );
-            o.insert(
-                "source",
-                TokenShape::Scalar(ScalarTy::String),
-                p("executor envelope"),
-            );
-            // Declared success output port → detail.outputs; else opaque.
-            let outputs = match node.data.output_ports().into_iter().next() {
-                Some(port) if !port.fields.is_empty() => port_to_shape(
-                    &port,
-                    node,
-                    "declared automated-step output (under detail.outputs)",
-                ),
-                _ => TokenShape::Opaque("executor outputs (undeclared)".to_string()),
-            };
-            let mut detail = TokenShape::object();
-            detail.insert(
-                "outputs",
-                outputs,
-                p("executor result — business output lives HERE, not at top level"),
-            );
-            detail.insert(
-                "exit_code",
-                TokenShape::Scalar(ScalarTy::Number),
-                p("executor envelope"),
-            );
-            o.insert(
-                "detail",
-                detail,
-                p("executor result envelope — upstream token was consumed into spec.inputs"),
-            );
-            o
-        }
-
-        // Loop: `t_*_enter` injects a declared `<slug>: { iteration: 0 }`
-        // namespace on the control token; body re-entry increments
-        // `<slug>.iteration`; the exit arm forwards the token unchanged so
-        // post-loop nodes can still read the final count. The namespace is
-        // first-class — `node_output_fields` declares `iteration: number`,
-        // the picker / `.pyi` overlay surface it as `<slug>.iteration`, the
-        // runner auto-promotes `<slug>` as a Python global, and Rhai
-        // expressions in `loopCondition` / guards / End mappings reference it
-        // as `input.<slug>.iteration` (or `<slug>.iteration` for the
-        // slug-borrow rewrite path).
-        WorkflowNodeData::Loop { .. } => {
-            let mut o = in_shape.clone();
-            let mut ns = TokenShape::object();
-            ns.insert(
-                "iteration",
-                TokenShape::Scalar(ScalarTy::Number),
-                Provenance::new(node, "loop iteration counter (declared producer field)"),
-            );
-            o.insert(
-                &node.slug(),
-                ns,
-                Provenance::new(node, "loop namespace (`<slug>.iteration`)"),
-            );
-            o
-        }
-
-        // Sub-workflow: `t_*_join` maps the child's terminal result onto the
-        // workflow token via the declared `output` port. With declared fields
-        // downstream sees exactly those; otherwise the child result is opaque
-        // here (we can't see across the spawned-child boundary at analyze time).
-        WorkflowNodeData::SubWorkflow { output, .. } => {
-            if output.fields.is_empty() {
-                in_shape.clone()
-            } else {
-                port_to_shape(
-                    output,
-                    node,
-                    "declared sub-workflow result (mapped at t_*_join)",
-                )
-            }
-        }
-
-        // Pure routing / pass-through patterns: token shape unchanged.
-        WorkflowNodeData::Decision { .. }
-        | WorkflowNodeData::ParallelSplit { .. }
-        | WorkflowNodeData::Join { .. }
-        | WorkflowNodeData::Scope { .. }
-        | WorkflowNodeData::PhaseUpdate { .. }
-        | WorkflowNodeData::ProgressUpdate { .. }
-        | WorkflowNodeData::Failure { .. }
-        | WorkflowNodeData::Delay { .. }
-        | WorkflowNodeData::Timeout { .. }
-        | WorkflowNodeData::Trigger { .. } => in_shape.clone(),
-
-        WorkflowNodeData::End { .. } => in_shape.clone(),
+/// Start emits its declared `initial` port + the instance-seeded
+/// `_instance_id`, plus `_process_name` when a process is registered.
+pub(crate) fn out_shape_start(node: &WorkflowNode, _in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::Start {
+        initial,
+        process_name,
+        ..
+    } = &node.data
+    else {
+        unreachable!("out_shape_start on non-Start variant");
+    };
+    let mut o = port_to_shape(initial, node, "Start input field (declared `initial` port)");
+    o.insert(
+        "_instance_id",
+        TokenShape::Scalar(ScalarTy::String),
+        Provenance::new(node, "injected at instance creation (seed)"),
+    );
+    if process_name.is_some() {
+        o.insert(
+            "_process_name",
+            TokenShape::Scalar(ScalarTy::String),
+            Provenance::new(node, "process-name interpolation (t_*_proc_name)"),
+        );
     }
+    o
+}
+
+/// Human task: `t_*_finalize` runs `build_merge_logic("state","signal")`
+/// = `for k in signal.keys() { result[k] = signal[k] }`. The signal is
+/// a `HumanTaskResponse` whose **form submission is nested under
+/// `.data`** (effect_tokens.rs:365 — "The `data` field contains the
+/// form submission"). So the output is the inbound token PLUS the
+/// response envelope, with the user-entered fields under `data`. This
+/// is the divergence the flat editor model erases.
+pub(crate) fn out_shape_human_task(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::HumanTask { steps, .. } = &node.data else {
+        unreachable!("out_shape_human_task on non-HumanTask variant");
+    };
+    let mut o = in_shape.clone();
+    o.insert(
+        "task_id",
+        TokenShape::Scalar(ScalarTy::String),
+        Provenance::new(node, "human-task correlation id (HumanTaskResponse)"),
+    );
+    o.insert(
+        "status",
+        TokenShape::Scalar(ScalarTy::String),
+        Provenance::new(node, "human-task outcome (HumanTaskResponse.status)"),
+    );
+    let mut form = port_to_shape(
+        &crate::models::template::derive_human_task_output_port(steps),
+        node,
+        "HUMAN-TASK FORM FIELD — nested under `data` (HumanTaskResponse.data)",
+    );
+    // Feature B: each Repeater block in this HumanTask contributes a
+    // typed array `<output_slug>: Array<{<sub_fields>}>` to the
+    // form envelope. Downstream consumers pick
+    // `<human_task_slug>.<output_slug>[*].<sub_field>` via the same
+    // `[*]` synthetic-child picker affordance as any other array.
+    // Validation (collision with form-field names, malformed refs)
+    // runs in `validate_repeaters`; here we just emit the shape
+    // assuming the config is well-formed.
+    for step in steps {
+        for block in &step.blocks {
+            if let TaskBlockConfig::Repeater {
+                output_slug,
+                blocks: repeater_blocks,
+                ..
+            } = block
+            {
+                let key = output_slug.trim();
+                if key.is_empty() {
+                    continue;
+                }
+                let elem = repeater_element_to_shape(repeater_blocks, node);
+                form.insert(
+                    key,
+                    TokenShape::Array(Box::new(elem)),
+                    Provenance::new(
+                        node,
+                        "Repeater typed array output — one element per sub-form row",
+                    ),
+                );
+            }
+        }
+    }
+    o.insert(
+        "data",
+        form,
+        Provenance::new(
+            node,
+            "form submission envelope — every form field lives in here",
+        ),
+    );
+    // The request-injection (`build_human_task_injection_logic`) and
+    // the human result listener also stamp these onto the token; model
+    // them so the derived schema matches the observed live token.
+    for (k, note) in [
+        ("title", "human-task request scaffold"),
+        ("instructions_mdsvex", "human-task request scaffold"),
+        ("place", "human-task response envelope"),
+        ("net_id", "human-task response envelope"),
+        ("response_subject", "human-task response envelope"),
+        ("completed_at", "human-task response envelope"),
+    ] {
+        o.insert(
+            k,
+            TokenShape::Scalar(ScalarTy::String),
+            Provenance::new(node, note),
+        );
+    }
+    o.insert(
+        "steps",
+        TokenShape::Array(Box::new(TokenShape::Any)),
+        Provenance::new(node, "human-task request scaffold"),
+    );
+    o
+}
+
+/// Automated step: `prepare` snapshots the inbound token into
+/// `spec.inputs["input.json"]` and the node forwards the **executor
+/// result envelope** (`executor_lifecycle` → `to_output` = `#{ output:
+/// done }`). The upstream business token is NOT propagated — anything
+/// downstream sees `{ execution_id, job_id, run, status, source,
+/// detail{ outputs, .. } }`. Business output (if the step declares an
+/// output port) is under `detail.outputs`, never flattened back.
+///
+/// Shared by AutomatedStep and Agent (same executor-envelope shape — see the
+/// `agent_degenerate_lowers_byte_identical_to_llm_automated_step` contract);
+/// both decls point `token_shape` at this fn.
+pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenShape) -> TokenShape {
+    let mut o = TokenShape::object();
+    let p = |n: &str| Provenance::new(node, n);
+    o.insert(
+        "execution_id",
+        TokenShape::Scalar(ScalarTy::String),
+        p("executor envelope"),
+    );
+    o.insert(
+        "job_id",
+        TokenShape::Scalar(ScalarTy::String),
+        p("executor envelope"),
+    );
+    o.insert(
+        "run",
+        TokenShape::Scalar(ScalarTy::Number),
+        p("executor envelope"),
+    );
+    o.insert(
+        "status",
+        TokenShape::Scalar(ScalarTy::String),
+        p("executor envelope"),
+    );
+    o.insert(
+        "source",
+        TokenShape::Scalar(ScalarTy::String),
+        p("executor envelope"),
+    );
+    // Declared success output port → detail.outputs; else opaque.
+    let outputs = match node.data.output_ports().into_iter().next() {
+        Some(port) if !port.fields.is_empty() => port_to_shape(
+            &port,
+            node,
+            "declared automated-step output (under detail.outputs)",
+        ),
+        _ => TokenShape::Opaque("executor outputs (undeclared)".to_string()),
+    };
+    let mut detail = TokenShape::object();
+    detail.insert(
+        "outputs",
+        outputs,
+        p("executor result — business output lives HERE, not at top level"),
+    );
+    detail.insert(
+        "exit_code",
+        TokenShape::Scalar(ScalarTy::Number),
+        p("executor envelope"),
+    );
+    o.insert(
+        "detail",
+        detail,
+        p("executor result envelope — upstream token was consumed into spec.inputs"),
+    );
+    o
+}
+
+/// Loop: `t_*_enter` injects a declared `<slug>: { iteration: 0 }`
+/// namespace on the control token; body re-entry increments
+/// `<slug>.iteration`; the exit arm forwards the token unchanged so
+/// post-loop nodes can still read the final count. The namespace is
+/// first-class — `node_output_fields` declares `iteration: number`,
+/// the picker / `.pyi` overlay surface it as `<slug>.iteration`, the
+/// runner auto-promotes `<slug>` as a Python global, and Rhai
+/// expressions in `loopCondition` / guards / End mappings reference it
+/// as `input.<slug>.iteration` (or `<slug>.iteration` for the
+/// slug-borrow rewrite path).
+pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::Loop { accumulators, .. } = &node.data else {
+        unreachable!("out_shape_loop on non-Loop variant");
+    };
+    let mut o = in_shape.clone();
+    let mut ns = TokenShape::object();
+    ns.insert(
+        "iteration",
+        TokenShape::Scalar(ScalarTy::Number),
+        Provenance::new(node, "loop iteration counter (declared producer field)"),
+    );
+    // Each accumulator is an additional parked field. `init` is opaque
+    // Rhai (could be any JSON shape), so the declared shape is `Any`.
+    for acc in accumulators {
+        ns.insert(
+            &acc.var,
+            TokenShape::Any,
+            Provenance::new(node, "loop accumulator (declared producer field)"),
+        );
+    }
+    o.insert(
+        &node.slug(),
+        ns,
+        Provenance::new(node, "loop namespace (`<slug>.iteration` + accumulators)"),
+    );
+    o
+}
+
+/// Map: parks a gathered COLLECTION at `p_<id>_data`, addressed downstream as
+/// `<map_slug>[*].<field>`. The outbound shape adds `<slug>` as an
+/// `Array(<element>)` namespace alongside the passed-through inbound token,
+/// where `<element>` is the declared `output` port shape (or `Any` when no
+/// fields are declared). The `[*]` borrow surface reuses the Repeater Array
+/// machinery (see `is_parked_producer` + `parse_repeater_ref`).
+pub(crate) fn out_shape_map(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::Map { output, .. } = &node.data else {
+        unreachable!("out_shape_map on non-Map variant");
+    };
+    let elem = match output {
+        Some(p) if !p.fields.is_empty() => {
+            port_to_shape(p, node, "map gathered element (declared output port)")
+        }
+        _ => TokenShape::Any,
+    };
+    let mut o = in_shape.clone();
+    o.insert(
+        &node.slug(),
+        TokenShape::Array(Box::new(elem)),
+        Provenance::new(node, "map gathered collection (`<slug>[*].<field>`)"),
+    );
+    o
+}
+
+/// Sub-workflow: `t_*_join` maps the child's terminal result onto the
+/// workflow token via the declared `output` port. With declared fields
+/// downstream sees exactly those; otherwise the child result is opaque
+/// here (we can't see across the spawned-child boundary at analyze time).
+pub(crate) fn out_shape_sub_workflow(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::SubWorkflow { output, .. } = &node.data else {
+        unreachable!("out_shape_sub_workflow on non-SubWorkflow variant");
+    };
+    if output.fields.is_empty() {
+        in_shape.clone()
+    } else {
+        port_to_shape(
+            output,
+            node,
+            "declared sub-workflow result (mapped at t_*_join)",
+        )
+    }
+}
+
+/// Pure routing / pass-through patterns: token shape unchanged. Shared by
+/// every control-flow / marker variant (Decision, ParallelSplit, Join, Scope,
+/// PhaseUpdate, ProgressUpdate, Failure, Delay, Timeout, End). Trigger also
+/// reuses it for completeness (Trigger never lowers, so its `out_shape` is
+/// never consulted in practice, but declaring the hook keeps the conformance
+/// test honest).
+pub(crate) fn out_shape_passthrough(_node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    in_shape.clone()
 }
 
 /// Compute inbound + outbound shapes for every node, then validate guards
@@ -503,18 +575,36 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
         );
     }
 
-    // Guard re-validation against the real shape.
+    // Guard re-validation against the real shape. The set of Rhai-bearing
+    // sources whose *real-shape* diagnostics surface in the editor is
+    // intentionally narrower than the publish-time `guard_rhai_sources` set:
+    // Decision/Loop/Delay/Timeout only (End/Failure result mappings are
+    // syntax+ref-checked at publish, but not shape-diagnosed inline). Preserved
+    // byte-identically — this loop feeds only the editor `analyze` endpoint's
+    // `diagnostics`, so widening it would change the editor contract.
     for node in &graph.nodes {
-        let guards: Vec<(String, &str)> = match &node.data {
+        let guards: Vec<&str> = match &node.data {
             WorkflowNodeData::Decision { conditions, .. } => conditions
                 .iter()
                 .filter(|c| !c.guard.trim().is_empty())
-                .map(|c| (c.label.clone(), c.guard.as_str()))
+                .map(|c| c.guard.as_str())
                 .collect(),
             WorkflowNodeData::Loop { loop_condition, .. }
                 if !loop_condition.trim().is_empty() =>
             {
-                vec![("loop".to_string(), loop_condition.as_str())]
+                vec![loop_condition.as_str()]
+            }
+            // Delay/Timeout duration expressions borrow upstream refs just
+            // like a Loop condition — re-validate against the real shape so
+            // an unresolved `<slug>.<field>` in the duration surfaces as an
+            // inline editor diagnostic, not a runtime failure.
+            WorkflowNodeData::Delay {
+                duration_ms_expr, ..
+            }
+            | WorkflowNodeData::Timeout {
+                duration_ms_expr, ..
+            } if !duration_ms_expr.trim().is_empty() => {
+                vec![duration_ms_expr.as_str()]
             }
             _ => continue,
         };
@@ -522,7 +612,7 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
             Some(s) => s,
             None => continue,
         };
-        for (_label, guard) in guards {
+        for guard in guards {
             check_guard(
                 node,
                 guard,
@@ -626,8 +716,20 @@ pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::Start { .. }
                     | WorkflowNodeData::Loop { .. }
                     | WorkflowNodeData::Join { .. }
+                    | WorkflowNodeData::Map { .. }
             )
     })
+}
+
+/// True if `id` names a `WorkflowNodeData::Map` node. A Map parks a gathered
+/// ARRAY at `p_<map>_data`; downstream borrows must iterate it with a `[*]`
+/// boundary (`<map_slug>[*].<field>`). A bare `<map_slug>.<field>` is a hard
+/// `MapRefMissingStar` error (caught in `resolve_ref` → `guard_readarc_plan`).
+pub(crate) fn is_map_node(graph: &WorkflowGraph, id: &str) -> bool {
+    graph
+        .nodes
+        .iter()
+        .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Map { .. }))
 }
 
 /// True if `id` names a `WorkflowNodeData::Loop` node. Loop counters live in a

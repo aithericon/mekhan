@@ -48,6 +48,33 @@ async fn seed_resource(
         workspace_id, resource_id
     );
 
+    // The resources_workspace_fk (migration 20240126) requires the workspace
+    // row to exist before a resource can reference it. Seed it idempotently so
+    // each fixture stays self-contained (callers pass an ad-hoc workspace_id).
+    sqlx::query(
+        "INSERT INTO workspaces (id, slug, display_name) \
+            VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(workspace_id)
+    .bind(format!("ws-{workspace_id}"))
+    .bind("Test Workspace")
+    .execute(db)
+    .await
+    .expect("seed workspace for resource FK");
+
+    // The resolver gates reads on workspace membership (resource_resolver.rs
+    // `is_member`), so the creator must be a member to resolve their own
+    // resource. Idempotent — multiple resources in one workspace are fine.
+    sqlx::query(
+        "INSERT INTO workspace_members (workspace_id, user_id, role) \
+            VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING",
+    )
+    .bind(workspace_id)
+    .bind(creator)
+    .execute(db)
+    .await
+    .expect("seed creator membership for resolver");
+
     sqlx::query(
         "INSERT INTO resources \
             (id, workspace_id, path, resource_type, display_name, latest_version, created_by) \

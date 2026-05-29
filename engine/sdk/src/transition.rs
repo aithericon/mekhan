@@ -141,6 +141,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: to.name.clone(),
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
         self
     }
@@ -157,6 +159,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: to.name.clone(),
             weight,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
         self
     }
@@ -170,6 +174,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: from.name.clone(),
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
         self
     }
@@ -186,6 +192,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: from.name.clone(),
             weight,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
         self
     }
@@ -233,6 +241,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: name,
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
 
         self
@@ -272,6 +282,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: name,
             weight,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
 
         self
@@ -301,6 +313,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: name,
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
 
         self
@@ -342,6 +356,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: name,
             weight: 1,
             read: true,
+            count_from: None,
+            correlate_on: None,
         });
 
         self
@@ -385,6 +401,65 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: name,
             weight: 1,
             read: true,
+            count_from: None,
+            correlate_on: None,
+        });
+
+        self
+    }
+
+    /// Fluent gather (reduce) input: a count-gated Batch input arc (gather barrier).
+    ///
+    /// Creates a [`Cardinality::Batch`] input port and wires a Batch input arc that
+    /// carries the gather-barrier fields:
+    ///
+    /// - `count_from` — a producer-namespaced reference (e.g. `"expected.k"`) to a
+    ///   field on a bound coordinator token that supplies the count `K` of result
+    ///   tokens this arc must accumulate before the transition fires. The arc's
+    ///   `weight` is ignored on a gather arc — `K` comes from the coordinator.
+    /// - `correlate_on` — an optional field name read from the coordinator token and
+    ///   matched against the same-named field on result tokens, so only tokens from
+    ///   one gather group (e.g. one loop iteration's `"iteration_id"`) are consumed.
+    ///   `None` makes every token in the place eligible.
+    ///
+    /// The transition fires only once `K` matching result tokens are present, and
+    /// consumes exactly those `K`. Pair it with a [`read_input`](Self::read_input)
+    /// (or [`auto_input`](Self::auto_input)) for the coordinator token referenced by
+    /// `count_from`, so the coordinator is bound before `K` is read.
+    ///
+    /// # Example
+    /// ```ignore
+    /// ctx.transition("gather", "Reduce Results")
+    ///     .read_input("expected", &coordinator)         // carries expected.k (+ iteration_id)
+    ///     .gather_input("results", &result_inbox, "expected.k", Some("iteration_id"))
+    ///     .auto_output("reduced", &done)
+    ///     .logic(r#"#{ reduced: #{ n: results.len() } }"#);
+    /// ```
+    pub fn gather_input<T: Token>(
+        mut self,
+        port_name: impl Into<String>,
+        place: &PlaceHandle<T>,
+        count_from: &str,
+        correlate_on: Option<&str>,
+    ) -> Self {
+        let name = port_name.into();
+
+        self.ctx.register_schema::<T>();
+        self.input_types.push(T::type_name().to_string());
+
+        self.input_ports.push(ScenarioPort {
+            name: name.clone(),
+            cardinality: Cardinality::Batch.as_str().into(),
+            schema_ref: Some(T::schema_ref()),
+        });
+
+        self.inputs.push(ScenarioArc {
+            place: place.id.clone(),
+            port: name,
+            weight: 1,
+            read: false,
+            count_from: Some(count_from.to_string()),
+            correlate_on: correlate_on.map(|s| s.to_string()),
         });
 
         self
@@ -414,6 +489,50 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: name,
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
+        });
+
+        self
+    }
+
+    /// Fluent batch (scatter) output: creates a Batch output port AND wires arc to place.
+    ///
+    /// Mirror of [`auto_output`](Self::auto_output) but the output port is declared
+    /// with [`Cardinality::Batch`]. When the transition's script returns a JSON
+    /// array on this port, the engine emits ONE token per array element (scatter);
+    /// a non-array value on a Batch output port is a permanent error.
+    ///
+    /// # Example
+    /// ```ignore
+    /// ctx.transition("scatter", "Fan Out")
+    ///     .auto_input("batch", &pending)
+    ///     .auto_output_batch("items", &items)  // each element of `items` becomes a token
+    ///     .logic(r#"#{ items: batch.parts }"#);
+    /// ```
+    pub fn auto_output_batch<T: Token>(
+        mut self,
+        port_name: impl Into<String>,
+        place: &PlaceHandle<T>,
+    ) -> Self {
+        let name = port_name.into();
+
+        self.ctx.register_schema::<T>();
+        self.output_types.push(T::type_name().to_string());
+
+        self.output_ports.push(ScenarioPort {
+            name: name.clone(),
+            cardinality: Cardinality::Batch.as_str().into(),
+            schema_ref: Some(T::schema_ref()),
+        });
+
+        self.outputs.push(ScenarioArc {
+            place: place.id.clone(),
+            port: name,
+            weight: 1,
+            read: false,
+            count_from: None,
+            correlate_on: None,
         });
 
         self
@@ -452,6 +571,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: name,
             weight,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
 
         self
@@ -486,6 +607,8 @@ impl<'ctx> TransitionBuilder<'ctx> {
             port: "_error".to_string(),
             weight: 1,
             read: false,
+            count_from: None,
+            correlate_on: None,
         });
         self
     }
@@ -1403,5 +1526,121 @@ impl<'ctx> TransitionBuilder<'ctx> {
     /// Panics if logic was not set via `.logic()`, `.logic_rhai()`, `.logic_wasm()`, or `.effect()`.
     pub fn done(self) {
         self.finalize();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::token;
+    use crate::Context;
+
+    #[token]
+    struct Item {
+        value: i64,
+    }
+
+    #[token]
+    struct Coordinator {
+        k: i64,
+        iteration_id: String,
+    }
+
+    #[test]
+    fn auto_output_batch_marks_output_port_cardinality_batch() {
+        let mut ctx = Context::new("test");
+        let pending = ctx.state::<Coordinator>("pending", "Pending");
+        let items = ctx.state::<Item>("items", "Items");
+
+        ctx.transition("scatter", "Fan Out")
+            .auto_input("batch", &pending)
+            .auto_output_batch("items", &items)
+            .logic(r#"#{ items: [batch.k] }"#);
+
+        let t = ctx.transitions.iter().find(|t| t.id == "scatter").unwrap();
+
+        let out_port = t
+            .output_ports
+            .iter()
+            .find(|p| p.name == "items")
+            .expect("output port `items` exists");
+        assert_eq!(out_port.cardinality, "batch");
+
+        // The output arc itself carries no gather fields.
+        let out_arc = t.outputs.iter().find(|a| a.port == "items").unwrap();
+        assert!(out_arc.count_from.is_none());
+        assert!(out_arc.correlate_on.is_none());
+    }
+
+    #[test]
+    fn gather_input_sets_batch_port_and_carries_barrier_fields() {
+        let mut ctx = Context::new("test");
+        let coordinator = ctx.state::<Coordinator>("coordinator", "Coordinator");
+        let results = ctx.state::<Item>("results", "Results");
+        let done = ctx.state::<Item>("done", "Done");
+
+        ctx.transition("gather", "Reduce Results")
+            .read_input("expected", &coordinator)
+            .gather_input("results", &results, "expected.k", Some("iteration_id"))
+            .auto_output("reduced", &done)
+            .logic(r#"#{ reduced: #{ value: results.len() } }"#);
+
+        let t = ctx.transitions.iter().find(|t| t.id == "gather").unwrap();
+
+        // The gather input port is Batch cardinality.
+        let in_port = t
+            .input_ports
+            .iter()
+            .find(|p| p.name == "results")
+            .expect("input port `results` exists");
+        assert_eq!(in_port.cardinality, "batch");
+
+        // The gather input arc carries count_from + correlate_on.
+        let gather_arc = t
+            .inputs
+            .iter()
+            .find(|a| a.port == "results")
+            .expect("input arc on `results` exists");
+        assert_eq!(gather_arc.count_from.as_deref(), Some("expected.k"));
+        assert_eq!(gather_arc.correlate_on.as_deref(), Some("iteration_id"));
+        // A gather arc is a consuming Batch arc (not a read arc).
+        assert!(!gather_arc.read);
+    }
+
+    #[test]
+    fn gather_input_without_correlate_on_leaves_field_none() {
+        let mut ctx = Context::new("test");
+        let coordinator = ctx.state::<Coordinator>("coordinator", "Coordinator");
+        let results = ctx.state::<Item>("results", "Results");
+        let done = ctx.state::<Item>("done", "Done");
+
+        ctx.transition("gather", "Reduce Results")
+            .read_input("expected", &coordinator)
+            .gather_input("results", &results, "expected.k", None)
+            .auto_output("reduced", &done)
+            .logic(r#"#{ reduced: #{ value: results.len() } }"#);
+
+        let t = ctx.transitions.iter().find(|t| t.id == "gather").unwrap();
+        let gather_arc = t.inputs.iter().find(|a| a.port == "results").unwrap();
+        assert_eq!(gather_arc.count_from.as_deref(), Some("expected.k"));
+        assert!(gather_arc.correlate_on.is_none());
+    }
+
+    #[test]
+    fn non_gather_arcs_omit_barrier_fields_from_air_json() {
+        // Byte-compat: an ordinary auto_input/auto_output transition must not emit
+        // count_from/correlate_on keys, so existing AIR round-trips identically.
+        let mut ctx = Context::new("test");
+        let input = ctx.state::<Item>("input", "Input");
+        let output = ctx.state::<Item>("output", "Output");
+
+        ctx.transition("plain", "Plain")
+            .auto_input("inp", &input)
+            .auto_output("out", &output)
+            .logic(r#"#{ out: inp }"#);
+
+        let t = ctx.transitions.iter().find(|t| t.id == "plain").unwrap();
+        let json = serde_json::to_string(&t.inputs).unwrap();
+        assert!(!json.contains("count_from"), "json was: {json}");
+        assert!(!json.contains("correlate_on"), "json was: {json}");
     }
 }

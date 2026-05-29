@@ -14,15 +14,99 @@
       "description": "Same-origin BFF (production single-origin posture)."
     },
     {
-      "url": "http://localhost:3100",
+      "url": "http://localhost:13100",
       "description": "Local mekhan-service direct."
     },
     {
-      "url": "http://localhost:5173",
+      "url": "http://localhost:15173",
       "description": "SvelteKit dev server (proxies /api/* to mekhan)."
     }
   ],
   "paths": {
+    "/api/v1/admin/demos/reseed": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v1/admin/demos/reseed",
+        "description": "Reset seeded demos to pristine: remove every seeded family (force) then\nre-seed all demos from the configured on-disk demos directory. Overwrites\nany user edits — true \"reset to factory\".",
+        "operationId": "reseed_demos",
+        "responses": {
+          "200": {
+            "description": "Seeded demos purged and re-seeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoResetReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor of the default workspace required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/demos/reset": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "POST /api/v1/admin/demos/reset",
+        "description": "Remove every seeded demo family (cancelling running instances + purging\ntheir engine nets). Does **not** re-seed — use `reseed` for that.",
+        "operationId": "reset_demos",
+        "responses": {
+          "200": {
+            "description": "Seeded demos removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoResetReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor of the default workspace required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analyze": {
       "post": {
         "tags": [
@@ -1307,6 +1391,54 @@
         }
       }
     },
+    "/api/v1/me/active-workspace": {
+      "post": {
+        "tags": [
+          "me"
+        ],
+        "summary": "POST /api/v1/me/active-workspace",
+        "description": "Override the resolver's default workspace pick for this session. The\noverride rides on an HttpOnly companion cookie and survives until the\ncaller explicitly clears it (DELETE) or its membership is revoked.\n\nRefuses workspaces the caller isn't a member of — a 403, not a silent\n\"did nothing\" — so the picker UI can surface the error directly.",
+        "operationId": "set_active_workspace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetActiveWorkspaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Active workspace set"
+          },
+          "403": {
+            "description": "Not a member of the target workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "me"
+        ],
+        "summary": "DELETE /api/v1/me/active-workspace",
+        "description": "Drop the override — the resolver's pick (or whatever the membership\ndefault rule chooses on next login) takes over again. Idempotent: a\nmissing cookie still returns 204.",
+        "operationId": "clear_active_workspace",
+        "responses": {
+          "204": {
+            "description": "Override cleared"
+          }
+        }
+      }
+    },
     "/api/v1/node-types": {
       "get": {
         "tags": [
@@ -2301,6 +2433,68 @@
         "responses": {
           "204": {
             "description": "Deleted"
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "PATCH /api/v1/projects/{id}",
+        "description": "Rename / re-describe a project. `slug` is immutable (it's the stable\nfilter key the templates list and OpenAPI bundle route hang off of), so\nonly `display_name` and `description` are mutable. Omitted fields are\nleft untouched via COALESCE.",
+        "operationId": "update_project",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
           },
           "403": {
             "description": "Editor role required",
@@ -3390,6 +3584,19 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "owner_template_id",
+            "in": "query",
+            "description": "Enumerate the private sub-workflow children owned by this parent\nfamily (`COALESCE(base_template_id, id)`). When supplied, the listing\nreturns *only* those private children (they're otherwise hidden from\nthe catalogue). When absent, private templates are excluded entirely.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
@@ -3428,58 +3635,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkflowTemplate"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/templates/apply-air": {
-      "post": {
-        "tags": [
-          "templates"
-        ],
-        "summary": "POST /api/v1/templates/apply-air",
-        "description": "Clinic-style headless template upload: accepts pre-compiled AIR\n(`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,\nbypassing the editor's `WorkflowGraph` → AIR compile pass entirely.\nThe supplied `air_json` is stored verbatim into the `air_json` column;\na synthetic stub graph containing just the `Trigger` node is stored\ninto the `graph` column so the trigger dispatcher's `register_triggers`\nfinds it post-commit.\n\nIdempotency: name-based, scoped per workspace. A first apply with a\ngiven `name` in the caller's workspace Seeds a fresh v1 chain\n(`is_latest = true`); subsequent applies with the same `(name,\nworkspace_id)` pair Bump the chain. Cross-workspace name collisions\nare independent chains.\n\nDistinct from `POST /api/v1/templates/{id}/apply` (the GitOps path for\ngraph-authored templates): that one demands an existing `{id}` and a\n`WorkflowGraph`, then runs the compile pass. This endpoint takes\nneither.",
-        "operationId": "apply_air_template",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApplyAirTemplateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Applied: seeded v1 or a new born-published version",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowTemplate"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid AIR or trigger spec",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3934,6 +4089,73 @@
         }
       }
     },
+    "/api/v1/templates/{id}/io-contract": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/io-contract",
+        "description": "Resolve a child template family (by base id or any version-row id) per the\noptional `version` pin — the SAME resolution `resolve_subworkflow_air` uses\nat publish — and return its derived SubWorkflow contract. The editor's\npreview therefore cannot drift from the contract frozen into the parent.",
+        "operationId": "get_io_contract",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Child template family id (base or any version row)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Pin to a specific child version. Omit for the family's latest published\nrow (matches a SubWorkflow node's `versionPin: latest`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Derived SubWorkflow input/output contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateIoContract"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/io-stubs": {
       "get": {
         "tags": [
@@ -4102,6 +4324,63 @@
         }
       }
     },
+    "/api/v1/templates/{id}/projects": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/projects",
+        "description": "Projects this template (by chain root) is currently attached to, within\nits workspace. Read-gated like the tags endpoint so the assign dialog can\nshow membership and offer a detach toggle without a fan-out.",
+        "operationId": "list_template_projects",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Projects containing this template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No read access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/publish": {
       "post": {
         "tags": [
@@ -4195,6 +4474,61 @@
       }
     },
     "/api/v1/templates/{id}/tags": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/tags",
+        "description": "Tags currently on this template's version chain. Read-gated (viewer or\npublic): populates the tag editor on the template detail page so a full\nreplace via PUT starts from the existing set rather than clobbering it.",
+        "operationId": "get_template_tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tags on this template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No read access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "tags": [
           "templates"
@@ -4523,7 +4857,7 @@
           "templates"
         ],
         "summary": "PATCH /api/v1/templates/{id}/visibility",
-        "description": "Flipping visibility is a tenancy decision (cross-workspace exposure) so\nit requires admin, not editor — even though it touches a template row.",
+        "description": "`public` is cross-workspace exposure — a tenancy decision, so it requires\nadmin. `workspace` and `private` are authoring-scope changes (a private\nsub-workflow is bound to its parent, never exposed beyond the workspace),\nso an editor building workflows can set them.",
         "operationId": "set_template_visibility",
         "parameters": [
           {
@@ -4562,7 +4896,7 @@
             }
           },
           "403": {
-            "description": "Admin role required",
+            "description": "Insufficient role (admin for public, editor otherwise)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5095,6 +5429,68 @@
         }
       }
     },
+    "/api/v1/users/resolve": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "POST /api/v1/users/resolve",
+        "description": "Resolves an email address to the OIDC subject used by Mekhan as the\nprincipal id. Authenticated (any role) — Zitadel does its own ACL on\nthe broker PAT; in dev_noop the response is computed locally without\ntouching any directory.",
+        "operationId": "resolve_user_by_email",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveEmailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty / malformed email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No user matches that email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Directory backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces": {
       "get": {
         "tags": [
@@ -5465,6 +5861,115 @@
         }
       }
     },
+    "/api/v1/workspaces/{id}/tags": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "GET /api/v1/workspaces/{id}/tags",
+        "description": "Distinct tags across every template in the workspace. Drives the tag\nfilter chips in the templates list — one round trip, no per-template\nfan-out.",
+        "operationId": "list_workspace_tags",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Distinct workspace tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json",
+        "description": "Returns a synthesized OpenAPI 3.0.3 document covering every webhook\ntrigger in the project's attached templates. The shape is suitable for\nfeeding into `openapi-typescript`, `openapi-generator`, or any OAS3\nviewer.",
+        "operationId": "project_openapi_bundle",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project OpenAPI bundle",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found or not in workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -5567,40 +6072,29 @@
           }
         }
       },
-      "ApplyAirTemplateRequest": {
+      "AnnotateConfig": {
         "type": "object",
-        "description": "Request body for `POST /api/templates/apply-air` — clinic-style\nheadless template upload.\n\nAccepts pre-compiled AIR directly: no `WorkflowGraph` compile pass,\nno Y.Doc init, no S3 file upload. The supplied `air_json` is stored\nverbatim into the `air_json` column; a synthetic stub graph (one\nTrigger node, no edges) is stored into the `graph` column so the\ntrigger dispatcher's `register_triggers` finds it.\n\nIdempotency: name-based. Re-apply with the same `name` Bumps the\nchain (new version row, prior version's triggers forgotten); first\napply Seeds (fresh chain at v1).",
         "required": [
-          "name",
-          "air_json",
-          "trigger"
+          "path",
+          "annotations",
+          "storage"
         ],
         "properties": {
-          "air_json": {
-            "description": "Pre-compiled AIR. Stored verbatim. The endpoint runs no compile\npass; the AIR is consumed by the engine at trigger-fire time."
+          "annotations": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "merge": {
+            "type": "boolean"
           },
-          "name": {
+          "path": {
             "type": "string"
           },
-          "source_ref": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/SourceRef",
-                "description": "Optional git provenance, recorded into `source_ref` exactly like\nthe existing GitOps `apply` endpoint."
-              }
-            ]
-          },
-          "trigger": {
-            "$ref": "#/components/schemas/PreAirTriggerSpec"
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
           }
         }
       },
@@ -5703,6 +6197,125 @@
           }
         }
       },
+      "AttachmentSpec": {
+        "type": "object",
+        "description": "One attachment. The compiler emits one of these per `attachments[]` entry\nin the workflow config and pairs it with a synthesized `inputs[]` entry\nthat materializes the file into the run's staged-inputs directory.",
+        "required": [
+          "filename",
+          "input_name"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "Filename the recipient sees in the mail client."
+          },
+          "input_name": {
+            "type": "string",
+            "description": "Staged-input name where the bytes live (one of `RunContext.staged_inputs`)."
+          },
+          "mime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional MIME override; otherwise inferred from `filename` extension."
+          }
+        }
+      },
+      "AuthConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Bearer token: `Authorization: Bearer <token>`",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token_env": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Basic auth: `Authorization: Basic base64(user:pass)`",
+            "required": [
+              "username",
+              "type"
+            ],
+            "properties": {
+              "password": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "password_env": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "basic"
+                ]
+              },
+              "username": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Custom header-based auth (e.g., `X-API-Key: <value>`)",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "header"
+                ]
+              },
+              "value": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value_env": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Authentication configuration."
+      },
       "BackendDescriptor": {
         "type": "object",
         "description": "Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.\n\nThe Svelte component map (`backend-panels.ts`) stays hand-written — TS\ncan't import components dynamically from a JSON tag at runtime without\ndefeating Vite chunking — but every other per-backend constant\n(display name, icon, default config, default output fields, dispatch\nmode, resource channel) flows from here. This is what kills the\n`automated-ports.ts` ↔ `default_output_port()` drift hazard.",
@@ -5716,9 +6329,14 @@
           "resourceChannel",
           "schedulable",
           "consumesDeclaredOutputs",
-          "outputAuthoring"
+          "outputAuthoring",
+          "configSchema",
+          "secretFields"
         ],
         "properties": {
+          "configSchema": {
+            "description": "Self-contained JSON Schema for this backend's `spec.config` shape\n(`#/components/schemas/*` refs inlined). The SPA's generic\nschema-driven form renders simple panels off this. `null` for\nbackends with no executor config type."
+          },
           "consumesDeclaredOutputs": {
             "type": "boolean",
             "description": "Whether this backend's declared output port fields drive a Rhai\n`outputs:` constant (mostly informational for the frontend)."
@@ -5753,6 +6371,13 @@
           "schedulable": {
             "type": "boolean",
             "description": "Whether the editor should show the Scheduled deployment toggle."
+          },
+          "secretFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`config` field names that hold secrets (rendered masked by the\ngeneric form)."
           }
         }
       },
@@ -5991,6 +6616,33 @@
           }
         }
       },
+      "ChatMessage": {
+        "type": "object",
+        "description": "A single message in conversation history.\n\n`content` is a JSON value, not a bare string, because tool-result\nmessages (`role: tool`) carry the structured tool output directly; the\nadapters render it to the string each provider's wire format expects.\nText turns (system/user/assistant) carry a JSON string.",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "content": {},
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "tool_call_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For `role: tool` — the id of the assistant tool call this answers."
+          },
+          "tool_calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LlmToolCall"
+            },
+            "description": "For `role: assistant` — the tool calls the model emitted this turn."
+          }
+        }
+      },
       "CompileErrorView": {
         "type": "object",
         "description": "Structured payload of a compile error for the editor. Returned as part of\nthe publish API response so the frontend can highlight the offending\nnode/edge inline instead of just showing a flat error string.",
@@ -6065,6 +6717,14 @@
           "any"
         ]
       },
+      "Compression": {
+        "type": "string",
+        "description": "Compression algorithm for streaming copy/move transfers.",
+        "enum": [
+          "gzip",
+          "zstd"
+        ]
+      },
       "ConcurrencyPolicy": {
         "oneOf": [
           {
@@ -6125,6 +6785,55 @@
           "drop_oldest",
           "summarize_oldest"
         ]
+      },
+      "CopyConfig": {
+        "type": "object",
+        "required": [
+          "source",
+          "destination",
+          "source_storage"
+        ],
+        "properties": {
+          "compress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "decompress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "destination": {
+            "type": "string"
+          },
+          "destination_storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageConfig"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_storage": {
+            "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
       },
       "CreateInstanceRequest": {
         "type": "object",
@@ -6499,6 +7208,56 @@
           }
         }
       },
+      "DeleteConfig": {
+        "type": "object",
+        "required": [
+          "path",
+          "storage"
+        ],
+        "properties": {
+          "ignore_missing": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
+      "DemoResetReport": {
+        "type": "object",
+        "description": "Tally of a [`purge_seeded`] / [`reseed_all`] run. Serializable so the admin\nHTTP endpoint hands it straight back to the operator / CLI.",
+        "required": [
+          "familiesRemoved",
+          "instancesPurged",
+          "testsRemoved",
+          "seeded"
+        ],
+        "properties": {
+          "familiesRemoved": {
+            "type": "integer",
+            "description": "Distinct seeded template *families* (by base id) deleted.",
+            "minimum": 0
+          },
+          "instancesPurged": {
+            "type": "integer",
+            "description": "Workflow instances (across every version of those families) whose\nengine nets were purged and DB rows deleted.",
+            "minimum": 0
+          },
+          "seeded": {
+            "type": "integer",
+            "description": "Demos freshly re-seeded. Only ever non-zero from [`reseed_all`].",
+            "minimum": 0
+          },
+          "testsRemoved": {
+            "type": "integer",
+            "description": "Bundled template-test rows removed alongside the families.",
+            "minimum": 0
+          }
+        }
+      },
       "DeploymentModel": {
         "oneOf": [
           {
@@ -6586,6 +7345,85 @@
           }
         ],
         "description": "Lowering mode — intrinsic to the backend, decided at the decl, NOT the\nstep. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a\nper-step author choice on any `ExecutorJob` backend."
+      },
+      "DockerConfig": {
+        "type": "object",
+        "description": "Configuration for the Docker execution backend.",
+        "required": [
+          "image"
+        ],
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Command to run in the container (Docker CMD)."
+          },
+          "entrypoint": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Override the image entrypoint."
+          },
+          "env": {
+            "type": "object",
+            "description": "Environment variables to set in the container.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "extra_volumes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Additional volume mounts in \"host:container\" format."
+          },
+          "image": {
+            "type": "string",
+            "description": "Docker image to use (e.g., \"python:3.12-slim\", \"alpine:3.19\")."
+          },
+          "network_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Docker network mode (e.g., \"host\", \"bridge\", \"none\")."
+          },
+          "pull_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PullPolicy",
+                "description": "Image pull policy."
+              }
+            ],
+            "default": "if_not_present"
+          },
+          "remove_container": {
+            "type": "boolean",
+            "description": "Remove the container after execution (equivalent to --rm).",
+            "default": true
+          },
+          "resource_limits": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceLimits",
+                "description": "Optional resource limits for the container."
+              }
+            ]
+          }
+        }
       },
       "DownloadItemConfig": {
         "type": "object",
@@ -6814,6 +7652,13 @@
           }
         }
       },
+      "ExtractionMode": {
+        "type": "string",
+        "enum": [
+          "single",
+          "batch"
+        ]
+      },
       "FailingTestInfo": {
         "type": "object",
         "required": [
@@ -6873,6 +7718,158 @@
             "description": "Name of the target port field this mapping fills."
           }
         }
+      },
+      "FileOpsConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProbeConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "probe"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CopyConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "copy"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoveConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "move"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeleteConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "delete"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AnnotateConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "annotate"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ListConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "list"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "stat"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Tagged enum of all file operations."
       },
       "FileUploadResponse": {
         "type": "object",
@@ -7082,21 +8079,6 @@
                 "description": "Optional per-request reply mode (lowest of the explicit selectors —\noverridden by `?reply=` / `Prefer`, overrides the node default)."
               }
             ]
-          },
-          "skip_mask": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Per-run ablation: transition IDs to skip at evaluate-time.\nThreaded through the dispatcher into the engine's\n`LoadScenarioRequest.skip_mask` (γ.mekhan wire). Empty by default\n— research-harness ablation flows surface this; ordinary fires omit.\n#126.2: extends the previously-always-empty trigger-boundary stub."
-          },
-          "stage_overrides": {
-            "type": "object",
-            "description": "Per-run ablation: per-transition JSON merge-patch keyed by\ntransition_id. Threaded into `LoadScenarioRequest.stage_overrides`.\nSame surface + provenance as `skip_mask`. #126.2.",
-            "additionalProperties": {},
-            "propertyNames": {
-              "type": "string"
-            }
           }
         }
       },
@@ -7367,6 +8349,116 @@
           }
         }
       },
+      "HttpConfig": {
+        "type": "object",
+        "description": "Configuration for the HTTP request backend.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "auth": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AuthConfig",
+                "description": "Authentication configuration."
+              }
+            ]
+          },
+          "auth_resource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Workspace resource alias supplying the auth secret. When set, the\nHTTP backend reads `<auth_resource>.json` (ConfigOverlay channel) and\nfills the secret of whichever `auth` scheme is selected:\n`http_bearer.token` → `Bearer{token}`, `http_basic.{username,password}`\n→ `Basic{..}`, `http_api_key.{header_name,value}` → `Header{name,value}`.\nPer-step inline values and env-var fallbacks still win over the\nresource when both are present."
+          },
+          "body": {
+            "description": "Inline request body. Mutually exclusive with `body_from_input`."
+          },
+          "body_from_input": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of a staged input file whose contents become the request body."
+          },
+          "danger_accept_invalid_certs": {
+            "type": "boolean",
+            "description": "Accept invalid TLS certificates (for dev/self-signed servers)."
+          },
+          "expected_status_codes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Expected success status codes. Empty means 2xx = success."
+          },
+          "follow_redirects": {
+            "type": "boolean",
+            "description": "Whether to follow HTTP redirects (default: true)."
+          },
+          "headers": {
+            "type": "object",
+            "description": "Request headers. Template substitution supported in values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "max_response_bytes": {
+            "type": "integer",
+            "description": "Maximum response body size in bytes (default: 1 MB).",
+            "minimum": 0
+          },
+          "method": {
+            "$ref": "#/components/schemas/HttpMethod",
+            "description": "HTTP method (default: GET)."
+          },
+          "output_mapping": {
+            "type": "object",
+            "description": "Maps declared output names to response field selectors.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": "object",
+            "description": "URL query parameters. Template substitution supported in values.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "response_mode": {
+            "$ref": "#/components/schemas/ResponseMode",
+            "description": "How to interpret the response body."
+          },
+          "timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Request-level timeout in seconds.",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "Target URL. Supports `{{variable}}` template substitution."
+          }
+        }
+      },
       "HttpMethod": {
         "type": "string",
         "enum": [
@@ -7385,6 +8477,26 @@
           "grid",
           "gallery"
         ]
+      },
+      "ImageInput": {
+        "type": "object",
+        "description": "An image to include with the user prompt.",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME type. If absent, guessed from file extension."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to the image file (resolved from `{{input:NAME}}`)."
+          }
+        }
       },
       "InstanceConcurrencyPolicy": {
         "oneOf": [
@@ -7576,6 +8688,63 @@
           "any"
         ]
       },
+      "KreuzbergConfig": {
+        "type": "object",
+        "description": "Configuration for the Kreuzberg document extraction backend.",
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For single mode: the staged input name containing the file to extract.\nDefaults to `\"file\"` or the sole staged input if there is exactly one."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For batch mode: list of input names to extract.\nIf empty, all staged inputs are used."
+          },
+          "force_ocr": {
+            "type": "boolean",
+            "description": "Force OCR even on text-based PDFs."
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional MIME type override. When absent, kreuzberg auto-detects."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExtractionMode",
+            "description": "Extraction mode: \"single\" (default) or \"batch\"."
+          },
+          "ocr": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OcrSettings",
+                "description": "OCR configuration."
+              }
+            ]
+          },
+          "pdf": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PdfSettings",
+                "description": "PDF-specific options."
+              }
+            ]
+          }
+        }
+      },
       "LineageResponse": {
         "type": "object",
         "description": "Lineage response: artifacts grouped by iteration/step.",
@@ -7622,6 +8791,31 @@
           },
           "step": {
             "type": "string"
+          }
+        }
+      },
+      "ListConfig": {
+        "type": "object",
+        "required": [
+          "prefix",
+          "storage"
+        ],
+        "properties": {
+          "include_stat": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
           }
         }
       },
@@ -7783,6 +8977,131 @@
           }
         }
       },
+      "LlmConfig": {
+        "type": "object",
+        "description": "Configuration for the LLM backend.",
+        "required": [
+          "provider",
+          "model",
+          "prompt"
+        ],
+        "properties": {
+          "api_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "API key. Falls back to provider-specific env var if absent."
+          },
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Base URL override (proxy, Azure, etc.)."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "description": "Prior conversation turns."
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageInput"
+            },
+            "description": "Images to include with the user prompt.\nEach entry references a staged input file path (after `{{input:NAME}}` resolution)."
+          },
+          "max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Maximum tokens to generate.",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string",
+            "description": "Model identifier (e.g. \"gpt-4o\", \"claude-sonnet-4-20250514\")."
+          },
+          "pending": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "description": "Turns produced since `history` was last persisted — for the agent\nloop, the tool result (or synthetic feedback) the engine accumulated\non the token between LLM calls. Appended after `history` when\nassembling the request; the off-token base (`history`) plus this\ndelta is what the worker persists as the next turn's cumulative\ntranscript blob. Empty for single-shot LLM steps."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The user prompt to send to the LLM."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/Provider",
+            "description": "Which LLM provider to use."
+          },
+          "resource_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional workspace resource name (e.g. `openai_prod`) the LLM step is\nbound to. When set, the compiler emits a ResourceEnvelope borrow that\nstages `<resource_alias>.json` into the run dir; the backend overlays\nthe resource's `api_key` / `base_url` / `organization` on top of any\nper-step values, so the step's authoring surface stays clean."
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseFormat",
+                "description": "Response format constraint. When set to `json_schema`, the provider\nwill use constrained decoding to guarantee valid JSON output."
+              }
+            ]
+          },
+          "system_prompt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "System prompt."
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Sampling temperature."
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolSchema"
+            },
+            "description": "Tools the LLM may call. Populated by the agent compiler from\nchild node `tool_meta` + input ports; empty for single-shot LLM\n`AutomatedStep`s. Adapters that don't support tool calls (Ollama\ntoday) ignore this field gracefully."
+          }
+        }
+      },
+      "LlmToolCall": {
+        "type": "object",
+        "description": "A single tool invocation requested by an LLM in one turn.\n\nNormalized across Anthropic / OpenAI / Ollama adapter shapes. The\n`id` is provider-assigned and opaque to the platform; downstream\ntransitions match on `name` only.",
+        "required": [
+          "id",
+          "name",
+          "arguments"
+        ],
+        "properties": {
+          "arguments": {},
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "LogRow": {
         "type": "object",
         "required": [
@@ -7838,6 +9157,29 @@
             "items": {
               "$ref": "#/components/schemas/LogRow"
             }
+          }
+        }
+      },
+      "LoopAccumulator": {
+        "type": "object",
+        "description": "One fold/scan slot on a [`WorkflowNodeData::Loop`]. Lives as an additional\nfield in the loop's parked `p_<id>_data` envelope (the iteration counter\ngeneralized): `init` is evaluated once in the enter transition, `merge_expr`\nis re-evaluated write-once-per-iteration in the continue transition. Both\nare Rhai expressions. `merge_expr` may reference the prior accumulator value\nas `<loop_slug>.<var>` and the body's output as `<body_slug>.<field>` — the\nstandard read-arc synthesis resolves those borrows automatically.",
+        "required": [
+          "var",
+          "init",
+          "mergeExpr"
+        ],
+        "properties": {
+          "init": {
+            "type": "string",
+            "description": "Rhai expression evaluated in the enter transition scope (the entering\nworkflow token is bound as `input`). Keep simple — e.g. `\"0\"`, `\"[]\"`,\n`\"#{}\"`."
+          },
+          "mergeExpr": {
+            "type": "string",
+            "description": "Rhai expression evaluated in the continue transition scope, producing the\nnext accumulator value. References the prior value as `<loop_slug>.<var>`\nand body output as `<body_slug>.<field>`."
+          },
+          "var": {
+            "type": "string",
+            "description": "Rhai identifier the accumulator is addressed by, both inside the loop's\nown continue transition (`<loop_slug>.<var>`) and downstream. Must not\nbe `iteration` (reserved) and must be unique within the loop."
           }
         }
       },
@@ -7956,6 +9298,55 @@
           }
         }
       },
+      "MoveConfig": {
+        "type": "object",
+        "required": [
+          "source",
+          "destination",
+          "source_storage"
+        ],
+        "properties": {
+          "compress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "decompress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Compression"
+              }
+            ]
+          },
+          "destination": {
+            "type": "string"
+          },
+          "destination_storage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StorageConfig"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_storage": {
+            "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
       "MultipartFileUpload": {
         "type": "object",
         "description": "Multipart body wrapper for spec documentation. The runtime extractor is\n`axum::extract::Multipart`; this struct only exists so the spec shows the\nexpected field name and type.",
@@ -8071,6 +9462,23 @@
           "wireName": {
             "type": "string",
             "description": "Snake-case wire tag — matches the variant's serde rename."
+          }
+        }
+      },
+      "OcrSettings": {
+        "type": "object",
+        "properties": {
+          "backend": {
+            "type": "string",
+            "description": "OCR backend: \"tesseract\" (default) or \"paddle-ocr\"."
+          },
+          "enable_table_detection": {
+            "type": "boolean",
+            "description": "Enable table detection during OCR."
+          },
+          "language": {
+            "type": "string",
+            "description": "Language code (ISO 639-3). Default: \"eng\"."
           }
         }
       },
@@ -8401,6 +9809,14 @@
                 },
                 "name": {
                   "type": "string"
+                },
+                "owner_template_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Owning parent family base id (`COALESCE(base_template_id, id)`), set\nonly when `visibility == \"private\"`. A private sub-workflow may be\nembedded only by this family and never runs standalone."
                 },
                 "parent_id": {
                   "type": [
@@ -8780,6 +10196,21 @@
           }
         }
       },
+      "PdfSettings": {
+        "type": "object",
+        "properties": {
+          "passwords": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Passwords for encrypted PDFs (tried in order)."
+          }
+        }
+      },
       "PhaseUpdateStatus": {
         "type": "string",
         "description": "Author-selected status for a `PhaseUpdate` control node. Serialized\nsnake_case so it lands on the breadcrumb exactly as the executor\n`PhaseStatus` the causality consumer deserializes in `record_phase_event`\n(`aithericon_executor_domain::PhaseStatus`). `Pending` is intentionally\nomitted — an author explicitly marking a phase always means it is at least\nrunning.",
@@ -8876,51 +10307,119 @@
           }
         }
       },
-      "PreAirTriggerSpec": {
+      "PostgresConfig": {
         "type": "object",
-        "description": "Trigger spec embedded in a `POST /api/templates/apply-air` request.\nThe endpoint synthesizes a `WorkflowGraph` stub containing only this\nTrigger node so that `register_triggers` (which walks `template.graph`)\nfinds it post-commit. Direct AIR-place binding via\n`air_target_place_id` — no graph edge.",
+        "description": "Configuration for a single Postgres job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.\n\nSee `docs/proposals/postgres-backend.md` (A1 spec § 2) for the full field\nreference.",
         "required": [
-          "node_id",
-          "label",
-          "source",
-          "air_target_place_id",
-          "enabled"
+          "query",
+          "projection"
         ],
         "properties": {
-          "air_target_place_id": {
-            "type": "string",
-            "description": "The AIR place id whose `initial_tokens` will be seeded with the\nfire payload + system fields. Must exist in the supplied AIR's\n`places[]` — validated at fire time by `parameterize_for_place`."
+          "params": {
+            "type": "array",
+            "items": {},
+            "description": "Ordered values bound to `$1`, `$2`, ...\n\nEach entry is a JSON scalar (string / number / bool / null).\nArrays / objects are intentionally **not** supported by the initial\nscope — they require explicit JSON-typed parameters and complicate the\ntype coercion path. A1 spec § 2 lists this as a follow-up."
           },
-          "enabled": {
-            "type": "boolean",
-            "description": "Whether the trigger is live post-apply. Explicit (no default) so\nthe deploy recipe must state intent — a disabled trigger never\nfires even if registered."
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which named connection pool to draw from. Resolved by the executor's\nper-process `PostgresBackendsConfig.pools` map; when absent, the\n`default_pool` from that map is used."
           },
-          "label": {
-            "type": "string"
-          },
-          "node_id": {
-            "type": "string",
-            "description": "Stable, globally-unique node id used in `POST /api/triggers/{node_id}/fire`\nURLs. Author-controlled (e.g. `\"trg_di_extraction_v1\"`)."
-          },
-          "payload_mapping": {
+          "projection": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/FieldMapping"
-            }
+              "type": "string"
+            },
+            "description": "Ordered list of column names expected in the result rows.\n\nThe backend verifies each column exists in the row description; an\nunexpected or missing column is a `BackendError`."
           },
-          "reply_default": {
+          "query": {
+            "type": "string",
+            "description": "The parametrised SQL statement (use `$1`, `$2`, ... placeholders —\n**never** string-interpolated values)."
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Whether the transaction is read-only.\n\nInitial scope hard-locks this to `true`; the backend rejects\n`read_only = false` until an allow-list arrives in a later iteration."
+          },
+          "row_limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum number of rows materialised.\n\nIf the query returns more, the backend fails closed.",
+            "minimum": 0
+          },
+          "statement_timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Per-statement timeout in milliseconds (applied via\n`SET LOCAL statement_timeout`).\n\nCapped at the job-level `RunContext.timeout`.",
+            "minimum": 0
+          }
+        }
+      },
+      "ProbeConfig": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "include_statistics": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "storage": {
             "oneOf": [
               {
                 "type": "null"
               },
               {
-                "$ref": "#/components/schemas/ReplyMode"
+                "$ref": "#/components/schemas/StorageConfig",
+                "description": "Optional. When omitted (e.g. compiler-injected probes against the\nplatform's own object store), the executor falls back to its\nglobally-configured default storage — mirroring\n`InputSource::StoragePath { storage: Option<_> }`."
               }
             ]
+          }
+        }
+      },
+      "ProcessConfig": {
+        "type": "object",
+        "description": "Configuration for the process execution backend.\n\nSpawns a local process with the given command and arguments.",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Command-line arguments."
           },
-          "source": {
-            "$ref": "#/components/schemas/TriggerSource",
-            "description": "Trigger source. Clinic's initial use case is `Manual`; other sources\nare valid here too (Webhook, Cron, ...) — the dispatcher resolves\nthem identically once the trigger is registered."
+          "command": {
+            "type": "string",
+            "description": "The command to run (e.g., \"python3\", \"/usr/bin/train.sh\")."
+          },
+          "env": {
+            "type": "object",
+            "description": "Environment variables to set.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "inherit_env": {
+            "type": "boolean",
+            "description": "Whether to inherit the executor process's environment variables.",
+            "default": true
+          },
+          "working_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Working directory. If None, inherits from the executor process."
           }
         }
       },
@@ -9096,6 +10595,15 @@
           }
         }
       },
+      "Provider": {
+        "type": "string",
+        "description": "LLM provider selection. Wire format is lowercase (`\"openai\"`, `\"anthropic\"`,\n`\"ollama\"`) to match how these vendors brand themselves and what the editor\nemits. `open_ai` is accepted as a back-compat alias.",
+        "enum": [
+          "openai",
+          "anthropic",
+          "ollama"
+        ]
+      },
       "PublishGateBlockedResponse": {
         "type": "object",
         "description": "Failure shape returned by the publication gate when one or more enabled\ntests block publish. Surfaces in the editor's `PublishGateModal`.",
@@ -9111,6 +10619,68 @@
           }
         }
       },
+      "PullPolicy": {
+        "type": "string",
+        "description": "Image pull policy.",
+        "enum": [
+          "always",
+          "if_not_present",
+          "never"
+        ]
+      },
+      "PythonConfig": {
+        "type": "object",
+        "description": "Configuration for the Python execution backend.\n\nThe `script` field names the Python file to execute, relative to the inputs\ndirectory. For inline code, use [`PythonConfig::inline_spec`] which stages\nthe code as a `Raw` input automatically.",
+        "required": [
+          "script"
+        ],
+        "properties": {
+          "env": {
+            "type": "object",
+            "description": "Additional environment variables.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "inherit_env": {
+            "type": "boolean",
+            "description": "Whether to inherit the executor process's environment variables."
+          },
+          "python": {
+            "type": "string",
+            "description": "Python command/binary to use (e.g., \"python3\", \"python3.11\")."
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pip packages to install before execution."
+          },
+          "script": {
+            "type": "string",
+            "description": "Name of the Python script file in the inputs directory."
+          },
+          "sdk": {
+            "type": "boolean",
+            "description": "Whether to auto-install the aithericon SDK in the virtualenv."
+          },
+          "virtualenv": {
+            "type": "boolean",
+            "description": "Whether to create an isolated virtualenv for this execution."
+          },
+          "working_dir": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Working directory (defaults to run_dir root)."
+          }
+        }
+      },
       "ReplyMode": {
         "type": "string",
         "description": "How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.\nThe caller selects per-request (query `?reply=`, `Prefer` header, or a\nJSON body field); a Trigger node's optional `replyDefault` is used only\nwhen the caller doesn't specify. `Sse` is never *executed* on the fire\nendpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is\nmodeled so a node can advertise it as the intended consumption mode.",
@@ -9119,6 +10689,34 @@
           "wait_for_result",
           "sse"
         ]
+      },
+      "ResolveEmailRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "ResolveEmailResponse": {
+        "type": "object",
+        "required": [
+          "subject",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Echoed back so the caller can confirm a case-insensitive match."
+          },
+          "subject": {
+            "type": "string",
+            "description": "OIDC `sub` of the matched user. Pass this into\n`POST /api/v1/workspaces/{id}/members.subject`."
+          }
+        }
       },
       "ResourceAuditEntry": {
         "type": "object",
@@ -9265,6 +10863,36 @@
           }
         }
       },
+      "ResourceLimits": {
+        "type": "object",
+        "description": "Resource limits for the container.",
+        "properties": {
+          "cpu_quota": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "CPU quota in microseconds per cpu-period (100ms default period)."
+          },
+          "cpu_shares": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "CPU shares (relative weight)."
+          },
+          "memory_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Memory limit in bytes."
+          }
+        }
+      },
       "ResourceSummary": {
         "type": "object",
         "description": "Compact list-row shape. Returned by `GET /api/v1/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
@@ -9363,6 +10991,55 @@
           }
         }
       },
+      "ResponseFormat": {
+        "type": "object",
+        "description": "Response format constraint: `{\"type\":\"text\"}` or `{\"type\":\"json_schema\",\"schema\":{...}}`.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "schema": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ResponseMode": {
+        "type": "string",
+        "description": "How to interpret the response body.",
+        "enum": [
+          "auto",
+          "json",
+          "text",
+          "discard"
+        ]
+      },
+      "RetryConfig": {
+        "type": "object",
+        "description": "Retry behaviour for transient storage errors (504, connection drops, etc.).\n\nWired into the OpenDAL `RetryLayer`, which only retries operations whose\nerrors return `is_temporary() == true` — non-transient failures (404,\n403, etc.) are not retried.\n\nDefaults are chosen to absorb a typical Hetzner / S3-compatible 504 burst\n(~3 attempts spaced 200ms / 400ms+jitter / 800ms+jitter ≈ 2s total) without\nblowing past a Slurm sbatch's wall-clock budget.",
+        "properties": {
+          "max_attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum retry attempts (excluding the initial attempt). Default 3.",
+            "minimum": 0
+          },
+          "max_delay_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cap on backoff delay in milliseconds. Default 10_000 (10s).",
+            "minimum": 0
+          },
+          "min_delay_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Initial backoff delay in milliseconds. Default 200.",
+            "minimum": 0
+          }
+        }
+      },
       "RetryPolicy": {
         "type": "object",
         "description": "Retry behaviour for an `AutomatedStep` whose execution fails or times out.\n\nOn failure the compiler re-dispatches the job (a fresh executor submit)\nwhile `retries < max_retries`, optionally after a `backoff` delay, then\nroutes the exhausted token to the node's error output.",
@@ -9384,6 +11061,16 @@
             "minimum": 0
           }
         }
+      },
+      "Role": {
+        "type": "string",
+        "description": "Message role.",
+        "enum": [
+          "system",
+          "user",
+          "assistant",
+          "tool"
+        ]
       },
       "RotateResourceRequest": {
         "type": "object",
@@ -9494,6 +11181,19 @@
           }
         }
       },
+      "SetActiveWorkspaceRequest": {
+        "type": "object",
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Target workspace id. The caller must already be a member."
+          }
+        }
+      },
       "SetTagsRequest": {
         "type": "object",
         "required": [
@@ -9525,9 +11225,17 @@
           "visibility"
         ],
         "properties": {
+          "owner_template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Required when `visibility == \"private\"`: the owning parent family\n(any version id; resolved to its base). Ignored otherwise. The\nprivate sub-workflow may then be embedded only by that family."
+          },
           "visibility": {
             "type": "string",
-            "description": "`workspace` (default) or `public`."
+            "description": "`workspace` (default), `public`, or `private`."
           }
         }
       },
@@ -9607,6 +11315,97 @@
           }
         }
       },
+      "SmtpConfig": {
+        "type": "object",
+        "description": "Configuration for the SMTP backend.\n\nThe backend receives this via `ExecutionSpec.config`. Recipient strings,\nthe subject line, the body sources, and the optional `from` override\nare Tera templates rendered against a context built from staged input\nfiles (`<slug>.json`) and the resolved `smtp` resource view.\n\nThe mekhan compiler **embeds the template source** directly in this\nconfig (read from the per-node Yjs files at publish time). This keeps the\nexecutor stateless about the editor's node-file storage and avoids a\nsecond I/O path for template lookup. Attachments do go through the normal\n`inputs[]` staging pipeline though — those are typically larger and\nreference upstream-step outputs.",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentSpec"
+            },
+            "description": "Attachments. Each entry references a staged input by `input_name`\n(which the compiler synthesizes as `\"_att_<idx>\"`); `filename` is the\nname the recipient sees and `mime` overrides the auto-detected type."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Bcc addresses."
+          },
+          "body_html": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TemplateSource",
+                "description": "HTML body template (Tera source). When both `body_text` and\n`body_html` are set, the message is sent multipart/alternative."
+              }
+            ]
+          },
+          "body_text": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TemplateSource",
+                "description": "Plain-text body template (Tera source). Optional but at least one of\n`body_text` / `body_html` must be set."
+              }
+            ]
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Cc addresses."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "When true, render templates + assemble MIME but do not connect to the\nSMTP server. Outputs include the rendered subject/body for inspection."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional From override. If absent, falls back to the SMTP resource's\n`from_address` field. If both are absent, validation fails."
+          },
+          "resource_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resource alias inside the workflow — names the SMTP resource binding\nthe compiler stages as `<alias>.json` in the run directory. Required\nfor the backend to find transport credentials. Echoed here so the\nTera context can also expose the alias to templates that want it."
+          },
+          "subject": {
+            "$ref": "#/components/schemas/TemplateSource",
+            "description": "Subject template (Tera source)."
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "To addresses. Each entry is a Tera template; rendered values must\nbe RFC 5322 addresses. At least one recipient (To + Cc + Bcc combined)\nis required."
+          },
+          "vars": {
+            "type": "object",
+            "description": "Optional extra string fields surfaced into the Tera context under\n`vars.<key>`. Useful for static per-template constants (signing-off\nname, support URL, …) the workflow author doesn't want to clutter\nupstream node outputs with.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "SourceRef": {
         "type": "object",
         "description": "Git provenance recorded on a version published via `mekhan apply`.\nSerialized into the `workflow_templates.source_ref` JSONB column.",
@@ -9666,6 +11465,21 @@
           },
           "token": {
             "description": "JSON object whose keys match the Start's `initial` port field names."
+          }
+        }
+      },
+      "StatConfig": {
+        "type": "object",
+        "required": [
+          "path",
+          "storage"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageConfig"
           }
         }
       },
@@ -9729,6 +11543,78 @@
           "status": {
             "type": "string",
             "description": "`\"pending\" | \"running\" | \"completed\" | \"failed\" | \"skipped\"`."
+          }
+        }
+      },
+      "StorageBackend": {
+        "type": "string",
+        "description": "Which storage backend to use.",
+        "enum": [
+          "local",
+          "s3",
+          "gcs",
+          "azblob"
+        ]
+      },
+      "StorageConfig": {
+        "type": "object",
+        "description": "Configuration for a storage backend.\n\nUsed both at the executor level (global artifact store) and at the\nper-input / per-output level for multi-backend staging.\n\n# Environment variables (executor-level)\n\n```text\nEXECUTOR_STORAGE_BACKEND=s3\nEXECUTOR_STORAGE_ENDPOINT=https://s3.amazonaws.com\nEXECUTOR_STORAGE_BUCKET=my-bucket\nEXECUTOR_STORAGE_REGION=us-east-1\nEXECUTOR_STORAGE_PREFIX=executor/\nEXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY=AKIA...\nEXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY=wJa...\n```\n\n# executor.toml\n\n```toml\n[storage]\nbackend = \"s3\"\nendpoint = \"https://minio.internal:9000\"\nbucket = \"artifacts\"\nregion = \"us-east-1\"\nprefix = \"executor/\"\n\n[storage.credentials]\naccess_key = \"minioadmin\"\nsecret_key = \"minioadmin\"\n```",
+        "required": [
+          "backend",
+          "endpoint"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/StorageBackend",
+            "description": "Which backend to use."
+          },
+          "bucket": {
+            "type": "string",
+            "description": "Bucket or container name (ignored for local)."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/StorageCredentials",
+            "description": "Credentials for the storage backend."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "Endpoint URL. For S3: the S3 endpoint. For local: the root directory path."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "Path prefix within the bucket (e.g. \"executor/\")."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Region (optional, for S3/GCS)."
+          },
+          "resource_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional workspace resource binding (e.g. an `s3` resource). When\nset, the executor's file-ops backend overlays `endpoint`, `region`,\n`bucket`, and credentials from the resource envelope at run time —\nper-step inline values still win on a field-by-field basis. Empty\nor absent means \"use the inline fields directly\"."
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryConfig",
+            "description": "Retry behaviour for transient storage errors. Applied via OpenDAL's\n`RetryLayer`, so only errors with `is_temporary() == true` are retried."
+          }
+        }
+      },
+      "StorageCredentials": {
+        "type": "object",
+        "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`,\n`EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]`\nsection in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved\nby the staging pipeline before use.",
+        "properties": {
+          "access_key": {
+            "type": "string",
+            "description": "Access key (S3 access key ID, GCS HMAC key, Azure account name)."
+          },
+          "secret_key": {
+            "type": "string",
+            "description": "Secret key (S3 secret access key, GCS HMAC secret, Azure account key)."
           }
         }
       },
@@ -10216,6 +12102,40 @@
           }
         }
       },
+      "TemplateIoContract": {
+        "type": "object",
+        "description": "SubWorkflow input/output contract derived from a child template's graph.\nMirrors exactly what the publish path freezes (see\n[`crate::compiler::derive_child_io`]): `input` is the child's Start\n`initial` port, `output` is the union of its End `result_mapping` targets\n(Json-typed). The SubWorkflow editor reads this to render fixed, read-only\nports and one input-mapping row per child Start field.",
+        "required": [
+          "input",
+          "output"
+        ],
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/Port"
+          },
+          "output": {
+            "$ref": "#/components/schemas/Port"
+          }
+        }
+      },
+      "TemplateSource": {
+        "type": "object",
+        "description": "One template source. Carries the source bytes inline plus a label used\nfor diagnostic messages (\"error in subject.tera at line 3\"). The label\nis the original node-file name from the editor.",
+        "required": [
+          "label",
+          "source"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Display name — typically the original node-file name (`subject.tera`)."
+          },
+          "source": {
+            "type": "string",
+            "description": "Raw Tera template text."
+          }
+        }
+      },
       "TemplateTest": {
         "type": "object",
         "description": "A test attached to a logical template family. `template_id` is the family\nroot (the row's `id` when `base_template_id` is NULL, else the\n`base_template_id`), resolved by `handlers::template_tests::family_root`.",
@@ -10426,6 +12346,26 @@
           "feedback",
           "bubble"
         ]
+      },
+      "ToolSchema": {
+        "type": "object",
+        "description": "Tool schema declared by the agent compiler from a child node's input\nport. Sent to the LLM provider in the request `tools` array.",
+        "required": [
+          "name",
+          "description",
+          "input_schema"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "input_schema": {
+            "description": "JSON Schema object describing the tool's expected arguments."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
       },
       "TriggerHistoryResponse": {
         "type": "object",
@@ -10785,6 +12725,24 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "description": "Partial update for a project. Both fields optional — omitted fields are\nleft untouched (COALESCE). `slug` is immutable (stable filter key).",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -11513,6 +13471,13 @@
               "type"
             ],
             "properties": {
+              "accumulators": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LoopAccumulator"
+                },
+                "description": "Optional fold/scan state carried across iterations. Each is an\nadditional field in the loop's parked `p_<id>_data` envelope\n(alongside `iteration`): initialized in the enter transition,\nre-folded write-once-per-iteration in the continue transition.\nDownstream blocks read them via `<loop_slug>.<var>` borrows."
+              },
               "description": {
                 "type": [
                   "string",
@@ -11557,6 +13522,56 @@
                 "type": "string",
                 "enum": [
                   "scope"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`\ninto N item tokens (one per element), runs a BODY sub-graph of child\nnodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`\nhandle mechanism as Loop) once per element, gathers the N results, and\nreduces them to one collection token parked at `p_<id>_data`. Downstream\nblocks borrow the gathered collection as `<map_slug>[*].<field>` (the\nRepeater `[*]` machinery generalized to any Array-typed parked producer;\n`<map_slug>.<field>` without `[*]` is a hard `MapRefMissingStar` error).\nThe scatter writes the item namespace ONTO each body token (namespace-\non-token, v1) so body guards / Python read `item.<field>` directly.",
+            "required": [
+              "label",
+              "itemsRef",
+              "resultVar",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "itemVar": {
+                "type": "string",
+                "description": "Identifier the per-item element is bound to on each body token.\nBody guards / Python read `<item_var>.<field>`. Defaults to `item`."
+              },
+              "itemsRef": {
+                "type": "string",
+                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`."
+              },
+              "label": {
+                "type": "string"
+              },
+              "output": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Port",
+                    "description": "Declared shape of one gathered element. Empty fields ⇒ `Any`\nelement. Drives the `<map_slug>[*].<field>` borrow surface."
+                  }
+                ]
+              },
+              "resultVar": {
+                "type": "string",
+                "description": "Field on each body output token whose value becomes the gathered\nelement (the per-iteration result the reduce collects)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "map"
                 ]
               }
             }
@@ -11762,13 +13777,6 @@
               "type"
             ],
             "properties": {
-              "airTargetPlaceId": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "Pre-AIR direct target. When set, the trigger fires by seeding the\nnamed AIR place with the supplied payload, bypassing graph-edge\nresolution. Mutually exclusive with an outgoing edge in the graph:\npre-AIR templates carry a Trigger-only stub graph (no Start, no\nedges). Used by clinic-style headless templates pushed through\n`POST /api/templates/apply-air`."
-              },
               "concurrency": {
                 "$ref": "#/components/schemas/ConcurrencyPolicy",
                 "description": "Concurrency / dedup policy applied by the dispatcher."
@@ -11978,6 +13986,14 @@
           "name": {
             "type": "string"
           },
+          "owner_template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Owning parent family base id (`COALESCE(base_template_id, id)`), set\nonly when `visibility == \"private\"`. A private sub-workflow may be\nembedded only by this family and never runs standalone."
+          },
           "parent_id": {
             "type": [
               "string",
@@ -12135,6 +14151,26 @@
     {
       "name": "health",
       "description": "Liveness probe."
+    },
+    {
+      "name": "workspaces",
+      "description": "Tenant boundaries — membership + member admin (Phase A2)."
+    },
+    {
+      "name": "projects",
+      "description": "Workspace-scoped template grouping + tag/visibility surface + per-project OpenAPI bundle."
+    },
+    {
+      "name": "me",
+      "description": "Per-session preferences — active workspace switcher."
+    },
+    {
+      "name": "users",
+      "description": "Directory lookups — email → OIDC subject resolver for member admin."
+    },
+    {
+      "name": "admin",
+      "description": "Operator-only maintenance — remove / reseed the built-in demo workflows."
     }
   ]
 }

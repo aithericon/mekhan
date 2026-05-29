@@ -184,7 +184,7 @@ impl MessageHandler for GlobalBridgeHandler<'_> {
             .resolver
             .resolve_net(net_id)
             .await
-            .map_err(|e| ProcessError::Transient(e))?;
+            .map_err(ProcessError::Transient)?;
 
         // Convert JSON to TokenColor
         let color = json_to_token_color(&transfer.token_color);

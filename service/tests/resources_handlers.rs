@@ -283,7 +283,7 @@ async fn create_rejects_bad_path_format() {
     assert!(body["error"]
         .as_str()
         .unwrap_or("")
-        .contains("does not match the required format"));
+        .contains("must be a snake_case identifier"));
 }
 
 #[tokio::test]

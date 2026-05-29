@@ -24,6 +24,8 @@ pub(crate) static TIMEOUT_DECL: NodeDecl = NodeDecl {
     output_ports: output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
+    validate: Some(crate::compiler::validate::validate_timeout),
+    token_shape: Some(crate::compiler::token_shape::analyze::out_shape_passthrough),
 };
 
 fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {

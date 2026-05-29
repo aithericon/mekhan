@@ -27,11 +27,22 @@
 <!--
 	Timeout is a body-container that races a wrapped subgraph against a
 	deadline. Body authoring places child nodes inside its bounds with
-	`parentId == timeout.id`. The compiler routes the inbound token in via
-	`body_in` (source handle, interior-right edge) and back via `body_out`
-	(target handle, interior-left edge). Two outer source handles: `out`
-	(default; fires when the body wins the race) and `timeout` (fires when
-	the timer wins).
+	`parentId == timeout.id` (drag-into / drag-out parenting is enabled in
+	WorkflowCanvas's `isContainer` set).
+
+	Port layout — three edges, three semantics:
+	  • LEFT  (in, target)   — entry
+	  • RIGHT (out, source)  — happy path: body finished before deadline
+	  • BOTTOM (timeout, source, amber-tinted) — exception path: timer won
+	The exception output lives on a different EDGE than the happy path so
+	the two race outcomes are visually unambiguous, matching the "fallout"
+	intuition (timeout drops down, not sideways).
+
+	Body wiring (interior handles, solid-filled to distinguish from the
+	outline-style outer perimeter handles):
+	  • body_in  (interior left, source) — start of watched work
+	  • body_out (interior right, target) — body completion (auto-cancels
+	    the parent timer); arrives via `loop_back` edge type to mirror Loop.
 -->
 <NodeResizer
 	isVisible={selected && !!reportResize}
@@ -54,15 +65,13 @@
 	position={Position.Right}
 	class={workflowNodeHandleClass('timeout')}
 	title="Done — body completed in time"
-	style="top: 35%;"
 />
 <Handle
 	id="timeout"
 	type="source"
-	position={Position.Right}
-	class={workflowNodeHandleClass('timeout')}
+	position={Position.Bottom}
+	class="!h-3 !w-3 !rounded-full !border-2 !border-amber-500 !bg-card"
 	title="Timed out — body did not finish before deadline"
-	style="top: 65%;"
 />
 
 <div
@@ -80,21 +89,29 @@
 		</div>
 	</div>
 
-	<!-- Inner-facing body handles (solid fill to distinguish from perimeter) -->
+	<!--
+		Inner-facing body handles (solid fill to distinguish from perimeter).
+		Their `position` points INWARD toward the body interior where the
+		wrapped children live: body_in uses Position.Right so its connection
+		leaves rightward into the body, body_out uses Position.Left so the
+		return arc enters from the body. The `left/right: auto` overrides keep
+		them pinned to the inner walls (16px) without the position class's
+		default wall-anchor fighting the styled placement.
+	-->
 	<Handle
 		id="body_in"
 		type="source"
-		position={Position.Left}
+		position={Position.Right}
 		class="!h-3 !w-3 !border-2 !border-node-timeout !bg-node-timeout"
-		style="left: 16px; top: 50%;"
+		style="left: 16px; right: auto; top: 50%;"
 		title="Body in — start of watched work"
 	/>
 	<Handle
 		id="body_out"
 		type="target"
-		position={Position.Right}
+		position={Position.Left}
 		class="!h-3 !w-3 !border-2 !border-node-timeout !bg-node-timeout"
-		style="right: 16px; top: 50%;"
+		style="right: 16px; left: auto; top: 50%;"
 		title="Body out — body completion (cancels the timer)"
 	/>
 </div>

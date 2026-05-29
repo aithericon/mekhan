@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// `id` is provider-assigned and opaque to the platform; downstream
 /// transitions match on `name` only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct LlmToolCall {
     pub id: String,
     pub name: String,
@@ -20,7 +20,7 @@ pub struct LlmToolCall {
 /// is the escape hatch for provider-specific values the platform hasn't
 /// modelled yet.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LlmStopReason {
     EndTurn,
@@ -46,7 +46,7 @@ impl std::fmt::Display for LlmStopReason {
 
 /// Token usage for one LLM turn (input + output).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct LlmUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -61,7 +61,7 @@ pub struct LlmUsage {
 /// `stop_reason` is the normalized provider stop signal. `usage` feeds
 /// per-turn metrics + `p_state.total_tokens_*` accumulation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct LlmTurnResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -74,7 +74,7 @@ pub struct LlmTurnResult {
 /// Tool schema declared by the agent compiler from a child node's input
 /// port. Sent to the LLM provider in the request `tools` array.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct ToolSchema {
     pub name: String,
     pub description: String,

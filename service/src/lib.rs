@@ -155,6 +155,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::templates::delete_template
         ))
         .routes(routes!(handlers::templates::get_template_bundle))
+        .routes(routes!(handlers::templates::get_io_contract))
         .routes(routes!(handlers::templates::publish_template))
         .routes(routes!(handlers::templates::new_version))
         .routes(routes!(handlers::templates::apply_template))
@@ -165,6 +166,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::templates::io_stubs))
         .routes(routes!(handlers::templates::compile_graph))
         .routes(routes!(handlers::templates::analyze_graph))
+        // Admin: remove / reseed built-in demos
+        .routes(routes!(handlers::demos::reset_demos))
+        .routes(routes!(handlers::demos::reseed_demos))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,
@@ -272,16 +276,34 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::workspaces::remove_member))
         // Projects (Phase A2) — M:N grouping of templates within a
         // workspace. Not an ACL boundary.
+        .routes(routes!(handlers::projects::list_workspace_tags))
         .routes(routes!(
             handlers::projects::list_projects,
             handlers::projects::create_project
         ))
-        .routes(routes!(handlers::projects::delete_project))
+        .routes(routes!(
+            handlers::projects::delete_project,
+            handlers::projects::update_project
+        ))
         .routes(routes!(handlers::projects::attach_template))
         .routes(routes!(handlers::projects::detach_template))
-        // Template tags + visibility (Phase A2).
-        .routes(routes!(handlers::projects::set_template_tags))
+        // Template tags + visibility (Phase A2; GET added Phase B).
+        .routes(routes!(
+            handlers::projects::get_template_tags,
+            handlers::projects::set_template_tags
+        ))
         .routes(routes!(handlers::projects::set_template_visibility))
+        .routes(routes!(handlers::projects::list_template_projects))
+        // Per-project OpenAPI bundle (Phase B) — synthesized webhook spec
+        // for SDK generators + API doc viewers.
+        .routes(routes!(handlers::openapi_bundle::project_openapi_bundle))
+        // Active-workspace switcher (Phase B) — per-session override cookie.
+        .routes(routes!(
+            handlers::me::set_active_workspace,
+            handlers::me::clear_active_workspace
+        ))
+        // Email → OIDC subject resolver (Phase B) — for the member-admin UI.
+        .routes(routes!(handlers::users::resolve_user_by_email))
 }
 
 pub fn build_router(state: AppState) -> Router {

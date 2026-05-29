@@ -35,6 +35,13 @@ export type {
 } from '$lib/api/client';
 
 export type WorkflowNodeType = SchemaWorkflowNodeData['type'];
+/**
+ * Canonical discriminant union of every workflow node kind, derived from the
+ * generated OpenAPI schema. Use this for exhaustive `Record<NodeKind, …>`
+ * registries (node renderers, property-panel sections) so adding/removing a
+ * kind in the Rust DTO surfaces as a compile error on the frontend.
+ */
+export type NodeKind = WorkflowNodeType;
 export type WorkflowEdgeType = 'sequence' | 'conditional' | 'loop_back';
 
 // Per-variant aliases extracted from the schema's discriminated union.
@@ -46,6 +53,7 @@ export type DecisionNodeData = Extract<SchemaWorkflowNodeData, { type: 'decision
 export type ParallelSplitNodeData = Extract<SchemaWorkflowNodeData, { type: 'parallel_split' }>;
 export type JoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'join' }>;
 export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
+export type MapNodeData = Extract<SchemaWorkflowNodeData, { type: 'map' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
 export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
 export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
@@ -135,7 +143,17 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				type: 'loop',
 				label: 'Loop',
 				maxIterations: 3,
-				loopCondition: 'true'
+				loopCondition: 'true',
+				accumulators: []
+			};
+		case 'map':
+			return {
+				type: 'map',
+				label: 'Map',
+				itemsRef: '',
+				itemVar: 'item',
+				resultVar: '',
+				output: { id: 'out', label: 'Element', fields: [] }
 			};
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };

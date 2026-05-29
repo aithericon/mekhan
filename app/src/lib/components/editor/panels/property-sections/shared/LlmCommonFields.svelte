@@ -32,12 +32,13 @@
 		ollama: 'Ollama'
 	};
 
-	/// Per-provider resource type map. Only `openai` has a workspace
-	/// resource type today; `anthropic` / `ollama` fall back to manual
-	/// api_key + base_url until those resource types ship.
+	/// Per-provider resource type map. `openai` and `anthropic` each have a
+	/// workspace resource kind carrying their api_key + base_url; `ollama`
+	/// (usually keyless, local) still falls back to manual base_url entry
+	/// until an `ollama` resource kind ships.
 	export const RESOURCE_TYPE_FOR_PROVIDER: Record<string, string | null> = {
 		openai: 'openai',
-		anthropic: null,
+		anthropic: 'anthropic',
 		ollama: null
 	};
 </script>

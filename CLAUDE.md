@@ -37,13 +37,13 @@ just dev up-<name>         # single-component restart: up-executor | up-engine |
 
 Local endpoints once `just dev` is up:
 - mekhan-service → http://localhost:3100
-- SvelteKit dev → http://localhost:5173 (proxies `/api/*` to mekhan, `/petri/*` to engine; `/api/yjs` is WS)
+- SvelteKit dev → http://localhost:15173 (proxies `/api/*` to mekhan, `/petri/*` to engine; `/api/yjs` is WS)
 - engine → http://localhost:3030
 - Postgres → `localhost:5439` (`mekhan:mekhan@.../mekhan`)
-- NATS → `nats://localhost:4333` (HTTP monitor :8333)
-- rustfs (S3) → http://localhost:9005 (admin `rustfsadmin/rustfsadmin`, console :9006)
+- NATS → `nats://localhost:4333` (HTTP monitor :18333)
+- rustfs (S3) → http://localhost:9005 (admin `rustfsadmin/rustfsadmin`, console :19006)
 - vault → http://localhost:8200 (dev mode, root token `root`, KV v2 at `secret/`)
-- executor cancel → http://localhost:3105
+- executor cancel → http://localhost:13105
 
 Auth defaults to `dev_noop` (every request is a fixed dev user, fully offline). Use `just dev up-auth` to run mekhan in BFF mode against Zitadel — requires `bash deploy/zitadel/bootstrap.sh` once to write `service/mekhan.local.toml`.
 

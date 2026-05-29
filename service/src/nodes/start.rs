@@ -26,6 +26,10 @@ pub(crate) static START_DECL: NodeDecl = NodeDecl {
     output_ports: output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
+    // No per-node structural rule (Start cardinality is checked graph-wide in
+    // `validate`, not per-node).
+    validate: None,
+    token_shape: Some(crate::compiler::token_shape::analyze::out_shape_start),
 };
 
 fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {

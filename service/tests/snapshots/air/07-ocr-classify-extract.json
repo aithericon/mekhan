@@ -332,6 +332,9 @@
         "ConfigRef": {
           "description": "Pointer to a static node-config blob in object storage. The executor's `FetchConfigHook` downloads from `storage_path` via the global `ArtifactStore` and replaces `ExecutionSpec.config` with the fetched JSON.\n\nThe storage path is opaque to the executor — it's whatever key the compiler chose at publish time (Mekhan uses `templates/{template_id}/v{version}/{node_id}/node-config.json`).",
           "properties": {
+            "overlay": {
+              "description": "Per-job overlay shallow-merged onto the fetched static config by `FetchConfigHook` (overlay keys win). Lets a caller keep the large, stable config (prompts, tool schemas) in object storage while shipping the slim, turn-varying parts inline on the token.\n\nThe agent loop uses this to carry the per-turn transcript plumbing on existing wire fields (so the engine needs no new typed field): it sets `history`/`pending` to `{{input:...}}` placeholders that `resolve_inputs` fills from staged inputs, and `_history_write_key` — the per-turn blob key the worker writes the new cumulative transcript to after the model responds."
+            },
             "storage_path": {
               "description": "Storage key inside the global artifact bucket.",
               "type": "string"
@@ -770,6 +773,9 @@
         "ConfigRef": {
           "description": "Pointer to a static node-config blob in object storage. The executor's `FetchConfigHook` downloads from `storage_path` via the global `ArtifactStore` and replaces `ExecutionSpec.config` with the fetched JSON.\n\nThe storage path is opaque to the executor — it's whatever key the compiler chose at publish time (Mekhan uses `templates/{template_id}/v{version}/{node_id}/node-config.json`).",
           "properties": {
+            "overlay": {
+              "description": "Per-job overlay shallow-merged onto the fetched static config by `FetchConfigHook` (overlay keys win). Lets a caller keep the large, stable config (prompts, tool schemas) in object storage while shipping the slim, turn-varying parts inline on the token.\n\nThe agent loop uses this to carry the per-turn transcript plumbing on existing wire fields (so the engine needs no new typed field): it sets `history`/`pending` to `{{input:...}}` placeholders that `resolve_inputs` fills from staged inputs, and `_history_write_key` — the per-turn blob key the worker writes the new cumulative transcript to after the model responds."
+            },
             "storage_path": {
               "description": "Storage key inside the global artifact bucket.",
               "type": "string"

@@ -8,9 +8,12 @@
 	import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetClose } from '$lib/components/ui/sheet';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
 	import * as Select from '$lib/components/ui/select';
+	import SchemaForm, {
+		deriveFieldSpecs,
+		type FieldSpec as SchemaFieldSpec
+	} from '$lib/components/editor/panels/shared/SchemaForm.svelte';
 	import X from '@lucide/svelte/icons/x';
 	import {
 		createResource,
@@ -53,53 +56,16 @@
 		types.find((t) => t.name === selectedType) ?? null
 	);
 
-	// JSON Schema property entries — derived from `descriptor.schema`. Picks
-	// the type, enum, description per field so the input render-decision
-	// happens once.
-	type FieldSpec = {
-		name: string;
-		label: string;
-		jsonType: 'string' | 'integer' | 'number' | 'boolean' | 'unknown';
-		isSecret: boolean;
-		isRequired: boolean;
-		enumOptions: string[] | null;
-		description: string | null;
-	};
-
-	const fieldSpecs = $derived.by<FieldSpec[]>(() => {
+	// JSON Schema property entries — derived from `descriptor.schema` via the
+	// shared `deriveFieldSpecs` (same logic SchemaForm renders with). The
+	// field order is the resource type's public-then-secret listing.
+	const fieldSpecs = $derived.by<SchemaFieldSpec[]>(() => {
 		if (!descriptor) return [];
-		const schema = (descriptor.schema ?? {}) as Record<string, unknown>;
-		const props = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
-		const required = (schema.required ?? []) as string[];
-		const order = [...descriptor.public_fields, ...descriptor.secret_fields];
-		const out: FieldSpec[] = [];
-		for (const name of order) {
-			const p = props[name] ?? {};
-			let jsonType: FieldSpec['jsonType'] = 'unknown';
-			const t = p.type;
-			if (t === 'string') jsonType = 'string';
-			else if (t === 'integer') jsonType = 'integer';
-			else if (t === 'number') jsonType = 'number';
-			else if (t === 'boolean') jsonType = 'boolean';
-			else if (Array.isArray(t)) {
-				// `["string","null"]` — pick the non-null half.
-				const non = t.find((x) => x !== 'null');
-				if (non === 'string') jsonType = 'string';
-				else if (non === 'integer') jsonType = 'integer';
-				else if (non === 'number') jsonType = 'number';
-				else if (non === 'boolean') jsonType = 'boolean';
-			}
-			out.push({
-				name,
-				label: name,
-				jsonType,
-				isSecret: descriptor.secret_fields.includes(name),
-				isRequired: required.includes(name),
-				enumOptions: Array.isArray(p.enum) ? (p.enum as string[]) : null,
-				description: typeof p.description === 'string' ? p.description : null
-			});
-		}
-		return out;
+		return deriveFieldSpecs(
+			(descriptor.schema ?? {}) as Record<string, unknown>,
+			descriptor.secret_fields,
+			[...descriptor.public_fields, ...descriptor.secret_fields]
+		);
 	});
 
 	// Bootstrap: load types if not provided, and pre-fill when editing.
@@ -164,10 +130,6 @@
 			}
 		})();
 	});
-
-	function setField(name: string, raw: string) {
-		fieldValues = { ...fieldValues, [name]: raw };
-	}
 
 	// --- kv (dynamic-fields) editor ----------------------------------------
 	// For `kv`-style resources the field set is user-defined. Track an
@@ -501,74 +463,17 @@
 							<div class="text-sm font-medium text-muted-foreground">
 								{descriptor.display_name} configuration
 							</div>
-							{#each fieldSpecs as f (f.name)}
-								<FormField
-									label={f.label + (f.isSecret ? ' (secret)' : '') + (f.isRequired ? ' *' : '')}
-									description={f.description ?? undefined}
-								>
-									{#if f.enumOptions}
-										<Select.Root
-											type="single"
-											value={fieldValues[f.name] ?? ''}
-											onValueChange={(v) => setField(f.name, v ?? '')}
-										>
-											<Select.Trigger class="w-full text-sm">
-												{fieldValues[f.name] || '— select —'}
-											</Select.Trigger>
-											<Select.Content>
-												{#each f.enumOptions as opt (opt)}
-													<Select.Item value={opt} label={opt} />
-												{/each}
-											</Select.Content>
-										</Select.Root>
-									{:else if f.jsonType === 'boolean'}
-										<Select.Root
-											type="single"
-											value={fieldValues[f.name] ?? ''}
-											onValueChange={(v) => setField(f.name, v ?? '')}
-										>
-											<Select.Trigger class="w-full text-sm">
-												{fieldValues[f.name] || '— select —'}
-											</Select.Trigger>
-											<Select.Content>
-												<Select.Item value="true" label="true" />
-												<Select.Item value="false" label="false" />
-											</Select.Content>
-										</Select.Root>
-									{:else if f.jsonType === 'integer' || f.jsonType === 'number'}
-										<Input
-											type="number"
-											value={fieldValues[f.name] ?? ''}
-											placeholder={f.isSecret && mode === 'edit'
-												? '(leave blank to keep current)'
-												: undefined}
-											oninput={(e) =>
-												setField(f.name, (e.currentTarget as HTMLInputElement).value)}
-											class="text-sm"
-										/>
-									{:else if f.isSecret}
-										<Input
-											type="password"
-											value={fieldValues[f.name] ?? ''}
-											placeholder={mode === 'edit'
-												? '(leave blank to keep current)'
-												: undefined}
-											oninput={(e) =>
-												setField(f.name, (e.currentTarget as HTMLInputElement).value)}
-											class="font-mono text-sm"
-											data-testid="resource-modal-secret-{f.name}"
-										/>
-									{:else}
-										<Input
-											type="text"
-											value={fieldValues[f.name] ?? ''}
-											oninput={(e) =>
-												setField(f.name, (e.currentTarget as HTMLInputElement).value)}
-											class="text-sm"
-										/>
-									{/if}
-								</FormField>
-							{/each}
+							<SchemaForm
+								schema={(descriptor.schema ?? {}) as Record<string, unknown>}
+								value={fieldValues}
+								secretFields={descriptor.secret_fields}
+								fieldOrder={[...descriptor.public_fields, ...descriptor.secret_fields]}
+								booleanWidget="select"
+								secretPlaceholder={mode === 'edit'
+									? '(leave blank to keep current)'
+									: undefined}
+								onchange={(next) => (fieldValues = next as Record<string, string>)}
+							/>
 						</div>
 					{/if}
 				</div>

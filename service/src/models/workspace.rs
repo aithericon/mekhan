@@ -61,6 +61,16 @@ pub struct CreateProjectRequest {
     pub description: String,
 }
 
+/// Partial update for a project. Both fields optional — omitted fields are
+/// left untouched (COALESCE). `slug` is immutable (stable filter key).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateProjectRequest {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AttachTemplateRequest {
     /// The *base* template id (the first version's id, which the
@@ -77,6 +87,11 @@ pub struct SetTagsRequest {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetVisibilityRequest {
-    /// `workspace` (default) or `public`.
+    /// `workspace` (default), `public`, or `private`.
     pub visibility: String,
+    /// Required when `visibility == "private"`: the owning parent family
+    /// (any version id; resolved to its base). Ignored otherwise. The
+    /// private sub-workflow may then be embedded only by that family.
+    #[serde(default)]
+    pub owner_template_id: Option<Uuid>,
 }

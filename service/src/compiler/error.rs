@@ -147,6 +147,14 @@ pub enum CompileError {
     #[error("sub-workflow cycle detected: {chain:?}")]
     SubWorkflowCycle { chain: Vec<String> },
 
+    #[error(
+        "sub-workflow node '{node_id}' references private template '{template_id}' owned by a different workflow"
+    )]
+    SubWorkflowPrivateOwnershipViolation {
+        node_id: String,
+        template_id: String,
+    },
+
     #[error("sub-workflow nesting too deep (limit {limit}) at node '{node_id}'")]
     SubWorkflowDepthExceeded { node_id: String, limit: usize },
 
@@ -155,6 +163,74 @@ pub enum CompileError {
     /// not a useful primitive; use a dedicated Delay node if/when needed).
     #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
     LoopEmpty { node_id: String },
+
+    /// Map has no body — no child node has `parent_id == map.id`. A Map with
+    /// nothing to run per element is a config error; wire at least one node
+    /// inside the map container.
+    #[error("map '{node_id}' has no body — add at least one node inside the map container")]
+    MapEmpty { node_id: String },
+
+    /// A `<map_slug>.<field>` reference omits the required `[*]` collection
+    /// boundary. A Map parks a gathered ARRAY at `p_<id>_data`; downstream
+    /// borrows must iterate it as `<map_slug>[*].<field>`. A bare
+    /// `<map_slug>.<field>` would address a scalar that doesn't exist.
+    #[error(
+        "node '{node_id}': reference '{ref_value}' borrows map producer '{map_slug}' \
+         without the required `[*]` collection boundary — use `{map_slug}[*].<field>`"
+    )]
+    MapRefMissingStar {
+        node_id: String,
+        map_slug: String,
+        ref_value: String,
+    },
+
+    /// A Map's `resultVar` is not a valid Rhai identifier
+    /// (`[A-Za-z_][A-Za-z0-9_]*`). Required because the gather transition
+    /// projects each body token's `<resultVar>` field into the result
+    /// collection (`#{ value: body.<resultVar>, … }`); a malformed name
+    /// would produce a Rhai syntax error deep in the emitted logic.
+    #[error(
+        "map '{node_id}': resultVar '{result_var}' is not a valid Rhai identifier ([A-Za-z_][A-Za-z0-9_]*)"
+    )]
+    MapResultVarInvalid { node_id: String, result_var: String },
+
+    /// A Map node is nested inside another Map (its `parent_id` chain reaches
+    /// a Map ancestor). v1 forbids nested map-reduce: the gather barrier's
+    /// `__map_id` correlation key and the namespace-on-token item injection
+    /// assume a single scatter scope, and the `<slug>[*].<field>` borrow
+    /// surface only describes one level of collection. Use a SubWorkflow as
+    /// the body if you need a second fan-out.
+    #[error(
+        "map '{node_id}' is nested inside map '{outer_id}' — nested map-reduce is not supported in v1"
+    )]
+    MapNested { node_id: String, outer_id: String },
+
+    /// A Map's `itemsRef` parses + resolves to a known producer field, but
+    /// that field's declared shape is not an array — the scatter can only
+    /// fan out over a collection. Mirrors `RepeaterItemsRefNotArray`;
+    /// `Any`/`Opaque`/`Json` are accepted (deferred to runtime).
+    #[error(
+        "map '{node_id}': itemsRef '{ref_value}' resolves to {actual_kind}, not an array — map can only scatter a collection"
+    )]
+    MapItemsRefNotArray {
+        node_id: String,
+        ref_value: String,
+        actual_kind: String,
+    },
+
+    /// A Map's `itemsRef` either doesn't parse as `<slug>.<field>…`, names a
+    /// `<slug>` that isn't a parked producer in the graph, or the field path
+    /// doesn't land on the producer's outbound shape. Mirrors
+    /// `RepeaterRefUnresolved`.
+    #[error(
+        "map '{node_id}': itemsRef '{ref_value}' is unresolved (slug: '{slug}', candidates: {available:?})"
+    )]
+    MapItemsRefUnresolved {
+        node_id: String,
+        ref_value: String,
+        slug: String,
+        available: Vec<String>,
+    },
 
     /// A node wired as an agent tool (target of an edge with
     /// `source_handle == "tools"`) has an incoming `WorkflowEdge` from
@@ -406,6 +482,33 @@ pub enum CompileError {
         node_id: String,
         output_slug: String,
     },
+
+    // --- Loop accumulator (fold/scan state) guards. Each accumulator var
+    //     becomes a parked field in the loop's `p_<id>_data` envelope and is
+    //     addressed downstream as `<loop_slug>.<var>`; the init/merge_expr are
+    //     emitted verbatim into the enter/continue transition logic. Reject
+    //     malformed declarations at publish so the editor can ring the loop.
+    /// Accumulator `var` is not a valid Rhai identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+    #[error(
+        "loop '{node_id}': accumulator var '{var}' is not a valid Rhai identifier ([A-Za-z_][A-Za-z0-9_]*)"
+    )]
+    LoopAccumulatorVarInvalid { node_id: String, var: String },
+
+    /// Accumulator `var` is `iteration` — reserved for the loop's own counter.
+    #[error("loop '{node_id}': accumulator var '{var}' is reserved (the loop iteration counter)")]
+    LoopAccumulatorVarReserved { node_id: String, var: String },
+
+    /// Two accumulators on the same loop declare the same `var`.
+    #[error("loop '{node_id}': duplicate accumulator var '{var}'")]
+    LoopAccumulatorDuplicateVar { node_id: String, var: String },
+
+    /// An accumulator's `init` or `merge_expr` does not parse as Rhai.
+    #[error("loop '{node_id}': accumulator '{var}' has an unparseable expression: {error}")]
+    LoopAccumulatorExprUnparseable {
+        node_id: String,
+        var: String,
+        error: String,
+    },
 }
 
 impl CompileError {
@@ -433,8 +536,17 @@ impl CompileError {
             }
             Self::SubWorkflowUnresolved { .. } => "subworkflow_unresolved",
             Self::SubWorkflowCycle { .. } => "subworkflow_cycle",
+            Self::SubWorkflowPrivateOwnershipViolation { .. } => {
+                "subworkflow_private_ownership_violation"
+            }
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
+            Self::MapEmpty { .. } => "map_empty",
+            Self::MapRefMissingStar { .. } => "map_ref_missing_star",
+            Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
+            Self::MapNested { .. } => "map_nested",
+            Self::MapItemsRefNotArray { .. } => "map_items_ref_not_array",
+            Self::MapItemsRefUnresolved { .. } => "map_items_ref_unresolved",
             Self::ToolChildHasIncomingEdge { .. } => "tool_child_has_incoming_edge",
             Self::OutputFieldShadowsReserved { .. } => "output_field_shadows_reserved",
             Self::OutputFieldShadowsInput { .. } => "output_field_shadows_input",
@@ -452,6 +564,10 @@ impl CompileError {
             Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
             Self::RepeaterOutputSlugInvalid { .. } => "repeater_output_slug_invalid",
             Self::RepeaterNested { .. } => "repeater_nested",
+            Self::LoopAccumulatorVarInvalid { .. } => "loop_accumulator_var_invalid",
+            Self::LoopAccumulatorVarReserved { .. } => "loop_accumulator_var_reserved",
+            Self::LoopAccumulatorDuplicateVar { .. } => "loop_accumulator_duplicate_var",
+            Self::LoopAccumulatorExprUnparseable { .. } => "loop_accumulator_expr_unparseable",
         }
     }
 
@@ -484,8 +600,15 @@ impl CompileError {
             | Self::TriggerUnresolvedRef { node_id, .. }
             | Self::TriggerEmptyMappingRequiredFields { node_id, .. }
             | Self::SubWorkflowUnresolved { node_id, .. }
+            | Self::SubWorkflowPrivateOwnershipViolation { node_id, .. }
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
+            | Self::MapEmpty { node_id }
+            | Self::MapRefMissingStar { node_id, .. }
+            | Self::MapResultVarInvalid { node_id, .. }
+            | Self::MapNested { node_id, .. }
+            | Self::MapItemsRefNotArray { node_id, .. }
+            | Self::MapItemsRefUnresolved { node_id, .. }
             | Self::ToolChildHasIncomingEdge {
                 child_id: node_id, ..
             }
@@ -501,6 +624,10 @@ impl CompileError {
             | Self::RepeaterItemsRefNotArray { node_id, .. }
             | Self::RepeaterOutputSlugInvalid { node_id, .. }
             | Self::RepeaterNested { node_id, .. }
+            | Self::LoopAccumulatorVarInvalid { node_id, .. }
+            | Self::LoopAccumulatorVarReserved { node_id, .. }
+            | Self::LoopAccumulatorDuplicateVar { node_id, .. }
+            | Self::LoopAccumulatorExprUnparseable { node_id, .. }
             | Self::WorkspaceResourceUnknown { node_id, .. } => Some(node_id),
             _ => None,
         }

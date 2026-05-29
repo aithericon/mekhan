@@ -215,6 +215,20 @@ pub struct ScenarioArc {
     /// Only meaningful on input arcs.
     #[serde(default, skip_serializing_if = "is_false")]
     pub read: bool,
+    /// Gather barrier: a producer-namespaced reference (e.g. `"expected.k"`) to a
+    /// field on a bound coordinator token supplying the count `K` of result tokens
+    /// this Batch input arc must accumulate before the transition fires. `None`
+    /// (the default) means today's behavior — no count-gate. Only meaningful on
+    /// input arcs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count_from: Option<String>,
+    /// Gather barrier: an optional field name read from the coordinator token and
+    /// matched against the same-named field on result tokens, so only tokens from
+    /// one gather group (e.g. one loop iteration's `iteration_id`) are consumed.
+    /// `None` makes every token in the place eligible. Only meaningful alongside
+    /// `count_from`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlate_on: Option<String>,
 }
 
 fn default_weight() -> usize {

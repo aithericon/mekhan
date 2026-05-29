@@ -265,6 +265,44 @@ impl MekhanNats {
         Ok(consumer)
     }
 
+    /// Create or get the durable consumer for engine-initiated human task
+    /// cancellations. The engine publishes to `human.cancel.{net_id}.{place}`
+    /// when the `human_cancel` effect handler fires (e.g. a Timeout's drain
+    /// transition firing when the timer wins). Mekhan reacts by flipping the
+    /// hpi_tasks row to `cancelled`, so the task disappears from the inbox
+    /// even though the user never clicked Cancel.
+    ///
+    /// The `HUMAN_CANCEL` stream is owned by the engine
+    /// (`engine/.../human_client.rs::ensure_cancel_stream`). We
+    /// `get_or_create` defensively so a fresh dev stack where mekhan boots
+    /// first doesn't hang.
+    pub async fn human_cancel_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self
+            .jetstream
+            .get_or_create_stream(jetstream::stream::Config {
+                name: "HUMAN_CANCEL".into(),
+                subjects: vec!["human.cancel.>".into()],
+                retention: jetstream::stream::RetentionPolicy::Limits,
+                max_age: Duration::from_secs(7 * 24 * 60 * 60),
+                ..Default::default()
+            })
+            .await?;
+        let durable = self.durable_name("mekhan-human-cancel-ingest");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "human.cancel.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
+
     /// Create or get the durable consumer for causality event ingestion.
     /// Consumes petri domain events and bridge transfers from PETRI_GLOBAL
     /// for causality projection and cross-net link tracking.

@@ -19,6 +19,7 @@ interface SessionUserDto {
 	display_name?: string | null;
 	roles?: string[];
 	org_id?: string | null;
+	workspace_id?: string | null;
 }
 
 function toUser(dto: SessionUserDto): AuthUser {
@@ -27,7 +28,8 @@ function toUser(dto: SessionUserDto): AuthUser {
 		email: dto.email ?? undefined,
 		displayName: dto.display_name ?? undefined,
 		roles: dto.roles ?? [],
-		orgId: dto.org_id ?? undefined
+		orgId: dto.org_id ?? undefined,
+		workspaceId: dto.workspace_id ?? undefined
 	};
 }
 

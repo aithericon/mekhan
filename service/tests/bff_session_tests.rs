@@ -167,7 +167,7 @@ async fn bff_authenticator_refreshes_near_expiry_session() {
             issuer_url: issuer.clone(),
             client_id: "test-client".into(),
             client_secret: None,
-            redirect_uri: "http://localhost:5173/api/auth/callback".into(),
+            redirect_uri: "http://localhost:15173/api/auth/callback".into(),
             scopes: "openid profile email offline_access".into(),
         })
         .await

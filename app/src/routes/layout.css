@@ -33,6 +33,7 @@
 	--node-decision: oklch(0.78 0.16 75);
 	--node-human-task: oklch(0.62 0.14 240);
 	--node-loop: oklch(0.70 0.17 350);
+	--node-map: oklch(0.68 0.15 165);
 	--node-scope: oklch(0.62 0.03 250);
 	--node-parallel: oklch(0.72 0.12 200);
 	--node-automated: oklch(0.62 0.16 290);
@@ -122,6 +123,7 @@
 	--color-node-decision: var(--node-decision);
 	--color-node-human-task: var(--node-human-task);
 	--color-node-loop: var(--node-loop);
+	--color-node-map: var(--node-map);
 	--color-node-scope: var(--node-scope);
 	--color-node-parallel: var(--node-parallel);
 	--color-node-automated: var(--node-automated);

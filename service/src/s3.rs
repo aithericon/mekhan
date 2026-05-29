@@ -197,4 +197,48 @@ impl ArtifactStore {
 
         Ok((bytes, content_type))
     }
+
+    /// Delete every object under `prefix`. Used by the retention sweep to GC
+    /// per-instance agent transcript blobs (`instances/{instance_id}/`).
+    /// Paginates the listing and deletes objects individually so a partial
+    /// failure still removes what it can; a no-op when the prefix is empty.
+    pub async fn delete_prefix(&self, prefix: &str) -> Result<(), ArtifactStoreError> {
+        let mut continuation: Option<String> = None;
+        loop {
+            let mut req = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix);
+            if let Some(token) = &continuation {
+                req = req.continuation_token(token);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| ArtifactStoreError::S3(format!("list {prefix}: {e}")))?;
+
+            for obj in resp.contents() {
+                if let Some(key) = obj.key() {
+                    self.client
+                        .delete_object()
+                        .bucket(&self.bucket)
+                        .key(key)
+                        .send()
+                        .await
+                        .map_err(|e| ArtifactStoreError::S3(format!("delete {key}: {e}")))?;
+                }
+            }
+
+            if resp.is_truncated().unwrap_or(false) {
+                continuation = resp.next_continuation_token().map(|s| s.to_string());
+                if continuation.is_none() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
 }

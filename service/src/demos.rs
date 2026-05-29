@@ -494,12 +494,50 @@ pub enum SeedOutcome {
 const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
     uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
 
-/// System-owned workspace that seeded demos belong to. Visibility=public on
-/// every row, so any authenticated user sees demos in `list_templates` via
-/// the cross-workspace public-read branch, without needing membership. Seeded
-/// in migration 20240123 alongside the default workspace.
-const DEMO_WORKSPACE_ID: uuid::Uuid =
-    uuid::uuid!("00000000-0000-0000-0000-0000000000de");
+/// Workspace that seeded demos belong to: the **default** workspace
+/// (`Uuid::nil()`, slug `default`), NOT the system-owned `demos` workspace.
+///
+/// Demos are meant to be first-class, *editable* starting points — the
+/// dev-noop user owns `default` (migration 20240123) and the BFF resolver
+/// auto-provisions every authenticated user as an `editor` of it
+/// (`ensure_default_workspace_membership`). So seeding here means a user can
+/// open a demo and publish edits without hitting `gate_template_write`'s
+/// membership check — which is exactly what a separate system-owned demos
+/// workspace prevented. Rows are still `visibility = 'public'` so users whose
+/// active workspace is some *other* tenant still discover them via the
+/// cross-workspace public-read branch in `list_templates`.
+const DEMO_WORKSPACE_ID: uuid::Uuid = uuid::Uuid::nil();
+
+/// Slug + display name of the project that groups every seeded demo. Projects
+/// are a non-ACL grouping inside a workspace (see migration 20240125), so this
+/// is purely organizational: it keeps the built-in demos collected under one
+/// heading in the default workspace instead of scattered among user templates.
+/// `UNIQUE (workspace_id, slug)` makes the slug the idempotency key.
+const DEMO_PROJECT_SLUG: &str = "demos";
+const DEMO_PROJECT_DISPLAY_NAME: &str = "Demos";
+const DEMO_PROJECT_DESCRIPTION: &str = "Built-in example workflows seeded by mekhan-service.";
+
+/// Upsert the demo project in the default workspace and return its id. Keyed
+/// on `(workspace_id, slug)`; `ON CONFLICT DO UPDATE` keeps the display name /
+/// description fresh and guarantees a `RETURNING id` even on the conflict path.
+async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, DemoSeedError> {
+    let (id,): (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO projects (workspace_id, slug, display_name, description, created_by) \
+              VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (workspace_id, slug) \
+              DO UPDATE SET display_name = EXCLUDED.display_name, \
+                            description = EXCLUDED.description \
+         RETURNING id",
+    )
+    .bind(DEMO_WORKSPACE_ID)
+    .bind(DEMO_PROJECT_SLUG)
+    .bind(DEMO_PROJECT_DISPLAY_NAME)
+    .bind(DEMO_PROJECT_DESCRIPTION)
+    .bind(DEMO_SEEDER_AUTHOR_ID)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(id)
+}
 
 /// Seed every demo under `root` into the running service. Idempotent:
 /// each demo's `demo.json::templateId` is the stable identifier — if
@@ -635,6 +673,31 @@ pub async fn seed_one(
     .fetch_one(&state.db)
     .await?;
 
+    // Group the demo under the shared "Demos" project. Keyed on
+    // `base_template_id` (= `template_id` here, since this is v1), so the
+    // attachment follows the live `is_latest` version automatically.
+    // Best-effort: a grouping failure must not fail the seed.
+    match ensure_demo_project(state).await {
+        Ok(project_id) => {
+            if let Err(e) = sqlx::query(
+                "INSERT INTO project_templates (project_id, base_template_id, added_by) \
+                      VALUES ($1, $2, $3) \
+                 ON CONFLICT (project_id, base_template_id) DO NOTHING",
+            )
+            .bind(project_id)
+            .bind(template_id)
+            .bind(DEMO_SEEDER_AUTHOR_ID)
+            .execute(&state.db)
+            .await
+            {
+                tracing::warn!(template_id = %template_id, error = %e, "attach demo to project failed (skipped)");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "ensure demo project failed — demo seeded without project grouping");
+        }
+    }
+
     // Initialize Y.Doc so the web editor sees the same graph + files the
     // executor will run. Non-fatal on failure (the executor reads AIR
     // from S3, not the Y.Doc) but a missing Y.Doc means the editor opens
@@ -693,6 +756,143 @@ pub async fn seed_one(
     }
 
     Ok(SeedOutcome::Seeded)
+}
+
+// ── Reset / reseed ────────────────────────────────────────────────────────────
+
+/// Tally of a [`purge_seeded`] / [`reseed_all`] run. Serializable so the admin
+/// HTTP endpoint hands it straight back to the operator / CLI.
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoResetReport {
+    /// Distinct seeded template *families* (by base id) deleted.
+    pub families_removed: usize,
+    /// Workflow instances (across every version of those families) whose
+    /// engine nets were purged and DB rows deleted.
+    pub instances_purged: usize,
+    /// Bundled template-test rows removed alongside the families.
+    pub tests_removed: usize,
+    /// Demos freshly re-seeded. Only ever non-zero from [`reseed_all`].
+    pub seeded: usize,
+}
+
+/// Force-delete every seeded demo family — the destructive half of "reset
+/// demos to pristine". Mirrors `handlers::templates::delete_template`'s cascade
+/// but **without** its running-instance guard: this is a deliberate reset, so
+/// running instances are cancelled (engine net purged), not spared.
+///
+/// "Seeded" is `author_id = DEMO_SEEDER_AUTHOR_ID` — the synthetic actor every
+/// seeded v1 row carries (see [`DEMO_SEEDER_AUTHOR_ID`]). Each such row is
+/// resolved to its family *base* id and the family is deleted whole: instances
+/// (nets purged + rows dropped), every version in the chain (Y.Doc cascades via
+/// FK), in-memory triggers forgotten, and bundled template-tests removed
+/// (template_tests has no FK to cascade, so it is deleted explicitly).
+///
+/// Idempotent: a second call finds nothing and returns a zeroed report.
+pub async fn purge_seeded(
+    state: &crate::AppState,
+) -> Result<DemoResetReport, DemoSeedError> {
+    let mut report = DemoResetReport::default();
+
+    // Family base ids. Seeded v1 rows set `base_template_id = id`, so COALESCE
+    // collapses both NULL-base and self-base rows to the family root.
+    let bases: Vec<(uuid::Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT COALESCE(base_template_id, id) \
+           FROM workflow_templates WHERE author_id = $1",
+    )
+    .bind(DEMO_SEEDER_AUTHOR_ID)
+    .fetch_all(&state.db)
+    .await?;
+
+    let purge_events = state.config.cleanup.purge_events;
+
+    for (base,) in bases {
+        // Purge engine nets for every instance in the family, then drop the
+        // rows. Force: no running-instance guard.
+        let instances: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT id, net_id FROM workflow_instances \
+              WHERE template_id IN \
+              (SELECT id FROM workflow_templates WHERE base_template_id = $1 OR id = $1)",
+        )
+        .bind(base)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        for (_iid, net_id) in &instances {
+            crate::lifecycle::cleanup_net(net_id, &state.nats, &state.petri, purge_events).await;
+        }
+
+        let del_inst = sqlx::query(
+            "DELETE FROM workflow_instances \
+              WHERE template_id IN \
+              (SELECT id FROM workflow_templates WHERE base_template_id = $1 OR id = $1)",
+        )
+        .bind(base)
+        .execute(&state.db)
+        .await?;
+        report.instances_purged += del_inst.rows_affected() as usize;
+
+        // Bundled tests key on the family root id (= base); no FK cascade.
+        let del_tests = sqlx::query("DELETE FROM template_tests WHERE template_id = $1")
+            .bind(base)
+            .execute(&state.db)
+            .await?;
+        report.tests_removed += del_tests.rows_affected() as usize;
+
+        // Project grouping keys on base_template_id with no FK to templates,
+        // so detach explicitly (leaves the now-empty "Demos" project in place
+        // for the next reseed to reuse).
+        sqlx::query("DELETE FROM project_templates WHERE base_template_id = $1")
+            .bind(base)
+            .execute(&state.db)
+            .await?;
+
+        // Capture version ids so their triggers can be forgotten post-delete
+        // (otherwise a deleted demo's triggers keep firing until restart).
+        let version_ids: Vec<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT id FROM workflow_templates WHERE base_template_id = $1 OR id = $1",
+        )
+        .bind(base)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        sqlx::query("DELETE FROM workflow_templates WHERE base_template_id = $1 OR id = $1")
+            .bind(base)
+            .execute(&state.db)
+            .await?;
+
+        for (vid,) in version_ids {
+            state.triggers.forget_template(vid);
+        }
+        report.families_removed += 1;
+    }
+
+    tracing::info!(
+        families = report.families_removed,
+        instances = report.instances_purged,
+        tests = report.tests_removed,
+        "purged seeded demos"
+    );
+    Ok(report)
+}
+
+/// Reset seeded demos to pristine: [`purge_seeded`] then [`seed_all`]. Because
+/// the purge runs first, the subsequent seed always recreates from disk (no
+/// idempotent skip), discarding any user edits — true "reset to factory".
+pub async fn reseed_all(
+    state: &crate::AppState,
+    root: &Path,
+) -> Result<DemoResetReport, DemoSeedError> {
+    let mut report = purge_seeded(state).await?;
+    let outcomes = seed_all(state, root).await?;
+    report.seeded = outcomes
+        .iter()
+        .filter(|(_, o)| matches!(o, SeedOutcome::Seeded))
+        .count();
+    tracing::info!(seeded = report.seeded, "reseeded demos");
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -1219,14 +1419,21 @@ mod tests {
         );
     }
 
-    /// The 09-agent-tool-loop demo (Start → Agent[+ python tool child] → End)
-    /// must parse + compile cleanly. Pins the agent loop path: with
+    /// The 09-agent-tool-loop demo (Start → Agent → End, tool = a SubWorkflow
+    /// child) must parse + compile cleanly. Pins the agent loop path: with
     /// `maxTurns: 4` + a tool child the compiler takes `lower_agent_loop`
     /// (NOT the degenerate single-shot path), so the resulting AIR must
-    /// carry the loop scaffold's signature places + transitions.
+    /// carry the loop scaffold's signature places + transitions. The tool is
+    /// now a SubWorkflow, so the bare `compile_to_air` can't resolve it (like
+    /// 06-subworkflow) — feed a stub child AIR via `SubWorkflowAir`. The loop
+    /// markers come from the agent + the slugified tool label (`lookup_order`),
+    /// independent of the child's contents.
     #[test]
     fn agent_tool_loop_demo_loads_and_compiles() {
-        use crate::compiler::{compile_to_air, node_files_inline};
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_inline, node_files_inline, ResolvedChild,
+            SubWorkflowAir,
+        };
 
         let root = repo_root().join("demos");
         let demo = load_demo(&root.join("09-agent-tool-loop"))
@@ -1237,12 +1444,31 @@ mod tests {
             "00000000-0000-0000-0000-000000000019"
         );
 
+        // Stub the SubWorkflow tool child ("lookup_order" node) — only its
+        // presence matters for the loop-marker assertions below.
+        let mut sub_air = SubWorkflowAir::new();
+        sub_air.insert(
+            "lookup_order".to_string(),
+            ResolvedChild {
+                air: serde_json::json!({
+                    "name": "child-stub", "places": [], "transitions": [],
+                    "groups": [], "mock_adapters": [], "definitions": {}, "requirements": []
+                }),
+                resolved_version: 1,
+                template_id: "00000000-0000-0000-0000-00000000008a".to_string(),
+                input_contract: crate::models::template::Port::empty_input(),
+                output_contract: crate::models::template::Port::empty_input(),
+            },
+        );
+
         let files = node_files_inline(&demo.files);
-        let air = compile_to_air(
+        let air = compile_to_air_with_subworkflows_inline(
             &demo.graph,
             &demo.metadata.name,
             demo.metadata.description.as_deref().unwrap_or(""),
             &files,
+            &demo.files,
+            &sub_air,
         )
         .unwrap_or_else(|e| panic!("09-agent-tool-loop must compile to AIR: {e:?}"));
 
@@ -1351,6 +1577,66 @@ mod tests {
         assert!(
             source.contains("\"smtp\""),
             "compiled AIR must carry the smtp backend discriminator"
+        );
+    }
+
+    #[test]
+    fn http_call_demo_loads_and_compiles_with_borrow() {
+        use crate::compiler::compile_to_air_with_subworkflows_and_interfaces;
+        use crate::compiler::node_files_inline;
+        use crate::compiler::resource_refs::KnownResources;
+        use crate::compiler::SubWorkflowAir;
+        use std::collections::HashMap;
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("11-http-call")).expect("11-http-call must load");
+        assert_eq!(demo.metadata.name, "11 · HTTP Call");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000022"
+        );
+
+        let files = node_files_inline(&demo.files);
+        // HTTP binds no workspace resource — empty known map, like any
+        // resource-free step.
+        let known = KnownResources::new();
+        let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let (air, _iface) = compile_to_air_with_subworkflows_and_interfaces(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            &inline,
+            &SubWorkflowAir::new(),
+            &known,
+        )
+        .unwrap_or_else(|e| panic!("11-http-call must compile to AIR: {e:?}"));
+
+        let call_prepare = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions")
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("httpcall/prepare"))
+            .expect("httpcall/prepare exists");
+        let logic_node = call_prepare.get("logic").expect("httpcall/prepare logic");
+        let source = logic_node
+            .get("Rhai")
+            .and_then(|l| l.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| logic_node.get("source").and_then(|s| s.as_str()))
+            .expect("Rhai source");
+
+        // The HTTP step's `{{ intake.username }}` / `{{ intake.topic }}`
+        // references (in url/header/query/body) must synthesize a read-arc
+        // that stages the intake producer envelope as `intake.json`.
+        assert!(
+            source.contains("intake.json"),
+            "compiled AIR must stage intake.json for the HTTP Tera context; source:\n{source}"
+        );
+        assert!(
+            source.contains("\"http\""),
+            "compiled AIR must carry the http backend discriminator"
         );
     }
 

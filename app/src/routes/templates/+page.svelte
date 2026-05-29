@@ -30,7 +30,13 @@
 	import Activity from '@lucide/svelte/icons/activity';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Search from '@lucide/svelte/icons/search';
+	import Settings from '@lucide/svelte/icons/settings';
+	import FolderInput from '@lucide/svelte/icons/folder-input';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
+	import TemplatesFiltersSidebar from '$lib/components/TemplatesFiltersSidebar.svelte';
+	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
+	import AssignToProjectDialog from '$lib/components/templates/AssignToProjectDialog.svelte';
+	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 
 	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(true);
@@ -39,6 +45,33 @@
 	let dialogTemplateId = $state<string | null>(null);
 	let runCounts = $state<Record<string, { running: number; completed: number }>>({});
 	let searchQuery = $state('');
+	let projectFilter = $state<string | null>(null);
+	let tagFilter = $state<string | null>(null);
+
+	// Per-card Settings sheet + Assign-to-project dialog. Each holds the
+	// target template so a single instance serves every card.
+	let settingsOpen = $state(false);
+	let settingsTemplate = $state<TemplateSummary | null>(null);
+	let assignOpen = $state(false);
+	let assignTemplate = $state<TemplateSummary | null>(null);
+
+	// Opening a bits-ui overlay from inside a closing dropdown races the
+	// dropdown's focus-return; defer to the next tick so the sheet/dialog
+	// keeps focus instead of being dismissed immediately.
+	function openSettings(t: TemplateSummary) {
+		settingsTemplate = t;
+		setTimeout(() => (settingsOpen = true), 0);
+	}
+	function openAssign(t: TemplateSummary) {
+		assignTemplate = t;
+		setTimeout(() => (assignOpen = true), 0);
+	}
+
+	function applyFilters(next: { projectId: string | null; tag: string | null }) {
+		projectFilter = next.projectId;
+		tagFilter = next.tag;
+		load();
+	}
 
 	const filteredTemplates = $derived.by(() => {
 		const q = searchQuery.trim().toLowerCase();
@@ -73,7 +106,14 @@
 		loading = true;
 		error = null;
 		try {
-			const result = await listTemplates();
+			const result = await listTemplates(
+				1,
+				20,
+				undefined,
+				undefined,
+				projectFilter ?? undefined,
+				tagFilter ?? undefined
+			);
 			templates = result.items;
 			loadRunCounts(result.items);
 		} catch (e) {
@@ -223,7 +263,13 @@
 	});
 </script>
 
-<div class="h-full overflow-y-auto" data-testid="templates-page">
+<div class="flex h-full" data-testid="templates-page">
+	<TemplatesFiltersSidebar
+		projectId={projectFilter}
+		tag={tagFilter}
+		onChange={applyFilters}
+	/>
+	<div class="flex-1 overflow-y-auto">
 	<div class="mx-auto max-w-5xl px-6 py-8 animate-rise">
 		<div class="mb-6 flex items-center justify-between">
 			<div>
@@ -356,6 +402,21 @@
 											<DropdownMenuSeparator />
 										{/if}
 										<DropdownMenuItem
+											data-testid="btn-settings-template-{template.id}"
+											onSelect={() => openSettings(template)}
+										>
+											<Settings class="size-4" />
+											Settings
+										</DropdownMenuItem>
+										<DropdownMenuItem
+											data-testid="btn-assign-project-template-{template.id}"
+											onSelect={() => openAssign(template)}
+										>
+											<FolderInput class="size-4" />
+											Assign to project
+										</DropdownMenuItem>
+										<DropdownMenuSeparator />
+										<DropdownMenuItem
 											variant="destructive"
 											data-testid="btn-delete-template-{template.id}"
 											onSelect={() => handleDelete(template.id)}
@@ -436,6 +497,7 @@
 				{/each}
 			</div>
 		{/if}
+		</div>
 	</div>
 </div>
 
@@ -443,4 +505,20 @@
 	bind:open={dialogOpen}
 	templateId={dialogTemplateId}
 	oncreated={onInstanceCreated}
+/>
+
+<Sheet.Root open={settingsOpen} onOpenChange={(o: boolean) => (settingsOpen = o)}>
+	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
+		<SheetTitle class="sr-only">Template settings</SheetTitle>
+		{#if settingsTemplate}
+			<TemplateSettingsPanel template={settingsTemplate} />
+		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<AssignToProjectDialog
+	bind:open={assignOpen}
+	templateId={assignTemplate?.id ?? null}
+	baseTemplateId={assignTemplate ? (assignTemplate.base_template_id ?? assignTemplate.id) : null}
+	templateName={assignTemplate?.name}
 />

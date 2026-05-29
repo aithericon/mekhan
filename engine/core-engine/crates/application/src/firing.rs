@@ -115,100 +115,127 @@ pub(crate) fn route_output_tokens(
             });
         }
 
-        // Validate output token against schema (skip _error port)
-        if port_name != "_error" {
-            if let (Some(registry), Some(port)) = (schema_registry, port) {
-                if let Some(ref schema_ref) = port.schema_ref {
-                    if let Err(e) = registry.validate(schema_ref, &token_data) {
-                        return Err(ServiceError::SchemaValidationFailed {
-                            port_name: port_name.clone(),
-                            transition_id: transition_id.clone(),
-                            error: e.to_string(),
-                        });
-                    }
+        // SCATTER: a Batch-cardinality output port unwraps its array value into
+        // ONE token per element (preserving array order). A Single port (the
+        // default) yields exactly one token carrying the whole value — byte
+        // identical to the pre-scatter behavior. A non-array value on a Batch
+        // output port is a permanent error that advances the marking.
+        let is_batch = matches!(
+            port.map(|p| &p.cardinality),
+            Some(petri_domain::PortCardinality::Batch)
+        );
+        let element_values: Vec<JsonValue> = if is_batch {
+            match token_data {
+                JsonValue::Array(arr) => arr,
+                _ => {
+                    return Err(ServiceError::BatchOutputNotArray {
+                        port_name: port_name.clone(),
+                    });
                 }
             }
-        }
+        } else {
+            vec![token_data]
+        };
 
-        let output_arc = net
-            .output_arc_for_port(transition_id, &port_name)
-            .ok_or_else(|| ServiceError::NoArcForPort {
-                port_name: port_name.clone(),
-            })?;
-
-        let token_color = json_to_token_color(&token_data);
-        let mut token = Token::new(token_color);
-
-        if let Some(place) = net.get_place(&output_arc.place_id) {
-            match &place.kind {
-                petri_domain::PlaceKind::BridgeReply { channel } => {
-                    let reply_addr = consumed_reply_routing.as_ref().and_then(|meta| {
-                        if let Some(ch) = channel {
-                            meta.reply_channels
-                                .as_ref()
-                                .and_then(|m| m.get(ch.as_str()))
-                        } else {
-                            meta.reply_to.as_ref()
-                        }
-                    });
-
-                    match reply_addr {
-                        Some(addr) => {
-                            bridge_out_tokens.push((
-                                output_arc.place_id.clone(),
-                                token,
-                                petri_domain::BridgeTarget {
-                                    target_net_id: addr.net_id.clone(),
-                                    target_place_name: addr.place_name.clone(),
-                                    reply_to: None,
-                                    reply_channels: None,
-                                },
-                                place.name.clone(),
-                                None,
-                            ));
-                            continue;
-                        }
-                        None => {
-                            return Err(ServiceError::BridgeReplyMissing {
-                                place_name: place.name.clone(),
-                                channel: channel.clone(),
+        for token_data in element_values {
+            // Validate output token against schema (skip _error port). For a
+            // Batch port this validates EACH ELEMENT against schema_ref (the
+            // element/item shape), which is the correct contract.
+            if port_name != "_error" {
+                if let (Some(registry), Some(port)) = (schema_registry, port) {
+                    if let Some(ref schema_ref) = port.schema_ref {
+                        if let Err(e) = registry.validate(schema_ref, &token_data) {
+                            return Err(ServiceError::SchemaValidationFailed {
+                                port_name: port_name.clone(),
+                                transition_id: transition_id.clone(),
+                                error: e.to_string(),
                             });
                         }
                     }
                 }
-                petri_domain::PlaceKind::BridgeOut {
-                    target_net_id,
-                    target_place_name,
-                    reply_to,
-                    reply_channels,
-                    ..
-                } => {
-                    let resolved_net = resolve_param(target_net_id, net_parameters, effect_result)?;
-                    let resolved_place =
-                        resolve_param(target_place_name, net_parameters, effect_result)?;
-                    bridge_out_tokens.push((
-                        output_arc.place_id.clone(),
-                        token,
-                        petri_domain::BridgeTarget {
-                            target_net_id: resolved_net,
-                            target_place_name: resolved_place,
-                            reply_to: reply_to.clone(),
-                            reply_channels: reply_channels.clone(),
-                        },
-                        place.name.clone(),
-                        reply_to.clone(),
-                    ));
-                    continue;
-                }
-                _ => {
-                    if let Some(ref meta) = consumed_reply_routing {
-                        token = token.with_reply_routing(meta.clone());
+            }
+
+            let output_arc = net
+                .output_arc_for_port(transition_id, &port_name)
+                .ok_or_else(|| ServiceError::NoArcForPort {
+                    port_name: port_name.clone(),
+                })?;
+
+            let token_color = json_to_token_color(&token_data);
+            let mut token = Token::new(token_color);
+
+            if let Some(place) = net.get_place(&output_arc.place_id) {
+                match &place.kind {
+                    petri_domain::PlaceKind::BridgeReply { channel } => {
+                        let reply_addr = consumed_reply_routing.as_ref().and_then(|meta| {
+                            if let Some(ch) = channel {
+                                meta.reply_channels
+                                    .as_ref()
+                                    .and_then(|m| m.get(ch.as_str()))
+                            } else {
+                                meta.reply_to.as_ref()
+                            }
+                        });
+
+                        match reply_addr {
+                            Some(addr) => {
+                                bridge_out_tokens.push((
+                                    output_arc.place_id.clone(),
+                                    token,
+                                    petri_domain::BridgeTarget {
+                                        target_net_id: addr.net_id.clone(),
+                                        target_place_name: addr.place_name.clone(),
+                                        reply_to: None,
+                                        reply_channels: None,
+                                    },
+                                    place.name.clone(),
+                                    None,
+                                ));
+                                continue;
+                            }
+                            None => {
+                                return Err(ServiceError::BridgeReplyMissing {
+                                    place_name: place.name.clone(),
+                                    channel: channel.clone(),
+                                });
+                            }
+                        }
+                    }
+                    petri_domain::PlaceKind::BridgeOut {
+                        target_net_id,
+                        target_place_name,
+                        reply_to,
+                        reply_channels,
+                        ..
+                    } => {
+                        let resolved_net =
+                            resolve_param(target_net_id, net_parameters, effect_result)?;
+                        let resolved_place =
+                            resolve_param(target_place_name, net_parameters, effect_result)?;
+                        bridge_out_tokens.push((
+                            output_arc.place_id.clone(),
+                            token,
+                            petri_domain::BridgeTarget {
+                                target_net_id: resolved_net,
+                                target_place_name: resolved_place,
+                                reply_to: reply_to.clone(),
+                                reply_channels: reply_channels.clone(),
+                            },
+                            place.name.clone(),
+                            reply_to.clone(),
+                        ));
+                        continue;
+                    }
+                    _ => {
+                        if let Some(ref meta) = consumed_reply_routing {
+                            token = token.with_reply_routing(meta.clone());
+                        }
                     }
                 }
             }
-        }
 
-        produced_tokens.push((output_arc.place_id.clone(), token));
+            produced_tokens.push((output_arc.place_id.clone(), token));
+        }
     }
 
     Ok((produced_tokens, bridge_out_tokens))
@@ -1018,6 +1045,176 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not found or not a string"));
+    }
+
+    // ── SCATTER: Batch-cardinality output ports ──────────────────────────
+
+    use petri_domain::{Arc as PetriArc, PetriNet, Place, Port, PortCardinality};
+    use std::collections::HashMap as StdHashMap;
+
+    use crate::rhai_runtime::token_color_to_json;
+    use crate::schema_registry::SchemaRegistry;
+
+    /// Build a single-transition net with one output port wired to one place.
+    /// `cardinality` controls scatter behavior; `schema_ref` is optional.
+    fn scatter_net(
+        port_name: &str,
+        cardinality: PortCardinality,
+        schema_ref: Option<&str>,
+    ) -> (PetriNet, Transition, TransitionId) {
+        let mut net = PetriNet::new();
+
+        let place = Place::internal("out_place");
+        let place_id = net.add_place(place);
+
+        let mut port = Port::new(port_name).with_cardinality(cardinality);
+        if let Some(s) = schema_ref {
+            port = port.with_schema(s);
+        }
+        let mut transition = Transition::new("scatterer", r#"#{}"#);
+        transition.output_ports = vec![port];
+        let transition_id = net.add_transition(transition.clone());
+
+        net.add_arc(PetriArc::output(
+            transition_id.clone(),
+            port_name,
+            place_id,
+        ));
+
+        (net, transition, transition_id)
+    }
+
+    #[test]
+    fn test_scatter_batch_output_emits_one_token_per_element_in_order() {
+        let (net, transition, transition_id) =
+            scatter_net("items", PortCardinality::Batch, None);
+
+        let mut script_result: StdHashMap<String, JsonValue> = StdHashMap::new();
+        script_result.insert(
+            "items".to_string(),
+            serde_json::json!([{"i": 0}, {"i": 1}, {"i": 2}]),
+        );
+
+        let (produced, bridge_out) = route_output_tokens(
+            &net,
+            &transition,
+            &transition_id,
+            script_result,
+            &None,
+            None,
+            None,
+            None,
+        )
+        .expect("scatter should succeed");
+
+        assert!(bridge_out.is_empty());
+        assert_eq!(produced.len(), 3, "3 array elements → 3 tokens");
+
+        // Array order preserved, each token carries its element.
+        for (idx, (_place_id, token)) in produced.iter().enumerate() {
+            let data = token_color_to_json(&token.color);
+            assert_eq!(data, serde_json::json!({"i": idx as i64}));
+        }
+    }
+
+    #[test]
+    fn test_scatter_batch_per_element_schema_validation() {
+        // schema_ref demands `i` be an integer; one element violates it.
+        let mut defs: StdHashMap<String, JsonValue> = StdHashMap::new();
+        defs.insert(
+            "Item".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": { "i": { "type": "integer" } },
+                "required": ["i"]
+            }),
+        );
+        let registry = SchemaRegistry::new(defs).expect("registry builds");
+
+        let (net, transition, transition_id) =
+            scatter_net("items", PortCardinality::Batch, Some("Item"));
+
+        let mut script_result: StdHashMap<String, JsonValue> = StdHashMap::new();
+        script_result.insert(
+            "items".to_string(),
+            serde_json::json!([{"i": 0}, {"i": "not-an-int"}, {"i": 2}]),
+        );
+
+        let err = route_output_tokens(
+            &net,
+            &transition,
+            &transition_id,
+            script_result,
+            &None,
+            Some(&registry),
+            None,
+            None,
+        )
+        .expect_err("element violating schema_ref must fail");
+
+        assert!(
+            matches!(err, ServiceError::SchemaValidationFailed { .. }),
+            "expected SchemaValidationFailed, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_scatter_batch_non_array_is_permanent_error() {
+        let (net, transition, transition_id) =
+            scatter_net("items", PortCardinality::Batch, None);
+
+        let mut script_result: StdHashMap<String, JsonValue> = StdHashMap::new();
+        // Object, not an array, on a Batch output port.
+        script_result.insert("items".to_string(), serde_json::json!({"not": "array"}));
+
+        let err = route_output_tokens(
+            &net,
+            &transition,
+            &transition_id,
+            script_result,
+            &None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("non-array on Batch output must fail");
+
+        assert!(err.is_permanent(), "BatchOutputNotArray must be permanent");
+        match err {
+            ServiceError::BatchOutputNotArray { port_name } => {
+                assert_eq!(port_name, "items");
+            }
+            other => panic!("expected BatchOutputNotArray, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_scatter_single_output_yields_exactly_one_token() {
+        // Regression: a Single (default) output port keeps the whole value in
+        // ONE token, even when that value is itself an array.
+        let (net, transition, transition_id) =
+            scatter_net("result", PortCardinality::Single, None);
+
+        let mut script_result: StdHashMap<String, JsonValue> = StdHashMap::new();
+        let whole = serde_json::json!([1, 2, 3]);
+        script_result.insert("result".to_string(), whole.clone());
+
+        let (produced, bridge_out) = route_output_tokens(
+            &net,
+            &transition,
+            &transition_id,
+            script_result,
+            &None,
+            None,
+            None,
+            None,
+        )
+        .expect("single output should succeed");
+
+        assert!(bridge_out.is_empty());
+        assert_eq!(produced.len(), 1, "Single port → exactly one token");
+        assert_eq!(token_color_to_json(&produced[0].1.color), whole);
     }
 }
 

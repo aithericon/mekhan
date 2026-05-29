@@ -540,3 +540,249 @@ async fn yjs_ws_rejects_cross_workspace() {
     };
     assert_eq!(status.as_u16(), 403, "cross-workspace yjs should be 403");
 }
+
+// ---------------------------------------------------------------------------
+// 10. Private visibility requires an owner, pins it chain-wide, and clears it
+//     when flipped back. Self-ownership is rejected.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn private_visibility_requires_and_pins_owner() {
+    let (app, db) = header_driven_app().await;
+
+    let ws = seed_workspace(&db, &format!("ws-priv-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws, "alice", "owner").await;
+
+    let parent = seed_template_in_workspace(&db, ws, "parent", "workspace").await;
+    let child = seed_template_in_workspace(&db, ws, "child", "workspace").await;
+
+    let patch_visibility = |body: Value| {
+        app.clone().oneshot(
+            req_as("alice", Some(ws))
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{child}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+    };
+
+    // private without an owner → 400
+    let resp = patch_visibility(json!({ "visibility": "private" })).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // private owned by itself → 400
+    let resp = patch_visibility(
+        json!({ "visibility": "private", "owner_template_id": child.to_string() }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // private owned by the parent → 204, owner pinned
+    let resp = patch_visibility(
+        json!({ "visibility": "private", "owner_template_id": parent.to_string() }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("GET")
+                .uri(format!("/api/v1/templates/{child}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["visibility"].as_str(), Some("private"));
+    assert_eq!(
+        body["owner_template_id"].as_str(),
+        Some(parent.to_string().as_str())
+    );
+
+    // flip back to workspace → owner cleared
+    let resp = patch_visibility(json!({ "visibility": "workspace" })).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("GET")
+                .uri(format!("/api/v1/templates/{child}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(body["visibility"].as_str(), Some("workspace"));
+    assert!(body["owner_template_id"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// 11. Private children are hidden from the catalogue but enumerable by owner.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn private_excluded_from_catalogue_included_by_owner() {
+    let (app, db) = header_driven_app().await;
+
+    let ws = seed_workspace(&db, &format!("ws-privlist-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws, "alice", "owner").await;
+
+    let parent = seed_template_in_workspace(&db, ws, "parent-wf", "workspace").await;
+    let child = seed_template_in_workspace(&db, ws, "private-child", "workspace").await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{child}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "visibility": "private", "owner_template_id": parent.to_string() })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let names_of = |body: &Value| -> Vec<String> {
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap_or("").to_string())
+            .collect()
+    };
+
+    // catalogue (no filter) excludes the private child but keeps the parent
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("GET")
+                .uri("/api/v1/templates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let names = names_of(&body_json(resp.into_body()).await);
+    assert!(names.contains(&"parent-wf".to_string()));
+    assert!(!names.contains(&"private-child".to_string()));
+
+    // owner-scoped listing returns exactly the private child
+    let resp = app
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("GET")
+                .uri(format!("/api/v1/templates?owner_template_id={parent}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let names = names_of(&body_json(resp.into_body()).await);
+    assert_eq!(names, vec!["private-child".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// 12. A private template cannot be run standalone.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn create_instance_rejects_private() {
+    let (app, db) = header_driven_app().await;
+
+    let ws = seed_workspace(&db, &format!("ws-privrun-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws, "alice", "owner").await;
+
+    let parent = seed_template_in_workspace(&db, ws, "owner-wf", "workspace").await;
+    let child = seed_template_in_workspace(&db, ws, "priv-child", "workspace").await;
+
+    // create_instance checks `published` before visibility, so the child must
+    // be published for the private gate (not the unpublished gate) to fire.
+    sqlx::query(
+        "UPDATE workflow_templates \
+            SET published = TRUE, visibility = 'private', owner_template_id = $2 \
+          WHERE id = $1",
+    )
+    .bind(child)
+    .bind(parent)
+    .execute(&db)
+    .await
+    .expect("privatize child");
+
+    let resp = app
+        .oneshot(
+            req_as("alice", Some(ws))
+                .method("POST")
+                .uri("/api/v1/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "template_id": child.to_string() }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp.into_body()).await;
+    assert!(
+        body.to_string().contains("private"),
+        "expected a private-specific rejection, got: {body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 13. An editor can mark a child `private` (authoring scope) but NOT `public`
+//     (cross-workspace exposure stays admin-gated).
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn editor_can_privatize_but_not_publicize() {
+    let (app, db) = header_driven_app().await;
+
+    let ws = seed_workspace(&db, &format!("ws-editrole-{}", Uuid::new_v4().simple())).await;
+    seed_member(&db, ws, "ed", "editor").await;
+
+    let parent = seed_template_in_workspace(&db, ws, "parent", "workspace").await;
+    let child = seed_template_in_workspace(&db, ws, "child", "workspace").await;
+
+    // editor → private: allowed
+    let resp = app
+        .clone()
+        .oneshot(
+            req_as("ed", Some(ws))
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{child}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "visibility": "private", "owner_template_id": parent.to_string() })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "editor may privatize");
+
+    // editor → public: forbidden (admin-gated tenancy decision)
+    let resp = app
+        .oneshot(
+            req_as("ed", Some(ws))
+                .method("PATCH")
+                .uri(format!("/api/v1/templates/{child}/visibility"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "visibility": "public" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "editor may not publicize");
+}

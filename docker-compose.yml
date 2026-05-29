@@ -22,7 +22,7 @@ services:
     command: ["--jetstream", "-m", "8222", "--store_dir", "/data"]
     ports:
       - "4333:4222"   # client
-      - "8333:8222"   # http monitoring
+      - "18333:8222"   # http monitoring
     volumes:
       - mekhan-natsdata:/data
     healthcheck:
@@ -64,7 +64,7 @@ services:
     container_name: mekhan-rustfs
     ports:
       - "9005:9000"   # S3 API (mekhan + executor artifact store)
-      - "9006:9001"   # web console
+      - "19006:9001"   # web console
     environment:
       RUSTFS_ROOT_USER: rustfsadmin
       RUSTFS_ROOT_PASSWORD: rustfsadmin
@@ -93,7 +93,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: zitadel
     ports:
-      - "5440:5432"
+      - "15440:5432"
     volumes:
       - zitadel-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -129,7 +129,7 @@ services:
       ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: postgres
       ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
       ZITADEL_EXTERNALDOMAIN: localhost
-      ZITADEL_EXTERNALPORT: 8080
+      ZITADEL_EXTERNALPORT: 18080
       ZITADEL_EXTERNALSECURE: "false"
       ZITADEL_TLS_ENABLED: "false"
     expose:
@@ -156,7 +156,7 @@ services:
     restart: unless-stopped
     environment:
       # Route the login UI's internal API calls back through caddy so the
-      # upstream `Host: localhost:8080` header matches Zitadel's
+      # upstream `Host: localhost:18080` header matches Zitadel's
       # ExternalDomain. Hitting `zitadel:8080` directly trips the instance
       # resolver and returns "Instance not found".
       ZITADEL_API_URL: "http://zitadel-proxy:8080"
@@ -178,7 +178,7 @@ services:
     profiles: ["auth"]
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "18080:8080"
     volumes:
       - ./deploy/zitadel/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:

@@ -23,6 +23,12 @@ pub(crate) static END_DECL: NodeDecl = NodeDecl {
     output_ports: output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
+    // No per-node structural rule (End cardinality is checked graph-wide in
+    // `validate`). End IS Rhai-bearing (`resultMapping` expressions) — those are
+    // syntax+ref-checked via `nodes::guard_rhai_sources` in `validate_guards`,
+    // not here. End emits its inbound token unchanged downstream.
+    validate: None,
+    token_shape: Some(crate::compiler::token_shape::analyze::out_shape_passthrough),
 };
 
 fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {

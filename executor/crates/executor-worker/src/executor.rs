@@ -12,7 +12,7 @@ use aithericon_executor_domain::{
 };
 use aithericon_executor_logs::LogSink;
 use aithericon_executor_metrics::MetricSink;
-use aithericon_executor_storage::ArtifactStore;
+use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
 use crate::cancel::CancellationRegistry;
 use crate::completion::CompletionTracker;
@@ -422,6 +422,100 @@ impl JobExecutor {
                                 message: format!("required output '{}' not produced", decl.name),
                             };
                             break;
+                        }
+                    }
+                }
+
+                // Agent transcript side-channel: persist the new cumulative
+                // conversation blob off-token. The engine ships the per-turn
+                // write key in the config_ref overlay (`_history_write_key`).
+                // We persist the FULL conversation the model saw this turn —
+                // system + the resolved user prompt + accumulated history +
+                // this turn's pending delta — sourced from the resolved LLM
+                // config the backend stashed in `backend_state` (so
+                // `{{input:...}}` placeholders + the prompt borrow are already
+                // materialised), then fold in the assistant turn it produced.
+                // On turn > 0 the compiler nulls system_prompt/prompt (they
+                // already head `history` from the prior blob), so they land
+                // exactly once. The executor is the SOLE transcript writer
+                // (the engine's transition Rhai is replay-sensitive, no S3).
+                // All generic JSON — no coupling to LLM config types.
+                if matches!(exec_result.outcome, ExecutionOutcome::Success) {
+                    if let (Some(store), Some(write_key)) = (
+                        self.artifact_store.as_ref(),
+                        run_context
+                            .spec
+                            .config
+                            .get("_history_write_key")
+                            .and_then(|v| v.as_str()),
+                    ) {
+                        let cfg = &run_context.backend_state;
+                        let mut transcript: Vec<serde_json::Value> = Vec::new();
+                        if let Some(serde_json::Value::String(sys)) = cfg.get("system_prompt") {
+                            if !sys.is_empty() {
+                                transcript.push(
+                                    serde_json::json!({ "role": "system", "content": sys }),
+                                );
+                            }
+                        }
+                        if let Some(serde_json::Value::String(prompt)) = cfg.get("prompt") {
+                            if !prompt.is_empty() {
+                                transcript.push(
+                                    serde_json::json!({ "role": "user", "content": prompt }),
+                                );
+                            }
+                        }
+                        for field in ["history", "pending"] {
+                            if let Some(serde_json::Value::Array(items)) = cfg.get(field) {
+                                transcript.extend(items.iter().cloned());
+                            }
+                        }
+                        // Build the assistant turn from the LLM result's
+                        // `turn_result` (same shape the engine Rhai used to
+                        // push: role=assistant, content string, tool_calls).
+                        if let Some(tr) = exec_result.outputs.get("turn_result") {
+                            let content = match tr.get("content") {
+                                Some(serde_json::Value::String(s)) => {
+                                    serde_json::Value::String(s.clone())
+                                }
+                                _ => serde_json::Value::String(String::new()),
+                            };
+                            let tool_calls = tr
+                                .get("tool_calls")
+                                .cloned()
+                                .unwrap_or_else(|| serde_json::json!([]));
+                            transcript.push(serde_json::json!({
+                                "role": "assistant",
+                                "content": content,
+                                "tool_calls": tool_calls,
+                            }));
+                        }
+                        match serde_json::to_vec(&transcript) {
+                            Ok(bytes) => {
+                                if let Err(e) = store
+                                    .put(&StoragePath(write_key.to_string()), bytes)
+                                    .await
+                                {
+                                    // Best-effort: an audit-blob write must not
+                                    // fail the job (the turn already succeeded).
+                                    warn!(
+                                        %execution_id,
+                                        write_key,
+                                        "agent transcript write failed: {e}"
+                                    );
+                                } else {
+                                    debug!(
+                                        %execution_id,
+                                        write_key,
+                                        turns = transcript.len(),
+                                        "agent transcript persisted"
+                                    );
+                                }
+                            }
+                            Err(e) => warn!(
+                                %execution_id,
+                                "agent transcript serialize failed: {e}"
+                            ),
                         }
                     }
                 }

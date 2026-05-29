@@ -38,6 +38,7 @@ use aithericon_sdk::scenario::{
 };
 
 use crate::compiler::CompileError;
+use crate::models::template::{FieldKind, Port, PortField, WorkflowGraph, WorkflowNodeData};
 
 /// Fixed boundary place ids — the contract the parent's `lower_subworkflow`
 /// wires against (`bridge_in_from(child, "reply_out")`, `bridge_out … "inbox"`,
@@ -60,6 +61,8 @@ fn arc(place: &str, port: &str) -> ScenarioArc {
         port: port.to_string(),
         weight: 1,
         read: false,
+        count_from: None,
+        correlate_on: None,
     }
 }
 
@@ -195,6 +198,62 @@ pub fn make_child_callable(
     Ok(())
 }
 
+/// Derive a SubWorkflow node's **fixed** input/output port contract from the
+/// referenced child template's high-level [`WorkflowGraph`].
+///
+/// - **input** = the child's `Start { initial }` port — its user-declared
+///   input contract (the same shape an agent-tool `input_schema` is built
+///   from). Absent Start ⇒ empty (permissive) input.
+/// - **output** = the union (dedup by `name`, first-seen order) of every
+///   `End { result_mapping }` entry's `target_field`, each typed [`FieldKind::Json`].
+///   This is exactly what the child returns as `exit_code.value` and what the
+///   parent's join unwraps (see `lower/subworkflow.rs`). No result mapping
+///   anywhere ⇒ empty fields = opaque pass-through (pre-derivation behavior).
+///
+/// This is the **single** derivation shared by the publish path
+/// (`resolve_subworkflow_air`) and the editor's `io-contract` endpoint, so the
+/// authoring preview can never drift from the contract frozen at publish.
+pub fn derive_child_io(child_graph: &WorkflowGraph) -> (Port, Port) {
+    let input = child_graph
+        .nodes
+        .iter()
+        .find_map(|n| match &n.data {
+            WorkflowNodeData::Start { initial, .. } => Some(initial.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(Port::empty_input);
+
+    let mut fields: Vec<PortField> = Vec::new();
+    for node in &child_graph.nodes {
+        let WorkflowNodeData::End { result_mapping, .. } = &node.data else {
+            continue;
+        };
+        for m in result_mapping {
+            let name = m.target_field.trim();
+            if name.is_empty() || fields.iter().any(|f| f.name == name) {
+                continue;
+            }
+            fields.push(PortField {
+                name: name.to_string(),
+                label: name.to_string(),
+                kind: FieldKind::Json,
+                required: false,
+                options: None,
+                description: None,
+                accept: None,
+            });
+        }
+    }
+
+    let output = Port {
+        id: "out".to_string(),
+        label: "Result".to_string(),
+        fields,
+    };
+
+    (input, output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +349,133 @@ mod tests {
         let err =
             make_child_callable(&mut c, "p_s_ready", &["p_e_done".to_string()]).unwrap_err();
         assert!(matches!(err, CompileError::Compilation(_)));
+    }
+
+    // -------------------------------------------------------------------
+    // derive_child_io
+    // -------------------------------------------------------------------
+
+    use crate::models::template::{
+        FieldMapping, Position, WorkflowEdge, WorkflowNode,
+    };
+
+    fn gnode(id: &str, data: WorkflowNodeData) -> WorkflowNode {
+        WorkflowNode {
+            id: id.to_string(),
+            node_type: String::new(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data,
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    fn graph(nodes: Vec<WorkflowNode>) -> WorkflowGraph {
+        WorkflowGraph {
+            nodes,
+            edges: Vec::<WorkflowEdge>::new(),
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+        }
+    }
+
+    fn field(name: &str, kind: FieldKind) -> PortField {
+        PortField {
+            name: name.to_string(),
+            label: name.to_string(),
+            kind,
+            required: false,
+            options: None,
+            description: None,
+            accept: None,
+        }
+    }
+
+    fn rm(target: &str, expr: &str) -> FieldMapping {
+        FieldMapping {
+            target_field: target.to_string(),
+            expression: expr.to_string(),
+        }
+    }
+
+    fn start(initial: Port) -> WorkflowNodeData {
+        WorkflowNodeData::Start {
+            label: "Start".to_string(),
+            description: None,
+            initial,
+            process_name: None,
+        }
+    }
+
+    fn end(result_mapping: Vec<FieldMapping>) -> WorkflowNodeData {
+        WorkflowNodeData::End {
+            label: "End".to_string(),
+            description: None,
+            terminal: Port::empty_input(),
+            result_mapping,
+        }
+    }
+
+    #[test]
+    fn derives_input_from_start_and_output_from_end_mappings() {
+        let initial = Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![field("message", FieldKind::Text), field("amount", FieldKind::Number)],
+        };
+        let g = graph(vec![
+            gnode("s", start(initial.clone())),
+            gnode(
+                "e",
+                end(vec![rm("invoice_amount", "review.amount"), rm("status", "decision.outcome")]),
+            ),
+        ]);
+
+        let (input, output) = derive_child_io(&g);
+
+        // Input is the Start initial port verbatim (typed).
+        assert_eq!(input.fields.len(), 2);
+        assert_eq!(input.fields[0].name, "message");
+        assert_eq!(input.fields[1].kind, FieldKind::Number);
+
+        // Output is the End result_mapping targets, Json-typed, in order.
+        let names: Vec<&str> = output.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["invoice_amount", "status"]);
+        assert!(output.fields.iter().all(|f| f.kind == FieldKind::Json));
+    }
+
+    #[test]
+    fn unions_and_dedups_across_multiple_ends() {
+        let g = graph(vec![
+            gnode("s", start(Port::empty_input())),
+            gnode("e1", end(vec![rm("a", "x.a"), rm("b", "x.b")])),
+            gnode("e2", end(vec![rm("b", "y.b"), rm("c", "y.c"), rm("  ", "ignored")])),
+        ]);
+
+        let (_input, output) = derive_child_io(&g);
+        let names: Vec<&str> = output.fields.iter().map(|f| f.name.as_str()).collect();
+        // First-seen order, dedup `b`, blank target skipped.
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn empty_result_mapping_is_passthrough() {
+        let g = graph(vec![
+            gnode("s", start(Port::empty_input())),
+            gnode("e", end(vec![])),
+        ]);
+        let (_input, output) = derive_child_io(&g);
+        assert!(output.fields.is_empty(), "no mapping ⇒ opaque pass-through");
+    }
+
+    #[test]
+    fn missing_start_yields_empty_input() {
+        let g = graph(vec![gnode("e", end(vec![rm("a", "x.a")]))]);
+        let (input, output) = derive_child_io(&g);
+        assert!(input.fields.is_empty());
+        assert_eq!(output.fields.len(), 1);
     }
 }

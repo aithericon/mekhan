@@ -291,7 +291,7 @@ impl EventConsumer {
         // events that were published during the disconnect window — those
         // events became phantoms when the engine retried and JetStream
         // dedup'd the re-publish via `Nats-Msg-Id`).
-        let mut consecutive_errors = 0u32;
+        let mut consecutive_errors: u32;
         const MAX_CONSECUTIVE_ERRORS: u32 = 3;
 
         'outer: loop {

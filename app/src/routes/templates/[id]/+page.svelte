@@ -6,6 +6,7 @@
 	import EditorToolbar from '$lib/components/editor/toolbar/EditorToolbar.svelte';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
 	import TestsPanel from '$lib/components/templates/TestsPanel.svelte';
+	import TemplateSettingsPanel from '$lib/components/templates/TemplateSettingsPanel.svelte';
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
 	// NodePropertyPanel is lazy-loaded — its static import drags in 17
@@ -29,6 +30,7 @@
 		type FailingTestInfo
 	} from '$lib/api/client';
 	import { compileErrors } from '$lib/editor/compile-errors.svelte';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import { buildAssertionScope } from '$lib/editor/assertion-scope';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
@@ -41,6 +43,7 @@
 	const templateId = $derived(page.params.id!);
 
 	let template = $state<Template | null>(null);
+	let ownerName = $state<string | null>(null);
 	let loading = $state(true);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
@@ -48,6 +51,7 @@
 	let airPreview = $state<object | null>(null);
 	let runDialogOpen = $state(false);
 	let testsPanelOpen = $state(false);
+	let settingsPanelOpen = $state(false);
 	let publishGate = $state<FailingTestInfo[] | null>(null);
 	let nodePropertyPanelModule = $state<NodePropertyPanelModule | null>(null);
 
@@ -67,6 +71,16 @@
 		error = null;
 		try {
 			template = await getTemplate(templateId);
+			// Private sub-workflows carry an owner; resolve its name for the
+			// breadcrumb back to the parent workflow.
+			ownerName = null;
+			if (template?.owner_template_id) {
+				try {
+					ownerName = (await getTemplate(template.owner_template_id)).name;
+				} catch {
+					ownerName = null;
+				}
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
 		} finally {
@@ -292,6 +306,8 @@
 		<EditorToolbar
 			templateName={template?.name ?? 'New Workflow'}
 			templateDescription={template?.description ?? null}
+			ownerId={template?.owner_template_id ?? undefined}
+			{ownerName}
 			published={template?.published ?? false}
 			{saving}
 			{templateId}
@@ -303,16 +319,25 @@
 			onnewversion={handleNewVersion}
 			onrun={handleRun}
 			ontests={() => (testsPanelOpen = true)}
+			onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 			onrename={handleRename}
 			ondescriptionchange={handleDescriptionChange}
 		/>
 
 		{#if error}
-			<div class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-				{error}
+			<div class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+				<span class="flex-1">{error}</span>
+				<CopyButton
+					getText={() =>
+						compileErrors.errors.length > 0
+							? `${error}\n\n${JSON.stringify(compileErrors.errors, null, 2)}`
+							: (error ?? '')}
+					title="Copy error (with compile diagnostics) as JSON"
+					class="text-amber-700 hover:text-amber-900"
+				/>
 				<button
 					type="button"
-					class="ml-2 underline"
+					class="underline"
 					onclick={() => (error = null)}>dismiss</button
 				>
 			</div>
@@ -371,6 +396,15 @@
 		<SheetTitle class="sr-only">Tests</SheetTitle>
 		{#if template}
 			<TestsPanel templateId={template.id} {humanTaskSlugs} {assertionScope} />
+		{/if}
+	</SheetContent>
+</Sheet.Root>
+
+<Sheet.Root open={settingsPanelOpen} onOpenChange={(o: boolean) => (settingsPanelOpen = o)}>
+	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
+		<SheetTitle class="sr-only">Template settings</SheetTitle>
+		{#if template}
+			<TemplateSettingsPanel {template} />
 		{/if}
 	</SheetContent>
 </Sheet.Root>

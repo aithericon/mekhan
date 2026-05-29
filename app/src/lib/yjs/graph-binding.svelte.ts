@@ -252,8 +252,23 @@ export class YjsGraphBinding {
 					...base,
 					type: 'loop',
 					maxIterations: (config?.maxIterations as number) ?? 3,
-					loopCondition: (config?.loopCondition as string) ?? 'true'
+					loopCondition: (config?.loopCondition as string) ?? 'true',
+					accumulators:
+						(config?.accumulators as { var: string; init: string; mergeExpr: string }[]) ?? []
 				};
+			case 'map': {
+				type MapDataT = Extract<WorkflowNodeData, { type: 'map' }>;
+				return {
+					...base,
+					type: 'map',
+					itemsRef: (config?.itemsRef as string) ?? '',
+					itemVar: (config?.itemVar as string) ?? 'item',
+					resultVar: (config?.resultVar as string) ?? '',
+					output:
+						(config?.output as MapDataT['output'] | undefined) ??
+						({ id: 'out', label: 'Element', fields: [] } as MapDataT['output'])
+				};
+			}
 			case 'scope':
 				return { ...base, type: 'scope' };
 			case 'phase_update':
@@ -735,6 +750,13 @@ export class YjsGraphBinding {
 			case 'loop':
 				config.set('maxIterations', data.maxIterations);
 				config.set('loopCondition', data.loopCondition);
+				config.set('accumulators', data.accumulators ?? []);
+				break;
+			case 'map':
+				config.set('itemsRef', data.itemsRef);
+				config.set('itemVar', data.itemVar ?? 'item');
+				config.set('resultVar', data.resultVar);
+				config.set('output', data.output ?? { id: 'out', label: 'Element', fields: [] });
 				break;
 			case 'scope':
 				break;

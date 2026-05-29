@@ -8,12 +8,9 @@ use crate::client::EngineClient;
 /// Print a summary table of all nets.
 pub fn run_status(client: &EngineClient) {
     // Try multi-net mode first (GET /api/nets/metadata)
-    match client.get::<Value>("/api/nets/metadata") {
-        Ok(metadata) => {
-            print_multi_net_status(&metadata);
-            return;
-        }
-        Err(_) => {}
+    if let Ok(metadata) = client.get::<Value>("/api/nets/metadata") {
+        print_multi_net_status(&metadata);
+        return;
     }
 
     // Try net list (GET /api/nets)

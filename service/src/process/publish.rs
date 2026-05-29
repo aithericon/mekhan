@@ -16,14 +16,15 @@ use uuid::Uuid;
 
 use crate::compiler::resource_refs::{KnownResource, KnownResources};
 use crate::compiler::{
-    compile_to_air_with_subworkflows_interfaces_and_configs, generate_py_io_files,
-    make_child_callable, node_files_storage_path, node_input_scopes, node_namespace_scopes,
-    node_output_fields, CompileError, ConfigStorage, InterfaceRegistry, NodeKind, ResolvedChild,
-    SubWorkflowAir,
+    compile_to_air_with_subworkflows_interfaces_and_configs, derive_child_io,
+    generate_py_io_files, make_child_callable, node_files_storage_path, node_input_scopes,
+    node_namespace_scopes, node_output_fields, CompileError, ConfigStorage, InterfaceRegistry,
+    NodeKind, ResolvedChild, SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
-    ExecutionBackendType, VersionPin, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+    default_subworkflow_output_port, ExecutionBackendType, Port, VersionPin, WorkflowGraph,
+    WorkflowNodeData, WorkflowTemplate,
 };
 use crate::petri::resource_resolver::splice_resources_into_air;
 use crate::AppState;
@@ -95,6 +96,17 @@ impl<'a> PublishService<'a> {
         let sub_air =
             resolve_subworkflow_air(self.state, publishing_family, graph).await?;
 
+        // Reconcile each SubWorkflow node's declared `output` port with the
+        // authoritative contract derived from its resolved child (the union of
+        // the child's End `result_mapping` targets). Publish is the source of
+        // truth for the SubWorkflow result shape — the editor keeps only a
+        // best-effort snapshot (via the io-contract endpoint). Compiling from
+        // the reconciled graph guarantees the join, `output_ports`, and the
+        // borrow resolver (`node_output_fields`) all agree with the child
+        // actually frozen into the AIR, independent of editor staleness. The
+        // original `graph` is still persisted as `graph_json` below.
+        let compiled_graph = reconcile_subworkflow_outputs(graph, &sub_air);
+
         // Discover workspace resources this graph touches by source-scanning
         // Python entrypoints for `<head>.<field>` accesses and looking the
         // heads up in the workspace's resources list. The compiler uses this
@@ -116,7 +128,7 @@ impl<'a> PublishService<'a> {
         };
         let (mut air_json, interface_json, node_configs) =
             compile_to_air_with_subworkflows_interfaces_and_configs(
-                graph,
+                &compiled_graph,
                 name,
                 description,
                 &air_files,
@@ -231,6 +243,11 @@ impl<'a> PublishService<'a> {
     /// registration. Republishing an existing template won't re-fire
     /// backfill because the dispatcher snapshots prior trigger ids.
     pub async fn register_triggers(&self, template: &WorkflowTemplate) -> usize {
+        // Private sub-workflows never run standalone, so their trigger nodes
+        // must never register — they'd dangle and fail at fire time.
+        if template.visibility == "private" {
+            return 0;
+        }
         self.state.triggers.register_template(template, true).await
     }
 }
@@ -444,6 +461,24 @@ fn synthesize_py_io_files(
 /// All child-resolution failures surface as a node-keyed
 /// `SubWorkflowUnresolved` so the editor canvas rings the offending node;
 /// the specific cause is logged.
+/// Return a clone of `graph` with every SubWorkflow node's declared `output`
+/// port replaced by its resolved child's authoritative `output_contract`
+/// (derived from the child's End `result_mapping`). Nodes with no resolved
+/// child (none should exist post-`resolve_subworkflow_air`) keep their declared
+/// output. The publish path compiles from this reconciled graph so the result
+/// shape can't drift from the frozen child; the editor's snapshot is advisory.
+fn reconcile_subworkflow_outputs(graph: &WorkflowGraph, sub_air: &SubWorkflowAir) -> WorkflowGraph {
+    let mut g = graph.clone();
+    for node in &mut g.nodes {
+        if let WorkflowNodeData::SubWorkflow { output, .. } = &mut node.data {
+            if let Some(child) = sub_air.get(&node.id) {
+                *output = child.output_contract.clone();
+            }
+        }
+    }
+    g
+}
+
 pub async fn resolve_subworkflow_air(
     state: &AppState,
     publishing_family: Option<Uuid>,
@@ -496,6 +531,18 @@ pub async fn resolve_subworkflow_air(
 
         if !child.published {
             return Err(unresolved("child template is not published"));
+        }
+
+        // Private sub-workflows may be embedded only by their owning parent
+        // family. `owner_template_id` holds that family's base; any other
+        // parent (or an owner mismatch) is rejected at this parent's publish,
+        // ringing the offending node in the editor.
+        if child.visibility == "private" && child.owner_template_id != publishing_family {
+            let e = CompileError::SubWorkflowPrivateOwnershipViolation {
+                node_id: node.id.clone(),
+                template_id: template_id.to_string(),
+            };
+            return Err(ApiError::compile(e.to_string(), vec![e.to_view()]));
         }
 
         // Direct same-family self-reference guard (authoring mistake; would
@@ -566,12 +613,30 @@ pub async fn resolve_subworkflow_air(
         let air = serde_json::to_value(&child_def)
             .map_err(|e| ApiError::internal(format!("serialize child AIR: {e}")))?;
 
+        // Derive the child's fixed input/output contract from its high-level
+        // graph via the single `derive_child_io` resolver (shared with the
+        // editor's io-contract endpoint, so the preview never drifts):
+        //   - input  = the child's Start `initial` Port. As an agent tool,
+        //     these fields become the LLM-facing `input_schema`.
+        //   - output = the union of End `result_mapping` targets (Json), i.e.
+        //     what the child returns as `exit_code.value`.
+        // Best-effort: a graph parse miss degrades to empty contracts
+        // (permissive input schema / opaque pass-through output) rather than
+        // failing resolution.
+        let (input_contract, output_contract) =
+            serde_json::from_value::<WorkflowGraph>(child.graph.clone())
+                .ok()
+                .map(|g| derive_child_io(&g))
+                .unwrap_or_else(|| (Port::empty_input(), default_subworkflow_output_port()));
+
         out.insert(
             node.id.clone(),
             ResolvedChild {
                 air,
                 resolved_version: child.version,
                 template_id: child.id.to_string(),
+                input_contract,
+                output_contract,
             },
         );
     }

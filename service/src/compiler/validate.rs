@@ -114,131 +114,316 @@ pub(crate) fn validate(graph: &WorkflowGraph, wg: &WorkflowDiGraph) -> Result<()
         ));
     }
 
-    // Validate loop blocks
+    // Per-node structural validation. Each variant's rule lives behind its
+    // `NodeDecl::validate` hook (one `validate_<kind>` free fn per rule-bearing
+    // variant, below) — the dispatcher walks every node and calls through.
+    // Pushing this into the registry means a future variant with a structural
+    // rule can't be silently skipped: it either declares a `validate` hook or
+    // trips the `validate_or_token_shape_hook_for_rule_bearing_kinds`
+    // conformance test. Variants with no per-node rule have `validate: None`
+    // and are a cheap no-op here.
     for node in &graph.nodes {
-        if let WorkflowNodeData::Loop {
-            max_iterations,
-            loop_condition,
-            ..
-        } = &node.data
-        {
-            if *max_iterations <= 0 {
-                return Err(CompileError::Validation(format!(
-                    "loop '{}' must have max_iterations > 0",
-                    node.id
-                )));
-            }
-            if loop_condition.trim().is_empty() {
-                return Err(CompileError::Validation(format!(
-                    "loop '{}' must have a non-empty condition",
-                    node.id
-                )));
+        if let Some(decl) = crate::nodes::lookup_by_variant(&node.data) {
+            if let Some(f) = decl.validate {
+                f(node, graph, wg)?;
             }
         }
     }
 
-    // Validate Delay / Timeout duration expressions are non-empty (parse +
-    // ref-resolution happens in `validate_guards` below alongside other
-    // Rhai surfaces). For Timeout, also require a body: at least one
-    // outgoing edge with sourceHandle="body_in" AND at least one incoming
-    // edge with targetHandle="body_out" — same shape as Loop's body.
-    for node in &graph.nodes {
-        match &node.data {
-            WorkflowNodeData::Delay {
-                duration_ms_expr, ..
-            } => {
-                if duration_ms_expr.trim().is_empty() {
-                    return Err(CompileError::Validation(format!(
-                        "delay '{}' must have a non-empty durationMsExpr",
-                        node.id
-                    )));
+    Ok(())
+}
+
+// ── Per-variant structural validation (registry hooks) ──────────────────────
+// One `pub(crate) fn validate_<kind>` per variant carrying a per-node rule,
+// referenced by the matching `NodeDecl::validate`. Bodies are byte-identical to
+// the pre-refactor per-node loops in `validate`. They live here (not in
+// `nodes/<kind>.rs`) so they keep using `CompileError` + `WorkflowDiGraph`
+// directly — mirroring how the `lower_*` fns live in `compiler/lower/`.
+
+/// Loop: `max_iterations > 0` and a non-empty `loop_condition`.
+pub(crate) fn validate_loop(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Loop {
+        max_iterations,
+        loop_condition,
+        accumulators,
+        ..
+    } = &node.data
+    else {
+        unreachable!("validate_loop on non-Loop variant");
+    };
+    if *max_iterations <= 0 {
+        return Err(CompileError::Validation(format!(
+            "loop '{}' must have max_iterations > 0",
+            node.id
+        )));
+    }
+    if loop_condition.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "loop '{}' must have a non-empty condition",
+            node.id
+        )));
+    }
+    // Accumulator validation: var is a valid Rhai identifier, not the
+    // reserved `iteration`, unique within the loop, and init/merge_expr
+    // parse as Rhai (reusing the same `parse_guard` surface used for
+    // loop_condition). init/merge_expr borrows (`<slug>.<var>`,
+    // `<body_slug>.<field>`) are resolved later by the read-arc pass.
+    let mut seen: HashSet<&str> = HashSet::new();
+    for acc in accumulators {
+        if !is_rhai_ident(&acc.var) {
+            return Err(CompileError::LoopAccumulatorVarInvalid {
+                node_id: node.id.clone(),
+                var: acc.var.clone(),
+            });
+        }
+        if acc.var == "iteration" {
+            return Err(CompileError::LoopAccumulatorVarReserved {
+                node_id: node.id.clone(),
+                var: acc.var.clone(),
+            });
+        }
+        if !seen.insert(acc.var.as_str()) {
+            return Err(CompileError::LoopAccumulatorDuplicateVar {
+                node_id: node.id.clone(),
+                var: acc.var.clone(),
+            });
+        }
+        for expr in [&acc.init, &acc.merge_expr] {
+            crate::compiler::rhai_scope::parse_guard(expr).map_err(|error| {
+                CompileError::LoopAccumulatorExprUnparseable {
+                    node_id: node.id.clone(),
+                    var: acc.var.clone(),
+                    error,
                 }
-            }
-            WorkflowNodeData::Timeout {
-                duration_ms_expr, ..
-            } => {
-                if duration_ms_expr.trim().is_empty() {
-                    return Err(CompileError::Validation(format!(
-                        "timeout '{}' must have a non-empty durationMsExpr",
-                        node.id
-                    )));
-                }
-                let has_body_in = graph.edges.iter().any(|e| {
-                    e.source == node.id
-                        && e.source_handle.as_deref() == Some("body_in")
-                });
-                let has_body_out = graph.edges.iter().any(|e| {
-                    e.target == node.id
-                        && e.target_handle.as_deref() == Some("body_out")
-                });
-                if !has_body_in || !has_body_out {
-                    return Err(CompileError::Validation(format!(
-                        "timeout '{}' requires a body — wire its body_in output \
-                         and a body completion back to body_out",
-                        node.id
-                    )));
-                }
-            }
-            _ => {}
+            })?;
         }
     }
+    Ok(())
+}
 
-    // Decision.defaultBranch is a free string on the wire (forward-compat
-    // for future multi-default decisions), but today the editor's
-    // `DecisionNode.svelte` hardcodes the Otherwise xyflow Handle id to
-    // `DEFAULT_BRANCH_HANDLE_ID`, so any other value would render as a
-    // floating edge in the UI even though the compiler would happily lower
-    // it. Reject at publish so hand-authored JSON can't silently produce a
-    // graph the editor won't render correctly.
-    for node in &graph.nodes {
-        if let WorkflowNodeData::Decision { default_branch: Some(db), .. } = &node.data {
-            if db != DEFAULT_BRANCH_HANDLE_ID {
-                return Err(CompileError::Validation(format!(
-                    "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
-                    node.id, DEFAULT_BRANCH_HANDLE_ID, db
-                )));
-            }
-        }
+/// Delay: non-empty `durationMsExpr` (parse + ref-resolution happens in
+/// `validate_guards` alongside other Rhai surfaces).
+pub(crate) fn validate_delay(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Delay {
+        duration_ms_expr, ..
+    } = &node.data
+    else {
+        unreachable!("validate_delay on non-Delay variant");
+    };
+    if duration_ms_expr.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "delay '{}' must have a non-empty durationMsExpr",
+            node.id
+        )));
     }
+    Ok(())
+}
 
-    // ParallelSplit must have >= 2 outgoing edges
-    for node in &graph.nodes {
-        if matches!(node.data, WorkflowNodeData::ParallelSplit { .. }) {
-            let idx = wg.indices[node.id.as_str()];
-            let out_count = wg.full.edges_directed(idx, Direction::Outgoing).count();
-            if out_count < 2 {
-                return Err(CompileError::Validation(format!(
-                    "parallel split '{}' must have at least 2 outgoing edges, found {out_count}",
-                    node.id
-                )));
-            }
-        }
+/// Timeout: non-empty `durationMsExpr`, plus a body — at least one outgoing
+/// edge with `sourceHandle="body_in"` AND at least one incoming edge with
+/// `targetHandle="body_out"` (same shape as Loop's body).
+pub(crate) fn validate_timeout(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Timeout {
+        duration_ms_expr, ..
+    } = &node.data
+    else {
+        unreachable!("validate_timeout on non-Timeout variant");
+    };
+    if duration_ms_expr.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "timeout '{}' must have a non-empty durationMsExpr",
+            node.id
+        )));
     }
-
-    // Unmerged fan-in: a work node (Automated/Human) with >1 incoming edge
-    // isn't a synchronizing join — its single input place has multiple
-    // producers, so the step *fires once per arriving token* with only that
-    // token's data, not a merge. This is legal Petri, rarely the intent.
-    // Warn (don't fail — existing graphs rely on it); the editor surfaces the
-    // same caveat per-node in the step reference panel.
-    for node in &graph.nodes {
-        if matches!(
-            node.data,
-            WorkflowNodeData::AutomatedStep { .. } | WorkflowNodeData::HumanTask { .. }
-        ) {
-            let idx = wg.indices[node.id.as_str()];
-            let in_count = wg.full.edges_directed(idx, Direction::Incoming).count();
-            if in_count > 1 {
-                tracing::warn!(
-                    node = %node.id,
-                    incoming = in_count,
-                    "unmerged fan-in: '{}' has {in_count} incoming edges and is not a Parallel Join; it will run once per upstream token (no merge). Insert a Parallel Join to combine inputs.",
-                    node.id
-                );
-            }
-        }
+    let has_body_in = graph
+        .edges
+        .iter()
+        .any(|e| e.source == node.id && e.source_handle.as_deref() == Some("body_in"));
+    let has_body_out = graph
+        .edges
+        .iter()
+        .any(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"));
+    if !has_body_in || !has_body_out {
+        return Err(CompileError::Validation(format!(
+            "timeout '{}' requires a body — wire its body_in output \
+             and a body completion back to body_out",
+            node.id
+        )));
     }
+    Ok(())
+}
 
+/// Map: non-empty `itemsRef` + `resultVar`, plus a body — at least one
+/// outgoing edge with `sourceHandle="body_in"` AND at least one incoming edge
+/// with `targetHandle="body_out"` (same body-attach shape as Loop/Timeout).
+/// The structural body-presence check here is the publish-time mirror of the
+/// `MapEmpty` lowering gate (which counts `parent_id == map.id` children).
+pub(crate) fn validate_map(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Map {
+        items_ref,
+        result_var,
+        ..
+    } = &node.data
+    else {
+        unreachable!("validate_map on non-Map variant");
+    };
+    if items_ref.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "map '{}' must have a non-empty itemsRef",
+            node.id
+        )));
+    }
+    if result_var.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "map '{}' must have a non-empty resultVar",
+            node.id
+        )));
+    }
+    // `resultVar` is interpolated as a Rhai field access in `t_<id>_collect`
+    // (`body.<resultVar>`) — a non-identifier name would emit unparseable
+    // logic deep in lowering. Reject at publish with a precise error (mirrors
+    // Loop's accumulator-var check).
+    if !is_rhai_ident(result_var.trim()) {
+        return Err(CompileError::MapResultVarInvalid {
+            node_id: node.id.clone(),
+            result_var: result_var.clone(),
+        });
+    }
+    // Nested map-reduce is unsupported in v1: the gather barrier correlates on
+    // a single `__map_id` and the `<slug>[*].<field>` borrow surface only
+    // describes one collection level. Reject a Map whose `parent_id` chain
+    // reaches another Map ancestor.
+    if let Some(outer_id) = enclosing_map(graph, node) {
+        return Err(CompileError::MapNested {
+            node_id: node.id.clone(),
+            outer_id,
+        });
+    }
+    let has_body_in = graph
+        .edges
+        .iter()
+        .any(|e| e.source == node.id && e.source_handle.as_deref() == Some("body_in"));
+    let has_body_out = graph
+        .edges
+        .iter()
+        .any(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"));
+    if !has_body_in || !has_body_out {
+        return Err(CompileError::Validation(format!(
+            "map '{}' requires a body — wire its body_in output \
+             and a body completion back to body_out",
+            node.id
+        )));
+    }
+    Ok(())
+}
+
+/// Walk `node`'s `parent_id` chain and return the id of the first `Map`
+/// ancestor, if any. Used to reject nested Map-in-Map (v1). Defends against a
+/// malformed cyclic `parent_id` chain with a bounded walk.
+fn enclosing_map(graph: &WorkflowGraph, node: &WorkflowNode) -> Option<String> {
+    let by_id: HashMap<&str, &WorkflowNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut current = node.parent_id.as_deref();
+    let mut guard = 0usize;
+    while let Some(pid) = current {
+        guard += 1;
+        if guard > graph.nodes.len() + 1 {
+            break; // cyclic parent_id — bail rather than loop forever
+        }
+        let Some(parent) = by_id.get(pid) else {
+            break;
+        };
+        if matches!(parent.data, WorkflowNodeData::Map { .. }) {
+            return Some(parent.id.clone());
+        }
+        current = parent.parent_id.as_deref();
+    }
+    None
+}
+
+/// Decision: `defaultBranch` must equal `DEFAULT_BRANCH_HANDLE_ID` when set.
+/// The wire allows a free string (forward-compat for multi-default decisions),
+/// but today `DecisionNode.svelte` hardcodes the Otherwise handle id, so any
+/// other value renders as a floating edge in the UI even though the compiler
+/// would happily lower it. Reject at publish so hand-authored JSON can't
+/// silently produce a graph the editor won't render correctly.
+pub(crate) fn validate_decision(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::Decision {
+        default_branch: Some(db),
+        ..
+    } = &node.data
+    else {
+        // No default branch set, or non-Decision (the dispatcher only routes
+        // Decision nodes here) — nothing to check.
+        return Ok(());
+    };
+    if db != DEFAULT_BRANCH_HANDLE_ID {
+        return Err(CompileError::Validation(format!(
+            "decision '{}' defaultBranch must be exactly \"{}\", got \"{}\"",
+            node.id, DEFAULT_BRANCH_HANDLE_ID, db
+        )));
+    }
+    Ok(())
+}
+
+/// ParallelSplit must have >= 2 outgoing edges.
+pub(crate) fn validate_parallel_split(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let idx = wg.indices[node.id.as_str()];
+    let out_count = wg.full.edges_directed(idx, Direction::Outgoing).count();
+    if out_count < 2 {
+        return Err(CompileError::Validation(format!(
+            "parallel split '{}' must have at least 2 outgoing edges, found {out_count}",
+            node.id
+        )));
+    }
+    Ok(())
+}
+
+/// Unmerged fan-in warning shared by AutomatedStep + HumanTask: a work node
+/// with >1 incoming edge isn't a synchronizing join — its single input place
+/// has multiple producers, so the step *fires once per arriving token* with
+/// only that token's data, not a merge. Legal Petri, rarely the intent. Warn
+/// (don't fail — existing graphs rely on it); the editor surfaces the same
+/// caveat per-node in the step reference panel.
+pub(crate) fn warn_unmerged_fan_in(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let idx = wg.indices[node.id.as_str()];
+    let in_count = wg.full.edges_directed(idx, Direction::Incoming).count();
+    if in_count > 1 {
+        tracing::warn!(
+            node = %node.id,
+            incoming = in_count,
+            "unmerged fan-in: '{}' has {in_count} incoming edges and is not a Parallel Join; it will run once per upstream token (no merge). Insert a Parallel Join to combine inputs.",
+            node.id
+        );
+    }
     Ok(())
 }
 
@@ -444,6 +629,11 @@ pub fn merged_identifier_scope(
 /// `<slug>.<field>` borrows. Covers:
 ///
 /// - **AutomatedStep** — explicit `output.fields` declared in the editor.
+/// - **SubWorkflow** — `output.fields` derived from the referenced child's End
+///   `result_mapping` (see `derive_child_io`). At publish the field is
+///   reconciled from the resolved child (`compile_artifacts`), so the borrow
+///   resolver sees the child's true return contract; in the editor it reflects
+///   the snapshot the panel keeps fresh via the `io-contract` endpoint.
 /// - **Loop** — synthetic `iteration: number` parked in `p_<loop>_data` by
 ///   `t_<id>_enter`; downstream nodes (including the body) read it through the
 ///   same `<slug>.<field>` mental model as any other producer, resolved by the
@@ -454,7 +644,8 @@ pub fn node_output_fields(
     let mut out: HashMap<String, std::collections::BTreeMap<String, FieldKind>> = HashMap::new();
     for node in &graph.nodes {
         match &node.data {
-            WorkflowNodeData::AutomatedStep { output, .. } => {
+            WorkflowNodeData::AutomatedStep { output, .. }
+            | WorkflowNodeData::SubWorkflow { output, .. } => {
                 if output.fields.is_empty() {
                     continue;
                 }
@@ -464,9 +655,14 @@ pub fn node_output_fields(
                 }
                 out.insert(node.id.clone(), fields);
             }
-            WorkflowNodeData::Loop { .. } => {
+            WorkflowNodeData::Loop { accumulators, .. } => {
                 let mut fields = std::collections::BTreeMap::new();
                 fields.insert("iteration".to_string(), FieldKind::Number);
+                // Accumulators are opaque-Rhai parked fields: `Json` escape
+                // hatch (mirrors the `TokenShape::Any` declared shape).
+                for acc in accumulators {
+                    fields.insert(acc.var.clone(), FieldKind::Json);
+                }
                 out.insert(node.id.clone(), fields);
             }
             _ => continue,
@@ -492,40 +688,14 @@ pub(crate) fn validate_guards<'a>(
         // `input.<path>` in transition *logic* just like guards do, so they
         // get the same syntax check + shape-aware resolution (the read-arc
         // synthesis phase rebinds them onto the owning parked data place).
-        let sources: Vec<&str> = match &node.data {
-            WorkflowNodeData::Decision { conditions, .. } => conditions
-                .iter()
-                .map(|c| c.guard.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Loop { loop_condition, .. }
-                if !loop_condition.trim().is_empty() =>
-            {
-                vec![loop_condition.as_str()]
-            }
-            WorkflowNodeData::End { result_mapping, .. } => result_mapping
-                .iter()
-                .map(|m| m.expression.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Failure {
-                error_result_mapping,
-                ..
-            } => error_result_mapping
-                .iter()
-                .map(|m| m.expression.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .collect(),
-            WorkflowNodeData::Delay {
-                duration_ms_expr, ..
-            }
-            | WorkflowNodeData::Timeout {
-                duration_ms_expr, ..
-            } if !duration_ms_expr.trim().is_empty() => {
-                vec![duration_ms_expr.as_str()]
-            }
-            _ => continue,
-        };
+        //
+        // The set of Rhai-bearing sources per variant is centralized in
+        // `crate::nodes::guard_rhai_sources` — the single source of truth
+        // shared with `token_shape::analyze`. A new Rhai-bearing variant that
+        // forgets an arm there fails the build (the match is exhaustive, no
+        // wildcard) and the `guard_rhai_sources` conformance test in
+        // `nodes/mod.rs`. `guard_rhai_sources` already filters empties.
+        let sources = crate::nodes::guard_rhai_sources(&node.data);
         for src in sources {
             rhai_scope::parse_guard(src).map_err(|message| CompileError::GuardSyntax {
                 node_id: node.id.clone(),
@@ -1070,6 +1240,125 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                         });
                     }
                 }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// --- Map itemsRef shape validation ---
+
+/// Walk every Map node and confirm its `itemsRef` resolves to an ARRAY on a
+/// known parked producer. The scatter transition fans the resolved collection
+/// out into one token per element, so a non-array (or unresolved) `itemsRef`
+/// is a hard reject. Runs after `validate_guards` (needs the per-node shapes
+/// from `analyze`) and before lowering, mirroring `validate_repeaters`.
+///
+/// `itemsRef` is a plain `<slug>.<field>…` reference (NOT a `[*]` ref — the
+/// `[*]` boundary applies to *downstream* borrows of the Map's gathered
+/// output, never to its input collection). Resolution reuses the same
+/// `find_by_leaf` + dotted-descent walk as the Repeater pre-`[*]` path.
+pub(crate) fn validate_maps(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    use crate::compiler::token_shape::{analyze, is_parked_producer, slug_index, TokenShape};
+
+    // Short-circuit when the graph has no Map nodes at all — avoids paying for
+    // the analyze pass on graphs that don't use the Map primitive.
+    if !graph
+        .nodes
+        .iter()
+        .any(|n| matches!(n.data, WorkflowNodeData::Map { .. }))
+    {
+        return Ok(());
+    }
+
+    let report = analyze(graph)?;
+    let slugs = slug_index(graph)?;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::Map { items_ref, .. } = &node.data else {
+            continue;
+        };
+        // Empty `itemsRef` is already rejected by `validate_map`; skip here so
+        // the structural error wins (clearer message, no shape work).
+        let raw = items_ref.trim();
+        if raw.is_empty() {
+            continue;
+        }
+
+        // Parse `<slug>.<path>…`. At least `<slug>.<field>` (one dot).
+        let Some((head, rest)) = raw.split_once('.') else {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: raw.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        };
+        let segs: Vec<&str> = rest.split('.').collect();
+        if head.is_empty() || segs.iter().any(|s| s.is_empty()) {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: head.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        }
+
+        let Some(prod_id) = slugs.node_for(head).map(str::to_string) else {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: head.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        };
+        if !is_parked_producer(graph, &prod_id) {
+            return Err(CompileError::MapItemsRefUnresolved {
+                node_id: node.id.clone(),
+                ref_value: items_ref.clone(),
+                slug: head.to_string(),
+                available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+            });
+        }
+
+        // Resolve the field path against the producer's outbound shape, using
+        // `find_by_leaf` for the first segment (maps the author's leaf to the
+        // physical parked path, e.g. HumanTask's `data.<field>`) + literal
+        // descent thereafter — identical to the Repeater pre-`[*]` walk.
+        let shape = report.node_out.get(&prod_id);
+        let resolved = shape.and_then(|s| {
+            let (phys, _ty, _prov) = s.find_by_leaf(segs[0])?;
+            let mut path: Vec<String> = phys.split('.').map(str::to_string).collect();
+            for extra in &segs[1..] {
+                path.push((*extra).to_string());
+            }
+            s.resolve(&path).map(|(t, _)| t.clone())
+        });
+
+        match resolved {
+            Some(TokenShape::Array(_))
+            | Some(TokenShape::Any)
+            | Some(TokenShape::Opaque(_))
+            | Some(TokenShape::Scalar(crate::compiler::token_shape::ScalarTy::Json)) => {
+                // Array (canonical), or Any/Opaque/Json (opaque — the producer
+                // declared arbitrary JSON the executor delivers as an array at
+                // runtime). Accept; defer the strict shape to runtime.
+            }
+            Some(other) => {
+                return Err(CompileError::MapItemsRefNotArray {
+                    node_id: node.id.clone(),
+                    ref_value: items_ref.clone(),
+                    actual_kind: other.kind_label(),
+                });
+            }
+            None => {
+                return Err(CompileError::MapItemsRefUnresolved {
+                    node_id: node.id.clone(),
+                    ref_value: items_ref.clone(),
+                    slug: head.to_string(),
+                    available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
+                });
             }
         }
     }

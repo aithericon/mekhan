@@ -8,6 +8,7 @@
 	import AlertCircle from '@lucide/svelte/icons/alert-circle';
 	import KeyValueList from './KeyValueList.svelte';
 	import SmartValue from './SmartValue.svelte';
+	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import { listProcessesByInstance, getProcessLogsTail } from '$lib/api/client';
 	import type { components } from '$lib/api/schema';
 	import type { RendererProps } from './types';
@@ -437,13 +438,19 @@
 				<div class="mt-2 space-y-2">
 					{#if hasStderr}
 						<div>
-							<div class="mb-1 text-sm font-mono text-muted-foreground">stderr (tail)</div>
+							<div class="mb-1 flex items-center gap-1.5">
+								<span class="text-sm font-mono text-muted-foreground">stderr (tail)</span>
+								<CopyButton text={detail.stderr_tail ?? ''} title="Copy stderr" />
+							</div>
 							<pre class="rounded-md border border-border bg-muted/30 p-3 text-sm font-mono whitespace-pre-wrap break-words">{detail.stderr_tail}</pre>
 						</div>
 					{/if}
 					{#if hasStdout}
 						<div>
-							<div class="mb-1 text-sm font-mono text-muted-foreground">stdout (tail)</div>
+							<div class="mb-1 flex items-center gap-1.5">
+								<span class="text-sm font-mono text-muted-foreground">stdout (tail)</span>
+								<CopyButton text={detail.stdout_tail ?? ''} title="Copy stdout" />
+							</div>
 							<pre class="rounded-md border border-border bg-muted/30 p-3 text-sm font-mono whitespace-pre-wrap break-words">{detail.stdout_tail}</pre>
 						</div>
 					{/if}

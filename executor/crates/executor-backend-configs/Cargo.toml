@@ -13,3 +13,16 @@ serde.workspace = true
 serde_json.workspace = true
 aithericon-executor-domain.workspace = true
 aithericon-executor-storage-types.workspace = true
+utoipa = { workspace = true, optional = true }
+
+[features]
+default = []
+# Derives `utoipa::ToSchema` on every public config type (and pulls the same
+# derive into the transitively-referenced executor-domain / storage-types
+# types). mekhan-service enables this to register the config schemas in its
+# OpenAPI document; the executor's own build leaves it off (no utoipa cost).
+schema = [
+    "dep:utoipa",
+    "aithericon-executor-domain/schema",
+    "aithericon-executor-storage-types/schema",
+]

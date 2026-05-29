@@ -98,7 +98,7 @@ test-e2e-zitadel:
     docker compose up -d
     echo "▶ waiting for zitadel…"
     for _ in $(seq 1 90); do
-      curl -fsS http://localhost:8080/debug/ready >/dev/null 2>&1 && break
+      curl -fsS http://localhost:18080/debug/ready >/dev/null 2>&1 && break
       sleep 2
     done
     echo "▶ waiting for postgres…"

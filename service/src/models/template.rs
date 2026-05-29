@@ -53,6 +53,10 @@ pub struct WorkflowTemplate {
     // frontend can render visibility badges and per-workspace filtering.
     pub workspace_id: Uuid,
     pub visibility: String,
+    /// Owning parent family base id (`COALESCE(base_template_id, id)`), set
+    /// only when `visibility == "private"`. A private sub-workflow may be
+    /// embedded only by this family and never runs standalone.
+    pub owner_template_id: Option<Uuid>,
 }
 
 // --- Visual editor data model (Section 2) ---
@@ -349,12 +353,52 @@ pub enum WorkflowNodeData {
         max_iterations: i32,
         #[serde(rename = "loopCondition")]
         loop_condition: String,
+        /// Optional fold/scan state carried across iterations. Each is an
+        /// additional field in the loop's parked `p_<id>_data` envelope
+        /// (alongside `iteration`): initialized in the enter transition,
+        /// re-folded write-once-per-iteration in the continue transition.
+        /// Downstream blocks read them via `<loop_slug>.<var>` borrows.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        accumulators: Vec<LoopAccumulator>,
     },
     #[serde(rename = "scope")]
     Scope {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+    },
+    /// Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`
+    /// into N item tokens (one per element), runs a BODY sub-graph of child
+    /// nodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`
+    /// handle mechanism as Loop) once per element, gathers the N results, and
+    /// reduces them to one collection token parked at `p_<id>_data`. Downstream
+    /// blocks borrow the gathered collection as `<map_slug>[*].<field>` (the
+    /// Repeater `[*]` machinery generalized to any Array-typed parked producer;
+    /// `<map_slug>.<field>` without `[*]` is a hard `MapRefMissingStar` error).
+    /// The scatter writes the item namespace ONTO each body token (namespace-
+    /// on-token, v1) so body guards / Python read `item.<field>` directly.
+    #[serde(rename = "map")]
+    Map {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Producer-namespaced reference to the array to scatter, carrying
+        /// exactly one `[*]` boundary at iteration time (resolved through the
+        /// Repeater items-ref machinery), e.g. `extract.tasks`.
+        #[serde(rename = "itemsRef")]
+        items_ref: String,
+        /// Identifier the per-item element is bound to on each body token.
+        /// Body guards / Python read `<item_var>.<field>`. Defaults to `item`.
+        #[serde(rename = "itemVar", default = "default_item_var")]
+        item_var: String,
+        /// Field on each body output token whose value becomes the gathered
+        /// element (the per-iteration result the reduce collects).
+        #[serde(rename = "resultVar")]
+        result_var: String,
+        /// Declared shape of one gathered element. Empty fields ⇒ `Any`
+        /// element. Drives the `<map_slug>[*].<field>` borrow surface.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<Port>,
     },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token
@@ -625,6 +669,7 @@ impl WorkflowNodeData {
             | Self::Join { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
+            | Self::Map { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
@@ -656,6 +701,7 @@ impl WorkflowNodeData {
             | Self::Join { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
+            | Self::Map { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
@@ -1132,6 +1178,11 @@ fn default_max_turns() -> u32 {
     1
 }
 
+/// Default `Map.item_var` — body tokens bind the per-element value as `item`.
+fn default_item_var() -> String {
+    "item".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
@@ -1392,6 +1443,31 @@ pub struct Port {
     pub fields: Vec<PortField>,
 }
 
+/// One fold/scan slot on a [`WorkflowNodeData::Loop`]. Lives as an additional
+/// field in the loop's parked `p_<id>_data` envelope (the iteration counter
+/// generalized): `init` is evaluated once in the enter transition, `merge_expr`
+/// is re-evaluated write-once-per-iteration in the continue transition. Both
+/// are Rhai expressions. `merge_expr` may reference the prior accumulator value
+/// as `<loop_slug>.<var>` and the body's output as `<body_slug>.<field>` — the
+/// standard read-arc synthesis resolves those borrows automatically.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopAccumulator {
+    /// Rhai identifier the accumulator is addressed by, both inside the loop's
+    /// own continue transition (`<loop_slug>.<var>`) and downstream. Must not
+    /// be `iteration` (reserved) and must be unique within the loop.
+    pub var: String,
+    /// Rhai expression evaluated in the enter transition scope (the entering
+    /// workflow token is bound as `input`). Keep simple — e.g. `"0"`, `"[]"`,
+    /// `"#{}"`.
+    pub init: String,
+    /// Rhai expression evaluated in the continue transition scope, producing the
+    /// next accumulator value. References the prior value as `<loop_slug>.<var>`
+    /// and body output as `<body_slug>.<field>`.
+    #[serde(rename = "mergeExpr")]
+    pub merge_expr: String,
+}
+
 impl Port {
     /// Empty input port — used as the deserialization default for `Start.initial`
     /// and similar so existing templates load unchanged.
@@ -1514,13 +1590,15 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
-            name: "history".to_string(),
-            label: "Conversation history".to_string(),
-            kind: FieldKind::Json,
+            name: "history_ref".to_string(),
+            label: "Conversation transcript blob".to_string(),
+            kind: FieldKind::Text,
             required: false,
             options: None,
             description: Some(
-                "Array of `{role, content, …}` entries the agent sent + received.".to_string(),
+                "Storage key of the final cumulative transcript blob (the full \
+                 `{role, content, …}` conversation lives off-token in object storage)."
+                    .to_string(),
             ),
             accept: None,
         },
@@ -2005,6 +2083,11 @@ pub struct ListTemplatesQuery {
     pub project_id: Option<Uuid>,
     /// Restrict to templates carrying this tag in the user's workspace.
     pub tag: Option<String>,
+    /// Enumerate the private sub-workflow children owned by this parent
+    /// family (`COALESCE(base_template_id, id)`). When supplied, the listing
+    /// returns *only* those private children (they're otherwise hidden from
+    /// the catalogue). When absent, private templates are excluded entirely.
+    pub owner_template_id: Option<Uuid>,
 }
 
 fn default_page() -> i64 {
@@ -2085,8 +2168,8 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef, Port, RetryPolicy, TaskBlockConfig,
-        TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
+        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef, Port, RetryPolicy,
+        TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -2149,6 +2232,9 @@ pub mod dsl {
 
         #[serde(skip_serializing_if = "Option::is_none")]
         pub loop_condition: Option<String>,
+
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub accumulators: Vec<LoopAccumulator>,
 
         // scope
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2447,6 +2533,7 @@ pub mod dsl {
                         description: step.description.clone(),
                         max_iterations: max_iter,
                         loop_condition: condition,
+                        accumulators: step.accumulators.clone(),
                     })
                 }
                 "scope" => Ok(WorkflowNodeData::Scope {
@@ -2460,7 +2547,7 @@ pub mod dsl {
                 // that behaviour but make it explicit per kind so the
                 // round-trip asymmetry is greppable rather than silent.
                 "phase_update" | "progress_update" | "failure" | "trigger" | "delay"
-                | "timeout" => Err(format!(
+                | "timeout" | "map" => Err(format!(
                     "step '{}' has GUI-only type '{}' which the DSL format does not model",
                     key, step.step_type
                 )),
@@ -2489,6 +2576,7 @@ pub mod dsl {
                 default_branch: None,
                 max_iterations: None,
                 loop_condition: None,
+                accumulators: Vec::new(),
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
@@ -2613,18 +2701,23 @@ pub mod dsl {
                 WorkflowNodeData::Loop {
                     max_iterations,
                     loop_condition,
+                    accumulators,
                     ..
                 } => {
                     step.max_iterations = Some(*max_iterations);
                     step.loop_condition = Some(loop_condition.clone());
+                    step.accumulators = accumulators.clone();
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }
                 | WorkflowNodeData::Failure { .. }
                 | WorkflowNodeData::Delay { .. }
-                | WorkflowNodeData::Timeout { .. } => {
-                    // DSL doesn't model the process-control nodes — GUI-authored
-                    // for now. Same lossy-drop behaviour as triggers.
+                | WorkflowNodeData::Timeout { .. }
+                | WorkflowNodeData::Map { .. } => {
+                    // DSL doesn't model the process-control / container nodes —
+                    // GUI-authored for now. Same lossy-drop behaviour as
+                    // triggers. (Map's body sub-graph + itemsRef/resultVar have
+                    // no DSL schema yet.)
                 }
                 WorkflowNodeData::Agent {
                     model,

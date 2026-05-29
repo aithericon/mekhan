@@ -32,7 +32,7 @@ impl LiveZitadel {
             return None;
         }
         let base = std::env::var("MEKHAN_E2E_ISSUER")
-            .unwrap_or_else(|_| "http://localhost:8080".to_string());
+            .unwrap_or_else(|_| "http://localhost:18080".to_string());
         let pat_file = std::env::var("MEKHAN_E2E_ADMIN_PAT_FILE")
             .unwrap_or_else(|_| "../deploy/zitadel/pat/zitadel-admin-sa.pat".to_string());
         let admin_pat = std::fs::read_to_string(&pat_file)

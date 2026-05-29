@@ -35,7 +35,7 @@ use petri_domain::{
     PlaceId, Port, PreDispatchOutcomeKind, TokenColor, Transition, TransitionId,
 };
 
-use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput};
+use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput, ExecutionMode};
 use crate::pre_dispatch::{
     HttpPreDispatchHook, PreDispatchChain, PreDispatchChainEntry, PreDispatchContext,
     PreDispatchError, PreDispatchHook, PreDispatchOutcome, PreDispatchRuntime,
@@ -527,4 +527,527 @@ async fn test_http_transport_consumes_canned_continue_outcome() {
         }),
         PreDispatchOutcomeKind::Continue
     );
+}
+
+// ============================================================================
+// Scatter / Gather (dynamic map-reduce) — end-to-end + replay determinism.
+//
+// These exercise the whole Layers 0-3 stack through the real firing pipeline:
+//
+//   * SCATTER  — a Batch-cardinality OUTPUT port whose Rhai value is a JSON
+//                array emits ONE token per element (Layer 1, firing.rs).
+//   * GATHER   — a Batch INPUT arc carrying `count_from` + `correlate_on`
+//                fires only when K matching result tokens are present and
+//                consumes exactly those K (Layer 2, binding.rs).
+//   * REPLAY   — re-running the recorded events in ExecutionMode::Replay must
+//                yield a byte-identical final marking AND an identical event
+//                sequence. Replay is a deterministic function of (rebuilt
+//                marking + token data), never of wall-clock / insertion timing.
+//
+// The net models one BO-style loop iteration:
+//
+//   [spec] ─(propose)─▶ [coordinator]            (Single: carries k + iter id)
+//                    └─▶ [raw_items]   ◀ Batch scatter: K item tokens
+//   [raw_items] ─(map)─▶ [mapped_items]          (per-item Rhai transform, ×K)
+//   [coordinator:read] + [mapped_items:gather K, correlate iteration_id]
+//                    ─(gather)─▶ [done]           (terminal: reduce to 1 token)
+// ============================================================================
+
+/// A compact, comparable digest of the marking: for each watched place, the
+/// JSON-serialized token data in marking-vector order. Used to assert the
+/// live run and the replay run land on a byte-identical final marking.
+fn marking_digest(marking: &Marking, places: &[(&str, &PlaceId)]) -> Vec<(String, Vec<String>)> {
+    places
+        .iter()
+        .map(|(label, pid)| {
+            let datas: Vec<String> = marking
+                .tokens_at(pid)
+                .iter()
+                .map(|t| serde_json::to_string(&token_color_json(&t.color)).unwrap())
+                .collect();
+            (label.to_string(), datas)
+        })
+        .collect()
+}
+
+/// Project a `TokenColor` to plain JSON (Data passthrough; Unit → null;
+/// Integer → number) for digest comparison.
+fn token_color_json(color: &TokenColor) -> serde_json::Value {
+    match color {
+        TokenColor::Data(v) => v.clone(),
+        TokenColor::Integer(n) => serde_json::json!(n),
+        TokenColor::Unit => serde_json::Value::Null,
+    }
+}
+
+/// A comparable digest of the event sequence: the variant tag plus the salient
+/// payload of each event, in log order. Two runs that fire the same transitions
+/// in the same order with the same token data produce identical digests.
+///
+/// NB: the *cross-port* ordering of produced tokens within a single firing is
+/// driven by `HashMap` iteration over the script result and is NOT a
+/// deterministic part of the engine contract (it predates scatter/gather). We
+/// therefore sort the per-firing produced-token payloads so the digest compares
+/// the produced *multiset* — which IS deterministic — rather than an incidental
+/// hash order. Token DATA and firing ORDER (the load-bearing replay invariant)
+/// are still asserted exactly.
+fn sorted_produced(produced: &[(PlaceId, petri_domain::Token)]) -> String {
+    let mut payloads: Vec<String> = produced
+        .iter()
+        .map(|(_, t)| token_color_json(&t.color).to_string())
+        .collect();
+    payloads.sort();
+    payloads.join("|")
+}
+
+fn event_digest(events: &[PersistedEvent]) -> Vec<String> {
+    events
+        .iter()
+        .map(|e| match &e.event {
+            DomainEvent::NetInitialized { .. } => "NetInitialized".to_string(),
+            DomainEvent::TokenCreated { place_id, token, .. } => {
+                format!("TokenCreated({},{})", place_id, token_color_json(&token.color))
+            }
+            DomainEvent::TransitionFired {
+                transition_id,
+                produced_tokens,
+                consumed_tokens,
+                ..
+            } => format!(
+                "TransitionFired({},consumed={},produced=[{}])",
+                transition_id,
+                consumed_tokens.len(),
+                sorted_produced(produced_tokens)
+            ),
+            DomainEvent::EffectCompleted {
+                transition_id,
+                produced_tokens,
+                effect_result,
+                ..
+            } => format!(
+                "EffectCompleted({},result={},produced=[{}])",
+                transition_id,
+                effect_result,
+                sorted_produced(produced_tokens)
+            ),
+            DomainEvent::TokenConsumed { token_id, place_id, .. } => {
+                format!("TokenConsumed({},{})", place_id, token_id)
+            }
+            DomainEvent::NetCompleted { .. } => "NetCompleted".to_string(),
+            other => format!("{:?}", std::mem::discriminant(other)),
+        })
+        .collect()
+}
+
+/// Build the Rhai scatter → gather net described above. Returns the net plus
+/// the PlaceIds we watch in the digest, and the seed place id.
+#[allow(clippy::type_complexity)]
+fn build_scatter_gather_net(
+    iteration_id: &str,
+    k: usize,
+) -> (PetriNet, PlaceId, PlaceId, PlaceId, PlaceId, PlaceId) {
+    let mut net = PetriNet::new();
+
+    let spec = Place::internal("spec");
+    let coordinator = Place::internal("coordinator");
+    let raw_items = Place::internal("raw_items");
+    let mapped_items = Place::internal("mapped_items");
+    let done = Place::terminal("done");
+
+    let spec_id = spec.id.clone();
+    let coordinator_id = coordinator.id.clone();
+    let raw_items_id = raw_items.id.clone();
+    let mapped_items_id = mapped_items.id.clone();
+    let done_id = done.id.clone();
+
+    net.add_place(spec);
+    net.add_place(coordinator);
+    net.add_place(raw_items);
+    net.add_place(mapped_items);
+    net.add_place(done);
+
+    // ── t_propose: Single `spec` in → Single `coord` out + Batch `items` out ──
+    // The scatter array is built in Rhai from spec.k, stamping iteration_id +
+    // __map_idx on each item so overlapping iterations never mix at the gather.
+    let propose_script = r#"
+        let items = [];
+        let i = 0;
+        while i < spec.k {
+            items.push(#{ "iteration_id": spec.iteration_id, "__map_idx": i, "v": i + 1 });
+            i += 1;
+        }
+        #{
+            coord: #{ iteration_id: spec.iteration_id, k: spec.k },
+            items: items
+        }
+    "#;
+    let t_propose = Transition::new("t_propose", propose_script)
+        .with_input_ports(vec![Port::new("spec")])
+        .with_output_ports(vec![Port::new("coord"), Port::batch("items")]);
+    let t_propose_id = t_propose.id.clone();
+    net.add_transition(t_propose);
+    net.add_arc(PetriArc::input(
+        spec_id.clone(),
+        t_propose_id.clone(),
+        "spec",
+    ));
+    net.add_arc(PetriArc::output(
+        t_propose_id.clone(),
+        "coord",
+        coordinator_id.clone(),
+    ));
+    net.add_arc(PetriArc::output(
+        t_propose_id.clone(),
+        "items",
+        raw_items_id.clone(),
+    ));
+
+    // ── t_map: per-item transform (Single in, Single out). Fires K times. ──
+    let map_script = r#"#{
+        mapped: #{
+            iteration_id: item.iteration_id,
+            "__map_idx": item.__map_idx,
+            v2: item.v * 10
+        }
+    }"#;
+    let t_map = Transition::new("t_map", map_script)
+        .with_input_ports(vec![Port::new("item")])
+        .with_output_ports(vec![Port::new("mapped")]);
+    let t_map_id = t_map.id.clone();
+    net.add_transition(t_map);
+    net.add_arc(PetriArc::input(
+        raw_items_id.clone(),
+        t_map_id.clone(),
+        "item",
+    ));
+    net.add_arc(PetriArc::output(
+        t_map_id.clone(),
+        "mapped",
+        mapped_items_id.clone(),
+    ));
+
+    // ── t_gather: counted, correlated gather barrier (Layer 2). ──
+    // `expected` is a Single READ arc (coordinator stays put, supplies K +
+    // iteration_id). `results` is the Batch gather arc: count_from=expected.k,
+    // correlate_on=iteration_id → consumes exactly K matching mapped items.
+    let gather_script = r#"#{
+        reduced: #{
+            iteration_id: expected.iteration_id,
+            n: results.len(),
+            sum: results.reduce(|acc, r| acc + r.v2, 0)
+        }
+    }"#;
+    let t_gather = Transition::new("t_gather", gather_script)
+        .with_input_ports(vec![Port::new("expected"), Port::batch("results")])
+        .with_output_ports(vec![Port::new("reduced")]);
+    let t_gather_id = t_gather.id.clone();
+    net.add_transition(t_gather);
+    net.add_arc(PetriArc::input(coordinator_id.clone(), t_gather_id.clone(), "expected").with_read(true));
+    net.add_arc(
+        PetriArc::input(mapped_items_id.clone(), t_gather_id.clone(), "results")
+            .with_count_from("expected.k")
+            .with_correlate_on("iteration_id"),
+    );
+    net.add_arc(PetriArc::output(
+        t_gather_id.clone(),
+        "reduced",
+        done_id.clone(),
+    ));
+
+    let _ = (iteration_id, k);
+    (
+        net,
+        spec_id,
+        coordinator_id,
+        raw_items_id,
+        mapped_items_id,
+        done_id,
+    )
+}
+
+#[tokio::test]
+async fn scatter_gather_live_run_reduces_k_items_to_one_collection_token() {
+    let k = 3usize;
+    let iteration_id = "iter-1";
+    let (net, spec_id, coordinator_id, raw_items_id, mapped_items_id, done_id) =
+        build_scatter_gather_net(iteration_id, k);
+
+    let service = new_service();
+    service.initialize(net).await.unwrap();
+    service
+        .create_token(
+            spec_id.clone(),
+            TokenColor::Data(serde_json::json!({ "iteration_id": iteration_id, "k": k })),
+        )
+        .await
+        .unwrap();
+
+    // propose (1) + map (K) + gather (1) = K + 2 firings.
+    let result = service.evaluate_until_quiescent(k + 4).await.unwrap();
+    assert_eq!(result.steps_executed, k + 2, "propose + K maps + gather");
+
+    let events = service.get_events().await;
+    let marking = TestProjection.project(&events);
+
+    // SCATTER fanned out into exactly K raw items; all consumed by t_map.
+    assert_eq!(marking.token_count(&raw_items_id), 0, "all raw items mapped");
+    // GATHER consumed exactly K mapped items.
+    assert_eq!(marking.token_count(&mapped_items_id), 0, "all mapped items gathered");
+    // Coordinator was a READ arc → it survives.
+    assert_eq!(marking.token_count(&coordinator_id), 1, "coordinator read, not consumed");
+    // Exactly one reduced collection token lands in the terminal place.
+    assert_eq!(marking.token_count(&done_id), 1);
+
+    let reduced = &marking.tokens_at(&done_id)[0];
+    let data = token_color_json(&reduced.color);
+    assert_eq!(data["iteration_id"], iteration_id);
+    assert_eq!(data["n"], k as i64);
+    // v = 1..=K mapped to v2 = 10*v → sum = 10*(1+2+3) = 60.
+    assert_eq!(data["sum"], 60);
+
+    let _ = spec_id;
+}
+
+#[tokio::test]
+async fn scatter_gather_replay_is_marking_and_event_identical() {
+    let k = 3usize;
+    let iteration_id = "iter-1";
+    let watched = |spec: &PlaceId,
+                   coordinator: &PlaceId,
+                   raw: &PlaceId,
+                   mapped: &PlaceId,
+                   done: &PlaceId|
+     -> Vec<(&'static str, PlaceId)> {
+        vec![
+            ("spec", spec.clone()),
+            ("coordinator", coordinator.clone()),
+            ("raw_items", raw.clone()),
+            ("mapped_items", mapped.clone()),
+            ("done", done.clone()),
+        ]
+    };
+
+    // ── LIVE RUN ──────────────────────────────────────────────────────────
+    let (net, spec_id, coordinator_id, raw_items_id, mapped_items_id, done_id) =
+        build_scatter_gather_net(iteration_id, k);
+    let live = new_service();
+    live.initialize(net).await.unwrap();
+    live.create_token(
+        spec_id.clone(),
+        TokenColor::Data(serde_json::json!({ "iteration_id": iteration_id, "k": k })),
+    )
+    .await
+    .unwrap();
+    live.evaluate_until_quiescent(k + 4).await.unwrap();
+
+    let live_events = live.get_events().await;
+    let live_marking = TestProjection.project(&live_events);
+    let live_places = watched(
+        &spec_id,
+        &coordinator_id,
+        &raw_items_id,
+        &mapped_items_id,
+        &done_id,
+    );
+    let live_places_ref: Vec<(&str, &PlaceId)> =
+        live_places.iter().map(|(l, p)| (*l, p)).collect();
+    let live_marking_digest = marking_digest(&live_marking, &live_places_ref);
+    let live_event_digest = event_digest(&live_events);
+
+    // ── REPLAY RUN ─────────────────────────────────────────────────────────
+    // A fresh service replaying the same net. The scatter/gather net is pure
+    // Rhai (no effect handlers), so Replay mode re-derives every TransitionFired
+    // deterministically from the rebuilt marking. The replay cursor only governs
+    // Effect* events — there are none here — so the marking + event sequence must
+    // come out byte-identical to the live run.
+    let (net2, spec_id2, coordinator_id2, raw_items_id2, mapped_items_id2, done_id2) =
+        build_scatter_gather_net(iteration_id, k);
+    let replay = new_service();
+    replay.initialize(net2).await.unwrap();
+    replay.set_execution_mode(ExecutionMode::Replay);
+    replay
+        .create_token(
+            spec_id2.clone(),
+            TokenColor::Data(serde_json::json!({ "iteration_id": iteration_id, "k": k })),
+        )
+        .await
+        .unwrap();
+    replay.evaluate_until_quiescent(k + 4).await.unwrap();
+
+    let replay_events = replay.get_events().await;
+    let replay_marking = TestProjection.project(&replay_events);
+    let replay_places = watched(
+        &spec_id2,
+        &coordinator_id2,
+        &raw_items_id2,
+        &mapped_items_id2,
+        &done_id2,
+    );
+    let replay_places_ref: Vec<(&str, &PlaceId)> =
+        replay_places.iter().map(|(l, p)| (*l, p)).collect();
+    let replay_marking_digest = marking_digest(&replay_marking, &replay_places_ref);
+    let replay_event_digest = event_digest(&replay_events);
+
+    // Identical final marking structure (token counts + data per place).
+    assert_eq!(
+        live_marking_digest, replay_marking_digest,
+        "live and replay must reach a byte-identical final marking"
+    );
+    // Identical event sequence.
+    assert_eq!(
+        live_event_digest, replay_event_digest,
+        "live and replay must emit an identical event sequence"
+    );
+}
+
+// ── EFFECT-path scatter: exercises the stored-produced_tokens replay path ──
+//
+// A Batch OUTPUT port on an EFFECT transition scatters the handler's array
+// result into N produced tokens, which are persisted verbatim in the
+// `EffectCompleted.produced_tokens`. On Replay the engine re-emits those stored
+// tokens (NOT re-running the handler), so this is the N>1 stored-token replay
+// path the spec calls out.
+
+/// Effect handler that emits a Batch array on the `items` output port. The
+/// array width is fixed so the live `produced_tokens` carry N>1 elements.
+struct ScatterEffectHandler {
+    n: usize,
+    execute_count: AtomicUsize,
+    replay_count: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl EffectHandler for ScatterEffectHandler {
+    async fn execute(&self, _input: EffectInput) -> Result<EffectOutput, EffectError> {
+        self.execute_count.fetch_add(1, Ordering::SeqCst);
+        let arr: Vec<serde_json::Value> = (0..self.n)
+            .map(|i| serde_json::json!({ "__map_idx": i, "v": i * 7 }))
+            .collect();
+        let mut tokens = HashMap::new();
+        tokens.insert("items".to_string(), serde_json::Value::Array(arr));
+        Ok(EffectOutput {
+            tokens,
+            result: serde_json::json!({ "scattered": self.n }),
+        })
+    }
+    fn replay(&self, _input: &EffectInput, _stored_result: &serde_json::Value) {
+        self.replay_count.fetch_add(1, Ordering::SeqCst);
+    }
+    fn name(&self) -> &str {
+        "scatter_effect"
+    }
+}
+
+/// Build a one-effect-transition net: `trigger ─(effect, Batch out)─▶ items`.
+fn build_effect_scatter_net() -> (PetriNet, PlaceId, PlaceId, TransitionId) {
+    let mut net = PetriNet::new();
+    let trigger = Place::internal("trigger");
+    let items = Place::internal("items");
+    let trigger_id = trigger.id.clone();
+    let items_id = items.id.clone();
+
+    let t = Transition::new("scatter_effect_t", "")
+        .with_input_ports(vec![Port::new("inp")])
+        .with_output_ports(vec![Port::batch("items")])
+        .with_effect_handler("scatter_effect");
+    let tid = t.id.clone();
+
+    net.add_place(trigger);
+    net.add_place(items);
+    net.add_transition(t);
+    net.add_arc(PetriArc::input(trigger_id.clone(), tid.clone(), "inp"));
+    net.add_arc(PetriArc::output(tid.clone(), "items", items_id.clone()));
+
+    (net, trigger_id, items_id, tid)
+}
+
+#[tokio::test]
+async fn effect_batch_output_scatters_and_replays_stored_tokens() {
+    let n = 4usize;
+
+    // ── LIVE: handler executes, Batch array scatters into N produced tokens ──
+    let (net, trigger_id, items_id, _tid) = build_effect_scatter_net();
+    let handler = Arc::new(ScatterEffectHandler {
+        n,
+        execute_count: AtomicUsize::new(0),
+        replay_count: AtomicUsize::new(0),
+    });
+    let service = new_service();
+    service
+        .register_effect_handler("scatter_effect", handler.clone())
+        .unwrap();
+    service.initialize(net).await.unwrap();
+    service
+        .create_token(trigger_id.clone(), TokenColor::Unit)
+        .await
+        .unwrap();
+
+    let result = service.evaluate_until_quiescent(4).await.unwrap();
+    assert_eq!(result.steps_executed, 1, "one effect firing");
+    assert_eq!(handler.execute_count.load(Ordering::SeqCst), 1);
+
+    let events = service.get_events().await;
+    let marking = TestProjection.project(&events);
+    assert_eq!(marking.token_count(&trigger_id), 0, "trigger consumed");
+    assert_eq!(
+        marking.token_count(&items_id),
+        n,
+        "Batch effect output scattered into N tokens"
+    );
+
+    // The single live EffectCompleted carries N produced tokens — the stored
+    // set that Replay will re-emit verbatim.
+    let live_produced: Vec<(PlaceId, petri_domain::Token)> = events
+        .iter()
+        .find_map(|e| match &e.event {
+            DomainEvent::EffectCompleted { produced_tokens, .. } => Some(produced_tokens.clone()),
+            _ => None,
+        })
+        .expect("one EffectCompleted in live run");
+    assert_eq!(live_produced.len(), n, "N>1 produced tokens stored for replay");
+
+    // ── REPLAY: same service + log, re-seed the trigger and replay. The engine
+    // re-emits the STORED produced tokens (not re-running execute) — the
+    // stored-produced_tokens replay path with N>1 tokens.
+    service.set_execution_mode(ExecutionMode::Replay);
+    service
+        .create_token(trigger_id.clone(), TokenColor::Unit)
+        .await
+        .unwrap();
+
+    // Cap at one step: replay re-emits the STORED consumed/produced tokens
+    // (referencing the original prior token ids), so it does not consume the
+    // freshly re-seeded trigger — leaving the transition perpetually enabled.
+    // One step is exactly the recorded firing we want to replay.
+    let replay_result = service.evaluate_until_quiescent(1).await.unwrap();
+    assert_eq!(replay_result.steps_executed, 1, "one replayed effect firing");
+    assert_eq!(
+        handler.execute_count.load(Ordering::SeqCst),
+        1,
+        "execute must NOT run again in replay"
+    );
+    assert_eq!(
+        handler.replay_count.load(Ordering::SeqCst),
+        1,
+        "replay hook invoked once"
+    );
+
+    // The replayed EffectCompleted re-emits the stored produced tokens (same
+    // token IDs + data) — a deterministic function of the recorded event, never
+    // a fresh handler call.
+    let replay_event = &replay_result.events[0];
+    match &replay_event.event {
+        DomainEvent::EffectCompleted { produced_tokens, .. } => {
+            assert_eq!(produced_tokens.len(), n, "replay re-emits all N tokens");
+            for (live, replayed) in live_produced.iter().zip(produced_tokens.iter()) {
+                assert_eq!(live.1.id, replayed.1.id, "same token id");
+                assert_eq!(
+                    token_color_json(&live.1.color),
+                    token_color_json(&replayed.1.color),
+                    "same token data"
+                );
+            }
+        }
+        other => panic!("expected EffectCompleted on replay, got {:?}", other),
+    }
 }

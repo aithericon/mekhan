@@ -41,6 +41,36 @@ pub struct Message {
     pub content: String,
     /// Base64-encoded images to include with this message.
     pub images: Vec<ImageData>,
+    /// For `Role::Tool` — the id of the assistant tool call this answers.
+    pub tool_call_id: Option<String>,
+    /// For `Role::Assistant` — the tool calls the model emitted this turn.
+    pub tool_calls: Vec<LlmToolCall>,
+}
+
+impl Message {
+    /// A plain text turn (no images, no tool metadata).
+    pub fn text(role: Role, content: String) -> Self {
+        Message {
+            role,
+            content,
+            images: vec![],
+            tool_call_id: None,
+            tool_calls: vec![],
+        }
+    }
+}
+
+/// Render a `ChatMessage` JSON content value to the string the adapters
+/// carry. Text turns store a JSON string (passed through); tool-result
+/// turns store structured output, which is JSON-encoded so the model
+/// receives a readable payload. Null becomes empty (assistant tool-call
+/// turns often have no text content).
+fn content_to_text(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
 }
 
 /// A base64-encoded image with its MIME type.
@@ -106,27 +136,31 @@ impl CompletionRequest {
         let mut messages = Vec::new();
 
         if let Some(ref system_prompt) = config.system_prompt {
-            messages.push(Message {
-                role: Role::System,
-                content: system_prompt.clone(),
-                images: vec![],
-            });
+            messages.push(Message::text(Role::System, system_prompt.clone()));
         }
 
-        for msg in &config.history {
+        // The initial user prompt precedes any accumulated turns. For the
+        // agent loop, `history` carries the assistant/tool turns that
+        // FOLLOWED this prompt, so user must come first; for single-shot
+        // LLM steps `history` is empty and `prompt` is the whole user turn.
+        // Skipped when empty so an agent can drive the conversation purely
+        // through `history` if it ever sets no prompt.
+        if !config.prompt.is_empty() {
+            messages.push(Message::text(Role::User, config.prompt.clone()));
+        }
+
+        // `history` (persisted base) then `pending` (this turn's not-yet-
+        // persisted delta — the tool result the agent loop accumulated on the
+        // token between calls) land after the initial user prompt, in order.
+        for msg in config.history.iter().chain(config.pending.iter()) {
             messages.push(Message {
                 role: msg.role.clone(),
-                content: msg.content.clone(),
+                content: content_to_text(&msg.content),
                 images: vec![],
+                tool_call_id: msg.tool_call_id.clone(),
+                tool_calls: msg.tool_calls.clone(),
             });
         }
-
-        // User message — images get attached later in backend.rs after file loading.
-        messages.push(Message {
-            role: Role::User,
-            content: config.prompt.clone(),
-            images: vec![],
-        });
 
         let response_format = match config.response_format {
             Some(ref fmt) => fmt.clone(),

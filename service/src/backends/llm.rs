@@ -80,7 +80,13 @@ pub static LLM_DECL: BackendDecl = BackendDecl {
     validate_ref_kind,
     output_authoring: OutputAuthoring::Derived,
     derive_output_port: Some(derive_output_port),
+    config_schema_fn: config_schema,
+    secret_fields: &["api_key"],
 };
+
+fn config_schema() -> Value {
+    super::self_contained_config_schema::<LlmConfig>()
+}
 
 /// Seed config the editor inserts when a step's backend is first set to
 /// LLM. Mirrors `AutomatedStepSection.svelte::defaultConfigs.llm`.
@@ -119,12 +125,11 @@ fn validate(
         validate_placeholders(sys, ctx.node_id, "llm", "system_prompt")?;
     }
     for (i, m) in parsed.history.iter().enumerate() {
-        validate_placeholders(
-            &m.content,
-            ctx.node_id,
-            "llm",
-            &format!("history[{i}].content"),
-        )?;
+        // `content` is a JSON value (tool-result turns carry structured
+        // output); only text turns can hold `{{...}}` placeholders.
+        if let Some(s) = m.content.as_str() {
+            validate_placeholders(s, ctx.node_id, "llm", &format!("history[{i}].content"))?;
+        }
     }
     for (i, img) in parsed.images.iter().enumerate() {
         let site = format!("images[{i}].path");

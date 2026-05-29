@@ -23,6 +23,7 @@ export default defineConfig({
 		]
 	},
 	server: {
+		port: 15173,
 		proxy: {
 			// Yjs WebSocket — must come before generic /api so the upgrade is preserved
 			'/api/yjs': {

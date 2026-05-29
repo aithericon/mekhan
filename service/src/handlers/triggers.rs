@@ -600,8 +600,7 @@ pub async fn set_trigger_enabled(
     .bind(record.template_id)
     .bind(record.template_version)
     .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    .await?
     .ok_or_else(|| ApiError::not_found("template not found"))?;
 
     // Inverse of the publish freeze: enable/disable is *only* a published-

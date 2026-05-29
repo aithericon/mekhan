@@ -111,7 +111,7 @@ log "Checking Docker containers (NATS + Postgres)..."
 
 docker_healthy=true
 # Check NATS
-if ! curl -sf http://localhost:8333/healthz > /dev/null 2>&1; then
+if ! curl -sf http://localhost:18333/healthz > /dev/null 2>&1; then
     docker_healthy=false
 fi
 # Check Postgres
@@ -295,7 +295,7 @@ log "=== Infrastructure Status ==="
 
 all_healthy=true
 for check in \
-    "NATS:http://localhost:8333/healthz" \
+    "NATS:http://localhost:18333/healthz" \
     "petri-lab:$PETRI_URL/api/nets" \
     "HPI:$HPI_URL" \
     "mekhan-service:$BACKEND_URL/api/v1/templates?page=1&per_page=1"; do

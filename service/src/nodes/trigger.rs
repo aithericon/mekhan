@@ -28,6 +28,14 @@ pub(crate) static TRIGGER_DECL: NodeDecl = NodeDecl {
     output_ports: output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
+    // Trigger is a pre-compile dispatcher concern: it never lowers, so its
+    // `out_shape` is never consulted by `analyze` (Trigger nodes are excluded
+    // from the topo order's shape pass). Declaring the pass-through hook anyway
+    // keeps the `token_shape_hook_declared_for_every_variant` conformance test
+    // honest (every variant declares one). No per-node structural rule —
+    // Trigger validation lives in the dedicated `validate_triggers` pass.
+    validate: None,
+    token_shape: Some(crate::compiler::token_shape::analyze::out_shape_passthrough),
 };
 
 fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {

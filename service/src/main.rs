@@ -85,24 +85,26 @@ async fn main() -> anyhow::Result<()> {
     // Spawn lifecycle event listener (updates DB on NetCompleted/NetCancelled).
     // Triggers are wired in later once the dispatcher is built — see below.
 
-    // Spawn background cleanup sweep
-    tokio::spawn(lifecycle::start_cleanup_sweep(
-        config.cleanup.clone(),
-        db.clone(),
-        mekhan_nats.clone(),
-        petri.clone(),
-    ));
-
-    let yjs_persistence = YjsPersistence::new(db.clone());
-    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
-    tracing::info!("Yjs collaboration manager initialized");
-
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
     if let Err(e) = artifact_store.ensure_bucket().await {
         tracing::warn!("S3 bucket check failed (non-fatal): {e}");
     } else {
         tracing::info!("S3 artifact store ready (bucket: {})", config.s3.bucket);
     }
+
+    // Spawn background cleanup sweep (also GCs per-instance agent transcript
+    // blobs from the artifact store on the retention sweep).
+    tokio::spawn(lifecycle::start_cleanup_sweep(
+        config.cleanup.clone(),
+        db.clone(),
+        mekhan_nats.clone(),
+        petri.clone(),
+        artifact_store.clone(),
+    ));
+
+    let yjs_persistence = YjsPersistence::new(db.clone());
+    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
+    tracing::info!("Yjs collaboration manager initialized");
 
     let artifact_s3 = config.artifact_s3.as_ref().map(|cfg| {
         Arc::new(ArtifactStore::new(cfg))
@@ -152,6 +154,17 @@ async fn main() -> anyhow::Result<()> {
     // canvas overlay.
     tokio::spawn(
         mekhan_service::projections::step_executions::start_step_executions_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
+    // Engine-initiated human task cancellations. When a Timeout's timer wins
+    // the SLA race, the engine fires `human_cancel` and publishes to
+    // `human.cancel.{net_id}.{place}` — without this listener, hpi_tasks
+    // would stay `pending` forever even though the engine moved on.
+    tokio::spawn(
+        mekhan_service::process::cancel_listener::start_human_cancel_listener(
             mekhan_nats.clone(),
             db.clone(),
         ),
@@ -351,7 +364,7 @@ async fn build_authenticator(
             // origin if present, else assume same-origin localhost dev.
             let redirect_uri = std::env::var("MEKHAN__AUTH__REDIRECT_URI")
                 .ok()
-                .unwrap_or_else(|| "http://localhost:5173/api/auth/callback".to_string());
+                .unwrap_or_else(|| "http://localhost:15173/api/auth/callback".to_string());
 
             let oidc = OidcClient::discover(OidcConfig {
                 issuer_url,

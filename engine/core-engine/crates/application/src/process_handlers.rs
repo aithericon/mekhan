@@ -171,6 +171,12 @@ impl ProcessCompleteHandler {
     }
 }
 
+impl Default for ProcessCompleteHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait::async_trait]
 impl EffectHandler for ProcessCompleteHandler {
     async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
@@ -196,7 +202,7 @@ impl EffectHandler for ProcessCompleteHandler {
         } else {
             // Multiple inputs — merge into single output
             let mut merged = serde_json::Map::new();
-            for (_, data) in &input.inputs {
+            for data in input.inputs.values() {
                 if let Some(obj) = data.as_object() {
                     merged.extend(obj.clone());
                 }
@@ -272,7 +278,7 @@ impl EffectHandler for ProcessFailHandler {
             tokens.insert("failed".to_string(), data.clone());
         } else {
             let mut merged = serde_json::Map::new();
-            for (_, data) in &input.inputs {
+            for data in input.inputs.values() {
                 if let Some(obj) = data.as_object() {
                     merged.extend(obj.clone());
                 }

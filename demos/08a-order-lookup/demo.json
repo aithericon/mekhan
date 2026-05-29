@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-00000000008a",
+  "name": "08a · Order Lookup (tool child)",
+  "description": "A tiny callable workflow used as the Agent's tool in 09-agent-tool-loop. Start declares the tool's input (`order_id`) — that Start contract IS the LLM-facing tool schema when this template is referenced from an agent's `tools` handle. A Python step reads `input.order_id` and returns a mock shipping status; the End maps `status`/`eta` back as the tool result. Seeds before 09 (alphabetical) so 09's SubWorkflow node can resolve it."
+}
