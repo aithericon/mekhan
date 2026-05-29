@@ -207,13 +207,21 @@ export class YjsGraphBinding {
 				const deploymentModel = config?.deploymentModel as
 					| AutomatedStepNodeData['deploymentModel']
 					| undefined;
+				// Resource-pool claim — presence-only (`{}` = claim a unit from
+				// the global pool). Mirror `deploymentModel`: only attach when
+				// the Yjs map actually carries the key, so an absent claim stays
+				// absent through the round-trip (the writer only sets it when on).
+				const resourcePool = config?.resourcePool as
+					| AutomatedStepNodeData['resourcePool']
+					| undefined;
 				return {
 					...base,
 					type: 'automated_step',
 					executionSpec: { entrypoint: 'main.py', ...spec },
 					...(output ? { output: output as never } : {}),
 					retryPolicy,
-					...(deploymentModel ? { deploymentModel } : {})
+					...(deploymentModel ? { deploymentModel } : {}),
+					...(resourcePool != null ? { resourcePool } : {})
 				};
 			}
 			case 'decision':
@@ -728,6 +736,15 @@ export class YjsGraphBinding {
 					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
 				);
 				config.set('deploymentModel', data.deploymentModel ?? { mode: 'inline' });
+				// Resource-pool claim: presence-only. Set the key only when the
+				// claim is on; DELETE it when off so it doesn't re-enable on
+				// reload (and never persist null/`{}` for a disabled step —
+				// Rust's `skip_serializing_if = none` only omits absent fields).
+				if (data.resourcePool != null) {
+					config.set('resourcePool', data.resourcePool);
+				} else {
+					config.delete('resourcePool');
+				}
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);

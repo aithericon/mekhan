@@ -5,6 +5,7 @@
 	import { onMount, untrack } from 'svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import PortsSection from './PortsSection.svelte';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
@@ -209,6 +210,30 @@
 	function setJobTemplate(v: string) {
 		onchange({ ...data, deploymentModel: { mode: 'scheduled', jobTemplate: v } });
 	}
+
+	// Resource-pool claim. Presence (`resourcePool: {}`) = "requires a unit
+	// from the shared GPU pool"; absence = no claim. v1 only checks presence,
+	// so pool/units are reserved and not surfaced — this is a plain boolean.
+	const requiresPool = $derived(data.resourcePool != null);
+
+	// Mutual exclusion (compiler rejects pool + scheduled — the scheduler-net
+	// owns its own admission): the pool toggle is disabled while scheduled,
+	// and the Scheduled deployment option is disabled while the pool is on.
+	const poolToggleDisabled = $derived(readonly || deploymentMode === 'scheduled');
+
+	function setRequiresPool(on: boolean) {
+		if (on) {
+			// Empty object → v1 defaults (global resource-pool-net, weight 1).
+			onchange({ ...data, resourcePool: {} });
+		} else {
+			// Destructure the key out so it's gone (not null) — Rust's
+			// `skip_serializing_if = "Option::is_none"` only omits absent fields,
+			// and the Yjs writer only persists the key when present.
+			const { resourcePool: _omit, ...rest } = data;
+			void _omit;
+			onchange(rest as AutomatedStepNodeData);
+		}
+	}
 </script>
 
 <div class="space-y-1.5">
@@ -264,7 +289,11 @@
 			</Select.Trigger>
 			<Select.Content>
 				<Select.Item value="inline" label="Inline (immediate)" />
-				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
+				<Select.Item
+					value="scheduled"
+					label="Scheduled (Nomad/Slurm, GPU)"
+					disabled={requiresPool}
+				/>
 			</Select.Content>
 		</Select.Root>
 		{#if deploymentMode === 'scheduled'}
@@ -298,6 +327,29 @@
 			Inline only — this backend runs as an engine effect.
 		</p>
 	{/if}
+
+	<!-- Shared GPU pool claim. Presence-only in v1 (no pool/units knobs);
+	     mutually exclusive with Scheduled (compiler rejects the combo — the
+	     scheduler-net owns its own admission). -->
+	<div class="space-y-1 pt-2">
+		<label class="flex items-center gap-1.5 text-sm text-foreground">
+			<Checkbox
+				checked={requiresPool}
+				disabled={poolToggleDisabled}
+				onCheckedChange={(v) => setRequiresPool(v === true)}
+				data-testid="toggle-resource-pool"
+			/>
+			Requires a shared GPU pool
+		</label>
+		{#if deploymentMode === 'scheduled'}
+			<p class="text-sm text-muted-foreground">Not available for scheduled steps.</p>
+		{:else}
+			<p class="text-sm text-muted-foreground">
+				Holds a unit from resource-pool-net for the step's duration; queues
+				when the pool is full.
+			</p>
+		{/if}
+	</div>
 </div>
 
 <div class="space-y-2 pt-3 border-t border-border/40">

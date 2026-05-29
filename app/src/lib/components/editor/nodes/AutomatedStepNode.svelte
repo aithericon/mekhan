@@ -12,6 +12,8 @@
 	const fields = $derived(data.output?.fields ?? []);
 	const hasFields = $derived(fields.length > 0);
 	const outputId = $derived(data.output?.id ?? 'out');
+	// Presence of a resource-pool claim — show a "GPU pool" chip on the card.
+	const requiresPool = $derived(data.resourcePool != null);
 
 	const kindBadge: Record<string, string> = {
 		text: 'Txt',
@@ -39,8 +41,20 @@
 />
 {#snippet automatedBody()}
 	<div class="space-y-1.5" data-testid="automated-step-body">
-		<div class="truncate capitalize text-foreground/80">
-			{data.executionSpec?.backendType ?? 'python'}
+		<div class="flex items-center justify-between gap-2">
+			<span class="truncate capitalize text-foreground/80">
+				{data.executionSpec?.backendType ?? 'python'}
+			</span>
+			{#if requiresPool}
+				<span
+					class="inline-flex shrink-0 items-center gap-1 rounded bg-node-automated/15 px-1.5 py-0.5 text-sm font-medium text-node-automated"
+					title="Holds a unit from the shared GPU pool (resource-pool-net) while running"
+					data-testid="badge-gpu-pool"
+				>
+					<Cpu class="size-3" />
+					GPU pool
+				</span>
+			{/if}
 		</div>
 		{#if hasFields}
 			<div class="space-y-0.5 border-t border-border/40 pt-1.5">
