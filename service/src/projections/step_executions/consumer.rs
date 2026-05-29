@@ -31,7 +31,22 @@ use crate::nats::MekhanNats;
 use crate::observability::record_silent_drop_with;
 use crate::petri::events::fetch_events;
 
-use super::projector::{project_step_executions, StepExecutionRow};
+use super::projector::{project_step_executions, StepExecutionRow, StepStatus};
+
+/// The bare `snake_case` wire string for the `step_execution.status` text
+/// column. `StepStatus` is now an alias for the canonical
+/// `aithericon_executor_domain::PhaseStatus`, which has no inherent `as_str()`;
+/// this match reproduces the prior projection's column values verbatim
+/// (`"pending"`/`"running"`/`"completed"`/`"failed"`/`"skipped"`).
+fn step_status_str(status: StepStatus) -> &'static str {
+    match status {
+        StepStatus::Pending => "pending",
+        StepStatus::Running => "running",
+        StepStatus::Completed => "completed",
+        StepStatus::Failed => "failed",
+        StepStatus::Skipped => "skipped",
+    }
+}
 
 /// Upper bound on simultaneously-buffered nets. Terminal nets are evicted
 /// eagerly (see `process_event`); this only guards against unbounded growth
@@ -289,7 +304,7 @@ async fn upsert_rows(
         .bind(ctx.template_id)
         .bind(ctx.template_version)
         .bind(row.node_kind.wire_str())
-        .bind(row.status.as_str())
+        .bind(step_status_str(row.status))
         .bind(row.inputs.as_ref())
         .bind(row.outputs.as_ref())
         .bind(row.branch_taken.as_deref())

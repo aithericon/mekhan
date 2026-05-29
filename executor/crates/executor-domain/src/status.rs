@@ -105,12 +105,27 @@ pub fn cancel_subject_filter(prefix: Option<&str>) -> String {
     }
 }
 
-/// Replace characters that are invalid in NATS subject tokens.
-pub(crate) fn sanitize_subject_token(s: &str) -> String {
+/// Canonical, shared NATS subject-token sanitizer.
+///
+/// This is the single sanitizer used across the platform for building NATS
+/// subject tokens (status/event subjects here; `mekhan.silent_drops.{kind}`
+/// in mekhan-service, which re-uses this via the crate-root re-export). It is
+/// **strict**: only ASCII alphanumerics plus `_` and `-` survive; every other
+/// character — including `.` (which would otherwise introduce an extra subject
+/// token), spaces, and the NATS wildcards `>`/`*` — collapses to `_`.
+///
+/// On all current callers the inputs are already in `[A-Za-z0-9_-]` (UUID-derived
+/// execution_ids, static snake_case `kind` literals), so the output is byte-for-byte
+/// identical to the previous lenient form. The strictness is purely defensive against
+/// a future caller passing a dotted/whitespaced token.
+pub fn sanitize_subject_token(s: &str) -> String {
     s.chars()
-        .map(|c| match c {
-            ' ' | '>' | '*' => '_',
-            _ => c,
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
         })
         .collect()
 }
@@ -151,6 +166,8 @@ mod tests {
         assert_eq!(sanitize_subject_token("train-alpha-0"), "train-alpha-0");
         assert_eq!(sanitize_subject_token("has spaces"), "has_spaces");
         assert_eq!(sanitize_subject_token("a>b*c"), "a_b_c");
+        // Strict form also collapses '.' (would otherwise add a subject token).
+        assert_eq!(sanitize_subject_token("a.b"), "a_b");
     }
 
     #[test]

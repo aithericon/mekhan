@@ -3671,6 +3671,30 @@ export interface components {
             /** @description Passwords for encrypted PDFs (tried in order). */
             passwords?: string[] | null;
         };
+        /** @description A named phase within an execution. */
+        Phase: {
+            /**
+             * Format: date-time
+             * @description When this phase ended.
+             */
+            ended_at?: string | null;
+            /** @description Optional message describing what this phase is doing. */
+            message?: string | null;
+            /** @description Phase name (unique within an execution). */
+            name: string;
+            /**
+             * Format: date-time
+             * @description When this phase started.
+             */
+            started_at?: string | null;
+            /** @description Current status of this phase. */
+            status: components["schemas"]["PhaseStatus"];
+        };
+        /**
+         * @description Status of an execution phase.
+         * @enum {string}
+         */
+        PhaseStatus: "pending" | "running" | "completed" | "failed" | "skipped";
         /**
          * @description Author-selected status for a `PhaseUpdate` control node. Serialized
          *     snake_case so it lands on the breadcrumb exactly as the executor
@@ -3847,6 +3871,33 @@ export interface components {
             name?: string | null;
             owner?: string | null;
             status?: string | null;
+        };
+        /** @description Progress information for an execution. */
+        Progress: {
+            /**
+             * Format: int64
+             * @description Current step number.
+             */
+            current_step?: number;
+            /**
+             * Format: double
+             * @description Overall fraction complete (0.0 to 1.0).
+             */
+            fraction: number;
+            /** @description Human-readable progress message. */
+            message?: string | null;
+            /** @description Phases within this execution. */
+            phases?: components["schemas"]["Phase"][];
+            /**
+             * Format: int64
+             * @description Total number of steps (0 if unknown).
+             */
+            total_steps?: number;
+            /**
+             * Format: date-time
+             * @description When progress was last updated.
+             */
+            updated_at: string;
         };
         Project: {
             /** Format: date-time */

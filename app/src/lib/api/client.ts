@@ -107,6 +107,12 @@ export type HpiMetricSummary = components['schemas']['HpiMetricSummary'];
 export type HpiLog = components['schemas']['HpiLog'];
 export type ProcessDetail = components['schemas']['ProcessDetail'];
 export type ProcessStats = components['schemas']['ProcessStats'];
+// Canonical phase/progress vocabulary — generated from
+// `aithericon_executor_domain::{PhaseStatus, Phase, Progress}` (the wire types
+// stored verbatim at `process.config.progress`). Single-sourced, not hand-kept.
+export type PhaseStatus = components['schemas']['PhaseStatus'];
+export type Phase = components['schemas']['Phase'];
+export type Progress = components['schemas']['Progress'];
 
 // ─── Catalogue ──────────────────────────────────────────────────────────────
 export type CatalogueEntry = components['schemas']['CatalogueEntry'];

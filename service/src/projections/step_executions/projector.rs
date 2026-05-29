@@ -48,29 +48,13 @@ use crate::compiler::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
 
 /// Lifecycle of a step in one execution.
 ///
-/// Wire shape is `snake_case` so the column in `step_execution.status`
-/// reads naturally (`"pending"`, `"running"`, etc.).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Skipped,
-}
-
-impl StepStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            StepStatus::Pending => "pending",
-            StepStatus::Running => "running",
-            StepStatus::Completed => "completed",
-            StepStatus::Failed => "failed",
-            StepStatus::Skipped => "skipped",
-        }
-    }
-}
+/// This is the canonical executor-domain phase vocabulary
+/// (`aithericon_executor_domain::PhaseStatus`) — the same 5 variants with
+/// identical `snake_case` wire form (`"pending"`, `"running"`, ...). The
+/// `step_execution.status` text column stores these verbatim. Aliased here so
+/// the projection's `StepStatus::Variant` call sites stay unchanged while the
+/// type is single-sourced from the wire contract.
+pub use aithericon_executor_domain::PhaseStatus as StepStatus;
 
 /// One projected step execution. Keyed by `(node_id, iteration_index)` per
 /// instance. Persisted into the `step_execution` table by the consumer.

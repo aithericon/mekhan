@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 /// Status of an execution phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PhaseStatus {
     Pending,
@@ -15,7 +15,7 @@ pub enum PhaseStatus {
 
 /// A named phase within an execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct Phase {
     /// Phase name (unique within an execution).
     pub name: String,
@@ -38,7 +38,7 @@ pub struct Phase {
 
 /// Progress information for an execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
 pub struct Progress {
     /// Overall fraction complete (0.0 to 1.0).
     pub fraction: f64,
