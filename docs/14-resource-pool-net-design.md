@@ -1,7 +1,10 @@
 # 14 — Resource-pool net: contended infrastructure on the Petri substrate
 
-> Status: M1 + M2 implemented and green (`feat/resource-pool-net`). M3–M5 in progress.
-> Prototype plan: `~/.claude/plans/please-plan-a-evaluatable-abstract-lampson.md`.
+> Status: M1–M5 implemented and green (`feat/resource-pool-net`). M3 (compiler
+> lowering) and M5 (UI contention view + badge) are built and committed; the
+> only un-executed step is the *live* one-command showcase against a dev stack
+> (a shared-stack restart to load the M3 mekhan was deferred — see "Run the
+> showcase"). Prototype plan: `~/.claude/plans/please-plan-a-evaluatable-abstract-lampson.md`.
 
 ## Thesis: resources are places, claims are tokens
 
@@ -114,9 +117,9 @@ is exactly the M1 replay-determinism property.
 |---|------|--------|--------|
 | M1 | In-net pool primitive + replay-safe reap | `cargo test -p petri-test-harness --test resource_pool` (conservation, mutex, crash-reap, replay determinism) | ✅ green |
 | M2 | Cross-net claim/grant/release contention | `cargo test -p petri-test-harness --features integration --lib integration::resource_pool -- --test-threads=1` (serialization, grant routing, two-phase release) | ✅ green |
-| M3 | Compiler lowering of a resource requirement | `compiler_e2e`-style: claim/grant/release places + transitions exist; every body-exit arcs to `release_out` | **designed (see "Implementation pointers"); not yet built** |
+| M3 | Compiler lowering of a resource requirement | `cargo test -p mekhan-service --test compiler_e2e` (`resource_pool_step_emits_claim_register_release_with_release_on_every_exit` + the no-pool byte-identity guard) and `--test air_snapshots` (`13-resource-pool` golden pins the topology) | ✅ green |
 | M4 | Concurrent-instance showcase over real NATS | `gpu_pool_two_capacity_four_jobs_showcase` + `crashed_holder_lease_is_reaped_and_regranted` (integration feature): N=2/K=4, `in_use ≤ N`, all complete, kill→reap→reallocate | ✅ green |
-| M5 | Live UI contention view | dogfood: 2 running / 2 waiting, pool drains 2→0 in NetWorkbench; kill→reap→reallocate | pending (scenario dynamics proven by M4; visual is the remaining gap) |
+| M5 | Live UI contention view | `PoolContentionView` (free/in-use, conservation indicator, per-hold list) + `awaitingResource` badge wired from the instance net marking; `npx svelte-check` clean. Live dogfood = the "Run the showcase" runbook below. | ✅ built (UI + badge committed); live visual = runbook |
 
 The M4 showcase test drives the exact deployable `resource_pool_net` design (registration
 pattern) over a real NATS testcontainer, so it is the reference run: it proves the contention
@@ -130,14 +133,22 @@ deploy `resource_pool_net` to the dev engine and drive instance nets bridging to
   (`cargo run -p aithericon-sdk --example resource_pool_net -- --deploy --net-id resource-pool-net`).
 - M1 proof: `engine/core-engine/crates/test-harness/tests/resource_pool.rs`.
 - M2 proof: `engine/core-engine/crates/test-harness/src/integration/resource_pool.rs`.
-- M3 lowering: mirror `lower_automated_step_scheduled`
-  (`service/src/compiler/lower/automated_step.rs:213`) — `bridge_out_reply_channels`
-  for `claim_out`, an `internal` `grant_inbox`, a plain `bridge_out` `release_out`,
-  and wire all body exits → `release_out`. Add `RESOURCE_POOL_NET_ID` +
-  `POOL_CLAIM_INBOX` / `POOL_RELEASE_INBOX` to `service/src/compiler/well_known.rs`
-  (mirroring `SCHEDULER_NET_ID` / `SCHEDULER_JOB_QUEUE`). The requirement is a new
-  optional field on the AutomatedStep node config (sibling to `deployment_model`),
-  so an absent field is byte-identical to today's lowering.
+- M3 lowering (BUILT): `lower_automated_step_pooled` in
+  `service/src/compiler/lower/automated_step.rs` (delegated when the new optional
+  `resourcePool` field on AutomatedStep — sibling to `deploymentModel` — is
+  present; absent ⇒ byte-identical inline path). It wraps the full inline
+  executor lifecycle: `t_{id}_claim` (mint `grant_id`, `bridge_out_reply_channels`
+  → `resource-pool-net/claim_inbox`, reply `grant`→`p_{id}_grant_inbox`, park
+  `p_{id}_pending`); `t_{id}_acquire` (consume pending+grant, build job spec,
+  `bridge_out` `register_out`, park `p_{id}_held`); `t_{id}_to_output` and
+  `t_{id}_to_error` both consume `p_{id}_held` and `bridge_out` a release. The
+  retry-exhausted edge is routed to a dedicated `p_{id}_exhausted` consumed by
+  `t_{id}_to_error` so EVERY reachable terminal exit releases exactly once
+  (`dead_letter` is an unreachable lifecycle sink). `grant_id =
+  input._instance_id + ":<node_id>"` — globally unique + replay-deterministic
+  (the launcher stamps `_instance_id`; `YIELD_LOGIC` preserves `_`-prefixed keys
+  on every control token). Constants in `service/src/compiler/well_known.rs`:
+  `RESOURCE_POOL_NET_ID` + `POOL_{CLAIM,REGISTER,RELEASE}_INBOX`.
 - Engine cross-net mechanics: `engine/core-engine/crates/nats/src/cross_net_bridge.rs`,
   `firing.rs::route_output_tokens`, `binding.rs::{find_valid_binding,merge_reply_routing}`.
 
@@ -148,6 +159,42 @@ body). Exactly 2 run while 2 queue. The pool place visibly drains 2→0 and refi
 as jobs release; the instance list shows 2 "Running (GPU held)" and 2 "Waiting for
 GPU". Money shot: kill a running instance → its lease is reaped → the freed GPU is
 immediately granted to a waiting instance.
+
+## Run the showcase (live dogfood)
+
+One-command per the plan, against a `just dev` stack running mekhan built from
+this branch (the demo's AutomatedStep declares `resourcePool`, which only the
+M3 compiler lowers). The recipes live in `just/dev.just`.
+
+```bash
+just dev                       # full stack (engine :13030, mekhan :13100, app :15173)
+just dev up-mekhan             # ensure mekhan is the M3 build, if the stack predates it
+just dev resource-pool-up      # build + deploy + activate resource-pool-net (N=2)
+just dev resource-pool-demo 4  # publish 13-resource-pool + fire 4 instances (start_token job_name)
+```
+
+Open `http://localhost:15173/nets/resource-pool`: the pool drains 2→0, two
+instances render while two queue in `claim_inbox`, and each release re-grants a
+slot. In an instance graph view (`/instances/{id}`) the queued nodes show the
+purple **"waiting"** badge (`p_{id}_pending`>0 ∧ `p_{id}_held`==0).
+
+Money shot — crash a holder and watch the lease reaped + re-granted. Take a
+running instance's id and inject its lease expiry (the deployed pool net's
+`lease_expired` is a signal place; a durable timer feeds it in production):
+
+```bash
+engine/target/debug/aithericon inject resource-pool-net lease_expired \
+  '{"grant_id":"<instanceId>:render"}'
+```
+
+The freed GPU returns to `pool` and is immediately granted to a waiter.
+
+> Why this wasn't auto-run here: the dev engine/mekhan on :13030/:13100 is a
+> shared singleton and another session had it up; loading the M3 mekhan needs a
+> restart that would disrupt concurrent work. The dynamics are already proven
+> headless (M4 over a real NATS testcontainer) and the lowering offline (M3
+> `compiler_e2e` + `air_snapshots` golden); this runbook is the only step that
+> touches a live shared stack.
 
 ## Productionization gate (out of scope for the prototype)
 
