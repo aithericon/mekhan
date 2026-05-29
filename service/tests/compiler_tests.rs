@@ -5208,13 +5208,19 @@ fn map_end_to_end_air_shape_is_stable() {
     for t in [
         "t_mp_scatter",
         "t_mp_dispatch",
-        "t_mp_body_noop",
         "t_mp_collect",
         "t_mp_gather",
         "t_mp_emit",
     ] {
         assert!(has_transition(&air, t), "missing Map transition {t}");
     }
+    // The Loop-style empty-body passthrough is intentionally NOT emitted for a
+    // Map (a Map always has a wired body — see lower_map): it would race the
+    // body entry for the scatter token and wedge non-AutomatedStep bodies.
+    assert!(
+        !has_transition(&air, "t_mp_body_noop"),
+        "Map must NOT emit a body-noop passthrough (it races the wired body)"
+    );
     assert!(has_group(&air, "grp_mp"), "expected Map group");
 
     // (3) Scatter: Batch output `items` + Single `count`, reading the itemsRef

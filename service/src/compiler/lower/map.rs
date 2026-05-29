@@ -35,9 +35,8 @@
 //!     `<itemVar>.<field>` directly, no parked producer).
 //!   - `t_dispatch`  — move each scattered item `p_items → p_body_in` (the body
 //!     entry). Pure passthrough; keeps `p_items` as the documented batch sink.
-//!   - `t_body_noop` — empty-body passthrough `p_body_in → p_body_out` (Loop
-//!     pattern: emitted unconditionally so an unwired body still completes;
-//!     wired bodies race their own completion edge and win the token).
+//!     (No `t_body_noop`: unlike Loop, a Map always has a wired body, so the
+//!     scatter item flows only to the body entry — no passthrough race.)
 //!   - `t_collect`   — one body-out token → one result on `p_results`, lifting
 //!     the body's `<resultVar>` into `value` and carrying `__map_idx`/`__map_id`.
 //!   - `t_gather`    — COUNTED BARRIER: read `p_count` (`count.expected`),
@@ -149,18 +148,18 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     .logic_rhai("#{ body: item }".to_string())
     .done();
 
-    // t_<id>_body_noop — empty-body passthrough (Loop pattern). Emitted
-    // unconditionally; a wired body's own completion edge into `body_out`
-    // races this and wins the `p_body_in` token. Keeps the unwired-body case
-    // structurally valid (the gather still sees N results).
-    ctx.transition(
-        format!("t_{id}_body_noop"),
-        format!("{label} - Body Noop"),
-    )
-    .auto_input("body", &p_body_in)
-    .auto_output("out", &p_body_out)
-    .logic_rhai("#{ out: body }".to_string())
-    .done();
+    // NOTE: no empty-body passthrough. The Loop lowering emits a `t_body_noop`
+    // (`p_body_in → p_body_out`) so an EMPTY loop body still completes — but a
+    // Map ALWAYS has a wired body (`MapEmpty` rejects a childless Map and
+    // `validate_map` requires both `body_in` and `body_out` edges), so a noop
+    // here is never needed. Worse, it is actively harmful: it would consume
+    // `p_body_in` in a race with the real body entry, and the winner depends on
+    // transition-id ordering (it happened to lose to `t_<step>_*` for an
+    // AutomatedStep body but BEAT `t_<sub>_shape` for a SubWorkflow body —
+    // emitting a bare scatter item with no `detail.outputs` to the gather and
+    // wedging it). With the noop gone, `p_body_in` has exactly one consumer
+    // (the body entry) and `p_body_out` exactly one producer (the body's
+    // `body_out` completion edge): deterministic, body-kind-agnostic.
 
     // t_<id>_collect — one body-out token → one result. The body terminal (an
     // AutomatedStep, lowered with the map-body fork — see
