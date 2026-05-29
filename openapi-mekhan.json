@@ -10337,6 +10337,58 @@
           }
         }
       },
+      "Phase": {
+        "type": "object",
+        "description": "A named phase within an execution.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this phase ended."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional message describing what this phase is doing."
+          },
+          "name": {
+            "type": "string",
+            "description": "Phase name (unique within an execution)."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this phase started."
+          },
+          "status": {
+            "$ref": "#/components/schemas/PhaseStatus",
+            "description": "Current status of this phase."
+          }
+        }
+      },
+      "PhaseStatus": {
+        "type": "string",
+        "description": "Status of an execution phase.",
+        "enum": [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "skipped"
+        ]
+      },
       "PhaseUpdateStatus": {
         "type": "string",
         "description": "Author-selected status for a `PhaseUpdate` control node. Serialized\nsnake_case so it lands on the breadcrumb exactly as the executor\n`PhaseStatus` the causality consumer deserializes in `record_phase_event`\n(`aithericon_executor_domain::PhaseStatus`). `Pending` is intentionally\nomitted — an author explicitly marking a phase always means it is at least\nrunning.",
@@ -10645,6 +10697,52 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "Progress": {
+        "type": "object",
+        "description": "Progress information for an execution.",
+        "required": [
+          "fraction",
+          "updated_at"
+        ],
+        "properties": {
+          "current_step": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Current step number.",
+            "minimum": 0
+          },
+          "fraction": {
+            "type": "number",
+            "format": "double",
+            "description": "Overall fraction complete (0.0 to 1.0)."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable progress message."
+          },
+          "phases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Phase"
+            },
+            "description": "Phases within this execution."
+          },
+          "total_steps": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total number of steps (0 if unknown).",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When progress was last updated."
           }
         }
       },

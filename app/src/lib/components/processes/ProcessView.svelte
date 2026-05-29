@@ -531,8 +531,8 @@
 					<div class="mb-2 flex items-baseline justify-between gap-3">
 						<h3 class="text-sm font-semibold text-foreground">Progress</h3>
 						<span class="text-sm tabular-nums text-muted-foreground">
-							{progressPct}%{#if progress.total_steps > 0}
-								· step {progress.current_step}/{progress.total_steps}{/if}
+							{progressPct}%{#if (progress.total_steps ?? 0) > 0}
+								· step {progress.current_step ?? 0}/{progress.total_steps}{/if}
 						</span>
 					</div>
 					<div class="h-2 w-full overflow-hidden rounded-full bg-muted/50">

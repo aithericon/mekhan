@@ -3,9 +3,19 @@
  * `HpiMetric`, `HpiMetricSummary`, `HpiLog`, `ProcessDetail`, `ProcessStats`)
  * plus the paginated envelopes (`PaginatedProcesses`, `PaginatedLogs`,
  * `PaginatedArtifacts`) are exported from `$lib/api/client` — import them
- * from there. This module is now scoped to the canonical phase/progress
- * timeline shapes that the SPA renders on top of `process.config.progress`.
+ * from there.
+ *
+ * The canonical phase/progress model (`PhaseStatus`, `Phase`, `Progress`) is
+ * generated from `aithericon_executor_domain::{PhaseStatus, Phase, Progress}`
+ * (stored verbatim by the mekhan ingest projector at
+ * `process.config.progress`) and likewise lives in `$lib/api/client`. It is
+ * re-exported here for the existing import sites; no longer hand-mirrored.
+ *
+ * This module is now scoped to `ProcessTimelineEntry`, a frontend-only shape
+ * with no Rust counterpart.
  */
+
+export type { PhaseStatus, Phase, Progress } from '$lib/api/client';
 
 export interface ProcessTimelineEntry {
 	step: string;
@@ -14,28 +24,4 @@ export interface ProcessTimelineEntry {
 	started_at?: string;
 	completed_at?: string;
 	duration_ms?: number;
-}
-
-/**
- * Canonical phase/progress model — mirrors
- * `aithericon_executor_domain::{Phase, Progress}`, stored verbatim by the
- * mekhan ingest projector at `process.config.progress`.
- */
-export type PhaseStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-
-export interface Phase {
-	name: string;
-	status: PhaseStatus;
-	message?: string | null;
-	started_at?: string | null;
-	ended_at?: string | null;
-}
-
-export interface Progress {
-	fraction: number;
-	message?: string | null;
-	current_step: number;
-	total_steps: number;
-	phases: Phase[];
-	updated_at: string;
 }
