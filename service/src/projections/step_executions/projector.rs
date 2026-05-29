@@ -118,6 +118,16 @@ pub fn project_step_executions(
         state.absorb(ev, &lookups);
     }
 
+    // Post-fold terminalization, in two passes over the FINAL row set:
+    //   1. `close_open_rows` — any row left `Pending`/`Running` at end of the
+    //      fold is closed with the terminal outcome (Skipped / Failed). Runs
+    //      after the whole stream so it catches rows opened by stray
+    //      post-terminal events too.
+    //   2. `finalize_unreached` — registry nodes that never got a row at all
+    //      are recorded as `Skipped`.
+    // Order matters only in that both are gated on `terminated`; they touch
+    // disjoint row sets (open existing rows vs. nonexistent ones).
+    state.close_open_rows();
     state.finalize_unreached(registry);
     state.into_rows()
 }
@@ -229,6 +239,14 @@ struct State {
     seen_entry_tokens: HashMap<String, HashSet<TokenId>>,
     /// True once a `NetCompleted`/`NetCancelled`/`NetFailed` was seen.
     terminated: bool,
+    /// The `(status, timestamp)` to terminalize still-open rows with, captured
+    /// from the terminal lifecycle event. `NetFailed → Failed`;
+    /// `NetCompleted`/`NetCancelled → Skipped`. Applied as a post-fold pass
+    /// (`close_open_rows`) so it catches EVERY open row regardless of event
+    /// ordering — including rows opened by stray post-terminal events that the
+    /// engine emits after `NetCompleted` (e.g. a Map gather/collect that races
+    /// net completion). Folding it inline at the terminal arm would miss those.
+    close_with: Option<(StepStatus, DateTime<Utc>)>,
 }
 
 impl State {
@@ -303,7 +321,19 @@ impl State {
             | DomainEvent::NetCancelled { .. }
             | DomainEvent::NetFailed { .. } => {
                 self.terminated = true;
-                self.close_open_rows(&persisted.event, persisted.timestamp, persisted.sequence);
+                // Record the close intent; the actual terminalization is a
+                // post-fold pass (`close_open_rows`) so it also catches rows
+                // opened by any events that arrive AFTER the terminal one in
+                // the buffer (out-of-order sequences / engine-emitted strays
+                // post-completion). The FIRST terminal event wins — a net is
+                // terminated exactly once; later lifecycle events (if any)
+                // don't override the recorded outcome.
+                let close_status = match &persisted.event {
+                    DomainEvent::NetFailed { .. } => StepStatus::Failed,
+                    _ => StepStatus::Skipped,
+                };
+                self.close_with
+                    .get_or_insert((close_status, persisted.timestamp));
             }
             _ => {}
         }
@@ -640,24 +670,31 @@ impl State {
         row.last_sequence = sequence;
     }
 
-    /// On terminal lifecycle, any row still `Pending`/`Running` is closed.
-    /// Maps `NetFailed` → Failed; `NetCompleted`/`NetCancelled` → Skipped.
+    /// Post-fold pass: on terminal lifecycle, any row STILL `Pending`/
+    /// `Running` after the whole event stream is folded is closed.
+    /// Maps `NetFailed` → Failed; `NetCompleted`/`NetCancelled` → Skipped
+    /// (the outcome recorded in `close_with` at the terminal event).
     ///
     /// A node still open at `NetCompleted` is in-flight work that a *different*
     /// branch superseded — e.g. a Timeout drains its body HumanTask when the
-    /// timer wins, then routes to an End and the net completes. That node never
+    /// timer wins, then routes to an End and the net completes; or a Map
+    /// scatters K body iterations and the run abandons (or supersedes) some of
+    /// them, leaving their per-(node, iteration) rows open. Such a row never
     /// produced its own output (its normal path marks it `Completed` at the
     /// data_port/terminal deposit), so it is NOT `Completed` — it was abandoned,
-    /// same as under a whole-net cancel. Without this arm the row stayed stuck
-    /// at `Running` forever (the editor badge never left the spinner).
-    /// Started-but-not-finished rows get a `completed_at` so duration math works.
-    fn close_open_rows(&mut self, ev: &DomainEvent, ts: DateTime<Utc>, _seq: u64) {
-        let close_status = match ev {
-            DomainEvent::NetFailed { .. } => StepStatus::Failed,
-            DomainEvent::NetCompleted { .. } | DomainEvent::NetCancelled { .. } => {
-                StepStatus::Skipped
-            }
-            _ => return,
+    /// same as under a whole-net cancel. Without this pass the row stayed stuck
+    /// at `Running`/`Pending` forever even though the instance is `completed`
+    /// (the editor badge never left the spinner).
+    ///
+    /// Running as a post-fold pass (rather than inline at the terminal arm) is
+    /// what makes it robust to event ordering: rows opened by stray events that
+    /// land AFTER the terminal event in the buffer (out-of-order sequence /
+    /// engine-emitted post-completion strays, which Map's racing gather/collect
+    /// can produce) are still caught. Started-but-not-finished rows get a
+    /// `completed_at` so duration math works.
+    fn close_open_rows(&mut self) {
+        let Some((close_status, ts)) = self.close_with else {
+            return;
         };
         for row in self.rows.values_mut() {
             if matches!(row.status, StepStatus::Pending | StepStatus::Running) {
@@ -1378,6 +1415,197 @@ mod tests {
         assert!(
             a_row.completed_at.is_some(),
             "closed row gets completed_at so duration math works"
+        );
+    }
+
+    /// Map-in-Loop shape: the Map node (`mp`) scatters K items into a body
+    /// node (`body`), opening one `(body, iter)` row per item. The run
+    /// abandons some iterations mid-flight (the engine wedged / a superseding
+    /// branch terminated the net) — those body rows are left `Pending`/
+    /// `Running`, and the Map node's own row may also be open if its gather
+    /// never produced. A `NetCompleted` then arrives. After the fold, EVERY
+    /// row must be terminal (no `Pending`/`Running`) — the COMPLETED instance
+    /// must not surface in-flight step rows.
+    #[test]
+    fn projector_net_completed_closes_open_map_iteration_rows() {
+        let mut reg: InterfaceRegistry = HashMap::new();
+
+        // Map node `mp`: entry p_mp_input, parks gathered output at p_mp_data.
+        let mut mp = NodeInterface::new("mp", NodeKind::Map);
+        mp.entry = Some("p_mp_input".to_string());
+        mp.data_port = Some("p_mp_data".to_string());
+        mp.outputs = BTreeMap::from([(OutputKey::Default, "p_mp_output".to_string())]);
+        mp.owned_places = vec![
+            "p_mp_input".to_string(),
+            "p_mp_items".to_string(),
+            "p_mp_results".to_string(),
+            "p_mp_gathered".to_string(),
+            "p_mp_data".to_string(),
+            "p_mp_output".to_string(),
+        ];
+        mp.owned_transitions = vec![
+            "t_mp_scatter".to_string(),
+            "t_mp_dispatch".to_string(),
+            "t_mp_gather".to_string(),
+            "t_mp_yield".to_string(),
+        ];
+        reg.insert("mp".to_string(), mp);
+
+        // Body node `body`: per-item entry p_body_in, parks at p_body_data.
+        let mut body = NodeInterface::new("body", NodeKind::AutomatedStep);
+        body.entry = Some("p_body_in".to_string());
+        body.data_port = Some("p_body_data".to_string());
+        body.outputs = BTreeMap::from([(OutputKey::Default, "p_body_out".to_string())]);
+        body.owned_places = vec![
+            "p_body_in".to_string(),
+            "p_body_data".to_string(),
+            "p_body_out".to_string(),
+        ];
+        body.owned_transitions = vec!["t_body_park".to_string()];
+        reg.insert("body".to_string(), body);
+
+        const K: usize = 3;
+        let mut events = Vec::new();
+
+        // 0: the workflow token lands at the Map node's entry.
+        events.push(token_created(0, 100, place("p_mp_input"), unit_token()));
+
+        // 1: t_mp_scatter — a SINGLE batch fire produces K item tokens, all at
+        //    the body's entry place p_body_in. Each opens a (body, iter) row.
+        let mut scatter_produced = Vec::new();
+        for i in 0..K {
+            scatter_produced.push((
+                place("p_body_in"),
+                data_token(serde_json::json!({ "x": i, "__map_idx": i })),
+            ));
+        }
+        events.push(fired(1, 101, trans("t_mp_scatter"), scatter_produced, vec![]));
+
+        // 2: only the FIRST body iteration actually completes (parks output).
+        events.push(fired(
+            2,
+            102,
+            trans("t_body_park"),
+            vec![
+                (place("p_body_data"), data_token(serde_json::json!({"y": 0}))),
+                (place("p_body_out"), unit_token()),
+            ],
+            vec![],
+        ));
+
+        // 3: NetCompleted arrives WITHOUT the remaining body iterations or the
+        //    Map node's own gather/yield completing — the run abandoned them.
+        events.push(net_completed(3, 200));
+
+        let rows = project_step_executions(&events, &reg);
+
+        // Every row must be terminal — nothing stuck pending/running.
+        for r in &rows {
+            assert!(
+                !matches!(r.status, StepStatus::Pending | StepStatus::Running),
+                "row ({}, {}) left non-terminal: {:?}",
+                r.node_id,
+                r.iteration_index,
+                r.status
+            );
+            assert!(
+                r.completed_at.is_some(),
+                "terminal row ({}, {}) must have completed_at for duration math",
+                r.node_id,
+                r.iteration_index
+            );
+        }
+
+        // Sanity: K body iteration rows exist; the first is Completed, the
+        // abandoned ones are Skipped; the Map node's own row is Skipped.
+        let body_rows: Vec<&StepExecutionRow> =
+            rows.iter().filter(|r| r.node_id == "body").collect();
+        assert_eq!(body_rows.len(), K, "one row per scattered item");
+        let completed = body_rows
+            .iter()
+            .filter(|r| r.status == StepStatus::Completed)
+            .count();
+        assert_eq!(completed, 1, "exactly the one finished iteration is Completed");
+        let skipped = body_rows
+            .iter()
+            .filter(|r| r.status == StepStatus::Skipped)
+            .count();
+        assert_eq!(skipped, K - 1, "abandoned iterations close as Skipped");
+
+        let mp_row = rows.iter().find(|r| r.node_id == "mp").expect("mp row");
+        assert_eq!(
+            mp_row.status,
+            StepStatus::Skipped,
+            "Map node whose gather never produced closes as Skipped, not Running"
+        );
+    }
+
+    /// Ordering robustness: the engine can emit a stray body event AFTER
+    /// `NetCompleted` in the buffer (Map's gather/collect racing net
+    /// completion → an out-of-order or post-terminal `TransitionFired` that
+    /// opens a fresh body iteration row). The terminal close must still catch
+    /// it. The old inline close (run at the terminal arm, before the stray
+    /// event was folded) left that row stuck `Pending`/`Running`; the post-fold
+    /// pass closes it.
+    #[test]
+    fn projector_closes_rows_opened_after_terminal_event() {
+        let mut reg: InterfaceRegistry = HashMap::new();
+        let mut mp = NodeInterface::new("mp", NodeKind::Map);
+        mp.entry = Some("p_mp_input".to_string());
+        mp.data_port = Some("p_mp_data".to_string());
+        mp.outputs = BTreeMap::from([(OutputKey::Default, "p_mp_output".to_string())]);
+        mp.owned_places = vec!["p_mp_input".to_string(), "p_mp_data".to_string()];
+        mp.owned_transitions = vec!["t_mp_scatter".to_string()];
+        reg.insert("mp".to_string(), mp);
+
+        let mut body = NodeInterface::new("body", NodeKind::AutomatedStep);
+        body.entry = Some("p_body_in".to_string());
+        body.data_port = Some("p_body_data".to_string());
+        body.outputs = BTreeMap::from([(OutputKey::Default, "p_body_out".to_string())]);
+        body.owned_places = vec![
+            "p_body_in".to_string(),
+            "p_body_data".to_string(),
+            "p_body_out".to_string(),
+        ];
+        body.owned_transitions = vec!["t_body_park".to_string()];
+        reg.insert("body".to_string(), body);
+
+        let events = vec![
+            token_created(0, 100, place("p_mp_input"), unit_token()),
+            // scatter opens one body iteration row.
+            fired(
+                1,
+                101,
+                trans("t_mp_scatter"),
+                vec![(place("p_body_in"), data_token(serde_json::json!({"x": 0})))],
+                vec![],
+            ),
+            // NetCompleted arrives.
+            net_completed(2, 200),
+            // STRAY post-terminal event: opens a SECOND body iteration row
+            // (Pending) AND fires its transition without parking output
+            // (Running) — both must be terminalized by the post-fold pass.
+            token_created(3, 201, place("p_body_in"), unit_token()),
+            fired(4, 202, trans("t_body_park"), vec![], vec![]),
+        ];
+
+        let rows = project_step_executions(&events, &reg);
+        for r in &rows {
+            assert!(
+                !matches!(r.status, StepStatus::Pending | StepStatus::Running),
+                "row ({}, {}) opened after the terminal event left non-terminal: {:?}",
+                r.node_id,
+                r.iteration_index,
+                r.status
+            );
+        }
+        // Both body iterations exist and both are Skipped.
+        let body_rows: Vec<&StepExecutionRow> =
+            rows.iter().filter(|r| r.node_id == "body").collect();
+        assert_eq!(body_rows.len(), 2, "stray post-terminal arrival still opens a row");
+        assert!(
+            body_rows.iter().all(|r| r.status == StepStatus::Skipped),
+            "every body row closes Skipped under NetCompleted"
         );
     }
 
