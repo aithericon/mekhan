@@ -196,12 +196,100 @@ The freed GPU returns to `pool` and is immediately granted to a waiter.
 > `compiler_e2e` + `air_snapshots` golden); this runbook is the only step that
 > touches a live shared stack.
 
+## Generalization: one claim contract, pluggable pool backends (the real-world path)
+
+The token-per-unit pool above is the *trivial end* of a spectrum. It is correct
+only when allocation is trivial and the resource is homogeneous and
+self-managed (N concurrency slots, N floating licenses, N identical workers) —
+there the firing rule genuinely *is* the admission logic. Real infrastructure is
+the opposite: a datacenter is heterogeneous and multi-dimensional (GPU type ×
+memory × interconnect topology × fairness × preemption × gang scheduling), which
+is NP-hard placement that a real scheduler (Slurm / Nomad / k8s / Borg) exists to
+solve. Encoding that as token matching would reinvent a scheduler badly — the
+`find_valid_binding` Cartesian cost is the early warning of that mistake. **Do
+not model a real DC as tokens.**
+
+### The load-bearing property: the claim contract is scheduler-agnostic
+
+The instance-side lowering (M3, `lower_automated_step_pooled`) does *not* care
+what serves the claim. It mints a `grant_id`, bridges a claim out, waits for a
+grant on a reply channel, registers the hold, and releases on **every** exit.
+What sits behind `claim_inbox` is **pluggable** — exactly the way
+`lower_automated_step_scheduled` already delegates *job* submission to
+`scheduler-net`. So choosing a different pool model swaps the **backend behind
+the claim**, never the contract. One instance-side wiring, three backends:
+
+| Backend | Marking | Source of truth | When |
+|---------|---------|-----------------|------|
+| `tokens` *(built — this doc)* | N tokens | the net | trivial, homogeneous, self-managed (license / LLM-concurrency cap) |
+| `counter` | 1 token (count/vector, read-arc + rewrite) | the net | platform-owned closed pool; larger N or multi-dim where admission is still expressible as a guard |
+| `scheduler` | 1 **lease** per claim | an **external** scheduler | real DC — allocation delegated (folds into docs/13's datacenter resource) |
+
+### Hold a lease, not a mirror of the DC
+
+When an external scheduler owns allocation it owns the authoritative state. A
+token that mirrors the DC ("one big state token for the whole datacenter") is a
+stale cache that drifts from the real allocator — two sources of truth fighting.
+The `scheduler` backend therefore holds a **lease per claim** (a small handle:
+`lease_id`, what was granted, expiry), and the external scheduler stays the
+source of truth for DC state. An aggregate state token is legitimate only (a) as
+an explicitly *non-authoritative projection* for observability, or (b) for a
+platform-owned **closed** pool — which is exactly the `counter` backend, not a DC
+mirror.
+
+### What the substrate adds over a bare scheduler API call
+
+The allocation *decision* leaves the net; the **lease lifecycle stays**. That is
+the value: replay-safe acquire → hold → release → reap, the compile-time
+release-on-every-exit leak-prevention invariant, crash-reap via journaled lease
+expiry, and the unified process / resource / data substrate with causality. The
+platform isn't reimplementing the scheduler — it's giving every external
+scheduler a durable, event-sourced, leak-proof lease lifecycle that workflows
+compose with natively. The `scheduler` backend is `scheduler-net` generalized
+from *job submission* to *resource leasing*; the lease, not the DC state, lives
+on the net.
+
+### Keystone: registry-resolved pools
+
+This makes **registry-resolved pools the keystone abstraction** (not just one
+gate item). A node declares `resourcePool: { alias: "prod-gpu-dc" }`; the alias
+resolves (via `service/src/petri/resource_resolver.rs`) to whichever backend —
+`tokens`, `counter`, or `scheduler` — and the instance lowering is byte-identical
+across all three. That is the seam that folds docs/13 (schedulers / datacenters
+as resources) and docs/14 (the lease lifecycle) into one model, and it is the
+first thing to build before any real use.
+
 ## Productionization gate (out of scope for the prototype)
 
-- Registry-resolved per-workspace pools (`resource_alias` → pool net id via
-  `service/src/petri/resource_resolver.rs`) instead of the global well-known id.
-- Capability sharding (`pool_<kind>` places + per-kind grant transitions) to
-  remove the `find_valid_binding` Cartesian cost and add heterogeneous matching.
-- Marking snapshots for the immortal pool net (`projection.rs::project_marking` is
-  a full fold from event 0; a never-terminating net needs periodic
-  `(event_seq, Marking)` snapshots before it accumulates a large log).
+- **Registry-resolved per-workspace pools (the keystone — see above):**
+  `resource_alias` → pool backend via `service/src/petri/resource_resolver.rs`,
+  replacing the global well-known id. Prerequisite for every real use.
+- **Bound the steady-state marking (net design, not snapshots).** `done`
+  currently accumulates one terminal token per completed job forever. Stop
+  parking it: emit the freed-unit signal as a firing event / metric and route
+  the spent token to a **sink** (zero-output transition, like the compiler's
+  `Decision` `t_*_deadend`), or collapse "freed total" to a single read-arc
+  **counter** token. Also cap `claim_inbox` with a claim **TTL / max-queue**
+  (the current design has no denial — claims queue forever). After this the
+  marking is bounded by N regardless of lifetime.
+- **Marking snapshots (engine, separate concern from sinks).** The runtime
+  marking *is* incrementally cached (`evaluation.rs::get_marking_cached`), so
+  `/state` is cheap; but there is no persisted `(event_seq, Marking)` snapshot,
+  so an immortal net's **event log** grows unbounded → linear rehydration on
+  restart. A periodic snapshot (+ eventual log compaction once the prefix is
+  covered) is the durability gate. Low urgency for a low-claim-rate first use
+  (e.g. an LLM-concurrency cap); required before a high-throughput pool.
+- **Capability sharding** (`pool_<kind>` places + per-kind grant transitions) —
+  only for the `tokens`/`counter` backends at heterogeneity/scale; the
+  `scheduler` backend delegates this to the real allocator. Premature otherwise.
+
+### First use case
+
+Selection rule: a fixed-capacity shared resource with **no external scheduler
+already doing admission** (otherwise the `scheduler` backend / scheduler-net is
+the right tool, not an in-net pool). Recommended first: a **concurrency cap on a
+self-hosted inference endpoint** (Ollama / HF-inference on a GPU box) — the
+`tokens` backend, composes with the existing LLM resource binding, a real
+bottleneck no scheduler covers, and low enough claim-rate that snapshots stay a
+follow-up. Highest domain value second: a **license-limited tool / single lab
+instrument** (`tokens` or `counter`).
