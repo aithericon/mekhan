@@ -489,8 +489,10 @@ pub(crate) async fn evaluate_until_quiescent<
 
 /// Check if any terminal place in the topology has tokens.
 ///
-/// Returns the first terminal place with a token, extracting an exit code
-/// from the token's data if present (looks for `data.exit_code`).
+/// Returns the first terminal place with a token, extracting the run result
+/// from the token's data: the explicit `data.exit_code` envelope when present,
+/// otherwise the whole token body (so hand-authored AIR nets that carry the
+/// result inline still surface it instead of completing with empty outputs).
 pub fn check_terminal_state(
     topology: &impl TopologyRepository,
     marking: &Marking,
@@ -502,8 +504,15 @@ pub fn check_terminal_state(
         }
         let tokens = marking.tokens_at(&place.id);
         if let Some(token) = tokens.first() {
+            // The compiler's End node stamps an explicit `exit_code` envelope
+            // ({ ok, value }); hand-authored AIR nets (e.g. clinic-submitted
+            // scenarios) carry the result as the token body with no `exit_code`
+            // key. Fall back to the whole token data so those nets surface a
+            // result rather than completing with empty outputs.
             let exit_code = match &token.color {
-                TokenColor::Data(data) => data.get("exit_code").cloned(),
+                TokenColor::Data(data) => {
+                    Some(data.get("exit_code").cloned().unwrap_or_else(|| data.clone()))
+                }
                 _ => None,
             };
             return Some(TerminalReachedInfo {
@@ -581,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn check_terminal_data_token_without_exit_code() {
+    fn check_terminal_data_token_without_exit_code_falls_back_to_full_body() {
         let topo = TestTopology(Some(net_with_terminal()));
         let mut marking = Marking::new();
         marking.add_token(
@@ -591,7 +600,8 @@ mod tests {
 
         let result = check_terminal_state(&topo, &marking).unwrap();
         assert_eq!(result.place_id, "done");
-        assert!(result.exit_code.is_none());
+        // No explicit `exit_code` key → the whole token body is the result.
+        assert_eq!(result.exit_code, Some(serde_json::json!({"foo": "bar"})));
     }
 
     #[test]
