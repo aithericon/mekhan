@@ -15,13 +15,27 @@ mod tests {
     use crate::status_mapping;
     use petri_domain::{JobStatus, SchedulerClient, SubmitRequest};
 
+    /// Absolute path to the committed sandbox SSH key.
+    ///
+    /// `cargo test` runs with CWD = the package manifest dir
+    /// (`core-engine/crates/slurm`), not the engine workspace root, so a bare
+    /// relative `infra/slurm/ssh/slurm_test` does not resolve. Anchor on
+    /// `CARGO_MANIFEST_DIR` and walk up to the engine root (`../../..`) where
+    /// `infra/` actually lives.
+    fn sandbox_ssh_key() -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../infra/slurm/ssh/slurm_test")
+            .to_string_lossy()
+            .into_owned()
+    }
+
     /// Build a config pointing at the local Docker Slurm sandbox.
     fn sandbox_config() -> SlurmConfig {
         SlurmConfig {
             ssh_host: "localhost".to_string(),
             ssh_port: 2222,
             ssh_user: "testuser".to_string(),
-            ssh_key: "infra/slurm/ssh/slurm_test".to_string(),
+            ssh_key: sandbox_ssh_key(),
             ssh_known_hosts: "accept".to_string(),
             poll_interval_secs: 2,
             template_dir: "/opt/petri/templates".to_string(),
@@ -151,6 +165,78 @@ mod tests {
             .await
             .expect("scancel should succeed");
         println!("Cancelled job: {}", result2.scheduler_job_id);
+    }
+
+    // ── Allocation lifecycle (salloc → scontrol → srun → scancel) ──────
+
+    #[tokio::test]
+    #[ignore] // requires live Slurm container
+    async fn slurm_alloc_lifecycle() {
+        use crate::alloc;
+
+        let config = sandbox_config();
+        let ssh = SshSession::connect(&config).await.expect("SSH connect");
+
+        let grant_id = "lease-lifecycle";
+        let request = serde_json::json!({});
+
+        // salloc: hold an allocation without running anything.
+        let alloc_id = alloc::salloc_no_shell(&ssh, grant_id, &request)
+            .await
+            .expect("salloc should grant an allocation");
+        assert!(!alloc_id.is_empty(), "salloc should return a job id");
+        println!("Held allocation: {}", alloc_id);
+
+        // scontrol: the allocation should resolve to a node (CPU-only sandbox).
+        // Allow a brief moment for the node to be assigned.
+        let mut allocation = alloc::scontrol_node(&ssh, &alloc_id)
+            .await
+            .expect("scontrol should find the allocation");
+        for _ in 0..10 {
+            if allocation.node.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            allocation = alloc::scontrol_node(&ssh, &alloc_id)
+                .await
+                .expect("scontrol should find the allocation");
+        }
+        let node = allocation
+            .node
+            .clone()
+            .expect("allocation should land on a node");
+        assert!(!node.is_empty(), "NodeList should be non-empty");
+        println!("Allocation {} on node {}", alloc_id, node);
+
+        // srun: run a command ON the held allocation.
+        let output = alloc::srun_into_alloc(&ssh, &alloc_id, "echo lease-ok")
+            .await
+            .expect("srun into the held allocation should succeed");
+        assert!(
+            output.contains("lease-ok"),
+            "srun output should contain 'lease-ok': {}",
+            output
+        );
+
+        // scancel: release the allocation.
+        alloc::scancel(&ssh, &alloc_id)
+            .await
+            .expect("scancel should succeed");
+        println!("Cancelled allocation: {}", alloc_id);
+
+        // The job should leave squeue once cancelled.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let squeue_out = ssh
+            .exec("squeue -o '%i|%k|%T' -h")
+            .await
+            .expect("squeue after scancel");
+        let entries = SqueueEntry::parse_all(&squeue_out);
+        assert!(
+            !entries.iter().any(|e| e.job_id == alloc_id),
+            "cancelled allocation {} should have left squeue: {}",
+            alloc_id,
+            squeue_out
+        );
     }
 
     // ── Parsers against real output ────────────────────────────────────

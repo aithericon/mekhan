@@ -83,6 +83,44 @@ pub trait AllocatorClient: Send + Sync {
         token: &str,
         alloc_id: &str,
     ) -> Result<(), AllocatorError>;
+
+    /// Flavor-aware acquire. The handler reads `scheduler_flavor` off the
+    /// per-fire `effect_config` (default `"http"`) and threads it here so a
+    /// single registered dispatcher client can route http vs slurm per fire.
+    ///
+    /// Default impl ignores the flavor and delegates to [`acquire`], so leaf
+    /// clients (e.g. `HttpAllocatorClient`, `SlurmAllocatorClient`) stay
+    /// flavor-unaware and byte-identical — only the dispatcher overrides this
+    /// to branch on `scheduler_flavor`.
+    ///
+    /// [`acquire`]: AllocatorClient::acquire
+    async fn acquire_with_flavor(
+        &self,
+        scheduler_flavor: &str,
+        allocator_url: &str,
+        token: &str,
+        grant_id: &str,
+        request: &JsonValue,
+    ) -> Result<JsonValue, AllocatorError> {
+        let _ = scheduler_flavor;
+        self.acquire(allocator_url, token, grant_id, request).await
+    }
+
+    /// Flavor-aware release. See [`acquire_with_flavor`] for the routing
+    /// rationale; default impl delegates to [`release`].
+    ///
+    /// [`acquire_with_flavor`]: AllocatorClient::acquire_with_flavor
+    /// [`release`]: AllocatorClient::release
+    async fn release_with_flavor(
+        &self,
+        scheduler_flavor: &str,
+        allocator_url: &str,
+        token: &str,
+        alloc_id: &str,
+    ) -> Result<(), AllocatorError> {
+        let _ = scheduler_flavor;
+        self.release(allocator_url, token, alloc_id).await
+    }
 }
 
 /// `reqwest`-backed allocator client. Stateless — the per-datacenter URL+token
@@ -171,10 +209,27 @@ impl AllocatorClient for HttpAllocatorClient {
     }
 }
 
-/// Read `{ allocator_url, token }` out of the resolved `effect_config`.
-/// `token` is the resolved secret (`firing.rs` ran `resolve_secrets` on the
-/// config before `execute`).
-fn read_connection(config: Option<&JsonValue>) -> Result<(String, String), EffectError> {
+/// Resolved allocator connection pulled out of the per-fire `effect_config`.
+///
+/// `allocator_url` + `token` are HTTP-centric (the generic HTTP allocator's
+/// endpoint + bearer secret). `scheduler_flavor` is the backend selector the
+/// `FlavorDispatchAllocatorClient` (registered in `petri-api`) routes on:
+/// `"http"` (default — the existing generic HTTP allocator) or `"slurm"` (the
+/// SSH/salloc-backed `SlurmAllocatorClient`). Slurm ignores `allocator_url`/
+/// `token` and uses its own held `SlurmConfig`; the flavor is the only field a
+/// Slurm fire strictly needs here.
+pub struct LeaseConnection {
+    pub allocator_url: String,
+    pub token: String,
+    pub scheduler_flavor: String,
+}
+
+/// Read `{ allocator_url, token, scheduler_flavor? }` out of the resolved
+/// `effect_config`. `token` is the resolved secret (`firing.rs` ran
+/// `resolve_secrets` on the config before `execute`). `scheduler_flavor`
+/// defaults to `"http"` when absent (the existing generic HTTP allocator path),
+/// so a config that predates the selector behaves byte-identically.
+fn read_connection(config: Option<&JsonValue>) -> Result<LeaseConnection, EffectError> {
     let cfg = config.ok_or_else(|| {
         EffectError::Fatal(
             "resource_lease handler requires effect_config { allocator_url, token }".into(),
@@ -192,7 +247,17 @@ fn read_connection(config: Option<&JsonValue>) -> Result<(String, String), Effec
         .and_then(|v| v.as_str())
         .ok_or_else(|| EffectError::Fatal("missing token in effect_config".into()))?
         .to_string();
-    Ok((allocator_url, token))
+    // scheduler_flavor is optional; absent → "http" (the historical path).
+    let scheduler_flavor = cfg
+        .get("scheduler_flavor")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http")
+        .to_string();
+    Ok(LeaseConnection {
+        allocator_url,
+        token,
+        scheduler_flavor,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +300,7 @@ impl EffectHandler for ResourceLeaseAcquireHandler {
             ))
         })?;
 
-        let (allocator_url, auth_token) = read_connection(input.config.as_ref())?;
+        let conn = read_connection(input.config.as_ref())?;
 
         // grant_id is the compiler-minted replay-safe correlation key
         // (instance_id:node_id). It is ALSO the allocator idempotency key.
@@ -251,7 +316,13 @@ impl EffectHandler for ResourceLeaseAcquireHandler {
 
         let lease = self
             .client
-            .acquire(&allocator_url, &auth_token, &grant_id, &request_params)
+            .acquire_with_flavor(
+                &conn.scheduler_flavor,
+                &conn.allocator_url,
+                &conn.token,
+                &grant_id,
+                &request_params,
+            )
             .await
             .map_err(|e| EffectError::ExecutionFailed(format!("lease acquire failed: {e}")))?;
 
@@ -341,7 +412,7 @@ impl EffectHandler for ResourceLeaseReleaseHandler {
             ))
         })?;
 
-        let (allocator_url, auth_token) = read_connection(input.config.as_ref())?;
+        let conn = read_connection(input.config.as_ref())?;
 
         let grant_id = token
             .get("grant_id")
@@ -355,7 +426,12 @@ impl EffectHandler for ResourceLeaseReleaseHandler {
             .to_string();
 
         self.client
-            .release(&allocator_url, &auth_token, &alloc_id)
+            .release_with_flavor(
+                &conn.scheduler_flavor,
+                &conn.allocator_url,
+                &conn.token,
+                &alloc_id,
+            )
             .await
             .map_err(|e| EffectError::ExecutionFailed(format!("lease release failed: {e}")))?;
 
@@ -581,6 +657,47 @@ mod tests {
             1,
             "release replay must NOT call the allocator"
         );
+    }
+
+    /// `scheduler_flavor` defaults to `"http"` when absent — the historical
+    /// path is byte-identical. Present, it parses through unchanged.
+    #[test]
+    fn read_connection_flavor_defaults_to_http() {
+        let cfg = serde_json::json!({ "allocator_url": "http://a.test", "token": "t" });
+        let conn = read_connection(Some(&cfg)).unwrap();
+        assert_eq!(conn.scheduler_flavor, "http");
+        assert_eq!(conn.allocator_url, "http://a.test");
+        assert_eq!(conn.token, "t");
+
+        let cfg_slurm = serde_json::json!({
+            "allocator_url": "http://a.test",
+            "token": "t",
+            "scheduler_flavor": "slurm"
+        });
+        assert_eq!(
+            read_connection(Some(&cfg_slurm)).unwrap().scheduler_flavor,
+            "slurm"
+        );
+    }
+
+    /// The flavor-aware acquire delegates to the leaf `acquire` for the default
+    /// (non-overriding) client, so a flavor-unaware MockAllocator still serves
+    /// every flavor — the dispatcher (next phase) is the only overrider.
+    #[tokio::test]
+    async fn acquire_with_flavor_delegates_by_default() {
+        let alloc = Arc::new(MockAllocator::default());
+        let lease = alloc
+            .acquire_with_flavor(
+                "slurm",
+                "http://a.test",
+                "t",
+                "g:1",
+                &serde_json::json!({ "gpu_count": 1 }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lease["alloc_id"], "alloc-42");
+        assert_eq!(alloc.acquire_calls.load(Ordering::SeqCst), 1);
     }
 
     /// Missing effect_config → Fatal (the datacenter connection must be wired).

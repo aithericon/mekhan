@@ -24,6 +24,7 @@
 //! in the `--comment` flag. The watcher reads these from `squeue -o %k` and
 //! `sacct -o Comment` to route signals to the correct net and place via NATS.
 
+pub mod alloc;
 pub mod client;
 pub mod config;
 pub mod models;
@@ -34,6 +35,7 @@ pub mod watcher;
 #[cfg(test)]
 mod integration_tests;
 
+pub use alloc::{Allocation, AllocError};
 pub use client::SlurmClient;
 pub use config::SlurmConfig;
 pub use watcher::{SlurmWatcher, WatcherError};

@@ -4,6 +4,7 @@ pub mod handlers;
 pub mod net_registry;
 pub mod router;
 pub mod scenario_bridge;
+pub mod slurm_allocator;
 
 pub use artifact_store::ArtifactStoreState;
 #[cfg(feature = "catalogue")]

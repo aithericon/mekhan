@@ -31,6 +31,7 @@ use petri_application::{
     TopologyRepository,
 };
 use petri_application::resource_lease_handlers::AllocatorClient;
+use crate::slurm_allocator::FlavorDispatchAllocatorClient;
 #[cfg(feature = "catalogue")]
 use petri_application::{
     CatalogueLookupHandler, CatalogueRegisterHandler, CatalogueSubscribeHandler,
@@ -856,10 +857,27 @@ where
         // backend's `lease` operation). The allocator connection
         // (url + token) arrives per-FIRE via the transition's `effect_config`
         // (resolved from the datacenter resource secret just-in-time), NOT at
-        // net-create — so one stateless `HttpAllocatorClient` serves every
-        // datacenter, no per-net connection state. Mirror the process-lifecycle
-        // always-on block.
-        let allocator_client: Arc<dyn AllocatorClient> = Arc::new(HttpAllocatorClient::new());
+        // net-create — so one stateless allocator serves every datacenter, no
+        // per-net connection state. Mirror the process-lifecycle always-on
+        // block.
+        //
+        // The registered client is a `FlavorDispatchAllocatorClient` that routes
+        // each fire on the `scheduler_flavor` the handler reads off the resolved
+        // `effect_config` (default `"http"` → the generic HTTP allocator;
+        // `"slurm"` → the SSH/salloc-backed `SlurmAllocatorClient`). The Slurm
+        // leg is built from the `SLURM_*` env only when the `slurm` feature is on
+        // AND `SLURM_SSH_HOST` is set; otherwise it is absent and a
+        // `scheduler_flavor=slurm` fire fails loudly.
+        let http_allocator: Arc<dyn AllocatorClient> = Arc::new(HttpAllocatorClient::new());
+        #[cfg(feature = "slurm")]
+        let slurm_allocator: Option<Arc<dyn AllocatorClient>> =
+            crate::slurm_allocator::SlurmAllocatorClient::from_env()
+                .map(|c| Arc::new(c) as Arc<dyn AllocatorClient>);
+        #[cfg(not(feature = "slurm"))]
+        let slurm_allocator: Option<Arc<dyn AllocatorClient>> = None;
+        let allocator_client: Arc<dyn AllocatorClient> = Arc::new(
+            FlavorDispatchAllocatorClient::new(http_allocator, slurm_allocator),
+        );
         service
             .register_effect_handler(
                 effects::RESOURCE_LEASE_ACQUIRE.handler_id,
