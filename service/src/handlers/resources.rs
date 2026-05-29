@@ -577,9 +577,18 @@ pub async fn create_resource(
 
     write_audit(&state.db, resource_id, version, principal_id, AuditAction::Create).await?;
 
-    // R3: if this is a token_pool, deploy its backing pool net (idempotent,
-    // engine-down-tolerant). Runs after the resource is durably persisted.
-    ensure_pool_net_for_kind(&state, &req.resource_type, resource_id, &public).await;
+    // R3/R4b: if this is a pool-backed kind (token_pool / datacenter), deploy
+    // its backing net (idempotent, engine-down-tolerant). Runs after the
+    // resource is durably persisted.
+    ensure_pool_net_for_kind(
+        &state,
+        &req.resource_type,
+        workspace_id,
+        resource_id,
+        version,
+        &public,
+    )
+    .await;
 
     let dynamic_keys = extract_kv_keys(&public);
     let summary = ResourceSummary {
@@ -595,36 +604,72 @@ pub async fn create_resource(
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
-/// R3 hook: for a `token_pool` resource, (re)deploy its backing pool net
-/// `pool-<id>` to the engine with the capacity from `public_config`. No-op for
-/// every other resource kind. Idempotent + engine-down-tolerant (see
-/// [`crate::petri::pool_net::ensure_token_pool_net_deployed`]). Called on
-/// create AND version bump so a capacity change re-seeds the net.
+/// R3/R4b hook: for a pool-backed resource kind, (re)deploy its backing net
+/// `pool-<id>` to the engine. No-op for every other kind. Idempotent +
+/// engine-down-tolerant. Called on create AND version bump so a config change
+/// (capacity, allocator url/token) re-deploys the net.
+///
+/// - `token_pool` → [`crate::petri::pool_net::ensure_token_pool_net_deployed`]
+///   (capacity from `public_config`).
+/// - `datacenter` → [`crate::petri::pool_net::ensure_datacenter_adapter_deployed`]
+///   (`allocator_url` from `public_config`; the token as a
+///   `{{secret:<vault_path>#token}}` template the engine resolves at fire time —
+///   `vault_path` from `(workspace_id, resource_id, version)`).
 async fn ensure_pool_net_for_kind(
     state: &AppState,
     resource_type: &str,
+    workspace_id: Uuid,
     resource_id: Uuid,
+    version: i32,
     public: &JsonMap<String, Value>,
 ) {
-    if resource_type != "token_pool" {
-        return;
+    match resource_type {
+        "token_pool" => {
+            // `capacity` is a required public field of the TokenPool kind (R1),
+            // so `split_config` guarantees it is present + a u32-shaped number.
+            // Defend against a malformed blob by skipping (best-effort deploy).
+            let Some(capacity) = public
+                .get("capacity")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32)
+            else {
+                tracing::warn!(
+                    %resource_id,
+                    "token_pool resource has no numeric `capacity` in public_config; skipping pool-net deploy"
+                );
+                return;
+            };
+            crate::petri::pool_net::ensure_token_pool_net_deployed(
+                &state.petri,
+                resource_id,
+                capacity,
+            )
+            .await;
+        }
+        "datacenter" => {
+            // `allocator_url` is a required public field of the Datacenter kind.
+            let Some(allocator_url) = public.get("allocator_url").and_then(|v| v.as_str()) else {
+                tracing::warn!(
+                    %resource_id,
+                    "datacenter resource has no `allocator_url` in public_config; skipping adapter-net deploy"
+                );
+                return;
+            };
+            // The token is the only secret field — reference it as a
+            // `{{secret:<vault_path>#token}}` template (the same template shape
+            // `resource_resolver.rs` emits), resolved by the engine at fire time.
+            let vault_path = vault_path_for(workspace_id, resource_id, version);
+            let token_secret_ref = format!("{{{{secret:{vault_path}#token}}}}");
+            crate::petri::pool_net::ensure_datacenter_adapter_deployed(
+                &state.petri,
+                resource_id,
+                allocator_url,
+                &token_secret_ref,
+            )
+            .await;
+        }
+        _ => {}
     }
-    // `capacity` is a required public field of the TokenPool kind (R1), so
-    // `split_config` guarantees it is present + a u32-shaped number. Defend
-    // against a malformed blob by skipping (the deploy is best-effort anyway).
-    let Some(capacity) = public
-        .get("capacity")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32)
-    else {
-        tracing::warn!(
-            %resource_id,
-            "token_pool resource has no numeric `capacity` in public_config; skipping pool-net deploy"
-        );
-        return;
-    };
-    crate::petri::pool_net::ensure_token_pool_net_deployed(&state.petri, resource_id, capacity)
-        .await;
 }
 
 /// Pull the `__kv_keys` array out of a `public_config` blob. Returns
@@ -777,9 +822,18 @@ pub async fn update_resource(
 
         write_audit(&state.db, row.id, latest_version, principal_id, AuditAction::Update).await?;
 
-        // R3: re-deploy the pool net on a token_pool version bump so a capacity
-        // change takes effect (idempotent, engine-down-tolerant).
-        ensure_pool_net_for_kind(&state, &row.resource_type, row.id, &public).await;
+        // R3/R4b: re-deploy the backing net on a pool-kind version bump so a
+        // config change (capacity / allocator url+token) takes effect
+        // (idempotent, engine-down-tolerant).
+        ensure_pool_net_for_kind(
+            &state,
+            &row.resource_type,
+            row.workspace_id,
+            row.id,
+            latest_version,
+            &public,
+        )
+        .await;
 
         new_kv_keys = extract_kv_keys(&public);
     }
