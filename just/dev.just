@@ -778,6 +778,62 @@ scheduler-down:
     just dev::up-executor
     echo "  ✓ scheduler layer down; engine + dev daemon back on plain dev config"
 
+# ── Resource-pool layer (shared capacity pool — the docs/14 reference pattern) ─
+#
+# Deploys the long-lived `resource-pool-net` (engine/sdk/examples/resource_pool_net.rs)
+# onto the ALREADY-RUNNING dev engine, seeded with N=2 GPU capacity tokens.
+# Unlike `scheduler-up` this needs NO engine restart — it is just another net
+# on :13030. The instance nets that contend for it are produced by the M3
+# compiler (an AutomatedStep with `resourcePool`), so mekhan must be built WITH
+# the resource-pool branch. Requires `just dev up` already running.
+#
+# Then `just dev resource-pool-demo` publishes the 13-resource-pool demo and
+# fires K instances; watch the contention drain at /nets/resource-pool.
+resource-pool-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    curl -sf --max-time 2 http://localhost:13030/api/nets/metadata >/dev/null 2>&1 || {
+      echo "✗ engine not reachable on :13030 — run 'just dev' first" >&2; exit 1; }
+    echo "▶ building resource_pool_net example + aithericon CLI…"
+    (cd engine && cargo build -p aithericon-sdk --example resource_pool_net)
+    cd engine
+    [ -x ./target/debug/aithericon ] || cargo build --bin aithericon
+    echo "▶ deploying + activating resource-pool-net (seeded with 2 GPU units)…"
+    ./target/debug/examples/resource_pool_net --deploy --net-id resource-pool-net >/dev/null
+    ./target/debug/aithericon activate resource-pool-net
+    echo ""
+    echo "✓ resource-pool-net deployed & Running on :13030 (pool = 2 capacity units)"
+    echo "  dashboard → http://localhost:15173/nets/resource-pool"
+    echo "  drive it  → just dev resource-pool-demo [n=4]"
+    echo "  reap a crashed holder (money shot):"
+    echo "    engine/target/debug/aithericon inject resource-pool-net lease_expired '{\"grant_id\":\"<instanceId>:render\"}'"
+
+# Publish the 13-resource-pool demo and launch N concurrent instances against
+# the pool. Run `resource-pool-up` FIRST — the instance nets bridge to
+# resource-pool-net, which must be deployed before they can activate (Strict
+# bridge gate). Default N=4 vs the pool's N=2 → 2 render, 2 queue.
+resource-pool-demo n="4":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TID="00000000-0000-0000-0000-000000000013"
+    BASE="http://localhost:13100"
+    curl -sf --max-time 2 "$BASE/healthz" >/dev/null 2>&1 || {
+      echo "✗ mekhan not reachable on :13100 — run 'just dev' first" >&2; exit 1; }
+    echo "▶ publishing 13-resource-pool (template $TID)…"
+    curl -sf -X POST "$BASE/api/v1/templates/$TID/publish" -H 'content-type: application/json' >/dev/null || {
+      echo "✗ publish failed — is the demo seeded? (just dev sets MEKHAN__DEMOS__SEED=true;" >&2
+      echo "  if you added the demo to a running stack, 'just dev demos-reseed' first)" >&2; exit 1; }
+    echo "▶ launching {{n}} render instances (Start field job_name=shot-N)…"
+    for i in $(seq 1 {{n}}); do
+      curl -sf -X POST "$BASE/api/v1/instances" -H 'content-type: application/json' \
+        -d "{\"template_id\":\"$TID\",\"start_tokens\":[{\"start_block_id\":\"start\",\"token\":{\"job_name\":\"shot-$i\"}}],\"metadata\":{\"demo\":\"resource-pool\"}}" \
+        >/dev/null && echo "  ✓ launched shot-$i" || echo "  ✗ shot-$i failed"
+    done
+    echo ""
+    echo "✓ {{n}} instances launched. With N=2 capacity, 2 render now and the rest"
+    echo "  queue in the pool's claim_inbox until a GPU frees (admission control)."
+    echo "  watch → http://localhost:15173/nets/resource-pool"
+
 # ── Slurm scheduler layer (for `Scheduled` AutomatedSteps via Slurm) ─────────
 #
 # Mirror of `scheduler-up` but using the local docker-compose Slurm cluster
