@@ -19,8 +19,7 @@
 					"config": {
 						"image": "alpine:latest"
 					}
-				},
-				"resourcePool": {}
+				}
 			}
 		},
 		{

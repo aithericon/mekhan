@@ -319,7 +319,6 @@ fn automated_step_produces_executor_lifecycle() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
-                    resource_pool: None,
                 },
                 parent_id: None,
                 width: None,
@@ -1124,7 +1123,6 @@ fn automated_step_has_scoped_effect_errors() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
-                    resource_pool: None,
                 },
                 parent_id: None,
                 width: None,
@@ -1169,7 +1167,6 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
             ),
             retry_policy: Default::default(),
             deployment_model: Default::default(),
-            resource_pool: None,
         },
         parent_id: None,
         width: None,
@@ -2044,7 +2041,6 @@ fn guard_multi_hop_scope_walk() {
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
-            resource_pool: None,
         },
         parent_id: None,
         width: None,
@@ -2249,7 +2245,6 @@ fn loop_with_accumulators_graph(
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
-            resource_pool: None,
         },
         parent_id: Some("lp".to_string()),
         width: None,
@@ -3929,7 +3924,6 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
             ),
             retry_policy: Default::default(),
             deployment_model: dm,
-            resource_pool: None,
         },
         parent_id: None,
         width: None,
@@ -3942,7 +3936,7 @@ fn automated_step_inline_unchanged_emits_lifecycle_no_bridge() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
-            automated_node_with_deployment("auto", DeploymentModel::Inline),
+            automated_node_with_deployment("auto", DeploymentModel::Inline { pool: None }),
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
@@ -3970,8 +3964,10 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
             automated_node_with_deployment(
                 "auto",
                 DeploymentModel::Scheduled {
+                    scheduler: None,
                     job_template: "petri-mumax3-worker".to_string(),
                     resources: None,
+                    operation: Default::default(),
                 },
             ),
             end_node("e"),
@@ -4045,7 +4041,6 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
-                    resource_pool: None,
                 },
                 parent_id: None,
                 width: None,
@@ -5079,7 +5074,6 @@ fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
-            resource_pool: None,
         },
         parent_id: Some(parent.to_string()),
         width: None,
@@ -5314,92 +5308,82 @@ fn automated_step_success_preserves_control_metadata_leaves() {
 // R1 — registry-resolved pools: schema foundation
 // ---------------------------------------------------------------------------
 
-/// `ResourcePoolClaim`'s new `{ alias?, request? }` shape stays NON-BREAKING:
-/// the empty `resourcePool: {}` the editor toggle + demo 13 emit still
-/// deserializes (both `None`), and the richer `{ alias }` / `{ alias, request }`
-/// shapes R2 introduces parse too.
+/// `DeploymentModel` after the consolidation pivot:
+/// - plain inline = `{"mode":"inline"}` (pool skipped) — the default + the shape
+///   every existing template round-trips to;
+/// - `Inline { pool: { alias (required), request? } }`;
+/// - `Scheduled` gained `scheduler?` + `operation` (default submit), both
+///   skipped/defaulted so today's `{"mode":"scheduled","jobTemplate":...}` is
+///   byte-identical.
 #[test]
-fn resource_pool_claim_deserializes_empty_and_aliased() {
-    use mekhan_service::models::template::ResourcePoolClaim;
-
-    // Today's editor toggle + demo 13 graph.json: `"resourcePool": {}`.
-    let empty: ResourcePoolClaim = serde_json::from_value(json!({})).expect("`{}` must parse");
-    assert_eq!(empty.alias, None);
-    assert_eq!(empty.request, None);
-
-    // R2's alias-only selection.
-    let aliased: ResourcePoolClaim =
-        serde_json::from_value(json!({ "alias": "prod-gpu" })).expect("`{alias}` must parse");
-    assert_eq!(aliased.alias.as_deref(), Some("prod-gpu"));
-    assert_eq!(aliased.request, None);
-
-    // R2's alias + claim-schema-shaped request params.
-    let full: ResourcePoolClaim =
-        serde_json::from_value(json!({ "alias": "prod-gpu", "request": { "gpu_count": 2 } }))
-            .expect("`{alias,request}` must parse");
-    assert_eq!(full.alias.as_deref(), Some("prod-gpu"));
-    assert_eq!(full.request, Some(json!({ "gpu_count": 2 })));
-
-    // Round-trips: an empty claim serializes back to `{}` (both fields skipped),
-    // so the demo-13 graph.json / AIR golden stays byte-identical.
-    assert_eq!(serde_json::to_value(&empty).unwrap(), json!({}));
-}
-
-/// An AutomatedStep with the empty `resourcePool: {}` (alias=None) still takes
-/// the pooled lowering path and bridges to the well-known global pool — the
-/// R1 fallback that keeps demo 13 working before R2 resolves real aliases.
-#[test]
-fn empty_resource_pool_claim_compiles_pooled_path() {
-    use mekhan_service::models::template::ResourcePoolClaim;
-
-    let graph = WorkflowGraph {
-        nodes: vec![
-            start_node("s"),
-            WorkflowNode {
-                id: "auto".to_string(),
-                node_type: "automated_step".to_string(),
-                slug: None,
-                position: pos(),
-                data: WorkflowNodeData::AutomatedStep {
-                    label: "GPU Render".to_string(),
-                    description: None,
-                    execution_spec: ExecutionSpecConfig {
-                        backend_type: ExecutionBackendType::Docker,
-                        entrypoint: None,
-                        config: json!({"image": "alpine:latest"}),
-                    },
-                    input: mekhan_service::models::template::Port::empty_input(),
-                    output: mekhan_service::models::template::default_output_port(
-                        ExecutionBackendType::Docker,
-                    ),
-                    retry_policy: Default::default(),
-                    deployment_model: Default::default(),
-                    // The new shape, empty == today's `resourcePool: {}`.
-                    resource_pool: Some(ResourcePoolClaim {
-                        alias: None,
-                        request: None,
-                    }),
-                },
-                parent_id: None,
-                width: None,
-                height: None,
-            },
-            end_node("e"),
-        ],
-        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
-        viewport: None,
-        instance_concurrency: Default::default(),
-        definitions: Default::default(),
+fn deployment_model_surface_round_trips() {
+    use mekhan_service::models::template::{
+        DeploymentModel, ResourcePoolBinding, ScheduledOperation,
     };
 
-    let air = compile_to_air(&graph, "pool_test", "", &std::collections::HashMap::new())
-        .expect("a pooled AutomatedStep should compile");
-
-    // The pooled path synthesizes the claim/release handshake transitions.
-    assert!(
-        has_transition(&air, "t_auto_claim"),
-        "pooled path must emit the claim transition"
+    // Default = plain inline, no pool. Serializes to a bare `{"mode":"inline"}`.
+    let inline_default = DeploymentModel::default();
+    assert_eq!(inline_default, DeploymentModel::Inline { pool: None });
+    assert_eq!(
+        serde_json::to_value(&inline_default).unwrap(),
+        json!({ "mode": "inline" })
     );
+    // A bare `{"mode":"inline"}` deserializes back to no-pool.
+    let parsed: DeploymentModel = serde_json::from_value(json!({ "mode": "inline" })).unwrap();
+    assert_eq!(parsed, DeploymentModel::Inline { pool: None });
+
+    // Inline with a pool binding (alias required).
+    let pooled: DeploymentModel = serde_json::from_value(
+        json!({ "mode": "inline", "pool": { "alias": "prod_gpu", "request": { "gpu_count": 2 } } }),
+    )
+    .expect("inline+pool must parse");
+    assert_eq!(
+        pooled,
+        DeploymentModel::Inline {
+            pool: Some(ResourcePoolBinding {
+                alias: "prod_gpu".to_string(),
+                request: Some(json!({ "gpu_count": 2 })),
+            })
+        }
+    );
+    // alias is REQUIRED: a `pool` without it is a hard deserialize error.
+    assert!(
+        serde_json::from_value::<DeploymentModel>(json!({ "mode": "inline", "pool": {} })).is_err(),
+        "pool without an alias must fail to deserialize"
+    );
+
+    // Scheduled: today's shape round-trips byte-identically (scheduler skipped,
+    // operation defaults to submit).
+    let sched_today: DeploymentModel = serde_json::from_value(
+        json!({ "mode": "scheduled", "jobTemplate": "petri-mumax3-worker" }),
+    )
+    .unwrap();
+    assert_eq!(
+        sched_today,
+        DeploymentModel::Scheduled {
+            scheduler: None,
+            job_template: "petri-mumax3-worker".to_string(),
+            resources: None,
+            operation: ScheduledOperation::Submit,
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&sched_today).unwrap(),
+        json!({ "mode": "scheduled", "jobTemplate": "petri-mumax3-worker", "operation": "submit" })
+    );
+
+    // The new Scheduled knobs parse.
+    let sched_full: DeploymentModel = serde_json::from_value(json!({
+        "mode": "scheduled",
+        "scheduler": "prod_dc",
+        "jobTemplate": "render",
+        "operation": "lease"
+    }))
+    .unwrap();
+    assert!(matches!(
+        sched_full,
+        DeploymentModel::Scheduled { operation: ScheduledOperation::Lease, scheduler: Some(_), .. }
+    ));
 }
 
 /// The two pool resource KINDS register through the same machinery as every

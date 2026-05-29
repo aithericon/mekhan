@@ -21,9 +21,12 @@
 						"image": "alpine:latest"
 					}
 				},
-				"resourcePool": {
-					"alias": "prod_gpu",
-					"request": { "gpu_count": 1, "gpu_type": "a100" }
+				"deploymentModel": {
+					"mode": "inline",
+					"pool": {
+						"alias": "prod_gpu",
+						"request": { "units": 1 }
+					}
 				}
 			}
 		},
@@ -39,7 +42,7 @@
 					{
 						"edgeId": "have-gpu",
 						"label": "Have GPU",
-						"guard": "render.lease.gpu_uuid != \"\""
+						"guard": "render.lease.unit_id != \"\""
 					}
 				],
 				"defaultBranch": "default"

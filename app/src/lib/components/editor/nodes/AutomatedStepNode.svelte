@@ -12,8 +12,14 @@
 	const fields = $derived(data.output?.fields ?? []);
 	const hasFields = $derived(fields.length > 0);
 	const outputId = $derived(data.output?.id ?? 'out');
-	// Presence of a resource-pool claim — show a "GPU pool" chip on the card.
-	const requiresPool = $derived(data.resourcePool != null);
+	// Inline token-pool admission (deploymentModel.Inline.pool) — show a "Pool"
+	// chip on the card.
+	const requiresPool = $derived(
+		data.deploymentModel?.mode === 'inline' && data.deploymentModel.pool != null
+	);
+	const poolAlias = $derived(
+		data.deploymentModel?.mode === 'inline' ? (data.deploymentModel.pool?.alias ?? '') : ''
+	);
 
 	const kindBadge: Record<string, string> = {
 		text: 'Txt',
@@ -48,11 +54,11 @@
 			{#if requiresPool}
 				<span
 					class="inline-flex shrink-0 items-center gap-1 rounded bg-node-automated/15 px-1.5 py-0.5 text-sm font-medium text-node-automated"
-					title="Holds a unit from the shared GPU pool (resource-pool-net) while running"
+					title={`Holds a unit from the "${poolAlias}" token pool while running`}
 					data-testid="badge-gpu-pool"
 				>
 					<Cpu class="size-3" />
-					GPU pool
+					Pool
 				</span>
 			{/if}
 		</div>

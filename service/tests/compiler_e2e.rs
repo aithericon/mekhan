@@ -440,15 +440,17 @@ fn transition_output_places<'a>(air: &'a Value, tid: &str) -> Vec<&'a str> {
         .unwrap_or_default()
 }
 
-/// An AutomatedStep with a `resourcePool` claim lowers to the
-/// claim/register/release handshake against the well-known pool net, and —
-/// the load-bearing invariant — BOTH terminal exits (success + error) arc to
-/// `release_out`, so the held capacity token is never stranded (docs/14).
+/// A pooled (`Inline { pool: { alias } }`) AutomatedStep lowers to the
+/// claim/register/release handshake against the resolved `token_pool`'s backing
+/// net, and — the load-bearing invariant — BOTH terminal exits (success +
+/// error) arc to `release_out`, so the held capacity token is never stranded
+/// (docs/14). The well-known-global fallback is gone, so this drives the
+/// resolved-alias path (the only pooled path now).
 #[test]
 fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() {
-    let graph = load_graph("resource-pool-step.json");
-    let air = compile_to_air(&graph, "t", "", &HashMap::new())
-        .expect("resource-pool step should compile");
+    let air = compile_aliased(&known_with_prod_gpu("token_pool"))
+        .expect("pooled step should compile");
+    let expected_net = format!("pool-{}", prod_gpu_id());
 
     // Structural sanity the whole suite leans on.
     assert_all_transitions_wired(&air);
@@ -460,14 +462,14 @@ fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() 
     assert!(has_place(&air, "p_render_register_out"), "register bridge_out");
     assert!(has_place(&air, "p_render_release_out"), "release bridge_out");
 
-    // Claim bridge targets the canonical pool net + claim_inbox, and routes
+    // Claim bridge targets the RESOLVED pool net + claim_inbox, and routes
     // the "grant" reply back to the grant inbox place.
     let claim_out = places(&air)
         .iter()
         .find(|p| p["id"] == "p_render_claim_out")
         .expect("claim_out place");
     assert_eq!(claim_out["type"], "bridge_out");
-    assert_eq!(claim_out["bridge_out"]["target_net_id"], "resource-pool-net");
+    assert_eq!(claim_out["bridge_out"]["target_net_id"], expected_net);
     assert_eq!(claim_out["bridge_out"]["target_place_name"], "claim_inbox");
     assert_eq!(
         claim_out["bridge_out"]["reply_channels"]["grant"], "p_render_grant_inbox",
@@ -482,7 +484,7 @@ fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() 
     ] {
         let p = places(&air).iter().find(|p| p["id"] == pid).unwrap();
         assert_eq!(p["type"], "bridge_out", "{pid} is a bridge_out");
-        assert_eq!(p["bridge_out"]["target_net_id"], "resource-pool-net");
+        assert_eq!(p["bridge_out"]["target_net_id"], expected_net);
         assert_eq!(p["bridge_out"]["target_place_name"], inbox);
         assert!(
             p["bridge_out"]["reply_channels"].is_null(),
@@ -530,31 +532,22 @@ fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() 
     );
 }
 
-/// Byte-identity guard: an AutomatedStep with NO `resourcePool` lowers exactly
-/// as today — the inline executor lifecycle, and NONE of the pool bridge
-/// places. (Companion to `automated_step_inline_unchanged_*` in
-/// `compiler_tests.rs`; this one runs through the camelCase JSON path.)
+/// Byte-identity guard: a plain-inline AutomatedStep (`deploymentModel` absent
+/// or `{ mode: inline }` with no pool) lowers exactly as today — the inline
+/// executor lifecycle, and NONE of the pool bridge places. (Companion to
+/// `automated_step_inline_unchanged_*` in `compiler_tests.rs`; this one runs
+/// through the camelCase JSON path.)
 #[test]
-fn automated_step_without_resource_pool_emits_no_pool_bridges() {
-    // Reuse the pooled fixture but strip the resourcePool field so the only
-    // difference vs. the pooled test is the claim.
-    let mut graph = load_graph("resource-pool-step.json");
-    for node in &mut graph.nodes {
-        if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
-            resource_pool,
-            ..
-        } = &mut node.data
-        {
-            *resource_pool = None;
-        }
-    }
+fn plain_inline_step_emits_no_pool_bridges() {
+    // The step fixture is now plain inline (no pool).
+    let graph = load_graph("resource-pool-step.json");
     let air = compile_to_air(&graph, "t", "", &HashMap::new())
-        .expect("no-pool step should compile");
+        .expect("plain-inline step should compile");
 
     // Inline executor lifecycle present (scoped `render/prepare`)...
     assert!(
         has_transition(&air, "render/prepare"),
-        "no-pool keeps the inline executor-lifecycle prepare"
+        "plain inline keeps the inline executor-lifecycle prepare"
     );
     // ...and NONE of the pool bridges.
     for pid in [
@@ -565,11 +558,11 @@ fn automated_step_without_resource_pool_emits_no_pool_bridges() {
         "p_render_held",
         "p_render_pending",
     ] {
-        assert!(!has_place(&air, pid), "no-pool must not emit {pid}");
+        assert!(!has_place(&air, pid), "plain inline must not emit {pid}");
     }
     assert!(
         !has_transition(&air, "t_render_claim"),
-        "no-pool must not emit the claim transition"
+        "plain inline must not emit the claim transition"
     );
 }
 
@@ -616,9 +609,9 @@ fn compile_aliased(known: &KnownResources) -> Result<Value, CompileError> {
     .map(|(air, _iface)| air)
 }
 
-/// The keystone: a `resourcePool: { alias }` step resolves to the pool
-/// resource's backing net `pool-<id>` (NOT the well-known global), carries the
-/// validated `request` in the ClaimRequest, declares `Lease__<kind>` in
+/// The keystone: an `Inline { pool: { alias } }` step resolves to the
+/// token_pool resource's backing net `pool-<id>`, carries the validated
+/// `request` in the ClaimRequest, declares `Lease__token_pool` in
 /// `definitions`, types the grant inbox with it, stages `lease.json` into the
 /// body, and merges the lease into the parked envelope so a downstream
 /// `<slug>.lease.<field>` borrow synthesizes a read-arc.
@@ -685,7 +678,7 @@ fn aliased_pool_resolves_backing_net_and_emits_typed_lease() {
         .unwrap()
         .to_string();
     assert!(
-        claim_logic.contains("request:") && claim_logic.contains("gpu_count"),
+        claim_logic.contains("request:") && claim_logic.contains("units"),
         "claim must carry the request params: {claim_logic}"
     );
 
@@ -741,37 +734,37 @@ fn aliased_pool_resolves_backing_net_and_emits_typed_lease() {
     );
 }
 
-/// datacenter is a pool kind too — same plumbing, `Lease__datacenter` with the
-/// scheduler lease fields.
+/// A `datacenter` under `Inline.pool` is a CompileError — it's a scheduler
+/// resource and belongs under `Scheduled`. The consolidation-pivot split:
+/// Inline admission is `token_pool`-only.
 #[test]
-fn aliased_pool_datacenter_kind_emits_lease_with_gpu_fields() {
-    let air = compile_aliased(&known_with_prod_gpu("datacenter"))
-        .expect("aliased datacenter step should compile");
-    let props = &air["definitions"]["Lease__datacenter"]["properties"];
-    for f in ["node", "gpu_uuid", "alloc_id", "expiry"] {
-        assert!(
-            props[f].is_object(),
-            "datacenter lease must declare `{f}`, got {props:?}"
-        );
+fn datacenter_under_inline_pool_is_compile_error() {
+    let err = compile_aliased(&known_with_prod_gpu("datacenter")).unwrap_err();
+    let msg = err.to_string();
+    match &err {
+        CompileError::ResourcePoolNotAPool { alias, kind, .. } => {
+            assert_eq!(alias, "prod_gpu");
+            assert_eq!(kind, "datacenter");
+            // The message steers the author to Scheduled.
+            assert!(
+                msg.contains("Scheduled"),
+                "datacenter error must point at Scheduled: {msg}"
+            );
+        }
+        other => panic!("expected ResourcePoolNotAPool for datacenter, got {other:?}"),
     }
-    let expected_net = format!("pool-{}", prod_gpu_id());
-    let claim_out = places(&air)
-        .iter()
-        .find(|p| p["id"] == "p_render_claim_out")
-        .unwrap();
-    assert_eq!(claim_out["bridge_out"]["target_net_id"], expected_net);
 }
 
-/// Byte-identity: the empty `resourcePool: {}` (alias None) compiles
-/// IDENTICALLY whether or not the workspace has pool resources — it always
-/// bridges to the well-known global, with no lease typing/staging. This is the
-/// R1 fallback the demo-13 golden + the `automated_step_*` guards pin.
+/// Byte-identity: a plain-inline step compiles IDENTICALLY whether or not the
+/// workspace has pool resources — the manifest is irrelevant to a no-pool step,
+/// and it emits no pool bridges / lease typing. (The well-known-global fallback
+/// is gone; plain inline is the no-admission path now.)
 #[test]
-fn no_alias_pool_is_byte_identical_to_well_known_global() {
+fn plain_inline_is_byte_identical_regardless_of_manifest() {
     let graph = load_graph("resource-pool-step.json");
     // Compile with an empty manifest (today's public entry) ...
     let air_empty = compile_to_air(&graph, "t", "", &HashMap::new()).unwrap();
-    // ... and with a populated manifest that the no-alias claim ignores.
+    // ... and with a populated manifest a plain-inline step ignores.
     let air_known = compile_to_air_with_subworkflows_and_interfaces(
         &graph,
         "t",
@@ -786,17 +779,16 @@ fn no_alias_pool_is_byte_identical_to_well_known_global() {
 
     assert_eq!(
         air_empty, air_known,
-        "the no-alias pool path must not depend on the resource manifest"
+        "a plain-inline step's AIR must not depend on the resource manifest"
     );
-    // And it bridges to the well-known global, with no lease definition.
-    let claim_out = places(&air_empty)
-        .iter()
-        .find(|p| p["id"] == "p_render_claim_out")
-        .unwrap();
-    assert_eq!(claim_out["bridge_out"]["target_net_id"], "resource-pool-net");
+    // No pool bridges, no lease definition.
+    assert!(
+        !has_place(&air_empty, "p_render_claim_out"),
+        "plain inline must emit no claim bridge"
+    );
     assert!(
         air_empty["definitions"].get("Lease__token_pool").is_none(),
-        "no-alias path must emit no Lease__ definition"
+        "plain inline must emit no Lease__ definition"
     );
 }
 
@@ -824,19 +816,20 @@ fn aliased_pool_non_pool_kind_is_compile_error() {
     }
 }
 
-/// A `request` that violates the kind's `claim_schema` → CompileError. The
-/// fixture's request is valid; we mutate it to a wrong-typed `gpu_count`.
+/// A `request` that violates the token_pool `claim_schema` → CompileError. The
+/// fixture's request is valid (`{units:1}`); we mutate `units` to a wrong type.
 #[test]
 fn aliased_pool_bad_request_is_compile_error() {
     let mut graph = load_graph("resource-pool-aliased.json");
     for node in &mut graph.nodes {
         if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
-            resource_pool: Some(claim),
+            deployment_model:
+                mekhan_service::models::template::DeploymentModel::Inline { pool: Some(binding) },
             ..
         } = &mut node.data
         {
-            // `gpu_count` is `Option<u32>`; a string is invalid.
-            claim.request = Some(serde_json::json!({ "gpu_count": "lots" }));
+            // `units` is `Option<u32>`; a string is invalid.
+            binding.request = Some(serde_json::json!({ "units": "lots" }));
         }
     }
     let err = compile_to_air_with_subworkflows_and_interfaces(
@@ -846,7 +839,7 @@ fn aliased_pool_bad_request_is_compile_error() {
         &HashMap::new(),
         &HashMap::new(),
         &SubWorkflowAir::new(),
-        &known_with_prod_gpu("datacenter"),
+        &known_with_prod_gpu("token_pool"),
     )
     .unwrap_err();
     match err {

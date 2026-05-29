@@ -2547,19 +2547,36 @@ export interface components {
             testsRemoved: number;
         };
         /**
-         * @description Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
-         *     `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
-         *     "resources":{...}}`. Keep the `mode` strings in lockstep with the
-         *     `snake_case` derive.
+         * @description Where an `AutomatedStep`'s job runs. Internally tagged on the wire by
+         *     `mode`: `{"mode":"inline", ...}` or `{"mode":"scheduled", ...}`. Keep the
+         *     `mode` strings in lockstep with the `snake_case` derive.
+         *
+         *     `inline` vs `scheduled` is the physically-honest local-executor vs
+         *     external-cluster split. Resource admission *is* scheduling, so:
+         *     - a `token_pool` admission lives under [`DeploymentModel::Inline`]'s `pool`
+         *       (the body runs inline holding the typed lease — R1–R3 machinery), and
+         *     - an external cluster is a `datacenter` resource bound under
+         *       [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`
+         *       selecting submit (today's sbatch/dispatch) vs lease (R4).
          */
         DeploymentModel: {
             /** @enum {string} */
             mode: "inline";
+            pool?: null | components["schemas"]["ResourcePoolBinding"];
         } | {
             jobTemplate: string;
             /** @enum {string} */
             mode: "scheduled";
+            /**
+             * @description `Submit` (default) = today's proven dispatch. `Lease` = R4.
+             *     NOTE: a DIFFERENT field name from the `mode` tag on purpose — `mode`
+             *     already discriminates inline/scheduled, so the submit/lease selector
+             *     is `operation`.
+             */
+            operation?: components["schemas"]["ScheduledOperation"];
             resources?: null | components["schemas"]["ResourceConfig"];
+            /** @description `datacenter` resource alias. `None` = env-global scheduler-net. */
+            scheduler?: string | null;
         };
         /**
          * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
@@ -4015,35 +4032,30 @@ export interface components {
             memory_bytes?: number | null;
         };
         /**
-         * @description A shared-capacity claim against a resource pool (`docs/14`). Authored on an
-         *     [`WorkflowNodeData::AutomatedStep`] (sibling to `deployment_model`); its
-         *     presence makes the compiler wrap the inline body with a
-         *     claim/register/release handshake so the engine's firing rule provides
-         *     admission control + mutual exclusion for free.
+         * @description A binding to a `token_pool` resource for inline admission (`docs/14`).
+         *     Lives under [`DeploymentModel::Inline`]'s `pool`; its presence makes the
+         *     compiler wrap the inline executor body with a claim/register/release
+         *     handshake against the pool resource's backing net so the engine's firing
+         *     rule provides admission control + mutual exclusion for free.
          *
-         *     Both fields are optional, so the empty `resourcePool: {}` the editor toggle
-         *     and demo 13 emit deserializes to `{ alias: None, request: None }` — which
-         *     still triggers the pooled lowering and bridges to the well-known global pool
-         *     (R1 fallback, byte-identical to the prototype). R2 makes `alias` meaningful:
-         *     it resolves a pool *resource* through the resource machinery to a backing
-         *     net id + kind + claim/lease schemas, and validates `request` against the
-         *     kind's `claim_schema`.
+         *     `alias` is REQUIRED (the `Option` lives on `Inline.pool`, expressing "no
+         *     pool"). It resolves at publish through the resource machinery to a backing
+         *     net id + kind + claim/lease schemas; `request` is validated against the
+         *     kind's `claim_schema`. The well-known-global fallback from the prototype is
+         *     gone — a pooled step must name a `token_pool` resource.
          */
-        ResourcePoolClaim: {
+        ResourcePoolBinding: {
             /**
-             * @description Which pool *resource* (by workspace alias) to claim against. Resolved at
-             *     publish (R2) through the resource machinery to a backing net id, kind,
-             *     and claim/lease schemas. `None` falls back to today's behavior — the
-             *     well-known global pool (`well_known::RESOURCE_POOL_NET_ID`) — so an
-             *     `resourcePool: {}` claim stays byte-identical to the prototype's
-             *     lowering until R2 resolves a real alias.
+             * @description Which `token_pool` resource (by workspace alias) to claim against.
+             *     Required. Resolved at publish to a backing net id (`pool-<resource_id>`),
+             *     kind, and claim/lease schemas.
              */
-            alias?: string | null;
+            alias: string;
             /**
-             * @description Claim-schema-shaped request params (the selected kind's `claim_schema`
-             *     in `crate::pool` / `aithericon_resources::pool`). Carried verbatim into
-             *     the `ClaimRequest` and validated against the kind's `claim_schema` in
-             *     R2. `None` ⇒ the kind's default placement (e.g. one token).
+             * @description Claim-schema-shaped request params (the kind's `claim_schema` in
+             *     `aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`
+             *     and validated against the kind's `claim_schema`. `None` ⇒ the kind's
+             *     default placement (e.g. one token).
              */
             request?: unknown;
         };
@@ -4177,6 +4189,12 @@ export interface components {
             runs: components["schemas"]["TemplateTestRun"][];
             total: number;
         };
+        /**
+         * @description The two operations a `Scheduled` step can perform against its cluster.
+         *     Internally a plain snake_case enum: `"submit"` / `"lease"`.
+         * @enum {string}
+         */
+        ScheduledOperation: "submit" | "lease";
         /**
          * @description One reachable, producer-attributed reference the guard picker should
          *     offer at a node. The single source of truth for editor scope —
@@ -5229,11 +5247,16 @@ export interface components {
         } | {
             /**
              * @description Where/how the job is dispatched. `Inline` (default) = the current
-             *     direct executor-lifecycle path. `Scheduled` = submit through the
-             *     long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
-             *     optionally pinning a job template + resources. `#[serde(default)]`
-             *     together with the `Inline` default ⇒ every existing template
+             *     direct executor-lifecycle path, optionally under a `token_pool`
+             *     admission (`Inline.pool`). `Scheduled` = submit/lease through an
+             *     external cluster (a `datacenter` resource, docs/13; or today's
+             *     env-global scheduler-net when `scheduler` is `None`).
+             *     `#[serde(default)]` + the `Inline` default ⇒ every existing template
              *     round-trips unchanged (same precedent as `retry_policy`).
+             *
+             *     Resource admission *is* scheduling, so the former standalone
+             *     `resourcePool` field folded into `Inline.pool` here (post-R3
+             *     consolidation pivot).
              */
             deploymentModel?: components["schemas"]["DeploymentModel"];
             description?: string | null;
@@ -5253,7 +5276,6 @@ export interface components {
              *     caller needs the canonical backend shape.
              */
             output?: components["schemas"]["Port"];
-            resourcePool?: null | components["schemas"]["ResourcePoolClaim"];
             /**
              * @description Retry behaviour on execution failure/timeout. Defaults to 3
              *     immediate retries (the historical hardcoded value), so existing

@@ -1176,19 +1176,6 @@
       "type": "state"
     },
     {
-      "bridge_out": {
-        "reply_channels": {
-          "grant": "p_render_grant_inbox"
-        },
-        "target_net_id": "resource-pool-net",
-        "target_place_name": "claim_inbox"
-      },
-      "id": "p_render_claim_out",
-      "name": "GPU Render - Claim Capacity",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "bridge_out"
-    },
-    {
       "id": "p_render_ctrl",
       "name": "GPU Render - Control Token",
       "token_schema": "#/definitions/Ctrl__render",
@@ -1207,56 +1194,10 @@
       "type": "state"
     },
     {
-      "id": "p_render_exhausted",
-      "name": "GPU Render - Retries Exhausted (awaiting release)",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "bridge_reply": true,
-      "bridge_reply_channel": "grant",
-      "id": "p_render_grant_inbox",
-      "name": "GPU Render - Grant Inbox",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_render_held",
-      "name": "GPU Render - Held (grant_id + gpu_id, release echo)",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_render_output",
       "name": "GPU Render - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
-    },
-    {
-      "id": "p_render_pending",
-      "name": "GPU Render - Pending (input + grant_id, awaiting grant)",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "bridge_out": {
-        "target_net_id": "resource-pool-net",
-        "target_place_name": "register_inbox"
-      },
-      "id": "p_render_register_out",
-      "name": "GPU Render - Register Hold",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "bridge_out"
-    },
-    {
-      "bridge_out": {
-        "target_net_id": "resource-pool-net",
-        "target_place_name": "release_inbox"
-      },
-      "id": "p_render_release_out",
-      "name": "GPU Render - Release Capacity",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "bridge_out"
     },
     {
       "id": "p_start_data",
@@ -1752,7 +1693,7 @@
       },
       "outputs": [
         {
-          "place": "p_render_exhausted",
+          "place": "p_render_error",
           "port": "err",
           "weight": 1
         }
@@ -2251,6 +2192,59 @@
         {
           "place": "render/failure_log",
           "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "render/prepare",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_main",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.job_id = \"render\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# GPU Render — a mock render body.\\n#\\n# Seeded as a plain inline step (the demo seeder provisions templates, not\\n# resources). To turn it into the shared-pool admission showcase: create a\\n# `token_pool` resource at /resources, then set this step's deploymentModel to\\n# `{ mode: \\\"inline\\\", pool: { alias: \\\"<your-pool>\\\" } }`. The compiler then wraps\\n# this body behind a capacity claim against the pool's backing net: the net does\\n# not start the body until a unit token is granted, and the grant is returned on\\n# every exit. From the body's point of view the unit is simply available —\\n# admission control and mutual exclusion are the Petri firing rule, not\\n# application code (see docs/14). The granted lease is staged as `lease.json`\\n# and parked, so body code can read `lease.unit_id`.\\n#\\n# `input.job_name` is the Start field (control-token-resident leaf). The\\n# ~12s sleep makes contention legible on the pool's dashboard once several\\n# instances contend for a small pool.\\n\\nimport time\\n\\nHOLD_SECONDS = 12\\n\\nlog_info(\\\"render started — holding a pooled GPU\\\", job=input.job_name)\\ntime.sleep(HOLD_SECONDS)\\n\\n# Implicit outputs: the runner sweeps globals matching the declared output\\n# port fields (`rendered`, `gpu`) at the end of execution.\\nrendered = f\\\"rendered {input.job_name} in {HOLD_SECONDS}s\\\"\\ngpu = \\\"(assigned by pool)\\\"\\n\\nlog_info(\\\"render complete — releasing GPU back to the pool\\\", job=input.job_name)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"rendered\", \"required\": true}, #{\"kind\": \"text\", \"name\": \"gpu\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/render/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "type": "rhai"
+      },
+      "name": "GPU Render - Prepare",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "render/inbox",
+          "port": "job",
           "weight": 1
         }
       ]
@@ -3165,167 +3159,11 @@
       ]
     },
     {
-      "guard": {
-        "source": "grant.grant_id == pending.grant_id",
-        "type": "rhai"
-      },
-      "id": "t_render_acquire",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "pending",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "grant",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_render_pending",
-          "port": "pending",
-          "weight": 1
-        },
-        {
-          "place": "p_render_grant_inbox",
-          "port": "grant",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let input = pending.input; let d = input; d.job_id = \"render\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# GPU Render — a mock render body that HOLDS a pooled GPU for its duration.\\n#\\n# This step declares `resourcePool` in the graph, so the compiler wraps it\\n# behind a capacity claim against the long-lived `resource-pool-net`: the net\\n# does not even start this body until a GPU token is granted from the pool,\\n# and the grant is returned on every exit. From the body's point of view the\\n# GPU is simply available — admission control and mutual exclusion are the\\n# Petri firing rule, not application code (see docs/14).\\n#\\n# `input.job_name` is the Start field (control-token-resident leaf). The\\n# ~12s sleep makes the 2-running / 2-waiting contention legible in the\\n# /nets/resource-pool dashboard while several instances contend.\\n\\nimport time\\n\\nHOLD_SECONDS = 12\\n\\nlog_info(\\\"render started — holding a pooled GPU\\\", job=input.job_name)\\ntime.sleep(HOLD_SECONDS)\\n\\n# Implicit outputs: the runner sweeps globals matching the declared output\\n# port fields (`rendered`, `gpu`) at the end of execution.\\nrendered = f\\\"rendered {input.job_name} in {HOLD_SECONDS}s\\\"\\ngpu = \\\"(assigned by pool)\\\"\\n\\nlog_info(\\\"render complete — releasing GPU back to the pool\\\", job=input.job_name)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"rendered\", \"required\": true}, #{\"kind\": \"text\", \"name\": \"gpu\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/render/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d, reg: #{ grant_id: pending.grant_id, gpu_id: grant.gpu_id }, held: #{ grant_id: pending.grant_id, gpu_id: grant.gpu_id } }",
-        "type": "rhai"
-      },
-      "name": "GPU Render - Acquire",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "job",
-          "schema_ref": "#/definitions/ExecutorSubmitInput"
-        },
-        {
-          "cardinality": "single",
-          "name": "reg",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "held",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          },
-          "ExecutorSubmitInput": {
-            "$ref": "#/definitions/ExecutorSubmitInput"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "render/inbox",
-          "port": "job",
-          "weight": 1
-        },
-        {
-          "place": "p_render_register_out",
-          "port": "reg",
-          "weight": 1
-        },
-        {
-          "place": "p_render_held",
-          "port": "held",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_render_claim",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "input",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_start_main",
-          "port": "input",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let gid = (input._instance_id + \":render\"); #{ claim: #{ grant_id: gid }, pending: #{ input: input, grant_id: gid } }",
-        "type": "rhai"
-      },
-      "name": "GPU Render - Claim",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "claim",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "pending",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_render_claim_out",
-          "port": "claim",
-          "weight": 1
-        },
-        {
-          "place": "p_render_pending",
-          "port": "pending",
-          "weight": 1
-        }
-      ]
-    },
-    {
       "id": "t_render_to_error",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "held",
+          "name": "dead",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -3339,18 +3177,13 @@
       },
       "inputs": [
         {
-          "place": "p_render_exhausted",
-          "port": "err",
-          "weight": 1
-        },
-        {
-          "place": "p_render_held",
-          "port": "held",
+          "place": "render/dead_letter",
+          "port": "dead",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ error: err, release: #{ grant_id: held.grant_id } }",
+        "source": "#{ error: dead }",
         "type": "rhai"
       },
       "name": "GPU Render - To Error",
@@ -3358,11 +3191,6 @@
         {
           "cardinality": "single",
           "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "release",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -3379,11 +3207,6 @@
           "place": "p_render_error",
           "port": "error",
           "weight": 1
-        },
-        {
-          "place": "p_render_release_out",
-          "port": "release",
-          "weight": 1
         }
       ]
     },
@@ -3393,11 +3216,6 @@
         {
           "cardinality": "single",
           "name": "done",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "held",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -3414,15 +3232,10 @@
           "place": "render/completed",
           "port": "done",
           "weight": 1
-        },
-        {
-          "place": "p_render_held",
-          "port": "held",
-          "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ output: done, release: #{ grant_id: held.grant_id } }",
+        "source": "#{ output: done }",
         "type": "rhai"
       },
       "name": "GPU Render - To Output",
@@ -3430,11 +3243,6 @@
         {
           "cardinality": "single",
           "name": "output",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "release",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -3450,11 +3258,6 @@
         {
           "place": "p_render_output",
           "port": "output",
-          "weight": 1
-        },
-        {
-          "place": "p_render_release_out",
-          "port": "release",
           "weight": 1
         }
       ]

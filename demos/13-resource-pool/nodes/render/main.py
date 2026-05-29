@@ -1,15 +1,19 @@
-# GPU Render — a mock render body that HOLDS a pooled GPU for its duration.
+# GPU Render — a mock render body.
 #
-# This step declares `resourcePool` in the graph, so the compiler wraps it
-# behind a capacity claim against the long-lived `resource-pool-net`: the net
-# does not even start this body until a GPU token is granted from the pool,
-# and the grant is returned on every exit. From the body's point of view the
-# GPU is simply available — admission control and mutual exclusion are the
-# Petri firing rule, not application code (see docs/14).
+# Seeded as a plain inline step (the demo seeder provisions templates, not
+# resources). To turn it into the shared-pool admission showcase: create a
+# `token_pool` resource at /resources, then set this step's deploymentModel to
+# `{ mode: "inline", pool: { alias: "<your-pool>" } }`. The compiler then wraps
+# this body behind a capacity claim against the pool's backing net: the net does
+# not start the body until a unit token is granted, and the grant is returned on
+# every exit. From the body's point of view the unit is simply available —
+# admission control and mutual exclusion are the Petri firing rule, not
+# application code (see docs/14). The granted lease is staged as `lease.json`
+# and parked, so body code can read `lease.unit_id`.
 #
 # `input.job_name` is the Start field (control-token-resident leaf). The
-# ~12s sleep makes the 2-running / 2-waiting contention legible in the
-# /nets/resource-pool dashboard while several instances contend.
+# ~12s sleep makes contention legible on the pool's dashboard once several
+# instances contend for a small pool.
 
 import time
 

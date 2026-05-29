@@ -297,23 +297,18 @@ pub enum WorkflowNodeData {
         #[serde(rename = "retryPolicy", default)]
         retry_policy: RetryPolicy,
         /// Where/how the job is dispatched. `Inline` (default) = the current
-        /// direct executor-lifecycle path. `Scheduled` = submit through the
-        /// long-lived scheduler-net (Nomad/Slurm) for queued / GPU execution,
-        /// optionally pinning a job template + resources. `#[serde(default)]`
-        /// together with the `Inline` default ⇒ every existing template
+        /// direct executor-lifecycle path, optionally under a `token_pool`
+        /// admission (`Inline.pool`). `Scheduled` = submit/lease through an
+        /// external cluster (a `datacenter` resource, docs/13; or today's
+        /// env-global scheduler-net when `scheduler` is `None`).
+        /// `#[serde(default)]` + the `Inline` default ⇒ every existing template
         /// round-trips unchanged (same precedent as `retry_policy`).
+        ///
+        /// Resource admission *is* scheduling, so the former standalone
+        /// `resourcePool` field folded into `Inline.pool` here (post-R3
+        /// consolidation pivot).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
-        /// Optional shared-capacity claim against the well-known resource-pool
-        /// net (`docs/14`). When `Some`, the inline executor body is wrapped
-        /// with a claim/register/release handshake against `resource-pool-net`
-        /// so contended infrastructure (GPUs, lab machines, LLM slots) is
-        /// admission-controlled by the Petri firing rule. `None` (absent) is
-        /// byte-identical to today's wire + lowering — same precedent as
-        /// `retry_policy` / `deployment_model`; guarded by
-        /// `automated_step_inline_unchanged`.
-        #[serde(rename = "resourcePool", default, skip_serializing_if = "Option::is_none")]
-        resource_pool: Option<ResourcePoolClaim>,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -1090,25 +1085,75 @@ pub fn default_join_output_port() -> Port {
     }
 }
 
-/// Where an `AutomatedStep`'s job runs. Internally tagged on the wire:
-/// `{"mode":"inline"}` or `{"mode":"scheduled","jobTemplate":"...",
-/// "resources":{...}}`. Keep the `mode` strings in lockstep with the
-/// `snake_case` derive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
+/// Where an `AutomatedStep`'s job runs. Internally tagged on the wire by
+/// `mode`: `{"mode":"inline", ...}` or `{"mode":"scheduled", ...}`. Keep the
+/// `mode` strings in lockstep with the `snake_case` derive.
+///
+/// `inline` vs `scheduled` is the physically-honest local-executor vs
+/// external-cluster split. Resource admission *is* scheduling, so:
+/// - a `token_pool` admission lives under [`DeploymentModel::Inline`]'s `pool`
+///   (the body runs inline holding the typed lease — R1–R3 machinery), and
+/// - an external cluster is a `datacenter` resource bound under
+///   [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`
+///   selecting submit (today's sbatch/dispatch) vs lease (R4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum DeploymentModel {
-    /// Current behaviour: direct executor-lifecycle dispatch (NATS).
-    #[default]
-    Inline,
-    /// Submit through the long-lived scheduler-net (Nomad/Slurm) — queued /
-    /// GPU execution. `job_template` selects the scheduler's parameterized
-    /// job (e.g. `petri-mumax3-worker`).
+    /// Local executor-lifecycle dispatch (NATS). `pool: None` is plain inline,
+    /// byte-identical to pre-feature behaviour. `pool: Some` wraps the body in
+    /// a `token_pool` claim/register/release handshake so contended local
+    /// infrastructure (GPUs, lab machines, LLM slots) is admission-controlled
+    /// by the Petri firing rule (R3). The bound alias MUST be a `token_pool`
+    /// resource — a `datacenter` belongs under [`DeploymentModel::Scheduled`].
+    Inline {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pool: Option<ResourcePoolBinding>,
+    },
+    /// Submit/lease through an external cluster. `scheduler` names a
+    /// `datacenter` resource (docs/13); `None` = today's env-global
+    /// scheduler-net (byte-identical). `job_template` selects the scheduler's
+    /// parameterized job (e.g. `petri-mumax3-worker`). `operation` picks
+    /// `Submit` (today's queued dispatch) or `Lease` (R4: hold an allocation,
+    /// run on it).
     Scheduled {
+        /// `datacenter` resource alias. `None` = env-global scheduler-net.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheduler: Option<String>,
         #[serde(rename = "jobTemplate")]
         job_template: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
+        /// `Submit` (default) = today's proven dispatch. `Lease` = R4.
+        /// NOTE: a DIFFERENT field name from the `mode` tag on purpose — `mode`
+        /// already discriminates inline/scheduled, so the submit/lease selector
+        /// is `operation`.
+        #[serde(default)]
+        operation: ScheduledOperation,
     },
+}
+
+impl Default for DeploymentModel {
+    /// Plain inline (no pool) — byte-identical to pre-feature behaviour, and the
+    /// shape every existing template round-trips to (a bare
+    /// `{"mode":"inline"}`, or an absent `deploymentModel` via the field's
+    /// `#[serde(default)]`).
+    fn default() -> Self {
+        DeploymentModel::Inline { pool: None }
+    }
+}
+
+/// The two operations a `Scheduled` step can perform against its cluster.
+/// Internally a plain snake_case enum: `"submit"` / `"lease"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduledOperation {
+    /// Today's behaviour: submit a job to the scheduler-net (sbatch / Nomad
+    /// dispatch) and await its result. Proven end-to-end.
+    #[default]
+    Submit,
+    /// Hold an allocation/lease on the cluster and run the body on it (R4 —
+    /// the `resource_lease` engine effect + datacenter lease-adapter).
+    Lease,
 }
 
 /// Optional resource hints forwarded to the scheduler for a `Scheduled` step.
@@ -1123,34 +1168,28 @@ pub struct ResourceConfig {
     pub gpu: Option<u32>,
 }
 
-/// A shared-capacity claim against a resource pool (`docs/14`). Authored on an
-/// [`WorkflowNodeData::AutomatedStep`] (sibling to `deployment_model`); its
-/// presence makes the compiler wrap the inline body with a
-/// claim/register/release handshake so the engine's firing rule provides
-/// admission control + mutual exclusion for free.
+/// A binding to a `token_pool` resource for inline admission (`docs/14`).
+/// Lives under [`DeploymentModel::Inline`]'s `pool`; its presence makes the
+/// compiler wrap the inline executor body with a claim/register/release
+/// handshake against the pool resource's backing net so the engine's firing
+/// rule provides admission control + mutual exclusion for free.
 ///
-/// Both fields are optional, so the empty `resourcePool: {}` the editor toggle
-/// and demo 13 emit deserializes to `{ alias: None, request: None }` — which
-/// still triggers the pooled lowering and bridges to the well-known global pool
-/// (R1 fallback, byte-identical to the prototype). R2 makes `alias` meaningful:
-/// it resolves a pool *resource* through the resource machinery to a backing
-/// net id + kind + claim/lease schemas, and validates `request` against the
-/// kind's `claim_schema`.
+/// `alias` is REQUIRED (the `Option` lives on `Inline.pool`, expressing "no
+/// pool"). It resolves at publish through the resource machinery to a backing
+/// net id + kind + claim/lease schemas; `request` is validated against the
+/// kind's `claim_schema`. The well-known-global fallback from the prototype is
+/// gone — a pooled step must name a `token_pool` resource.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ResourcePoolClaim {
-    /// Which pool *resource* (by workspace alias) to claim against. Resolved at
-    /// publish (R2) through the resource machinery to a backing net id, kind,
-    /// and claim/lease schemas. `None` falls back to today's behavior — the
-    /// well-known global pool (`well_known::RESOURCE_POOL_NET_ID`) — so an
-    /// `resourcePool: {}` claim stays byte-identical to the prototype's
-    /// lowering until R2 resolves a real alias.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alias: Option<String>,
-    /// Claim-schema-shaped request params (the selected kind's `claim_schema`
-    /// in `crate::pool` / `aithericon_resources::pool`). Carried verbatim into
-    /// the `ClaimRequest` and validated against the kind's `claim_schema` in
-    /// R2. `None` ⇒ the kind's default placement (e.g. one token).
+pub struct ResourcePoolBinding {
+    /// Which `token_pool` resource (by workspace alias) to claim against.
+    /// Required. Resolved at publish to a backing net id (`pool-<resource_id>`),
+    /// kind, and claim/lease schemas.
+    pub alias: String,
+    /// Claim-schema-shaped request params (the kind's `claim_schema` in
+    /// `aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`
+    /// and validated against the kind's `claim_schema`. `None` ⇒ the kind's
+    /// default placement (e.g. one token).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<serde_json::Value>,
 }
@@ -2461,7 +2500,6 @@ pub mod dsl {
                         // DSL does not model deployment topology — inline.
                         deployment_model: DeploymentModel::default(),
                         // DSL does not model resource pools (yet).
-                        resource_pool: None,
                     })
                 }
                 "decision" => {

@@ -12,47 +12,17 @@
 use super::*;
 
 pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
-    // Resource-pool steps wrap the inline executor body with a
-    // claim/register/release handshake against the well-known pool net
-    // (`docs/14`). Delegated early — same `matches!`-then-delegate shape as
-    // the Scheduled arm — so the inline path below stays byte-identical when
-    // no pool is requested (guarded by `automated_step_inline_unchanged`).
+    // Dispatch on `deployment_model` (post-R3 consolidation: admission folded
+    // into it). `matches!` drops the borrow immediately so each delegate can
+    // take `cx` mutably.
     //
-    // v1: a pooled step is an INLINE step under contention. Pooled +
-    // `Scheduled` is rejected (the scheduler-net already owns its own
-    // queueing/admission, so layering a second pool over it is out of scope —
-    // see `docs/14`'s productionization gate). `matches!` drops the borrow
-    // immediately so the delegate can take `cx` mutably.
-    if matches!(
-        &cx.node.data,
-        WorkflowNodeData::AutomatedStep {
-            resource_pool: Some(_),
-            ..
-        }
-    ) {
-        if matches!(
-            &cx.node.data,
-            WorkflowNodeData::AutomatedStep {
-                deployment_model: DeploymentModel::Scheduled { .. },
-                ..
-            }
-        ) {
-            return Err(CompileError::Compilation(format!(
-                "node '{}': a resource-pool claim cannot be combined with a Scheduled \
-                 deployment model — the scheduler-net already owns queueing/admission. \
-                 Use a resource pool with the default (inline) deployment model, or drop \
-                 the pool claim (v1; see docs/14).",
-                cx.node.id
-            )));
-        }
-        return lower_automated_step_pooled(cx);
-    }
-
-    // Scheduled steps dispatch through the long-lived scheduler-net instead of
-    // the inline executor lifecycle. Delegated early so the inline path below
-    // is byte-identical to pre-feature behaviour (guarded by
-    // `automated_step_inline_unchanged`). `matches!` drops the borrow
-    // immediately so the delegate can take `cx` mutably.
+    //   - Scheduled            → lower_automated_step_scheduled (Submit = today's
+    //                            scheduler-net path, byte-identical; Lease = R4).
+    //   - Inline { pool: Some } → lower_automated_step_pooled (token_pool
+    //                            admission, R2/R3 machinery).
+    //   - Inline { pool: None } → falls through to the plain inline lowering
+    //                            below (BYTE-IDENTICAL — guarded by
+    //                            `automated_step_inline_unchanged`).
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
@@ -61,6 +31,16 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         }
     ) {
         return lower_automated_step_scheduled(cx);
+    }
+
+    if matches!(
+        &cx.node.data,
+        WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Inline { pool: Some(_) },
+            ..
+        }
+    ) {
+        return lower_automated_step_pooled(cx);
     }
 
     // Engine-effect backends (e.g. CatalogueQuery → `catalogue_lookup`):
@@ -296,12 +276,31 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     };
     let label = label.clone();
     let DeploymentModel::Scheduled {
+        scheduler,
         job_template,
         resources,
+        operation,
     } = deployment_model
     else {
         unreachable!("lower_automated_step_scheduled on non-Scheduled step")
     };
+    // R4: leasing an allocation (vs submitting a job) is not yet implemented —
+    // it needs the `resource_lease` engine effect + the datacenter lease
+    // adapter. Reject at compile so a `Lease` step fails fast at publish rather
+    // than silently lowering as a submit.
+    if matches!(operation, ScheduledOperation::Lease) {
+        return Err(CompileError::Compilation(format!(
+            "node '{id}': Scheduled `operation: lease` is not yet implemented (R4) — \
+             use `operation: submit`"
+        )));
+    }
+    // `scheduler` binds a `datacenter` resource (docs/13). R-consolidate keeps
+    // the env-global scheduler-net path byte-identical: when `scheduler` is
+    // `None` (today's only shape) the lowering is unchanged. A `Some` alias is
+    // accepted at the surface but the datacenter-net binding lands in R4; for
+    // now it does not alter the lowering (the env-global scheduler-net still
+    // services the submit). Bound to acknowledge the field without changing AIR.
+    let _scheduler = scheduler.clone();
     let job_template = job_template.clone();
     let resources: Option<ResourceConfig> = resources.clone();
     let backend_type = execution_spec.backend_type;
@@ -410,10 +409,8 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     Ok(())
 }
 
-/// Everything the pooled lowering needs once `resourcePool.alias` has been
-/// resolved to a pool resource. `None` (alias unset) is represented by the
-/// caller passing `None` around — this struct only exists for the resolved
-/// (alias=Some) path.
+/// Everything the pooled lowering needs once `Inline.pool.alias` has been
+/// resolved to a `token_pool` resource.
 struct PoolBinding {
     /// Deterministic backing net id (`pool-<resource_id>`) the claim/register/
     /// release bridges target.
@@ -423,29 +420,29 @@ struct PoolBinding {
     /// The kind's lease JSON Schema, registered into `scenario.definitions`.
     lease_schema: serde_json::Value,
     /// The validated `request` params rendered as a Rhai literal (`()` when
-    /// `resourcePool.request` is absent).
+    /// `binding.request` is absent).
     request_rhai: String,
 }
 
-/// Resolve `resourcePool.alias` → a [`PoolBinding`], or `None` when the claim
-/// carries no alias (the R1 fallback to the well-known global pool — kept
-/// byte-identical to the prototype).
+/// Resolve `Inline.pool` (alias required) → a [`PoolBinding`].
 ///
 /// Errors:
 /// - alias names a resource not in `known_resources` → `WorkspaceResourceUnknown`
-///   (this normally can't happen at publish — `discover_known_resources` already
-///   hard-fails — but a direct `compile_to_air` caller could omit it).
-/// - alias resolves to a non-pool kind (no `pool_kind`) → `ResourcePoolNotAPool`.
+///   (normally caught earlier at publish by `discover_known_resources`, but a
+///   direct `compile_to_air` caller could omit it).
+/// - alias resolves to a NON-pool kind (no `pool_kind`) → `ResourcePoolNotAPool`.
+/// - alias resolves to a pool kind that isn't `token_pool` (e.g. `datacenter`)
+///   → `ResourcePoolNotAPool` with a "bind under Scheduled" message. Inline
+///   admission is `token_pool`-only; an external cluster is a `Scheduled`
+///   `datacenter` (the consolidation-pivot split).
 /// - `request` fails validation against the kind's `claim_schema` →
 ///   `ResourcePoolRequestInvalid`.
 fn resolve_pool_binding(
     node_id: &str,
-    claim: &ResourcePoolClaim,
+    binding: &ResourcePoolBinding,
     known: &crate::compiler::resource_refs::KnownResources,
-) -> Result<Option<PoolBinding>, CompileError> {
-    let Some(alias) = claim.alias.as_deref().filter(|a| !a.is_empty()) else {
-        return Ok(None);
-    };
+) -> Result<PoolBinding, CompileError> {
+    let alias = binding.alias.as_str();
     let resource = known.get(alias).ok_or_else(|| {
         CompileError::WorkspaceResourceUnknown {
             node_id: node_id.to_string(),
@@ -453,6 +450,10 @@ fn resolve_pool_binding(
         }
     })?;
     let kind = resource.type_name.clone();
+    // Must be a pool kind AND specifically `token_pool` — a `datacenter` is a
+    // scheduler resource and belongs under `Scheduled`. The `pool_kind` lookup
+    // gates "is it a pool at all"; the `== "token_pool"` gate enforces the
+    // Inline/Scheduled split.
     let pool_desc = aithericon_resources::pool::pool_kind(&kind).ok_or_else(|| {
         CompileError::ResourcePoolNotAPool {
             node_id: node_id.to_string(),
@@ -460,11 +461,18 @@ fn resolve_pool_binding(
             kind: kind.clone(),
         }
     })?;
+    if kind != "token_pool" {
+        return Err(CompileError::ResourcePoolNotAPool {
+            node_id: node_id.to_string(),
+            alias: alias.to_string(),
+            kind: kind.clone(),
+        });
+    }
 
     // Validate `request` against the kind's claim_schema before we bake it into
     // the ClaimRequest. Same `jsonschema` crate/version the engine
     // `SchemaRegistry` uses, so compile-time and runtime agree.
-    let request_rhai = match &claim.request {
+    let request_rhai = match &binding.request {
         None => "()".to_string(),
         Some(req) => {
             let claim_schema = (pool_desc.claim_schema)();
@@ -486,7 +494,7 @@ fn resolve_pool_binding(
         }
     };
 
-    Ok(Some(PoolBinding {
+    Ok(PoolBinding {
         backing_net_id: well_known::pool_net_id(resource.id),
         lease_def_name: format!("Lease__{kind}"),
         // Strip the schemars envelope (`$schema`, `title`) so the registered
@@ -497,7 +505,7 @@ fn resolve_pool_binding(
         // lifting.
         lease_schema: sanitize_definition_schema((pool_desc.lease_schema)()),
         request_rhai,
-    }))
+    })
 }
 
 /// Drop schemars' root-only envelope keys (`$schema`, `title`) so a
@@ -511,12 +519,13 @@ fn sanitize_definition_schema(mut schema: serde_json::Value) -> serde_json::Valu
     schema
 }
 
-/// Resource-pool AutomatedStep: the inline executor-lifecycle body wrapped in
-/// a **claim / register / release** handshake against the well-known pool net
-/// (`well_known::RESOURCE_POOL_NET_ID`, contract in
-/// `engine/sdk/examples/resource_pool_net.rs`). The pool's `t_grant` fires only
-/// when capacity is free, so an empty pool simply leaves the claim queued —
-/// admission control falls straight out of the Petri firing rule (`docs/14`).
+/// Pooled (`Inline { pool: Some }`) AutomatedStep: the inline executor-lifecycle
+/// body wrapped in a **claim / register / release** handshake against the
+/// resolved `token_pool` resource's backing net (`well_known::pool_net_id`,
+/// built by `mekhan_service::petri::pool_net::build_token_pool_net`). The pool's
+/// `t_grant` fires only when capacity is free, so an empty pool simply leaves
+/// the claim queued — admission control falls straight out of the Petri firing
+/// rule (`docs/14`).
 ///
 /// ## grant_id — globally unique AND replay-deterministic (TASK 0)
 ///
@@ -585,31 +594,24 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
         execution_spec,
         retry_policy,
         output,
-        resource_pool,
+        deployment_model,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_automated_step_pooled on non-AutomatedStep node")
     };
+    let DeploymentModel::Inline { pool: Some(binding) } = deployment_model else {
+        unreachable!("lower_automated_step_pooled only runs for Inline pool:Some")
+    };
     let label = label.clone();
     let retry_policy = retry_policy.clone();
-    let claim: &ResourcePoolClaim = resource_pool
-        .as_ref()
-        .expect("lower_automated_step_pooled only runs when resource_pool is Some");
 
-    // Resolve `resourcePool.alias` against the workspace-resource manifest the
-    // publish handler threaded in. Two paths:
-    //
-    //   - alias = None → the R1 fallback: bridge to the well-known global pool,
-    //     untyped grant, no lease staging. BYTE-IDENTICAL to the prototype
-    //     (the `automated_step_inline_unchanged` / demo-13 golden guards).
-    //   - alias = Some → resolve to `{resource_id, kind}`, look up the pool
-    //     kind's claim/lease schemas, bridge to the deterministic backing net
-    //     `pool-<resource_id>`, validate `request`, and emit a typed,
-    //     body-visible lease (R2).
-    //
-    // `PoolBinding` carries everything the rest of the lowering branches on.
-    let pool_binding = resolve_pool_binding(&cx.node.id, claim, cx.known_resources)?;
+    // Resolve `Inline.pool.alias` (required) against the workspace-resource
+    // manifest the publish handler threaded in: a `token_pool` resource →
+    // `{resource_id, kind}` → the kind's claim/lease schemas, the deterministic
+    // backing net `pool-<resource_id>`, validated `request`, and a typed,
+    // body-visible lease (R2/R3). A non-token_pool alias is a CompileError.
+    let pool_binding = resolve_pool_binding(&cx.node.id, binding, cx.known_resources)?;
     let backend_type = execution_spec.backend_type;
 
     // Same config offload + staged inputs + declared outputs as the inline
@@ -646,19 +648,17 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     // is a pure function of journaled token data.
     let grant_id_expr = format!(r#"(input._instance_id + ":{id_lit}")"#);
 
-    // For the registry-resolved (alias=Some) path, record the typed-lease
-    // definition + the grant-inbox place to type, while we still hold `cx`
-    // (the `&mut *cx.ctx` reborrow below would block `cx.fixups`). The grant
-    // inbox is created OUTSIDE the lifecycle scope, so its id is the unprefixed
-    // `p_{id}_grant_inbox`. `compile_to_air` drains these after `ctx.build()`.
-    if let Some(b) = &pool_binding {
-        cx.fixups
-            .lease_definitions
-            .push((b.lease_def_name.clone(), b.lease_schema.clone()));
-        cx.fixups
-            .lease_inbox_schemas
-            .push((format!("p_{id}_grant_inbox"), b.lease_def_name.clone()));
-    }
+    // Record the typed-lease definition + the grant-inbox place to type, while
+    // we still hold `cx` (the `&mut *cx.ctx` reborrow below would block
+    // `cx.fixups`). The grant inbox is created OUTSIDE the lifecycle scope, so
+    // its id is the unprefixed `p_{id}_grant_inbox`. `compile_to_air` drains
+    // these after `ctx.build()`.
+    cx.fixups
+        .lease_definitions
+        .push((pool_binding.lease_def_name.clone(), pool_binding.lease_schema.clone()));
+    cx.fixups
+        .lease_inbox_schemas
+        .push((format!("p_{id}_grant_inbox"), pool_binding.lease_def_name.clone()));
 
     let ctx = &mut *cx.ctx;
 
@@ -678,21 +678,16 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
         format!("{label} - Grant Inbox"),
         "grant",
     );
-    // The net all three handshake bridges target. alias=None → the well-known
-    // global (byte-identical to the prototype); alias=Some → the resolved
-    // resource's deterministic backing net `pool-<resource_id>`. The inbox
-    // place names (`claim_inbox` / `register_inbox` / `release_inbox`) are the
-    // SAME for both backends — the kind decides what the net IS, the contract
-    // is shared.
-    let pool_net_id: String = match &pool_binding {
-        Some(b) => b.backing_net_id.clone(),
-        None => well_known::RESOURCE_POOL_NET_ID.to_string(),
-    };
+    // The net all three handshake bridges target: the resolved resource's
+    // deterministic backing net `pool-<resource_id>`. The inbox place names
+    // (`claim_inbox` / `register_inbox` / `release_inbox`) are the shared
+    // cross-net contract the `build_token_pool_net` net implements.
+    let pool_net_id: &str = &pool_binding.backing_net_id;
     // Claim bridge_out, routing the pool's "grant" reply back to p_grant_inbox.
     let p_claim_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
         format!("p_{id}_claim_out"),
         format!("{label} - Claim Capacity"),
-        &pool_net_id,
+        pool_net_id,
         well_known::POOL_CLAIM_INBOX,
         &[("grant", grant_inbox_place.as_str())],
     );
@@ -701,13 +696,13 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     let p_register_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
         format!("p_{id}_register_out"),
         format!("{label} - Register Hold"),
-        &pool_net_id,
+        pool_net_id,
         well_known::POOL_REGISTER_INBOX,
     );
     let p_release_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
         format!("p_{id}_release_out"),
         format!("{label} - Release Capacity"),
-        &pool_net_id,
+        pool_net_id,
         well_known::POOL_RELEASE_INBOX,
     );
 
@@ -733,14 +728,10 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
         format!("{label} - Retries Exhausted (awaiting release)"),
     );
 
-    // ── ClaimRequest payload. alias=None keeps the prototype's bare
-    // `#{ grant_id: gid }` (byte-identical). alias=Some adds the validated
-    // `request` params (the kind's claim-schema shape; `()` when omitted) so
-    // the backing net's `t_grant` can size/shape the grant.
-    let claim_payload = match &pool_binding {
-        None => "#{ grant_id: gid }".to_string(),
-        Some(b) => format!("#{{ grant_id: gid, request: {} }}", b.request_rhai),
-    };
+    // ── ClaimRequest payload: `grant_id` + the validated `request` params (the
+    // kind's claim-schema shape; `()` when omitted) so the backing net's
+    // `t_grant` can size/shape the grant.
+    let claim_payload = format!("#{{ grant_id: gid, request: {} }}", pool_binding.request_rhai);
     // ── t_claim: mint grant_id, emit ClaimRequest, park {input, grant_id} ───
     ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim"))
         .auto_input("input", &p_input)
@@ -796,30 +787,19 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     // post-merge exactly as for inline nodes. The job's `input.json` is the
     // ORIGINAL upstream token parked in `pending.input`. ───────────────────
     //
-    // alias=None: untyped grant carrying `gpu_id` — `reg`/`held` are the
-    // prototype's `#{ grant_id, gpu_id }` (byte-identical), no lease staging.
-    // alias=Some: the routed `grant` token IS the typed lease (validated vs
-    // `Lease__<kind>` on `p_grant_inbox`). We (a) stage it into the body as
-    // `lease.json` so body code reads `lease.<field>` (e.g. `lease.gpu_uuid`
-    // → CUDA_VISIBLE_DEVICES), mirroring the resource-envelope `<alias>.json`
-    // staging, and (b) park the WHOLE lease on `p_held` so `t_to_output` can
-    // merge it into the parked data envelope. `grant` still carries
-    // `grant_id` (the correlation key), so the release-by-grant_id path is
-    // unchanged.
-    let lease_stage_push = match &pool_binding {
-        None => String::new(),
-        Some(_) => r#"job_inputs.push(#{ "name": "lease.json", "source": #{ "type": "inline", "value": grant } }); "#.to_string(),
-    };
-    let (reg_payload, held_payload) = match &pool_binding {
-        None => (
-            "#{ grant_id: pending.grant_id, gpu_id: grant.gpu_id }".to_string(),
-            "#{ grant_id: pending.grant_id, gpu_id: grant.gpu_id }".to_string(),
-        ),
-        // Carry the full lease so the hold echo + held parking both keep every
-        // lease field; `grant.grant_id` is the correlation key the pool keys
-        // register/release on.
-        Some(_) => ("grant".to_string(), "grant".to_string()),
-    };
+    // The routed `grant` token IS the typed lease (validated vs `Lease__<kind>`
+    // on `p_grant_inbox`). We (a) stage it into the body as `lease.json` so
+    // body code reads `lease.<field>` (e.g. `lease.unit_id`), mirroring the
+    // resource-envelope `<alias>.json` staging, and (b) park the WHOLE lease on
+    // `p_held` so `t_to_output` can merge it into the parked data envelope.
+    // `grant` still carries `grant_id` (the correlation key), so the
+    // release-by-grant_id path is unchanged.
+    let lease_stage_push = r#"job_inputs.push(#{ "name": "lease.json", "source": #{ "type": "inline", "value": grant } }); "#;
+    // Carry the full lease so the hold echo + held parking both keep every
+    // lease field; `grant.grant_id` is the correlation key the pool keys
+    // register/release on.
+    let reg_payload = "grant";
+    let held_payload = "grant";
     ctx.transition(format!("t_{id}_acquire"), format!("{label} - Acquire"))
         .auto_input("pending", &p_pending)
         .auto_input("grant", &p_grant_inbox)
@@ -834,19 +814,13 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     // ── Terminal exits: BOTH consume p_held and BOTH arc to p_release_out.
     // Success path: lifecycle `completed` + held → output + release. ────────
     //
-    // alias=None: forward the executor result unchanged (byte-identical).
-    // alias=Some: merge the held lease into the output envelope under a
-    // `lease` key BEFORE it is parked by `split_outputs` (→ `p_{id}_data`),
-    // so a downstream `<slug>.lease.<field>` borrow resolves through the
-    // standard read-arc pipeline against the parked data place. The parked
-    // `Data__<id>` schema is `additionalProperties: true`, so the extra
-    // `lease` key validates.
-    let to_output_logic = match &pool_binding {
-        None => r#"#{ output: done, release: #{ grant_id: held.grant_id } }"#.to_string(),
-        Some(_) => {
-            r#"let out = done; out.lease = held; #{ output: out, release: #{ grant_id: held.grant_id } }"#.to_string()
-        }
-    };
+    // Merge the held lease into the output envelope under a `lease` key BEFORE
+    // it is parked by `split_outputs` (→ `p_{id}_data`), so a downstream
+    // `<slug>.lease.<field>` borrow resolves through the standard read-arc
+    // pipeline against the parked data place. The parked `Data__<id>` schema is
+    // `additionalProperties: true`, so the extra `lease` key validates.
+    let to_output_logic =
+        r#"let out = done; out.lease = held; #{ output: out, release: #{ grant_id: held.grant_id } }"#;
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
         .auto_input("done", &handles.completed)
         .auto_input("held", &p_held)

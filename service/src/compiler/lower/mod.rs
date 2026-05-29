@@ -19,8 +19,8 @@ pub(super) use crate::compiler::token_shape::YIELD_LOGIC;
 pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
-    PhaseUpdateStatus, Port, ResourceConfig, ResourcePoolClaim, WorkflowEdge, WorkflowGraph,
-    WorkflowNode, WorkflowNodeData,
+    PhaseUpdateStatus, Port, ResourceConfig, ResourcePoolBinding, ScheduledOperation,
+    WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 pub(super) use aithericon_executor_domain::InputSource;
 pub(super) use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -275,10 +275,10 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     pub(crate) config_storage: ConfigStorage<'a>,
     /// Workspace-resource manifest the publish handler resolved
     /// (`discover_known_resources`). A pooled AutomatedStep reads its
-    /// `resourcePool.alias` out of here to learn `{resource_id, kind}` and
-    /// bridge to the kind's backing pool net. Empty for tests / previews that
-    /// don't resolve resources — the pooled lowering then takes the
-    /// well-known-global fallback.
+    /// `Inline.pool.alias` out of here to learn `{resource_id, kind}` and
+    /// bridge to the `token_pool`'s backing pool net. Empty for tests / previews
+    /// that don't resolve resources — a pooled step then fails with
+    /// `WorkspaceResourceUnknown` (no well-known-global fallback any more).
     pub(crate) known_resources: &'a crate::compiler::resource_refs::KnownResources,
 }
 

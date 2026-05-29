@@ -344,22 +344,22 @@ async fn discover_known_resources(
             declared.push((node.id.clone(), alias));
         }
 
-        // `resourcePool.alias` is a declared resource binding too, but it
-        // lives on the node *data* (sibling to `executionSpec`), not inside
-        // the backend config the scanner above reads. Collect it the same
-        // way — into `heads` (so it resolves to a `KnownResource` the
-        // compiler can read) and `declared` (so a missing/unknown alias
-        // hard-fails at publish, like any other declared alias). An empty
-        // `resourcePool: {}` (alias None) is the R1 fallback and contributes
-        // nothing here.
+        // `Inline.pool.alias` is a declared resource binding too, but it lives
+        // on the node *data* (`deploymentModel.pool`), not inside the backend
+        // config the scanner above reads. Collect it the same way — into
+        // `heads` (so it resolves to a `KnownResource` the compiler can read)
+        // and `declared` (so a missing/unknown alias hard-fails at publish,
+        // like any other declared alias). Plain inline (no pool) contributes
+        // nothing.
         if let WorkflowNodeData::AutomatedStep {
-            resource_pool: Some(claim),
+            deployment_model:
+                crate::models::template::DeploymentModel::Inline { pool: Some(binding) },
             ..
         } = &node.data
         {
-            if let Some(alias) = claim.alias.as_deref().filter(|a| !a.is_empty()) {
-                heads.insert(alias.to_string());
-                declared.push((node.id.clone(), alias.to_string()));
+            if !binding.alias.is_empty() {
+                heads.insert(binding.alias.clone());
+                declared.push((node.id.clone(), binding.alias.clone()));
             }
         }
     }

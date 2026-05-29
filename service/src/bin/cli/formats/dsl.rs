@@ -769,7 +769,6 @@ flow:
                         ),
                         retry_policy: custom_retry,
                         deployment_model: Default::default(),
-                        resource_pool: None,
                     },
                     parent_id: None,
                     width: None,

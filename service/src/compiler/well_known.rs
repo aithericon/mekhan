@@ -13,24 +13,16 @@ pub const SCHEDULER_NET_ID: &str = "scheduler-net";
 /// `job_inbox`, the `bridge_in::<SchedulerSubmitInput>` place).
 pub const SCHEDULER_JOB_QUEUE: &str = "job_inbox";
 
-/// The long-lived resource-pool net a resource-claiming AutomatedStep bridges
-/// its claim/register/release handshake to (`docs/14`). A pool of N capacity
-/// units is modelled as a place holding N tokens; the engine's firing rule
-/// then provides admission control + mutual exclusion for free. Must match the
-/// canonical contract in `engine/sdk/examples/resource_pool_net.rs`, which is
-/// what ops deploys (`--example resource_pool_net --net-id resource-pool-net`).
-/// v1 always uses this single well-known global (per-workspace pool resolution
-/// is the productionization gate in `docs/14`).
-pub const RESOURCE_POOL_NET_ID: &str = "resource-pool-net";
-
-/// Deterministic backing-net id for a registry-resolved pool resource (R2+).
-/// A pooled AutomatedStep whose `resourcePool.alias` resolves to resource
-/// `<resource_id>` bridges its claim/register/release handshake to this id
-/// instead of the well-known global [`RESOURCE_POOL_NET_ID`]. R3 (tokens
-/// backend) and R4 (scheduler backend) deploy a net with exactly this id; the
-/// resource *kind* decides what that net IS, but the id scheme is shared so the
-/// compiler stays backend-agnostic. Pure function of the resource id ⇒
-/// replay-safe + diff-stable in the AIR.
+/// Deterministic backing-net id for a registry-resolved pool resource. A pooled
+/// AutomatedStep (`Inline { pool: { alias } }`) whose alias resolves to a
+/// `token_pool` resource `<resource_id>` bridges its claim/register/release
+/// handshake to this id. R3 (tokens backend) deploys a net with exactly this id
+/// via `build_token_pool_net`; the resource *kind* decides what that net IS, but
+/// the id scheme is shared so the compiler stays backend-agnostic. Pure function
+/// of the resource id ⇒ replay-safe + diff-stable in the AIR.
+///
+/// The prototype's single well-known global (`resource-pool-net`) is gone — the
+/// consolidation pivot requires every pool to be a named `token_pool` resource.
 pub fn pool_net_id(resource_id: uuid::Uuid) -> String {
     format!("pool-{resource_id}")
 }

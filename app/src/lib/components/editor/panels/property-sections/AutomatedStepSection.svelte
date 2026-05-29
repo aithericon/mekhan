@@ -8,6 +8,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { Input } from '$lib/components/ui/input';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import PortsSection from './PortsSection.svelte';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
@@ -170,6 +171,10 @@
 	// non-schedulable (engine effects — catalogue_query today).
 	const allowScheduled = $derived(currentBackend?.schedulable ?? true);
 
+	// Switching to scheduled drops any inline pool (pool is an Inline-only
+	// admission — a datacenter cluster is bound under Scheduled instead). R5
+	// adds the scheduler alias + submit/lease operation picker; for now
+	// scheduled defaults to operation=submit, scheduler=env-global.
 	function setDeploymentMode(mode: string) {
 		onchange({
 			...data,
@@ -187,28 +192,31 @@
 		onchange({ ...data, deploymentModel: { mode: 'scheduled', jobTemplate: v } });
 	}
 
-	// Resource-pool claim. Presence (`resourcePool: {}`) = "requires a unit
-	// from the shared GPU pool"; absence = no claim. v1 only checks presence,
-	// so pool/units are reserved and not surfaced — this is a plain boolean.
-	const requiresPool = $derived(data.resourcePool != null);
-
-	// Mutual exclusion (compiler rejects pool + scheduled — the scheduler-net
-	// owns its own admission): the pool toggle is disabled while scheduled,
-	// and the Scheduled deployment option is disabled while the pool is on.
-	const poolToggleDisabled = $derived(readonly || deploymentMode === 'scheduled');
+	// Inline token-pool admission. The binding lives under
+	// `deploymentModel.Inline.pool` (post-R3 consolidation); presence = "claim a
+	// unit from this token_pool". `alias` is REQUIRED — a pooled step names a
+	// token_pool resource (no well-known-global fallback). R5 replaces this text
+	// input with a real alias picker grouped by kind.
+	const poolAlias = $derived(
+		data.deploymentModel?.mode === 'inline' ? (data.deploymentModel.pool?.alias ?? '') : ''
+	);
+	const requiresPool = $derived(
+		data.deploymentModel?.mode === 'inline' && data.deploymentModel.pool != null
+	);
+	// Pool is intrinsically inline-only now (it lives under Inline.pool), so the
+	// control is simply hidden while scheduled.
+	const poolControlsVisible = $derived(deploymentMode === 'inline');
 
 	function setRequiresPool(on: boolean) {
 		if (on) {
-			// Empty object → v1 defaults (global resource-pool-net, weight 1).
-			onchange({ ...data, resourcePool: {} });
+			onchange({ ...data, deploymentModel: { mode: 'inline', pool: { alias: poolAlias } } });
 		} else {
-			// Destructure the key out so it's gone (not null) — Rust's
-			// `skip_serializing_if = "Option::is_none"` only omits absent fields,
-			// and the Yjs writer only persists the key when present.
-			const { resourcePool: _omit, ...rest } = data;
-			void _omit;
-			onchange(rest as AutomatedStepNodeData);
+			onchange({ ...data, deploymentModel: { mode: 'inline' } });
 		}
+	}
+
+	function setPoolAlias(alias: string) {
+		onchange({ ...data, deploymentModel: { mode: 'inline', pool: { alias } } });
 	}
 </script>
 
@@ -265,11 +273,7 @@
 			</Select.Trigger>
 			<Select.Content>
 				<Select.Item value="inline" label="Inline (immediate)" />
-				<Select.Item
-					value="scheduled"
-					label="Scheduled (Nomad/Slurm, GPU)"
-					disabled={requiresPool}
-				/>
+				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
 			</Select.Content>
 		</Select.Root>
 		{#if deploymentMode === 'scheduled'}
@@ -304,28 +308,40 @@
 		</p>
 	{/if}
 
-	<!-- Shared GPU pool claim. Presence-only in v1 (no pool/units knobs);
-	     mutually exclusive with Scheduled (compiler rejects the combo — the
-	     scheduler-net owns its own admission). -->
-	<div class="space-y-1 pt-2">
-		<label class="flex items-center gap-1.5 text-sm text-foreground">
-			<Checkbox
-				checked={requiresPool}
-				disabled={poolToggleDisabled}
-				onCheckedChange={(v) => setRequiresPool(v === true)}
-				data-testid="toggle-resource-pool"
-			/>
-			Requires a shared GPU pool
-		</label>
-		{#if deploymentMode === 'scheduled'}
-			<p class="text-sm text-muted-foreground">Not available for scheduled steps.</p>
-		{:else}
-			<p class="text-sm text-muted-foreground">
-				Holds a unit from resource-pool-net for the step's duration; queues
-				when the pool is full.
-			</p>
-		{/if}
-	</div>
+	<!-- Inline token-pool admission. Lives under Inline.pool (consolidation
+	     pivot) — only shown for inline steps. A pooled step names a token_pool
+	     resource by alias (required). R5 swaps the alias text input for a real
+	     alias picker grouped by kind. -->
+	{#if poolControlsVisible}
+		<div class="space-y-1 pt-2">
+			<label class="flex items-center gap-1.5 text-sm text-foreground">
+				<Checkbox
+					checked={requiresPool}
+					disabled={readonly}
+					onCheckedChange={(v) => setRequiresPool(v === true)}
+					data-testid="toggle-resource-pool"
+				/>
+				Claim from a token pool
+			</label>
+			{#if requiresPool}
+				<FormField label="Pool resource alias" for="pool-alias">
+					<Input
+						id="pool-alias"
+						value={poolAlias}
+						disabled={readonly}
+						placeholder="e.g. prod_gpu"
+						oninput={(e) => setPoolAlias((e.currentTarget as HTMLInputElement).value)}
+						data-testid="input-pool-alias"
+					/>
+				</FormField>
+				<p class="text-sm text-muted-foreground">
+					Holds a unit from the named token_pool resource for the step's
+					duration; queues when the pool is full. The granted lease is
+					readable in the body as <code>lease.unit_id</code>.
+				</p>
+			{/if}
+		</div>
+	{/if}
 </div>
 
 <div class="space-y-2 pt-3 border-t border-border/40">

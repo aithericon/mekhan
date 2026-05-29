@@ -204,15 +204,12 @@ export class YjsGraphBinding {
 				const output = config?.output as
 					| { id: string; label: string; fields: unknown[] }
 					| undefined;
+				// `deploymentModel` carries the inline/scheduled split AND (post-R3
+				// consolidation) the inline token-pool admission under
+				// `Inline.pool` + the scheduled `scheduler`/`operation` knobs.
+				// The whole nested object round-trips as one value.
 				const deploymentModel = config?.deploymentModel as
 					| AutomatedStepNodeData['deploymentModel']
-					| undefined;
-				// Resource-pool claim — presence-only (`{}` = claim a unit from
-				// the global pool). Mirror `deploymentModel`: only attach when
-				// the Yjs map actually carries the key, so an absent claim stays
-				// absent through the round-trip (the writer only sets it when on).
-				const resourcePool = config?.resourcePool as
-					| AutomatedStepNodeData['resourcePool']
 					| undefined;
 				return {
 					...base,
@@ -220,8 +217,7 @@ export class YjsGraphBinding {
 					executionSpec: { entrypoint: 'main.py', ...spec },
 					...(output ? { output: output as never } : {}),
 					retryPolicy,
-					...(deploymentModel ? { deploymentModel } : {}),
-					...(resourcePool != null ? { resourcePool } : {})
+					...(deploymentModel ? { deploymentModel } : {})
 				};
 			}
 			case 'decision':
@@ -735,16 +731,10 @@ export class YjsGraphBinding {
 					'retryPolicy',
 					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
 				);
+				// `deploymentModel` round-trips whole — the nested `Inline.pool`
+				// (token-pool admission) and scheduled `scheduler`/`operation`
+				// knobs travel with it. Default = plain inline.
 				config.set('deploymentModel', data.deploymentModel ?? { mode: 'inline' });
-				// Resource-pool claim: presence-only. Set the key only when the
-				// claim is on; DELETE it when off so it doesn't re-enable on
-				// reload (and never persist null/`{}` for a disabled step —
-				// Rust's `skip_serializing_if = none` only omits absent fields).
-				if (data.resourcePool != null) {
-					config.set('resourcePool', data.resourcePool);
-				} else {
-					config.delete('resourcePool');
-				}
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);

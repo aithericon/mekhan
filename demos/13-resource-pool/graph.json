@@ -30,7 +30,7 @@
       "data": {
         "type": "automated_step",
         "label": "GPU Render",
-        "description": "Runs on a GPU drawn from the shared resource-pool-net. The compiler wraps this body behind a claim/grant/release against the pool: the step waits in the pool's claim_inbox until a unit is free (admission control), holds it for the duration of the render, and returns it on every exit (success or error). A ~12s mock render makes the contention observable.",
+        "description": "A ~12s mock render. The shared-pool admission showcase now lives on a real token_pool RESOURCE: create one at /resources, then set this step's deploymentModel to { mode: \"inline\", pool: { alias: \"<your-pool>\" } }. The compiler then wraps this body behind a claim/grant/release against the pool's backing net (admission control via the Petri firing rule). Seeded here as plain inline because the demo seeder provisions templates, not resources — see R5 dogfood.",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -50,8 +50,7 @@
             { "name": "rendered", "label": "Rendered", "kind": "text", "required": true },
             { "name": "gpu", "label": "GPU", "kind": "text", "required": false }
           ]
-        },
-        "resourcePool": {}
+        }
       }
     },
     {

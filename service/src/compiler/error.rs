@@ -400,14 +400,19 @@ pub enum CompileError {
     )]
     WorkspaceResourceUnknown { node_id: String, alias: String },
 
-    /// A `resourcePool.alias` resolved to a workspace resource whose *kind*
-    /// is not a pool kind (no `aithericon_resources::pool::pool_kind` entry).
-    /// e.g. the author pointed a pool claim at a `postgres` resource. The pool
-    /// claim machinery needs a claim/lease schema + backend, which only
-    /// `token_pool` / `datacenter` (R1) declare.
+    /// An `Inline.pool.alias` resolved to a workspace resource that is not a
+    /// `token_pool`. Inline admission is `token_pool`-only: a `datacenter` is a
+    /// scheduler resource (bind it under `Scheduled`), and a plain credential
+    /// (`postgres`, …) is no pool at all. The message names the `datacenter`
+    /// case explicitly since that's the likely author mistake.
     #[error(
-        "node '{node_id}': resource pool alias '{alias}' is a '{kind}', not a pool — \
-         point it at a token_pool or datacenter resource"
+        "node '{node_id}': inline pool alias '{alias}' is a '{kind}', not a token_pool — \
+         {}",
+        if kind == "datacenter" {
+            "a datacenter is a scheduler resource; bind it under a Scheduled deployment model"
+        } else {
+            "point it at a token_pool resource"
+        }
     )]
     ResourcePoolNotAPool {
         node_id: String,
