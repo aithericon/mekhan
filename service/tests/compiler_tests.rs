@@ -4574,7 +4574,7 @@ fn map_lowers_scatter_gather() {
         nodes: vec![
             start_node_with_items("s"),
             map_node("mp", "mymap", "start.items", "score"),
-            map_body_phase("body", "mp"),
+            map_body_auto("body", "mp"),
             end_node("e"),
         ],
         edges: vec![
@@ -4692,7 +4692,7 @@ fn map_output_collection_resolves() {
         nodes: vec![
             start_node_with_items("s"),
             map_node("mp", "mymap", "start.items", "score"),
-            map_body_phase("body", "mp"),
+            map_body_auto("body", "mp"),
             end,
         ],
         edges: vec![
@@ -4749,7 +4749,7 @@ fn map_ref_without_star_is_rejected() {
         nodes: vec![
             start_node_with_items("s"),
             map_node("mp", "mymap", "start.items", "score"),
-            map_body_phase("body", "mp"),
+            map_body_auto("body", "mp"),
             end,
         ],
         edges: vec![
@@ -4801,7 +4801,7 @@ fn map_body_item_resolves() {
         width: None,
         height: None,
     };
-    let mut merge = map_body_phase("merge", "mp");
+    let mut merge = map_body_auto("merge", "mp");
     merge.id = "merge".to_string();
 
     let graph = WorkflowGraph {
@@ -4899,7 +4899,7 @@ fn map_graph(start: WorkflowNode, map: WorkflowNode) -> WorkflowGraph {
         nodes: vec![
             start,
             map,
-            map_body_phase("body", &map_id),
+            map_body_auto("body", &map_id),
             end_node("e"),
         ],
         edges: vec![
@@ -5028,7 +5028,7 @@ fn map_nested_inside_map_is_rejected() {
             start_node_with_items("s"),
             map_node("mp", "mymap", "start.items", "score"),
             inner,
-            map_body_phase("inner_body", "mp2"),
+            map_body_auto("inner_body", "mp2"),
             end_node("e"),
         ],
         edges: vec![
@@ -5051,6 +5051,44 @@ fn map_nested_inside_map_is_rejected() {
             assert_eq!(outer_id, "mp");
         }
         other => panic!("expected MapNested, got: {other:?}"),
+    }
+}
+
+/// A pure pass-through PhaseUpdate as a Map body terminal cannot produce a
+/// `detail.outputs.<resultVar>` envelope, so it is rejected at publish with
+/// `MapBodyUnsupported` (keyed to the offending body node) rather than silently
+/// wedging the gather with all-null elements. This is the sole construction
+/// site of the variant; the SUPPORTED AutomatedStep fork is already locked by
+/// `map_end_to_end_air_shape_is_stable` (do not re-assert it here).
+#[test]
+fn map_phase_update_body_is_rejected() {
+    let (body_in, body_out) = map_body_edges("mp", "body");
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node_with_items("s"),
+            map_node("mp", "mymap", "start.items", "score"),
+            map_body_phase("body", "mp"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "mp"),
+            body_in,
+            body_out,
+            edge("e2", "mp", "e"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let err = compile_to_air(&graph, "map_pu_body", "", &std::collections::HashMap::new())
+        .expect_err("a PhaseUpdate Map body terminal must be rejected");
+    match err {
+        CompileError::MapBodyUnsupported { map_id, node_id, kind } => {
+            assert_eq!(map_id, "mp");
+            assert_eq!(node_id, "body");
+            assert_eq!(kind, "phase_update");
+        }
+        other => panic!("expected MapBodyUnsupported, got: {other:?}"),
     }
 }
 

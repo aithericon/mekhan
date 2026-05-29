@@ -205,6 +205,24 @@ pub enum CompileError {
     )]
     MapNested { node_id: String, outer_id: String },
 
+    /// A Map body terminal is a node kind that cannot produce the
+    /// `detail.outputs.<resultVar>` envelope the gather requires (engine-effect
+    /// backends like CatalogueQuery, Scheduled AutomatedSteps whose scheduler
+    /// round-trip is unverified, and pure pass-through nodes like PhaseUpdate /
+    /// Decision / Join that forward the raw control token with no parked
+    /// output). The Map terminal must be a parked-producer kind (inline
+    /// AutomatedStep, Agent, or SubWorkflow).
+    #[error(
+        "map '{map_id}': body terminal '{node_id}' ({kind}) cannot be a Map body \
+         terminal — it produces no `detail.outputs` envelope for the gather. Use \
+         an inline AutomatedStep, Agent, or SubWorkflow as the terminal node."
+    )]
+    MapBodyUnsupported {
+        map_id: String,
+        node_id: String,
+        kind: String,
+    },
+
     /// A Map's `itemsRef` parses + resolves to a known producer field, but
     /// that field's declared shape is not an array — the scatter can only
     /// fan out over a collection. Mirrors `RepeaterItemsRefNotArray`;
@@ -584,6 +602,7 @@ impl CompileError {
             Self::MapRefMissingStar { .. } => "map_ref_missing_star",
             Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
             Self::MapNested { .. } => "map_nested",
+            Self::MapBodyUnsupported { .. } => "map_body_unsupported",
             Self::MapItemsRefNotArray { .. } => "map_items_ref_not_array",
             Self::MapItemsRefUnresolved { .. } => "map_items_ref_unresolved",
             Self::ToolChildHasIncomingEdge { .. } => "tool_child_has_incoming_edge",
@@ -648,6 +667,7 @@ impl CompileError {
             | Self::MapRefMissingStar { node_id, .. }
             | Self::MapResultVarInvalid { node_id, .. }
             | Self::MapNested { node_id, .. }
+            | Self::MapBodyUnsupported { node_id, .. }
             | Self::MapItemsRefNotArray { node_id, .. }
             | Self::MapItemsRefUnresolved { node_id, .. }
             | Self::ToolChildHasIncomingEdge {
