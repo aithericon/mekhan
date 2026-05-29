@@ -799,14 +799,16 @@ resource-pool-up:
     cd engine
     [ -x ./target/debug/aithericon ] || cargo build --bin aithericon
     echo "▶ deploying + activating resource-pool-net (seeded with 2 GPU units)…"
-    ./target/debug/examples/resource_pool_net --deploy --net-id resource-pool-net >/dev/null
-    ./target/debug/aithericon activate resource-pool-net
+    # The dev engine is on :13030 (the SDK example + aithericon CLI default to
+    # :3030), so point both at it explicitly.
+    ./target/debug/examples/resource_pool_net --deploy --net-id resource-pool-net --url http://localhost:13030 >/dev/null
+    ./target/debug/aithericon activate resource-pool-net --url http://localhost:13030
     echo ""
     echo "✓ resource-pool-net deployed & Running on :13030 (pool = 2 capacity units)"
     echo "  dashboard → http://localhost:15173/nets/resource-pool"
     echo "  drive it  → just dev resource-pool-demo [n=4]"
     echo "  reap a crashed holder (money shot):"
-    echo "    engine/target/debug/aithericon inject resource-pool-net lease_expired '{\"grant_id\":\"<instanceId>:render\"}'"
+    echo "    engine/target/debug/aithericon inject resource-pool-net lease_expired '{\"grant_id\":\"<instanceId>:render\"}' --url http://localhost:13030"
 
 # Publish the 13-resource-pool demo and launch N concurrent instances against
 # the pool. Run `resource-pool-up` FIRST — the instance nets bridge to
@@ -819,10 +821,14 @@ resource-pool-demo n="4":
     BASE="http://localhost:13100"
     curl -sf --max-time 2 "$BASE/healthz" >/dev/null 2>&1 || {
       echo "✗ mekhan not reachable on :13100 — run 'just dev' first" >&2; exit 1; }
-    echo "▶ publishing 13-resource-pool (template $TID)…"
-    curl -sf -X POST "$BASE/api/v1/templates/$TID/publish" -H 'content-type: application/json' >/dev/null || {
-      echo "✗ publish failed — is the demo seeded? (just dev sets MEKHAN__DEMOS__SEED=true;" >&2
-      echo "  if you added the demo to a running stack, 'just dev demos-reseed' first)" >&2; exit 1; }
+    echo "▶ ensuring 13-resource-pool is published (template $TID)…"
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/templates/$TID/publish" -H 'content-type: application/json')
+    case "$code" in
+      200|201) echo "  published";;
+      409)     echo "  already published (ok)";;
+      404)     echo "✗ template not found — seed it first: 'just dev demos-reseed'" >&2; exit 1;;
+      *)       echo "✗ publish failed (HTTP $code)" >&2; exit 1;;
+    esac
     echo "▶ launching {{n}} render instances (Start field job_name=shot-N)…"
     for i in $(seq 1 {{n}}); do
       curl -sf -X POST "$BASE/api/v1/instances" -H 'content-type: application/json' \
