@@ -1460,6 +1460,23 @@ mod tests {
                 output_contract: crate::models::template::Port::empty_input(),
             },
         );
+        // Second tool: the `collect_feedback` HumanTask-form SubWorkflow (09b).
+        // Same stub treatment — only its presence drives the dispatch/collect
+        // marker assertions; the real child's Start/End contract is exercised by
+        // 09b's own compile + the live publish path.
+        sub_air.insert(
+            "collect_feedback".to_string(),
+            ResolvedChild {
+                air: serde_json::json!({
+                    "name": "child-stub", "places": [], "transitions": [],
+                    "groups": [], "mock_adapters": [], "definitions": {}, "requirements": []
+                }),
+                resolved_version: 1,
+                template_id: "00000000-0000-0000-0000-00000000009b".to_string(),
+                input_contract: crate::models::template::Port::empty_input(),
+                output_contract: crate::models::template::Port::empty_input(),
+            },
+        );
 
         let files = node_files_inline(&demo.files);
         let air = compile_to_air_with_subworkflows_inline(
@@ -1486,6 +1503,12 @@ mod tests {
             "t_agent_collect_lookup_order",
             "p_agent_state",
             "p_agent_dispatch_lookup_order",
+            // Second tool — the dynamic-form HumanTask SubWorkflow. Proves the
+            // agent compiler mints dispatch/invoke/collect plumbing for it too.
+            "t_agent_route_dispatch_collect_feedback",
+            "t_agent_invoke_collect_feedback",
+            "t_agent_collect_collect_feedback",
+            "p_agent_dispatch_collect_feedback",
         ] {
             assert!(
                 air_str.contains(marker),

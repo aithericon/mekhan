@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-00000000009b",
+  "name": "09b · Collect Feedback (agent tool)",
+  "description": "A private sub-workflow used as the `collect_feedback` AGENT TOOL in demo 09. The agent DESIGNS the form: it calls the tool with a `steps` argument (a TaskStepConfig[] array), which lands on this child's Start. A HumanTask renders that agent-supplied form via `stepsRef = \"start.steps\"` (a normal upstream-producer borrow — Start is the producer), the operator submits, and the End returns the answers as the tool result. This is the dynamic-form-as-agent-tool pattern realized with ZERO new compiler wiring: SubWorkflow-as-tool (already supported) + stepsRef-from-producer (the dynamic-form feature). The Start's `steps` field carries the TaskStepConfig[] JSON schema inline so the agent compiler advertises the exact grammar to the LLM."
+}
