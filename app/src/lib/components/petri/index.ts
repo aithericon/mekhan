@@ -18,3 +18,4 @@ export { default as ServicesPanel } from './ServicesPanel.svelte';
 export { default as NetTreeSidebar } from './NetTreeSidebar.svelte';
 export { default as ScenarioEditor } from './ScenarioEditor.svelte';
 export { default as NetWorkbench } from './NetWorkbench.svelte';
+export { default as PoolContentionView } from './PoolContentionView.svelte';

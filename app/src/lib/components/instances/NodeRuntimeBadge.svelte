@@ -6,14 +6,31 @@
 	import Loader2 from '@lucide/svelte/icons/loader-2';
 	import Circle from '@lucide/svelte/icons/circle';
 	import MinusCircle from '@lucide/svelte/icons/minus-circle';
+	import Hourglass from '@lucide/svelte/icons/hourglass';
 
 	type Props = {
 		nodeId: string;
 		/** When true, render only an icon (no duration); used for tight headers. */
 		compact?: boolean;
+		/**
+		 * When true, overlays a "Waiting for resource" badge alongside (or
+		 * instead of) the normal runtime status. This is the M3 resource-pool
+		 * contention signal: the node's `p_{id}_claim_out` token has been
+		 * emitted to the pool net but the corresponding `p_{id}_grant_inbox`
+		 * is still empty (no grant received yet).
+		 *
+		 * TODO(M3): populate from the per-instance net marking once the M3
+		 * compiler lowering is deployed. The parent (WorkflowGraphView or a
+		 * dedicated PoolOverlay component) should read:
+		 *   - `p_{nodeId}_claim_out` → token present means claim was sent
+		 *   - `p_{nodeId}_grant_inbox` → empty means grant not yet received
+		 * and set `awaitingResource={true}` when claim_out has ≥1 token AND
+		 * grant_inbox has 0 tokens in the INSTANCE net's marking.
+		 */
+		awaitingResource?: boolean;
 	};
 
-	let { nodeId, compact = false }: Props = $props();
+	let { nodeId, compact = false, awaitingResource = false }: Props = $props();
 
 	const lookup = useNodeRuntime();
 	const executions = $derived(lookup(nodeId));
@@ -42,6 +59,28 @@
 		pending:   { ring: 'ring-gray-300',  bg: 'bg-gray-50',   text: 'text-gray-600',   label: 'pending' }
 	};
 </script>
+
+<!--
+  Resource-contention "Waiting for resource" badge.
+  Predicate: awaitingResource=true iff (per-instance net marking):
+    count(p_{nodeId}_claim_out) > 0  AND  count(p_{nodeId}_grant_inbox) == 0
+  This means the node has emitted a claim to the resource pool but has not
+  yet received a grant token back.
+  TODO(M3): wire this from WorkflowGraphView once M3 compiler lowering is
+  deployed. Until then the prop defaults to false and the badge is invisible.
+-->
+{#if awaitingResource}
+	<span
+		class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-sm font-medium ring-1 ring-purple-300 bg-purple-50 text-purple-700"
+		title="Waiting for resource grant — claim queued in pool net"
+		data-testid="badge-awaiting-resource"
+	>
+		<Hourglass class="size-3" />
+		{#if !compact}
+			<span>waiting</span>
+		{/if}
+	</span>
+{/if}
 
 {#if latest}
 	{@const tone = palette[latest.status] ?? palette.pending}

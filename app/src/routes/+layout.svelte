@@ -60,6 +60,16 @@
 			<Button
 				variant="ghost"
 				size="sm"
+				href="/nets/resource-pool"
+				data-testid="nav-resource-pool"
+				class="text-muted-foreground"
+				title="Resource pool contention dashboard"
+			>
+				Pool
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
 				href="/processes"
 				data-testid="nav-processes"
 				class="text-muted-foreground"
