@@ -1,0 +1,30 @@
+{
+  "name": "reviewed-in-time-takes-done-branch",
+  "enabled": false,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {
+        "request_id": "REQ-1042"
+      }
+    }
+  ],
+  "human_answers": {
+    "review": {
+      "approved": true,
+      "comment": "looks good"
+    }
+  },
+  "assertions": [
+    {
+      "path": "result.value.outcome",
+      "op": "eq",
+      "value": "reviewed"
+    },
+    {
+      "path": "result.value.request_id",
+      "op": "eq",
+      "value": "REQ-1042"
+    }
+  ]
+}

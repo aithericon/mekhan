@@ -1,0 +1,10 @@
+{
+  "name": "low-score-routes-low",
+  "enabled": true,
+  "start_tokens": [{ "start_block_id": "start", "token": { "score": 10 } }],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.doubled", "op": "eq", "value": 20 },
+    { "path": "result.value.bucket", "op": "eq", "value": "low" }
+  ]
+}

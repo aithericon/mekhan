@@ -1,0 +1,10 @@
+{
+  "name": "fans-out-and-joins",
+  "enabled": true,
+  "start_tokens": [{ "start_block_id": "start", "token": { "subject": "hello world" } }],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.shouted", "op": "eq", "value": "HELLO WORLD" },
+    { "path": "result.value.reversed", "op": "eq", "value": "dlrow olleh" }
+  ]
+}

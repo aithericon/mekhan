@@ -1,0 +1,28 @@
+{
+  "name": "http-echoes-username",
+  "enabled": false,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {}
+    }
+  ],
+  "human_answers": {
+    "intake": {
+      "username": "ada",
+      "topic": "weather"
+    }
+  },
+  "assertions": [
+    {
+      "path": "result.value.status_code",
+      "op": "eq",
+      "value": 200
+    },
+    {
+      "path": "result.value.echoed_user",
+      "op": "eq",
+      "value": "ada"
+    }
+  ]
+}
