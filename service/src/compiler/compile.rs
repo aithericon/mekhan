@@ -666,6 +666,7 @@ fn lower_nodes_topologically<'a>(
             .unwrap_or(&empty_children);
         expand_node(
             node,
+            graph,
             &outgoing,
             &incoming,
             children,

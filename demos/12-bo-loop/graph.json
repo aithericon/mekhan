@@ -144,9 +144,21 @@
           "label": "Eval",
           "fields": [
             {
-              "name": "obs",
-              "label": "Observation",
-              "kind": "json",
+              "name": "a",
+              "label": "a",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "d",
+              "label": "d",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "z",
+              "label": "z",
+              "kind": "number",
               "required": true
             }
           ]

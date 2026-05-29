@@ -126,6 +126,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let mut virtual_cx = LoweringCtx {
         node: &virtual_node,
+        graph: cx.graph,
         outgoing_edges: cx.outgoing_edges,
         incoming_edges: cx.incoming_edges,
         children: cx.children,

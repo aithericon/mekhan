@@ -152,23 +152,30 @@ pub fn executor_lifecycle(
             .logic(r#"#{ out: job }"#);
 
         // t_success — flatten sig.detail so consumers can use
-        // `completed.detail.outputs.*` without double nesting.
+        // `completed.detail.outputs.*` without double nesting, AND preserve the
+        // job token's `_`-prefixed control-metadata leaves (consume-mutate-
+        // produce). The rebuilt completed token would otherwise drop every key
+        // outside its fixed field set, silently losing control-metadata that
+        // rode in on the input — e.g. Map's `__map_idx`/`__map_id` correlation
+        // stamps (and structurally `_loop_*`). This mirrors `YIELD_LOGIC`'s
+        // metadata rule (`service/src/compiler/token_shape/surface.rs`) so the
+        // `_`-prefix metadata channel survives an executor round-trip.
         ctx.transition("t_success", "Execution Completed")
             .auto_input("job", &running)
             .auto_input("sig", &sig_completed)
             .correlate("sig", "job", "execution_id")
             .auto_output("done", &completed)
             .logic(
-                r#"#{
-                    done: #{
-                        job_id: job.job_id,
-                        run: job.run,
-                        execution_id: job.execution_id,
-                        detail: sig.detail,
-                        source: if sig.source != () { sig.source } else { "" },
-                        status: sig.status
-                    }
-                }"#,
+                r#"let __done = #{
+                    job_id: job.job_id,
+                    run: job.run,
+                    execution_id: job.execution_id,
+                    detail: sig.detail,
+                    source: if sig.source != () { sig.source } else { "" },
+                    status: sig.status
+                };
+                for __k in job.keys() { if __k.starts_with("_") { __done[__k] = job[__k]; } }
+                #{ done: __done }"#,
             );
 
         (accepted, running)
