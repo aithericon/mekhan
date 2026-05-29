@@ -111,6 +111,7 @@ impl ExecutionBackend for SuryaBackend {
         &self,
         run_context: &RunContext,
         status_cb: StatusCallback,
+        _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let resolved: ResolvedSuryaConfig = serde_json::from_value(run_context.backend_state.clone())
