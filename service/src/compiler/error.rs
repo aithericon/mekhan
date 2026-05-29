@@ -400,6 +400,32 @@ pub enum CompileError {
     )]
     WorkspaceResourceUnknown { node_id: String, alias: String },
 
+    /// A `resourcePool.alias` resolved to a workspace resource whose *kind*
+    /// is not a pool kind (no `aithericon_resources::pool::pool_kind` entry).
+    /// e.g. the author pointed a pool claim at a `postgres` resource. The pool
+    /// claim machinery needs a claim/lease schema + backend, which only
+    /// `token_pool` / `datacenter` (R1) declare.
+    #[error(
+        "node '{node_id}': resource pool alias '{alias}' is a '{kind}', not a pool — \
+         point it at a token_pool or datacenter resource"
+    )]
+    ResourcePoolNotAPool {
+        node_id: String,
+        alias: String,
+        kind: String,
+    },
+
+    /// `resourcePool.request` failed validation against the pool kind's
+    /// `claim_schema`. `message` carries the first jsonschema error.
+    #[error(
+        "node '{node_id}': resource pool request for '{alias}' is invalid: {message}"
+    )]
+    ResourcePoolRequestInvalid {
+        node_id: String,
+        alias: String,
+        message: String,
+    },
+
     /// `executionSpec.config` (or a nested value) carries a
     /// `{"$ref": "#/definitions/<name>"}` that the workflow-level
     /// `definitions` map can't resolve — unknown name, cycle,
@@ -558,6 +584,8 @@ impl CompileError {
             Self::ResourceAliasCollidesWithSlug { .. } => "resource_alias_collides_with_slug",
             Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
             Self::WorkspaceResourceUnknown { .. } => "workspace_resource_unknown",
+            Self::ResourcePoolNotAPool { .. } => "resource_pool_not_a_pool",
+            Self::ResourcePoolRequestInvalid { .. } => "resource_pool_request_invalid",
             Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
             Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
             Self::RepeaterRefUnresolved { .. } => "repeater_ref_unresolved",
@@ -628,7 +656,9 @@ impl CompileError {
             | Self::LoopAccumulatorVarReserved { node_id, .. }
             | Self::LoopAccumulatorDuplicateVar { node_id, .. }
             | Self::LoopAccumulatorExprUnparseable { node_id, .. }
-            | Self::WorkspaceResourceUnknown { node_id, .. } => Some(node_id),
+            | Self::WorkspaceResourceUnknown { node_id, .. }
+            | Self::ResourcePoolNotAPool { node_id, .. }
+            | Self::ResourcePoolRequestInvalid { node_id, .. } => Some(node_id),
             _ => None,
         }
     }

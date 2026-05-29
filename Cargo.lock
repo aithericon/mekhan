@@ -2739,6 +2739,7 @@ dependencies = [
  "hcl-rs",
  "http-body-util",
  "indexmap",
+ "jsonschema",
  "jsonwebtoken",
  "petgraph",
  "petri-api-types",

@@ -402,6 +402,29 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
         detail,
         p("executor result envelope — upstream token was consumed into spec.inputs"),
     );
+    // Registry-resolved pool steps (R2) merge the granted typed lease into the
+    // parked data envelope under `lease` (see `lower_automated_step_pooled`'s
+    // `t_<id>_to_output`). Surface a `lease` field so a downstream
+    // `<slug>.lease.<field>` borrow resolves through the standard read-arc
+    // pipeline. Opaque (not the kind's typed lease schema) because shape
+    // analysis has no `known_resources` to resolve the kind here — the leaf is
+    // findable + the nested `.field` is appended verbatim, which is all the
+    // borrow resolver needs. Only emitted when an alias is set: the
+    // well-known-fallback path (`resourcePool: {}`) stages no lease and stays
+    // byte-identical.
+    if let WorkflowNodeData::AutomatedStep {
+        resource_pool: Some(claim),
+        ..
+    } = &node.data
+    {
+        if claim.alias.as_deref().is_some_and(|a| !a.is_empty()) {
+            o.insert(
+                "lease",
+                TokenShape::Opaque("typed pool lease (Lease__<kind>)".to_string()),
+                p("granted pool lease, staged into the body + parked"),
+            );
+        }
+    }
     o
 }
 

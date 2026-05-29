@@ -343,6 +343,25 @@ async fn discover_known_resources(
         for alias in collect_declared_resource_aliases(&ctx, backend_type) {
             declared.push((node.id.clone(), alias));
         }
+
+        // `resourcePool.alias` is a declared resource binding too, but it
+        // lives on the node *data* (sibling to `executionSpec`), not inside
+        // the backend config the scanner above reads. Collect it the same
+        // way — into `heads` (so it resolves to a `KnownResource` the
+        // compiler can read) and `declared` (so a missing/unknown alias
+        // hard-fails at publish, like any other declared alias). An empty
+        // `resourcePool: {}` (alias None) is the R1 fallback and contributes
+        // nothing here.
+        if let WorkflowNodeData::AutomatedStep {
+            resource_pool: Some(claim),
+            ..
+        } = &node.data
+        {
+            if let Some(alias) = claim.alias.as_deref().filter(|a| !a.is_empty()) {
+                heads.insert(alias.to_string());
+                declared.push((node.id.clone(), alias.to_string()));
+            }
+        }
     }
 
     if heads.is_empty() {

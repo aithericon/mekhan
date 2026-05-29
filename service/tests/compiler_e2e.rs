@@ -572,3 +572,287 @@ fn automated_step_without_resource_pool_emits_no_pool_bridges() {
         "no-pool must not emit the claim transition"
     );
 }
+
+// ---------------------------------------------------------------------------
+// R2 — registry-resolved pool binding + typed body-visible lease
+// ---------------------------------------------------------------------------
+
+use mekhan_service::compiler::compile_to_air_with_subworkflows_and_interfaces;
+use mekhan_service::compiler::resource_refs::{KnownResource, KnownResources};
+use mekhan_service::compiler::CompileError;
+use mekhan_service::compiler::SubWorkflowAir;
+
+/// Fixed resource id for `prod_gpu` so the backing-net id assertion is stable.
+fn prod_gpu_id() -> uuid::Uuid {
+    uuid::Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap()
+}
+
+/// A `KnownResources` map with `prod_gpu` resolving to a `token_pool`. Mirrors
+/// what `discover_known_resources` hands the compiler at publish.
+fn known_with_prod_gpu(type_name: &str) -> KnownResources {
+    let mut k = KnownResources::new();
+    k.insert(
+        "prod_gpu".to_string(),
+        KnownResource {
+            id: prod_gpu_id(),
+            type_name: type_name.to_string(),
+            latest_version: 1,
+        },
+    );
+    k
+}
+
+fn compile_aliased(known: &KnownResources) -> Result<Value, CompileError> {
+    let graph = load_graph("resource-pool-aliased.json");
+    compile_to_air_with_subworkflows_and_interfaces(
+        &graph,
+        "t",
+        "",
+        &HashMap::new(),
+        &HashMap::new(),
+        &SubWorkflowAir::new(),
+        known,
+    )
+    .map(|(air, _iface)| air)
+}
+
+/// The keystone: a `resourcePool: { alias }` step resolves to the pool
+/// resource's backing net `pool-<id>` (NOT the well-known global), carries the
+/// validated `request` in the ClaimRequest, declares `Lease__<kind>` in
+/// `definitions`, types the grant inbox with it, stages `lease.json` into the
+/// body, and merges the lease into the parked envelope so a downstream
+/// `<slug>.lease.<field>` borrow synthesizes a read-arc.
+#[test]
+fn aliased_pool_resolves_backing_net_and_emits_typed_lease() {
+    let air = compile_aliased(&known_with_prod_gpu("token_pool"))
+        .expect("aliased token_pool step should compile");
+
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    let expected_net = format!("pool-{}", prod_gpu_id());
+
+    // (1) All three handshake bridges target the RESOLVED backing net, not the
+    //     well-known global.
+    for (pid, inbox) in [
+        ("p_render_claim_out", "claim_inbox"),
+        ("p_render_register_out", "register_inbox"),
+        ("p_render_release_out", "release_inbox"),
+    ] {
+        let p = places(&air).iter().find(|p| p["id"] == pid).unwrap();
+        assert_eq!(
+            p["bridge_out"]["target_net_id"], expected_net,
+            "{pid} must bridge to the resolved backing net"
+        );
+        assert_eq!(p["bridge_out"]["target_place_name"], inbox);
+    }
+    // Definitely not the global fallback.
+    let claim_out = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_render_claim_out")
+        .unwrap();
+    assert_ne!(
+        claim_out["bridge_out"]["target_net_id"], "resource-pool-net",
+        "aliased path must NOT use the well-known global net"
+    );
+
+    // (2) `Lease__token_pool` is in definitions and types the grant inbox.
+    assert!(
+        air["definitions"]["Lease__token_pool"].is_object(),
+        "Lease__token_pool must be registered in definitions, got: {:?}",
+        air["definitions"]
+    );
+    let lease_props = &air["definitions"]["Lease__token_pool"]["properties"];
+    assert!(
+        lease_props["unit_id"].is_object(),
+        "token_pool lease must declare unit_id"
+    );
+    let grant_inbox = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_render_grant_inbox")
+        .unwrap();
+    assert_eq!(
+        grant_inbox["token_schema"], "#/definitions/Lease__token_pool",
+        "grant inbox place must be typed as the kind's lease"
+    );
+
+    // (3) The ClaimRequest carries the validated request params.
+    let claim_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_claim")
+        .unwrap()["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        claim_logic.contains("request:") && claim_logic.contains("gpu_count"),
+        "claim must carry the request params: {claim_logic}"
+    );
+
+    // (4) `lease.json` is staged into the body spec at acquire time. Read the
+    //     unescaped Rhai source (the `logic.source` string) so substring
+    //     matching is against the real script, not its JSON encoding.
+    let acquire_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_acquire")
+        .unwrap()["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        acquire_logic.contains(r#""name": "lease.json""#)
+            && acquire_logic.contains(r#""value": grant"#),
+        "acquire must stage lease.json (the granted lease) into job_inputs: {acquire_logic}"
+    );
+
+    // (5) The success exit merges the lease into the parked envelope.
+    let to_output_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_to_output")
+        .unwrap()["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        to_output_logic.contains("out.lease = held"),
+        "to_output must merge the lease into the output envelope: {to_output_logic}"
+    );
+
+    // (6) The downstream Decision guard `render.lease.gpu_uuid` synthesized a
+    //     non-consuming read-arc into the parked data place `p_render_data`.
+    let route_guard_inputs = transitions(&air)
+        .iter()
+        .find(|t| t["id"].as_str().is_some_and(|s| s.starts_with("t_route")))
+        .map(|t| t["inputs"].clone());
+    let read_arc = transitions(&air).iter().any(|t| {
+        t["inputs"]
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|a| {
+                    a["place"] == "p_render_data" && a["read"] == serde_json::Value::Bool(true)
+                })
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        read_arc,
+        "a downstream `<slug>.lease.<field>` borrow must synthesize a read-arc into \
+         p_render_data; route guard inputs were {route_guard_inputs:?}"
+    );
+}
+
+/// datacenter is a pool kind too — same plumbing, `Lease__datacenter` with the
+/// scheduler lease fields.
+#[test]
+fn aliased_pool_datacenter_kind_emits_lease_with_gpu_fields() {
+    let air = compile_aliased(&known_with_prod_gpu("datacenter"))
+        .expect("aliased datacenter step should compile");
+    let props = &air["definitions"]["Lease__datacenter"]["properties"];
+    for f in ["node", "gpu_uuid", "alloc_id", "expiry"] {
+        assert!(
+            props[f].is_object(),
+            "datacenter lease must declare `{f}`, got {props:?}"
+        );
+    }
+    let expected_net = format!("pool-{}", prod_gpu_id());
+    let claim_out = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_render_claim_out")
+        .unwrap();
+    assert_eq!(claim_out["bridge_out"]["target_net_id"], expected_net);
+}
+
+/// Byte-identity: the empty `resourcePool: {}` (alias None) compiles
+/// IDENTICALLY whether or not the workspace has pool resources — it always
+/// bridges to the well-known global, with no lease typing/staging. This is the
+/// R1 fallback the demo-13 golden + the `automated_step_*` guards pin.
+#[test]
+fn no_alias_pool_is_byte_identical_to_well_known_global() {
+    let graph = load_graph("resource-pool-step.json");
+    // Compile with an empty manifest (today's public entry) ...
+    let air_empty = compile_to_air(&graph, "t", "", &HashMap::new()).unwrap();
+    // ... and with a populated manifest that the no-alias claim ignores.
+    let air_known = compile_to_air_with_subworkflows_and_interfaces(
+        &graph,
+        "t",
+        "",
+        &HashMap::new(),
+        &HashMap::new(),
+        &SubWorkflowAir::new(),
+        &known_with_prod_gpu("token_pool"),
+    )
+    .map(|(air, _)| air)
+    .unwrap();
+
+    assert_eq!(
+        air_empty, air_known,
+        "the no-alias pool path must not depend on the resource manifest"
+    );
+    // And it bridges to the well-known global, with no lease definition.
+    let claim_out = places(&air_empty)
+        .iter()
+        .find(|p| p["id"] == "p_render_claim_out")
+        .unwrap();
+    assert_eq!(claim_out["bridge_out"]["target_net_id"], "resource-pool-net");
+    assert!(
+        air_empty["definitions"].get("Lease__token_pool").is_none(),
+        "no-alias path must emit no Lease__ definition"
+    );
+}
+
+/// Unknown alias → CompileError (a direct `compile_to_air_*` caller can hit
+/// this; at publish `discover_known_resources` already hard-fails earlier).
+#[test]
+fn aliased_pool_unknown_alias_is_compile_error() {
+    let err = compile_aliased(&KnownResources::new()).unwrap_err();
+    assert!(
+        matches!(err, CompileError::WorkspaceResourceUnknown { ref alias, .. } if alias == "prod_gpu"),
+        "expected WorkspaceResourceUnknown, got {err:?}"
+    );
+}
+
+/// Alias pointing at a non-pool kind (e.g. postgres) → CompileError.
+#[test]
+fn aliased_pool_non_pool_kind_is_compile_error() {
+    let err = compile_aliased(&known_with_prod_gpu("postgres")).unwrap_err();
+    match err {
+        CompileError::ResourcePoolNotAPool { alias, kind, .. } => {
+            assert_eq!(alias, "prod_gpu");
+            assert_eq!(kind, "postgres");
+        }
+        other => panic!("expected ResourcePoolNotAPool, got {other:?}"),
+    }
+}
+
+/// A `request` that violates the kind's `claim_schema` → CompileError. The
+/// fixture's request is valid; we mutate it to a wrong-typed `gpu_count`.
+#[test]
+fn aliased_pool_bad_request_is_compile_error() {
+    let mut graph = load_graph("resource-pool-aliased.json");
+    for node in &mut graph.nodes {
+        if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
+            resource_pool: Some(claim),
+            ..
+        } = &mut node.data
+        {
+            // `gpu_count` is `Option<u32>`; a string is invalid.
+            claim.request = Some(serde_json::json!({ "gpu_count": "lots" }));
+        }
+    }
+    let err = compile_to_air_with_subworkflows_and_interfaces(
+        &graph,
+        "t",
+        "",
+        &HashMap::new(),
+        &HashMap::new(),
+        &SubWorkflowAir::new(),
+        &known_with_prod_gpu("datacenter"),
+    )
+    .unwrap_err();
+    match err {
+        CompileError::ResourcePoolRequestInvalid { alias, .. } => {
+            assert_eq!(alias, "prod_gpu");
+        }
+        other => panic!("expected ResourcePoolRequestInvalid, got {other:?}"),
+    }
+}

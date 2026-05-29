@@ -94,6 +94,11 @@ aithericon-backends = { path = "../shared/backends" }
 regex = "1"
 
 schemars = "0.8"
+# Publish-time validation of `resourcePool.request` against a pool kind's
+# `claim_schema`. Same crate + locked version the engine's `SchemaRegistry`
+# uses (`petri-application`), so the compile-time check and the runtime check
+# share validator semantics.
+jsonschema = "0.27"
 petgraph = "0.6"
 
 # Rhai parser for guard scope validation (Phase 3 typed-ports). We only use the

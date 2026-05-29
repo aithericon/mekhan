@@ -184,6 +184,20 @@ pub(crate) struct PostProcess {
     /// drain transition + matching `<kind>_cancel` effect for every
     /// cancellable child.
     pub(crate) timeout_cancel_fanouts: Vec<crate::compiler::lower::timeout::TimeoutCancelFanout>,
+    /// Typed-lease definitions a registry-resolved pooled AutomatedStep needs
+    /// in the AIR `definitions` map: `(def_name, json_schema)` where `def_name`
+    /// is `Lease__<kind>`. The SDK `Context` has no public definition-register
+    /// hook (only token-typed `register_schema`), so the lowering records the
+    /// pair here and `compile_to_air` drains it into `scenario.definitions`
+    /// after `ctx.build()`. Deduplicated on insert by the drain (same kind
+    /// across N pooled nodes ⇒ one entry).
+    pub(crate) lease_definitions: Vec<(String, serde_json::Value)>,
+    /// Grant-inbox places to type with a `Lease__<kind>` ref: `(place_id,
+    /// def_name)`. Drained alongside `lease_definitions` after build so the
+    /// engine `SchemaRegistry` validates the routed grant reply IS the typed
+    /// lease. Kept separate from `lease_definitions` because place typing is a
+    /// post-build scenario mutation, not a definitions insert.
+    pub(crate) lease_inbox_schemas: Vec<(String, String)>,
 }
 
 /// Tracks which places are the input/output interface of each expanded node.
@@ -259,6 +273,13 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// `node-config.json` key the publish path uploads to (see
     /// `mekhan_service::s3::ArtifactStore::node_config_key`).
     pub(crate) config_storage: ConfigStorage<'a>,
+    /// Workspace-resource manifest the publish handler resolved
+    /// (`discover_known_resources`). A pooled AutomatedStep reads its
+    /// `resourcePool.alias` out of here to learn `{resource_id, kind}` and
+    /// bridge to the kind's backing pool net. Empty for tests / previews that
+    /// don't resolve resources — the pooled lowering then takes the
+    /// well-known-global fallback.
+    pub(crate) known_resources: &'a crate::compiler::resource_refs::KnownResources,
 }
 
 /// Compile-time pointer set the lowering uses to mint the
@@ -361,6 +382,7 @@ pub(crate) fn expand_node<'a>(
     definitions: &'a std::collections::BTreeMap<String, serde_json::Value>,
     node_configs: &mut HashMap<String, serde_json::Value>,
     config_storage: ConfigStorage<'a>,
+    known_resources: &'a crate::compiler::resource_refs::KnownResources,
 ) -> Result<(), CompileError> {
     let mut cx = LoweringCtx {
         node,
@@ -378,6 +400,7 @@ pub(crate) fn expand_node<'a>(
         definitions,
         node_configs,
         config_storage,
+        known_resources,
     };
     let decl = crate::nodes::lookup_by_variant(&node.data)
         .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");

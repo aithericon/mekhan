@@ -23,6 +23,18 @@ pub const SCHEDULER_JOB_QUEUE: &str = "job_inbox";
 /// is the productionization gate in `docs/14`).
 pub const RESOURCE_POOL_NET_ID: &str = "resource-pool-net";
 
+/// Deterministic backing-net id for a registry-resolved pool resource (R2+).
+/// A pooled AutomatedStep whose `resourcePool.alias` resolves to resource
+/// `<resource_id>` bridges its claim/register/release handshake to this id
+/// instead of the well-known global [`RESOURCE_POOL_NET_ID`]. R3 (tokens
+/// backend) and R4 (scheduler backend) deploy a net with exactly this id; the
+/// resource *kind* decides what that net IS, but the id scheme is shared so the
+/// compiler stays backend-agnostic. Pure function of the resource id ⇒
+/// replay-safe + diff-stable in the AIR.
+pub fn pool_net_id(resource_id: uuid::Uuid) -> String {
+    format!("pool-{resource_id}")
+}
+
 /// The pool net's claim queue (`bridge_in::<ClaimRequest>("claim_inbox", …)`).
 /// A `ClaimRequest { grant_id }` deposited here is matched against a free
 /// capacity token by `t_grant`, which replies a `Grant { grant_id, gpu_id }`

@@ -449,6 +449,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
         &mut fixups,
         &mut interfaces,
         &mut node_configs,
+        known_resources,
     )?;
 
     // 4b. Drain queued agent → tool-child wiring. Runs after every
@@ -477,6 +478,33 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     }
 
     let mut scenario = ctx.build();
+
+    // 5b. Drain registry-resolved pool lease typing collected during lowering.
+    //     `Lease__<kind>` definitions + grant-inbox place schema_refs. Done
+    //     here (post-build) because the SDK `Context` exposes no public
+    //     definition-register hook; the pooled lowering recorded the pairs in
+    //     `fixups`. Runs before merges — the grant-inbox place is a
+    //     `bridge_reply_channel` state place that no pass-through merge
+    //     touches, so typing it here is stable. Deduplicate definitions on the
+    //     same kind name (one `Lease__token_pool` regardless of N pooled
+    //     nodes).
+    for (def_name, schema) in &fixups.lease_definitions {
+        scenario
+            .definitions
+            .entry(def_name.clone())
+            .or_insert_with(|| schema.clone());
+    }
+    if !fixups.lease_inbox_schemas.is_empty() {
+        for place in &mut scenario.places {
+            if let Some((_, def_name)) = fixups
+                .lease_inbox_schemas
+                .iter()
+                .find(|(pid, _)| *pid == place.id)
+            {
+                place.token_schema = Some(format!("#/definitions/{def_name}"));
+            }
+        }
+    }
 
     // 6. Resolve place aliases from merges
     let alias = resolve_aliases(&fixups.merges);
@@ -602,6 +630,7 @@ fn lower_nodes_topologically<'a>(
     fixups: &mut PostProcess,
     interfaces: &mut InterfaceRegistry,
     node_configs: &mut HashMap<String, serde_json::Value>,
+    known_resources: &'a KnownResources,
 ) -> Result<(), CompileError> {
     // Pre-populate scope_groups: map child node_id → parent scope's group_id.
     for node in &graph.nodes {
@@ -680,6 +709,7 @@ fn lower_nodes_topologically<'a>(
             &graph.definitions,
             node_configs,
             config_storage,
+            known_resources,
         )?;
     }
     Ok(())
