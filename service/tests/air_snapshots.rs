@@ -231,12 +231,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     numbered.sort();
 
     let covered: std::collections::HashSet<&str> = SNAPSHOT_DEMOS.iter().copied().collect();
-    // Both skipped for the same reason: they reference a child template by id
-    // that the bare `compile_to_air` entry-point can't resolve (the publish
-    // handler runs the resolver). 09's `lookup_order` tool is a SubWorkflow
-    // (the 08a-order-lookup child), so it joins 06 here.
+    // Skipped for the same reason: each references a child template or resource
+    // by id that the bare `compile_to_air` entry-point can't resolve (the
+    // publish handler runs the resolver). 09's `lookup_order` tool is a
+    // SubWorkflow (the 08a-order-lookup child), so it joins 06; 11-http-call's
+    // `http` backend references an http resource the resolver would supply.
     let documented_skip: std::collections::HashSet<&str> =
-        ["06-subworkflow", "09-agent-tool-loop"].into_iter().collect();
+        ["06-subworkflow", "09-agent-tool-loop", "11-http-call"].into_iter().collect();
 
     for d in &numbered {
         let s = d.as_str();
