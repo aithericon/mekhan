@@ -1081,26 +1081,24 @@ mod tests {
     #[test]
     fn document_pipeline_v1_compiles_with_strict_schemas() {
         use crate::compiler::{
-            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
-            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
         let demo = load_demo(&repo_root().join("demos/document-pipeline-v1"))
             .expect("document-pipeline-v1 must load");
 
         let files = node_files_inline(&demo.files);
-        let (_air, _iface, node_configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &demo.graph,
-                &demo.metadata.name,
-                demo.metadata.description.as_deref().unwrap_or(""),
-                &files,
-                &demo.files,
-                &SubWorkflowAir::new(),
-                &KnownResources::new(),
-                ConfigStorage::ephemeral(),
-            )
-            .expect("document-pipeline-v1 must compile (no Rhai-complexity panic)");
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("document-pipeline-v1 must compile (no Rhai-complexity panic)");
 
         // Every LLM extractor's resolved config must land in the
         // side-channel — that's the proof the literal-inline path is
@@ -1148,8 +1146,7 @@ mod tests {
     #[test]
     fn classify_and_group_v1_demo_loads_and_compiles() {
         use crate::compiler::{
-            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
-            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
         let demo = load_demo(&repo_root().join("demos/classify-and-group-v1"))
@@ -1161,18 +1158,17 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        let (_air, _iface, node_configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &demo.graph,
-                &demo.metadata.name,
-                demo.metadata.description.as_deref().unwrap_or(""),
-                &files,
-                &demo.files,
-                &SubWorkflowAir::new(),
-                &KnownResources::new(),
-                ConfigStorage::ephemeral(),
-            )
-            .expect("classify-and-group-v1 must compile");
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("classify-and-group-v1 must compile");
 
         // The vision-LLM `classify` step uses a strict response_format
         // `$ref`. Its resolved config must land in the side-channel
@@ -1212,8 +1208,7 @@ mod tests {
     #[test]
     fn di_extraction_canary_demo_loads_and_compiles() {
         use crate::compiler::{
-            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
-            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
         let demo = load_demo(&repo_root().join("demos/di-extraction-canary"))
@@ -1237,18 +1232,17 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        let (_air, _iface, node_configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &demo.graph,
-                &demo.metadata.name,
-                demo.metadata.description.as_deref().unwrap_or(""),
-                &files,
-                &demo.files,
-                &SubWorkflowAir::new(),
-                &KnownResources::new(),
-                ConfigStorage::ephemeral(),
-            )
-            .expect("di-extraction-canary must compile");
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("di-extraction-canary must compile");
 
         // The vision LLM `extract` step has a strict $ref response_format.
         let extract_cfg = node_configs
@@ -1275,8 +1269,7 @@ mod tests {
     #[test]
     fn output_safety_gate_demo_loads_and_compiles() {
         use crate::compiler::{
-            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
-            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
         let demo = load_demo(&repo_root().join("demos/output-safety-gate"))
@@ -1302,18 +1295,17 @@ mod tests {
         }
 
         let files = node_files_inline(&demo.files);
-        let (_air, _iface, node_configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &demo.graph,
-                &demo.metadata.name,
-                demo.metadata.description.as_deref().unwrap_or(""),
-                &files,
-                &demo.files,
-                &SubWorkflowAir::new(),
-                &KnownResources::new(),
-                ConfigStorage::ephemeral(),
-            )
-            .expect("output-safety-gate must compile");
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("output-safety-gate must compile");
 
         // Critic config must have the expanded CriticFlags schema parked
         // and the start.subject_text / start.evidence_text borrows wired.
@@ -1431,7 +1423,7 @@ mod tests {
     #[test]
     fn agent_tool_loop_demo_loads_and_compiles() {
         use crate::compiler::{
-            compile_to_air_with_subworkflows_inline, node_files_inline, ResolvedChild,
+            compile_to_air_with_options, node_files_inline, CompileOptions, ResolvedChild,
             SubWorkflowAir,
         };
 
@@ -1462,15 +1454,19 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        let air = compile_to_air_with_subworkflows_inline(
+        let air = compile_to_air_with_options(
             &demo.graph,
             &demo.metadata.name,
             demo.metadata.description.as_deref().unwrap_or(""),
             &files,
-            &demo.files,
-            &sub_air,
+            CompileOptions {
+                inline_sources: &demo.files,
+                sub_air: &sub_air,
+                ..Default::default()
+            },
         )
-        .unwrap_or_else(|e| panic!("09-agent-tool-loop must compile to AIR: {e:?}"));
+        .unwrap_or_else(|e| panic!("09-agent-tool-loop must compile to AIR: {e:?}"))
+        .air;
 
         let air_str = air.to_string();
         // Signature transitions of the loop path — degenerate would emit
@@ -1502,10 +1498,9 @@ mod tests {
     /// backend dispatches without requiring a real mail server.
     #[test]
     fn email_welcome_demo_loads_and_compiles() {
-        use crate::compiler::compile_to_air_with_subworkflows_and_interfaces;
         use crate::compiler::node_files_inline;
         use crate::compiler::resource_refs::{KnownResource, KnownResources};
-        use crate::compiler::SubWorkflowAir;
+        use crate::compiler::{compile_to_air_with_options, CompileArtifacts, CompileOptions};
         use std::collections::HashMap;
         use uuid::Uuid;
 
@@ -1532,14 +1527,16 @@ mod tests {
             },
         );
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
-        let (air, _iface) = compile_to_air_with_subworkflows_and_interfaces(
+        let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
             &demo.metadata.name,
             demo.metadata.description.as_deref().unwrap_or(""),
             &files,
-            &inline,
-            &SubWorkflowAir::new(),
-            &known,
+            CompileOptions {
+                inline_sources: &inline,
+                known_resources: &known,
+                ..Default::default()
+            },
         )
         .unwrap_or_else(|e| panic!("email-welcome must compile to AIR with known resources: {e:?}"));
 
@@ -1582,10 +1579,9 @@ mod tests {
 
     #[test]
     fn http_call_demo_loads_and_compiles_with_borrow() {
-        use crate::compiler::compile_to_air_with_subworkflows_and_interfaces;
         use crate::compiler::node_files_inline;
         use crate::compiler::resource_refs::KnownResources;
-        use crate::compiler::SubWorkflowAir;
+        use crate::compiler::{compile_to_air_with_options, CompileArtifacts, CompileOptions};
         use std::collections::HashMap;
 
         let root = repo_root().join("demos");
@@ -1601,14 +1597,16 @@ mod tests {
         // resource-free step.
         let known = KnownResources::new();
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
-        let (air, _iface) = compile_to_air_with_subworkflows_and_interfaces(
+        let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
             &demo.metadata.name,
             demo.metadata.description.as_deref().unwrap_or(""),
             &files,
-            &inline,
-            &SubWorkflowAir::new(),
-            &known,
+            CompileOptions {
+                inline_sources: &inline,
+                known_resources: &known,
+                ..Default::default()
+            },
         )
         .unwrap_or_else(|e| panic!("11-http-call must compile to AIR: {e:?}"));
 
@@ -1753,27 +1751,23 @@ mod tests {
     /// any of those layers fails here rather than at seed time.
     #[test]
     fn bo_loop_demo_compiles() {
-        use crate::compiler::{
-            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
-            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
-        };
+        use crate::compiler::{compile_to_air_with_options, node_files_inline, CompileOptions};
 
         let demo = load_demo(&repo_root().join("demos/12-bo-loop"))
             .expect("12-bo-loop must load");
 
         let files = node_files_inline(&demo.files);
-        let (_air, _iface, _configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &demo.graph,
-                &demo.metadata.name,
-                demo.metadata.description.as_deref().unwrap_or(""),
-                &files,
-                &demo.files,
-                &SubWorkflowAir::new(),
-                &KnownResources::new(),
-                ConfigStorage::ephemeral(),
-            )
-            .expect("12-bo-loop must compile (Map-in-Loop + accumulators + collection borrow)");
+        compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("12-bo-loop must compile (Map-in-Loop + accumulators + collection borrow)");
     }
 
     /// Phase 4 of the BO arc (`12a-bo-catalog-trigger`): a catalog Trigger
@@ -1786,10 +1780,7 @@ mod tests {
     /// borrows in the Python proposer.
     #[test]
     fn bo_catalog_trigger_demo_compiles() {
-        use crate::compiler::{
-            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
-            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
-        };
+        use crate::compiler::{compile_to_air_with_options, node_files_inline, CompileOptions};
         use crate::models::template::{TriggerSource, WorkflowNodeData};
 
         let demo = load_demo(&repo_root().join("demos/12a-bo-catalog-trigger"))
@@ -1844,18 +1835,17 @@ mod tests {
         // AIR compilation skips the Trigger node; the Start→propose→End body
         // must compile (read-arc synthesis for the `start.*` Python borrows).
         let files = node_files_inline(&demo.files);
-        let (_air, _iface, _configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &demo.graph,
-                &demo.metadata.name,
-                demo.metadata.description.as_deref().unwrap_or(""),
-                &files,
-                &demo.files,
-                &SubWorkflowAir::new(),
-                &KnownResources::new(),
-                ConfigStorage::ephemeral(),
-            )
-            .expect("12a-bo-catalog-trigger body must compile (Trigger skipped, Start→propose→End)");
+        compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("12a-bo-catalog-trigger body must compile (Trigger skipped, Start→propose→End)");
     }
 
     /// The learning-path demos (`01-` … `06-`) all parse through the same
@@ -1945,8 +1935,7 @@ mod tests {
     #[test]
     fn ocr_classify_extract_demo_loads_and_compiles_with_borrows() {
         use crate::compiler::{
-            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
-            ConfigStorage, SubWorkflowAir,
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
         let root = repo_root().join("demos");
@@ -1958,18 +1947,19 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        let (air, _iface, node_configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &demo.graph,
-                &demo.metadata.name,
-                demo.metadata.description.as_deref().unwrap_or(""),
-                &files,
-                &demo.files,
-                &SubWorkflowAir::new(),
-                &crate::compiler::resource_refs::KnownResources::new(),
-                ConfigStorage::ephemeral(),
-            )
-            .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
+        let CompileArtifacts {
+            air, node_configs, ..
+        } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("07-ocr-classify-extract must compile to AIR: {e:?}"));
 
         let air_str = air.to_string();
 
