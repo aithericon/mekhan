@@ -580,6 +580,7 @@ pub(super) fn is_map_body_terminal(
 pub(crate) fn apply_agent_tool_wirings(
     ctx: &mut Context,
     node_ports: &HashMap<String, NodePorts>,
+    interfaces: &InterfaceRegistry,
     wirings: &[AgentToolWiring],
 ) -> Result<(), CompileError> {
     for wiring in wirings {
@@ -632,18 +633,55 @@ pub(crate) fn apply_agent_tool_wirings(
             // worker folds it into the cumulative blob. State stays inside the
             // agent — the workflow token (which the child may have stripped)
             // is irrelevant once we have the tool result.
-            if let Some(child_out) = child_default_out {
-                ctx.transition(
-                    format!("t_{agent_id}_collect_{tn}"),
-                    format!("{agent_label} - Collect {tn}"),
-                )
-                .auto_input("result", &child_out)
-                .auto_input("state", &wiring.p_state_in_tool)
-                .auto_output("state", &wiring.p_state)
-                .logic_rhai(format!(
-                    r#"let s = state; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
-                ))
-                .done();
+            //
+            // CRITICAL — read the child's PARKED data, not its control token.
+            // Any parked producer (SubWorkflow, AutomatedStep) splits its
+            // output via `split_outputs`/`YIELD_LOGIC`: the real business
+            // payload is parked write-once in `p_<child>_data`, while the
+            // DEFAULT output place carries only the slim control token
+            // (`_`-prefixed leaves + `task_id`/`status`). Feeding the model
+            // the control token hands it an empty tool result, so it never
+            // sees the child's actual return (e.g. a looked-up order id) and
+            // can't chain to the next tool. We therefore READ-ARC the parked
+            // data place (published on `interface.data_port`) for `result`,
+            // and still CONSUME the control token as the "child done" firing
+            // trigger (its presence gates the transition + clears it for any
+            // re-dispatch). Non-parking children (no `data_port`) keep the
+            // old behaviour: their default output IS the payload.
+            let child_data_port = interfaces
+                .get(&entry.child_id)
+                .and_then(|i| i.data_port.clone());
+            match (child_default_out, child_data_port) {
+                (Some(child_out), Some(data_place_id)) => {
+                    let p_data: PlaceHandle<DynamicToken> =
+                        PlaceHandle::external(data_place_id);
+                    ctx.transition(
+                        format!("t_{agent_id}_collect_{tn}"),
+                        format!("{agent_label} - Collect {tn}"),
+                    )
+                    .auto_input("ctrl", &child_out)
+                    .read_input("result", &p_data)
+                    .auto_input("state", &wiring.p_state_in_tool)
+                    .auto_output("state", &wiring.p_state)
+                    .logic_rhai(format!(
+                        r#"let s = state; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                    ))
+                    .done();
+                }
+                (Some(child_out), None) => {
+                    ctx.transition(
+                        format!("t_{agent_id}_collect_{tn}"),
+                        format!("{agent_label} - Collect {tn}"),
+                    )
+                    .auto_input("result", &child_out)
+                    .auto_input("state", &wiring.p_state_in_tool)
+                    .auto_output("state", &wiring.p_state)
+                    .logic_rhai(format!(
+                        r#"let s = state; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                    ))
+                    .done();
+                }
+                (None, _) => {}
             }
 
             // Error path: Feedback re-enters the loop with a
