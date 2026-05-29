@@ -1,5 +1,15 @@
 # Round 2 refactor — overnight orchestration log
 
+> **LANDED ON MAIN (2026-05-29).** Round 2 merged into `main` at `e02fa23`
+> ("Merge round 2 code-smell refactor into main"); `refactor/code-smell-round-2-int`
+> is fully contained in `main` (`git log main..refactor/code-smell-round-2-int` is
+> empty). The concurrent-session `stepsRef` / dynamic-human-task work that this log
+> flagged as a conflict risk **also landed independently** at `f970467`
+> ("Merge feat/dynamic-human-task"), so the untangling described below is resolved —
+> both features coexist on `main`. The `refactor/code-smell-round-2*` and
+> `refactor/r2-*` branches are now stale and safe to delete. This log is kept as the
+> orchestration record.
+
 Started 2026-05-28 ~23:55. Integration branch: `refactor/code-smell-round-2` (off `main` @ f2c5df3).
 Main stays pristine. Each lane = own worktree + branch, single-workspace. Merge sequentially into the integration branch after verifying each compiles. Never push.
 
@@ -43,7 +53,16 @@ Main stays pristine. Each lane = own worktree + branch, single-workspace. Merge 
 ## Incident (resolved): stray `git stash pop` in r2-exec
 The EXEC agent ran `git stash pop` while diagnosing the smtp test, which popped the user's pre-existing `stash@{0}: WIP on main` into the r2-exec worktree and left 4 app/ files conflicted. Resolution: verified `stash@{0}` fully intact (all 10 files), confirmed the r2-executor branch commits are executor-only (no contamination), merged the clean branch, force-removed the worktree (discarding only the redundant popped copy), re-confirmed `stash@{0}` still present. **No user WIP lost.**
 
-## ⚠️ IMPORTANT — concurrent session detected; integration moved to a new branch
+## ✅ RESOLVED — concurrent session conflict (both features landed on main)
+Both branches reached `main` cleanly: round-2 at `e02fa23` and the `stepsRef` /
+dynamic-human-task feature at `f970467`. The only predicted overlap point was
+`service/src/models/template.rs` (round-2's `chain_root_id` vs stepsRef's `steps_ref`);
+both now coexist there on `main` (verified: `chain_root_id()` at `template.rs:66`).
+The `/tmp/rescued-*` safety nets are no longer needed. Original incident note retained below.
+
+---
+
+### ⚠️ (historical) concurrent session detected; integration moved to a new branch
 Mid-run, the MAIN checkout's working tree picked up uncommitted WIP that was NOT there at
 session start: a coherent **`stepsRef` / dynamic human-task form** feature across 7 service
 files + `service/tests/dynamic_human_task_e2e.rs`. The `ps` table showed **multiple live
