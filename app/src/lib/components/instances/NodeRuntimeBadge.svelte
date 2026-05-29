@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { StepExecution } from '$lib/api/client';
-	import { useNodeRuntime } from './runtime-context';
+	import { useNodeRuntime, useAwaitingResource } from './runtime-context';
 	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
 	import XCircle from '@lucide/svelte/icons/x-circle';
 	import Loader2 from '@lucide/svelte/icons/loader-2';
@@ -13,26 +13,23 @@
 		/** When true, render only an icon (no duration); used for tight headers. */
 		compact?: boolean;
 		/**
-		 * When true, overlays a "Waiting for resource" badge alongside (or
-		 * instead of) the normal runtime status. This is the M3 resource-pool
-		 * contention signal: the node's `p_{id}_claim_out` token has been
-		 * emitted to the pool net but the corresponding `p_{id}_grant_inbox`
-		 * is still empty (no grant received yet).
-		 *
-		 * TODO(M3): populate from the per-instance net marking once the M3
-		 * compiler lowering is deployed. The parent (WorkflowGraphView or a
-		 * dedicated PoolOverlay component) should read:
-		 *   - `p_{nodeId}_claim_out` → token present means claim was sent
-		 *   - `p_{nodeId}_grant_inbox` → empty means grant not yet received
-		 * and set `awaitingResource={true}` when claim_out has ≥1 token AND
-		 * grant_inbox has 0 tokens in the INSTANCE net's marking.
+		 * Explicit override for the "Waiting for resource" overlay. When
+		 * omitted, the badge reads the M3 resource-pool predicate from the
+		 * `awaiting-resource` Svelte context that `WorkflowGraphView` provides
+		 * (computed from the instance net marking:
+		 * `count(p_{id}_pending) > 0 && count(p_{id}_held) == 0`). Pass this
+		 * prop directly when the badge is used outside an instance canvas
+		 * (e.g. a standalone contention table).
 		 */
 		awaitingResource?: boolean;
 	};
 
-	let { nodeId, compact = false, awaitingResource = false }: Props = $props();
+	let { nodeId, compact = false, awaitingResource }: Props = $props();
 
 	const lookup = useNodeRuntime();
+	const awaitingLookup = useAwaitingResource();
+	// Explicit prop wins; otherwise fall back to the instance-marking context.
+	const isAwaiting = $derived(awaitingResource ?? awaitingLookup(nodeId));
 	const executions = $derived(lookup(nodeId));
 	// For Loop body nodes the latest iteration is the most informative; for
 	// non-loop nodes there's only one row.
@@ -62,14 +59,16 @@
 
 <!--
   Resource-contention "Waiting for resource" badge.
-  Predicate: awaitingResource=true iff (per-instance net marking):
-    count(p_{nodeId}_claim_out) > 0  AND  count(p_{nodeId}_grant_inbox) == 0
-  This means the node has emitted a claim to the resource pool but has not
-  yet received a grant token back.
-  TODO(M3): wire this from WorkflowGraphView once M3 compiler lowering is
-  deployed. Until then the prop defaults to false and the badge is invisible.
+  Predicate (per-instance net marking, see instance-marking.svelte.ts):
+    count(p_{nodeId}_pending) > 0  AND  count(p_{nodeId}_held) == 0
+  i.e. the node emitted a pool claim (t_claim parked p_pending) but has not
+  yet acquired the grant (t_acquire would consume p_pending → p_held).
+  `p_claim_out` is a bridge_out place whose token is removed from the local
+  marking the instant it's sent, so it can't be the wait signal — hence the
+  pending/held pair. Wired via the `awaiting-resource` context from
+  WorkflowGraphView; falls back to false outside an instance canvas.
 -->
-{#if awaitingResource}
+{#if isAwaiting}
 	<span
 		class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-sm font-medium ring-1 ring-purple-300 bg-purple-50 text-purple-700"
 		title="Waiting for resource grant — claim queued in pool net"
