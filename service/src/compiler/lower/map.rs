@@ -162,20 +162,23 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     .logic_rhai("#{ out: body }".to_string())
     .done();
 
-    // t_<id>_collect — one body-out token → one result. Lifts the body's
-    // `<resultVar>` into `value`, carrying the correlation keys forward so the
-    // gather barrier can count + correlate. The body may have stripped the
-    // workflow token (e.g. an AutomatedStep envelope), so `__map_idx` /
-    // `__map_id` must survive ON the body token — which they do, because the
-    // scatter stamped them and the body carries the token through (or, for an
-    // AutomatedStep body, the executor envelope is staged with the item token's
-    // keys re-promoted; v1 bodies that strip the token still carry `__map_idx`
-    // via the executor `source`/`detail` envelope — see handoff note).
+    // t_<id>_collect — one body-out token → one result. The body terminal (an
+    // AutomatedStep, lowered with the map-body fork — see
+    // `lower_automated_step`'s `is_map_body_terminal`) forwards its FULL
+    // completed envelope here: `body` = `#{ job_id, run, execution_id,
+    // detail: #{ outputs: #{ <resultVar>: .. } }, source, status,
+    // __map_idx, __map_id }`. The per-element value is the declared output the
+    // step PARKS under `detail.outputs.<resultVar>` (an AutomatedStep never
+    // carries its business output on the bare token). `__map_idx`/`__map_id`
+    // survive because the executor lifecycle's `t_success` preserves
+    // `_`-prefixed control-metadata leaves (see
+    // `engine/sdk/src/components/executor_lifecycle.rs`); the gather then
+    // counts/correlates/orders on them.
     ctx.transition(format!("t_{id}_collect"), format!("{label} - Collect"))
         .auto_input("body", &p_body_out)
         .auto_output("result", &p_results)
         .logic_rhai(format!(
-            "#{{ result: #{{ value: body.{result_var}, \"__map_idx\": body.__map_idx, \"__map_id\": body.__map_id }} }}"
+            "#{{ result: #{{ value: body.detail.outputs.{result_var}, \"__map_idx\": body.__map_idx, \"__map_id\": body.__map_id }} }}"
         ))
         .done();
 

@@ -53,7 +53,7 @@
         "label": "BO Iterations",
         "description": "Carries the campaign state across iterations: the accumulated `observations`, the incumbent `f_best`, and the best point seen (`best_a`/`best_d`). Each iteration fits a surrogate, proposes + evaluates K candidates, and folds the results in. The real stop condition is loopCondition (`bo.iteration < input.max_iterations`); maxIterations is a runaway cap.",
         "maxIterations": 30,
-        "loopCondition": "bo.iteration < input.max_iterations",
+        "loopCondition": "bo.iteration < bo.budget",
         "accumulators": [
           {
             "var": "observations",
@@ -74,6 +74,11 @@
             "var": "best_d",
             "init": "0.0",
             "mergeExpr": "gather.new_best_d"
+          },
+          {
+            "var": "budget",
+            "init": "input.max_iterations",
+            "mergeExpr": "bo.budget"
           }
         ]
       }
@@ -144,9 +149,21 @@
           "label": "Eval",
           "fields": [
             {
-              "name": "obs",
-              "label": "Observation",
-              "kind": "json",
+              "name": "a",
+              "label": "a",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "d",
+              "label": "d",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "z",
+              "label": "z",
+              "kind": "number",
               "required": true
             }
           ]

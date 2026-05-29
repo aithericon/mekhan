@@ -19,7 +19,8 @@ pub(super) use crate::compiler::token_shape::YIELD_LOGIC;
 pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
-    PhaseUpdateStatus, Port, ResourceConfig, WorkflowEdge, WorkflowNode, WorkflowNodeData,
+    PhaseUpdateStatus, Port, ResourceConfig, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    WorkflowNodeData,
 };
 pub(super) use aithericon_executor_domain::InputSource;
 pub(super) use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
@@ -208,6 +209,11 @@ pub(crate) struct NodePorts {
 /// incident edges, staged files).
 pub(crate) struct LoweringCtx<'a, 'c> {
     pub(crate) node: &'a WorkflowNode,
+    /// The whole workflow graph. Lowerings need it to inspect neighbour kinds
+    /// (e.g. `lower_automated_step` checks whether its `parent_id` names a Map
+    /// to choose the full-token `park_outputs` over the slim `split_outputs`
+    /// for a map body terminal). Reuses `token_shape::is_*_node`.
+    pub(crate) graph: &'a WorkflowGraph,
     pub(crate) outgoing_edges: &'a [&'a WorkflowEdge],
     pub(crate) incoming_edges: &'a [&'a WorkflowEdge],
     /// Container children — nodes whose `parent_id == self.node.id`. Empty for
@@ -341,6 +347,7 @@ impl LoweringCtx<'_, '_> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn expand_node<'a>(
     node: &'a WorkflowNode,
+    graph: &'a WorkflowGraph,
     outgoing_edges: &'a [&'a WorkflowEdge],
     incoming_edges: &'a [&'a WorkflowEdge],
     children: &'a [&'a WorkflowNode],
@@ -357,6 +364,7 @@ pub(crate) fn expand_node<'a>(
 ) -> Result<(), CompileError> {
     let mut cx = LoweringCtx {
         node,
+        graph,
         outgoing_edges,
         incoming_edges,
         children,
