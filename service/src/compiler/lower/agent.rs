@@ -118,6 +118,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             output: crate::models::template::default_output_port(ExecutionBackendType::Llm),
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            resource_pool: None,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,

@@ -126,6 +126,7 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                         job_template: "petri-executor-worker".to_string(),
                         resources: None,
                     },
+                    resource_pool: None,
                 },
                 parent_id: None,
                 width: None,

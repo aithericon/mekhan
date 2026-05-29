@@ -420,3 +420,155 @@ fn ui_invoice_processing_interpolates_start_file_param() {
         "download block type missing from injected steps"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M3: resource-pool claim lowering (docs/14)
+// ---------------------------------------------------------------------------
+
+/// The output-arc place ids of a single transition (empty if it has none or
+/// the transition is missing).
+fn transition_output_places<'a>(air: &'a Value, tid: &str) -> Vec<&'a str> {
+    transitions(air)
+        .iter()
+        .find(|t| t["id"] == tid)
+        .and_then(|t| t["outputs"].as_array())
+        .map(|arcs| {
+            arcs.iter()
+                .filter_map(|a| a["place"].as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// An AutomatedStep with a `resourcePool` claim lowers to the
+/// claim/register/release handshake against the well-known pool net, and —
+/// the load-bearing invariant — BOTH terminal exits (success + error) arc to
+/// `release_out`, so the held capacity token is never stranded (docs/14).
+#[test]
+fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() {
+    let graph = load_graph("resource-pool-step.json");
+    let air = compile_to_air(&graph, "t", "", &HashMap::new())
+        .expect("resource-pool step should compile");
+
+    // Structural sanity the whole suite leans on.
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    // The four cross-net bridge places exist.
+    assert!(has_place(&air, "p_render_claim_out"), "claim bridge_out");
+    assert!(has_place(&air, "p_render_grant_inbox"), "grant reply place");
+    assert!(has_place(&air, "p_render_register_out"), "register bridge_out");
+    assert!(has_place(&air, "p_render_release_out"), "release bridge_out");
+
+    // Claim bridge targets the canonical pool net + claim_inbox, and routes
+    // the "grant" reply back to the grant inbox place.
+    let claim_out = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_render_claim_out")
+        .expect("claim_out place");
+    assert_eq!(claim_out["type"], "bridge_out");
+    assert_eq!(claim_out["bridge_out"]["target_net_id"], "resource-pool-net");
+    assert_eq!(claim_out["bridge_out"]["target_place_name"], "claim_inbox");
+    assert_eq!(
+        claim_out["bridge_out"]["reply_channels"]["grant"], "p_render_grant_inbox",
+        "claim must route the pool's grant reply back to the grant inbox"
+    );
+
+    // Register + release are PLAIN bridge_outs (no reply routing) so recycled
+    // capacity tokens stay clean (docs/14 taint avoidance).
+    for (pid, inbox) in [
+        ("p_render_register_out", "register_inbox"),
+        ("p_render_release_out", "release_inbox"),
+    ] {
+        let p = places(&air).iter().find(|p| p["id"] == pid).unwrap();
+        assert_eq!(p["type"], "bridge_out", "{pid} is a bridge_out");
+        assert_eq!(p["bridge_out"]["target_net_id"], "resource-pool-net");
+        assert_eq!(p["bridge_out"]["target_place_name"], inbox);
+        assert!(
+            p["bridge_out"]["reply_channels"].is_null(),
+            "{pid} must be a PLAIN bridge (no reply routing)"
+        );
+    }
+
+    // grant_id is derived deterministically from the instance id + node id —
+    // NO uuid()/random() (replay-safe, see TASK 0). The claim transition mints
+    // it from `input._instance_id`.
+    let claim_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_claim")
+        .expect("claim transition")["logic"]
+        .to_string();
+    assert!(
+        claim_logic.contains("input._instance_id") && claim_logic.contains(":render"),
+        "grant_id must be derived from input._instance_id + node id (replay-safe): {claim_logic}"
+    );
+    assert!(
+        !claim_logic.contains("uuid(") && !claim_logic.contains("random("),
+        "grant_id must NOT use a non-deterministic source: {claim_logic}"
+    );
+
+    // THE KEY ASSERTION: both the success-exit and the error-exit transitions
+    // arc to release_out. A forgotten release on any exit strands a capacity
+    // token and deadlocks the pool under contention (docs/14).
+    let success_out = transition_output_places(&air, "t_render_to_output");
+    assert!(
+        success_out.contains(&"p_render_output") && success_out.contains(&"p_render_release_out"),
+        "success exit must arc to BOTH output and release_out, got {success_out:?}"
+    );
+    let error_out = transition_output_places(&air, "t_render_to_error");
+    assert!(
+        error_out.contains(&"p_render_error") && error_out.contains(&"p_render_release_out"),
+        "error exit must arc to BOTH error and release_out, got {error_out:?}"
+    );
+
+    // The acquire transition registers the hold (plain bridge) AND parks the
+    // held token; it consumes the grant reply and correlates by grant_id.
+    let acquire_out = transition_output_places(&air, "t_render_acquire");
+    assert!(
+        acquire_out.contains(&"p_render_register_out") && acquire_out.contains(&"p_render_held"),
+        "acquire must register the hold and park held, got {acquire_out:?}"
+    );
+}
+
+/// Byte-identity guard: an AutomatedStep with NO `resourcePool` lowers exactly
+/// as today — the inline executor lifecycle, and NONE of the pool bridge
+/// places. (Companion to `automated_step_inline_unchanged_*` in
+/// `compiler_tests.rs`; this one runs through the camelCase JSON path.)
+#[test]
+fn automated_step_without_resource_pool_emits_no_pool_bridges() {
+    // Reuse the pooled fixture but strip the resourcePool field so the only
+    // difference vs. the pooled test is the claim.
+    let mut graph = load_graph("resource-pool-step.json");
+    for node in &mut graph.nodes {
+        if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
+            resource_pool,
+            ..
+        } = &mut node.data
+        {
+            *resource_pool = None;
+        }
+    }
+    let air = compile_to_air(&graph, "t", "", &HashMap::new())
+        .expect("no-pool step should compile");
+
+    // Inline executor lifecycle present (scoped `render/prepare`)...
+    assert!(
+        has_transition(&air, "render/prepare"),
+        "no-pool keeps the inline executor-lifecycle prepare"
+    );
+    // ...and NONE of the pool bridges.
+    for pid in [
+        "p_render_claim_out",
+        "p_render_grant_inbox",
+        "p_render_register_out",
+        "p_render_release_out",
+        "p_render_held",
+        "p_render_pending",
+    ] {
+        assert!(!has_place(&air, pid), "no-pool must not emit {pid}");
+    }
+    assert!(
+        !has_transition(&air, "t_render_claim"),
+        "no-pool must not emit the claim transition"
+    );
+}

@@ -12,6 +12,42 @@
 use super::*;
 
 pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    // Resource-pool steps wrap the inline executor body with a
+    // claim/register/release handshake against the well-known pool net
+    // (`docs/14`). Delegated early — same `matches!`-then-delegate shape as
+    // the Scheduled arm — so the inline path below stays byte-identical when
+    // no pool is requested (guarded by `automated_step_inline_unchanged`).
+    //
+    // v1: a pooled step is an INLINE step under contention. Pooled +
+    // `Scheduled` is rejected (the scheduler-net already owns its own
+    // queueing/admission, so layering a second pool over it is out of scope —
+    // see `docs/14`'s productionization gate). `matches!` drops the borrow
+    // immediately so the delegate can take `cx` mutably.
+    if matches!(
+        &cx.node.data,
+        WorkflowNodeData::AutomatedStep {
+            resource_pool: Some(_),
+            ..
+        }
+    ) {
+        if matches!(
+            &cx.node.data,
+            WorkflowNodeData::AutomatedStep {
+                deployment_model: DeploymentModel::Scheduled { .. },
+                ..
+            }
+        ) {
+            return Err(CompileError::Compilation(format!(
+                "node '{}': a resource-pool claim cannot be combined with a Scheduled \
+                 deployment model — the scheduler-net already owns queueing/admission. \
+                 Use a resource pool with the default (inline) deployment model, or drop \
+                 the pool claim (v1; see docs/14).",
+                cx.node.id
+            )));
+        }
+        return lower_automated_step_pooled(cx);
+    }
+
     // Scheduled steps dispatch through the long-lived scheduler-net instead of
     // the inline executor lifecycle. Delegated early so the inline path below
     // is byte-identical to pre-feature behaviour (guarded by
@@ -330,6 +366,300 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         .logic(r#"#{ error: fail }"#);
 
     // Same data/control split + port registration tail as the inline path.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
+    cx.ports.insert(
+        id.clone(),
+        NodePorts {
+            input_place: p_input,
+            output_places: vec![
+                (None, p_ctrl),
+                (Some("error".to_string()), p_error),
+            ],
+            input_places: HashMap::new(),
+            input_handles: HashMap::new(),
+        },
+    );
+    cx.publish_interface().data_port = Some(data_place_id);
+    Ok(())
+}
+
+/// Resource-pool AutomatedStep: the inline executor-lifecycle body wrapped in
+/// a **claim / register / release** handshake against the well-known pool net
+/// (`well_known::RESOURCE_POOL_NET_ID`, contract in
+/// `engine/sdk/examples/resource_pool_net.rs`). The pool's `t_grant` fires only
+/// when capacity is free, so an empty pool simply leaves the claim queued —
+/// admission control falls straight out of the Petri firing rule (`docs/14`).
+///
+/// ## grant_id — globally unique AND replay-deterministic (TASK 0)
+///
+/// The pool correlates register / release / reap by `grant_id` ACROSS
+/// instances, so it must be globally unique. It must ALSO be replay-safe: the
+/// engine re-folds the event log on replay, so a `uuid()` / `random()` would
+/// mint a *different* id on replay and break correlation (and the M1
+/// replay-determinism invariant). There is no engine-injected net/instance id
+/// reachable in transition Rhai — `RhaiRuntime` builds the transition scope
+/// purely from the input token bindings (`rhai_runtime.rs::build_scope`), and
+/// the only registered helpers are `__pluck` (the adapter-only `random()` /
+/// `timestamp()` are NOT on the transition engine).
+///
+/// What IS reachable is `input._instance_id`: the launcher stamps the instance
+/// UUID onto every Start token (`petri::instance.rs` injects `_instance_id`),
+/// it is preserved on every slim control token (`YIELD_LOGIC` keeps `_`-prefixed
+/// keys), and it is a value fixed at launch in the event log — so it replays
+/// identically. We therefore derive
+///
+///   `grant_id = <input._instance_id> ":" <node_id>`
+///
+/// — unique per (instance, node) hence globally unique even across concurrent
+/// instances of the same template, and a pure function of journaled token data
+/// (no clock, no RNG) hence replay-deterministic. `<node_id>` is a compile-time
+/// constant baked into the Rhai literal.
+///
+/// ## Topology (places + transitions + arcs)
+///
+/// ```text
+///  p_input ─[t_claim]─▶ p_pending (parks {input, grant_id})
+///                    └─▶ p_claim_out  (bridge → pool/claim_inbox, reply "grant")
+///  p_grant_inbox ◀─(reply "grant", Grant{grant_id,gpu_id})
+///  {p_pending, p_grant_inbox} ─[t_acquire (correlate grant_id)]
+///       ─▶ {id}/inbox      (executor job spec — same shape as inline prepare)
+///       ─▶ p_register_out  (bridge → pool/register_inbox, HoldReg{grant_id,gpu_id})
+///       ─▶ p_held          (parks {grant_id, gpu_id} for the release echo)
+///  …executor lifecycle + retry topology (hold persists across retries)…
+///  {completed, p_held} ─[t_to_output]─▶ p_output + p_release_out (ReleaseRequest)
+///  {p_exhausted, p_held} ─[t_to_error]─▶ p_error + p_release_out (ReleaseRequest)
+/// ```
+///
+/// Exactly one of `t_to_output` / `t_to_error` fires per run (they race for the
+/// single `p_held` token), so the release bridges **exactly once** on every
+/// terminal path — the load-bearing leak-prevention invariant (`docs/14`).
+///
+/// The error terminal is `p_exhausted`, NOT the lifecycle's `dead_letter`:
+/// `dead_letter` is an unreachable sink (executor_lifecycle.rs:186) so the
+/// retry topology's `exhausted` transition is the real failure exit. We route
+/// it to a dedicated `p_exhausted` place (instead of straight to `p_error` as
+/// the inline path does) so the hold is consumed + released BEFORE the error
+/// surfaces — otherwise a failed job would strand its capacity token.
+///
+/// ## Reply-routing taint (docs/14)
+///
+/// `t_acquire` consumes the routed grant. `route_output_tokens` stamps the
+/// grant's reply routing onto `t_acquire`'s internal outputs (`p_held`, the
+/// job token) — but that is harmless here: the capacity token recycled into
+/// the pool is built by the pool's own `t_release` from the CLEAN `ReleaseRequest`
+/// (it crossed a plain `bridge_out`) and the CLEAN registered `in_use` hold (it
+/// crossed a plain `bridge_out` too). The tainted `p_held` never re-enters the
+/// pool, so capacity tokens stay clean and the pool does not wedge.
+fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let id = cx.node.id.clone();
+    let WorkflowNodeData::AutomatedStep {
+        label,
+        execution_spec,
+        retry_policy,
+        output,
+        resource_pool,
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_automated_step_pooled on non-AutomatedStep node")
+    };
+    let label = label.clone();
+    let retry_policy = retry_policy.clone();
+    // v1 ignores the pool/units knobs (single well-known global, weight 1) but
+    // bind it so the field is acknowledged and a future pass has the hook.
+    let _claim: &ResourcePoolClaim = resource_pool
+        .as_ref()
+        .expect("lower_automated_step_pooled only runs when resource_pool is Some");
+    let backend_type = execution_spec.backend_type;
+
+    // Same config offload + staged inputs + declared outputs as the inline
+    // path (`lower_automated_step`) — keep the job-spec Rhai byte-for-byte
+    // structurally identical so a pooled node executes its body the same way.
+    let (mut validated_config, staged_inputs) =
+        crate::compiler::backend_configs::validate_and_transform(
+            &backend_type,
+            &execution_spec.config,
+            cx.node_files,
+            &id,
+        )?;
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
+        .map_err(|e| CompileError::SchemaRefUnresolved {
+            node_id: id.clone(),
+            path: String::new(),
+            message: e.to_string(),
+        })?;
+    let storage_key = cx.config_storage.key(&id);
+    cx.node_configs.insert(id.clone(), validated_config);
+    let config_ref_rhai = format!(
+        "#{{ \"storage_path\": \"{}\" }}",
+        rhai_str_escape(&storage_key)
+    );
+    let inputs_rhai =
+        json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
+    let outputs_rhai = declared_outputs_rhai(backend_type, output);
+    let backend_wire = backend_type.as_wire_str();
+    let max_retries = retry_policy.max_retries;
+    let id_lit = rhai_str_escape(&id);
+
+    // grant_id literal builder (see the doc comment for the replay-safety
+    // argument). Built inside the Rhai logic from `input._instance_id` so it
+    // is a pure function of journaled token data.
+    let grant_id_expr = format!(r#"(input._instance_id + ":{id_lit}")"#);
+
+    let ctx = &mut *cx.ctx;
+
+    // ── Node-interface places (outside the lifecycle scope) ─────────────────
+    let p_input: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+    let p_output: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+    let p_error: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+
+    // Grant reply lands here (consumable `state` place w/ bridge_reply_channel,
+    // same proven-consumable kind the scheduled path uses for `sched_result`).
+    let grant_inbox_place = format!("p_{id}_grant_inbox");
+    let p_grant_inbox: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
+        grant_inbox_place.clone(),
+        format!("{label} - Grant Inbox"),
+        "grant",
+    );
+    // Claim bridge_out, routing the pool's "grant" reply back to p_grant_inbox.
+    let p_claim_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
+        format!("p_{id}_claim_out"),
+        format!("{label} - Claim Capacity"),
+        well_known::RESOURCE_POOL_NET_ID,
+        well_known::POOL_CLAIM_INBOX,
+        &[("grant", grant_inbox_place.as_str())],
+    );
+    // Register + release bridges are PLAIN (no reply routing) so the pool's
+    // recycled capacity tokens stay clean — see the taint note above.
+    let p_register_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
+        format!("p_{id}_register_out"),
+        format!("{label} - Register Hold"),
+        well_known::RESOURCE_POOL_NET_ID,
+        well_known::POOL_REGISTER_INBOX,
+    );
+    let p_release_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
+        format!("p_{id}_release_out"),
+        format!("{label} - Release Capacity"),
+        well_known::RESOURCE_POOL_NET_ID,
+        well_known::POOL_RELEASE_INBOX,
+    );
+
+    // Internal parking places.
+    let p_pending: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_pending"),
+        format!("{label} - Pending (input + grant_id, awaiting grant)"),
+    );
+    let p_held: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_held"),
+        format!("{label} - Held (grant_id + gpu_id, release echo)"),
+    );
+    // Retry-exhausted SINK. The inline path lets `build_retry_topology` write
+    // its `exhausted` transition straight to `p_error` — but that transition
+    // does NOT consume `p_held`, so on the failure path the hold would be
+    // stranded and the capacity token leaked. We therefore give the retry
+    // topology a DEDICATED exhausted place and route it through a
+    // held-consuming transition (`t_to_error` below) so EVERY terminal exit
+    // releases. This is the structural enforcement of the docs/14
+    // every-body-exit-arcs-to-release_out invariant.
+    let p_exhausted: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_exhausted"),
+        format!("{label} - Retries Exhausted (awaiting release)"),
+    );
+
+    // ── t_claim: mint grant_id, emit ClaimRequest, park {input, grant_id} ───
+    ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim"))
+        .auto_input("input", &p_input)
+        .auto_output("claim", &p_claim_out)
+        .auto_output("pending", &p_pending)
+        .logic(format!(
+            r#"let gid = {grant_id_expr}; #{{ claim: #{{ grant_id: gid }}, pending: #{{ input: input, grant_id: gid }} }}"#
+        ));
+
+    // ── Lifecycle scope: build the inbox INSIDE the scope (so the lifecycle's
+    // submit consumes it), then the lifecycle + retry topology. The acquire
+    // transition (below, outside the scope) writes the job spec into it. ─────
+    let handles = ctx.scoped_prefix(id.as_str(), label.as_str(), |ctx| {
+        let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
+        let exec_inbox_retry = exec_inbox.clone();
+
+        let lc = executor_lifecycle(
+            ctx,
+            ExecutorBridges {
+                inbox: exec_inbox.clone(),
+                result_out: None,
+                failure_out: None,
+                process_id: None,
+                process_step: None,
+                catalogue: true,
+                process: true,
+            },
+        );
+
+        // Retry re-injects a fresh submit into the SAME inbox — the hold
+        // (p_held) persists across retries, so we do NOT re-claim per retry.
+        // The retry topology's terminal `exhausted` edge drains to
+        // `p_exhausted` (NOT `p_error`) so the hold can be released first.
+        build_retry_topology(
+            ctx,
+            &retry_policy,
+            &lc.failed,
+            &lc.timed_out,
+            &exec_inbox_retry,
+            &lc.effect_errors,
+            &p_exhausted,
+        );
+
+        (exec_inbox, lc)
+    });
+    let (exec_inbox, handles) = handles;
+
+    // ── t_acquire: grant arrived. Consume {pending, grant} (correlate
+    // grant_id), build the executor job spec (same structure as the inline
+    // `prepare`), register the hold over the plain bridge, and park
+    // {grant_id, gpu_id} for the release echo. The `/*__BORROWED_INPUTS__*/`
+    // marker is preserved so Python `<slug>.<field>` staging still rewrites it
+    // post-merge exactly as for inline nodes. The job's `input.json` is the
+    // ORIGINAL upstream token parked in `pending.input`. ───────────────────
+    ctx.transition(format!("t_{id}_acquire"), format!("{label} - Acquire"))
+        .auto_input("pending", &p_pending)
+        .auto_input("grant", &p_grant_inbox)
+        .correlate("grant", "pending", "grant_id")
+        .auto_output("job", &exec_inbox)
+        .auto_output("reg", &p_register_out)
+        .auto_output("held", &p_held)
+        .logic(format!(
+            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d, reg: #{{ grant_id: pending.grant_id, gpu_id: grant.gpu_id }}, held: #{{ grant_id: pending.grant_id, gpu_id: grant.gpu_id }} }}"#
+        ));
+
+    // ── Terminal exits: BOTH consume p_held and BOTH arc to p_release_out.
+    // Success path: lifecycle `completed` + held → output + release. ────────
+    ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
+        .auto_input("done", &handles.completed)
+        .auto_input("held", &p_held)
+        .auto_output("output", &p_output)
+        .auto_output("release", &p_release_out)
+        .logic(r#"#{ output: done, release: #{ grant_id: held.grant_id } }"#);
+
+    // Error path: retries exhausted (the ONLY reachable executor-failure
+    // terminal — `dead_letter` is an unreachable lifecycle sink, see
+    // executor_lifecycle.rs:186). Consume `{p_exhausted, p_held}` → error +
+    // release. This held-consuming reconciliation guarantees the failure exit
+    // releases the hold. `held` is unused in the error payload (the failure
+    // token `err` already carries job context) but consuming it is the whole
+    // point — it frees the capacity. The `dead_letter` handle is ignored (no
+    // consumer), exactly as in the inline path.
+    let _ = &handles.dead_letter;
+    ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+        .auto_input("err", &p_exhausted)
+        .auto_input("held", &p_held)
+        .auto_output("error", &p_error)
+        .auto_output("release", &p_release_out)
+        .logic(r#"#{ error: err, release: #{ grant_id: held.grant_id } }"#);
+
+    // Foundation split + port registration tail — identical to the inline path.
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
     cx.ports.insert(
         id.clone(),

@@ -10893,6 +10893,28 @@
           }
         }
       },
+      "ResourcePoolClaim": {
+        "type": "object",
+        "description": "A shared-capacity claim against a resource-pool net (`docs/14`). Authored\non an [`WorkflowNodeData::AutomatedStep`] (sibling to `deployment_model`);\nits presence makes the compiler wrap the inline body with a\nclaim/register/release handshake against the well-known pool net so the\nengine's firing rule provides admission control + mutual exclusion for free.\n\nAll fields are forward-looking and optional so the v1 shape stays minimal\n— and so an absent claim is byte-identical to today's lowering. v1 ignores\nboth fields (it always bridges to the single well-known global pool and\ntreats every claim as 1 unit); they exist so the wire contract is stable\nwhen per-workspace pool resolution + weighted claims land (the\n\"Productionization gate\" in `docs/14`).",
+        "properties": {
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which pool net to claim against. v1 **ignores** this and always uses\nthe well-known global (`well_known::RESOURCE_POOL_NET_ID`); a future\npass resolves a per-workspace `resource_alias` → pool net id here."
+          },
+          "units": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Capacity weight of this claim. v1 treats absent (and any value) as a\nsingle unit — the deployed pool net grants one capacity token per\nclaim. Reserved for weighted/heterogeneous claims (capability sharding,\n`docs/14`).",
+            "minimum": 0
+          }
+        }
+      },
       "ResourceSummary": {
         "type": "object",
         "description": "Compact list-row shape. Returned by `GET /api/v1/resources` — never carries\nper-version data (`public_config`, `vault_path`) so the list endpoint\nstays cheap to render.",
@@ -13343,6 +13365,17 @@
               "output": {
                 "$ref": "#/components/schemas/Port",
                 "description": "Declared output shape. Persisted as-is once authored; the bare\ndefault has no fields and should be re-derived from\n`execution_spec.backend_type` via `default_output_port` whenever a\ncaller needs the canonical backend shape."
+              },
+              "resourcePool": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ResourcePoolClaim",
+                    "description": "Optional shared-capacity claim against the well-known resource-pool\nnet (`docs/14`). When `Some`, the inline executor body is wrapped\nwith a claim/register/release handshake against `resource-pool-net`\nso contended infrastructure (GPUs, lab machines, LLM slots) is\nadmission-controlled by the Petri firing rule. `None` (absent) is\nbyte-identical to today's wire + lowering — same precedent as\n`retry_policy` / `deployment_model`; guarded by\n`automated_step_inline_unchanged`."
+                  }
+                ]
               },
               "retryPolicy": {
                 "$ref": "#/components/schemas/RetryPolicy",

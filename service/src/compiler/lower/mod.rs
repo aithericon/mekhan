@@ -19,7 +19,8 @@ pub(super) use crate::compiler::token_shape::YIELD_LOGIC;
 pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
-    PhaseUpdateStatus, Port, ResourceConfig, WorkflowEdge, WorkflowNode, WorkflowNodeData,
+    PhaseUpdateStatus, Port, ResourceConfig, ResourcePoolClaim, WorkflowEdge, WorkflowNode,
+    WorkflowNodeData,
 };
 pub(super) use aithericon_executor_domain::InputSource;
 pub(super) use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};

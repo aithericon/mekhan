@@ -787,6 +787,7 @@ mod tests {
                 output: Port::empty_input(),
                 retry_policy: RetryPolicy::default(),
                 deployment_model: DeploymentModel::default(),
+                resource_pool: None,
             },
             parent_id: None,
             width: None,

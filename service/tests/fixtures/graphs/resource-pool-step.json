@@ -1,0 +1,49 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 100 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "render",
+			"type": "automated_step",
+			"position": { "x": 250, "y": 250 },
+			"data": {
+				"type": "automated_step",
+				"label": "GPU Render",
+				"description": "Runs on a shared GPU drawn from the pool",
+				"executionSpec": {
+					"backendType": "docker",
+					"config": {
+						"image": "alpine:latest"
+					}
+				},
+				"resourcePool": {}
+			}
+		},
+		{
+			"id": "end-1",
+			"type": "end",
+			"position": { "x": 250, "y": 400 },
+			"data": { "type": "end", "label": "End" }
+		}
+	],
+	"edges": [
+		{
+			"id": "e1",
+			"source": "start-1",
+			"target": "render",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e2",
+			"source": "render",
+			"target": "end-1",
+			"targetHandle": "in",
+			"type": "sequence"
+		}
+	]
+}

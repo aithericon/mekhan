@@ -3944,6 +3944,36 @@ export interface components {
             memory_bytes?: number | null;
         };
         /**
+         * @description A shared-capacity claim against a resource-pool net (`docs/14`). Authored
+         *     on an [`WorkflowNodeData::AutomatedStep`] (sibling to `deployment_model`);
+         *     its presence makes the compiler wrap the inline body with a
+         *     claim/register/release handshake against the well-known pool net so the
+         *     engine's firing rule provides admission control + mutual exclusion for free.
+         *
+         *     All fields are forward-looking and optional so the v1 shape stays minimal
+         *     — and so an absent claim is byte-identical to today's lowering. v1 ignores
+         *     both fields (it always bridges to the single well-known global pool and
+         *     treats every claim as 1 unit); they exist so the wire contract is stable
+         *     when per-workspace pool resolution + weighted claims land (the
+         *     "Productionization gate" in `docs/14`).
+         */
+        ResourcePoolClaim: {
+            /**
+             * @description Which pool net to claim against. v1 **ignores** this and always uses
+             *     the well-known global (`well_known::RESOURCE_POOL_NET_ID`); a future
+             *     pass resolves a per-workspace `resource_alias` → pool net id here.
+             */
+            pool?: string | null;
+            /**
+             * Format: int32
+             * @description Capacity weight of this claim. v1 treats absent (and any value) as a
+             *     single unit — the deployed pool net grants one capacity token per
+             *     claim. Reserved for weighted/heterogeneous claims (capability sharding,
+             *     `docs/14`).
+             */
+            units?: number | null;
+        };
+        /**
          * @description Compact list-row shape. Returned by `GET /api/v1/resources` — never carries
          *     per-version data (`public_config`, `vault_path`) so the list endpoint
          *     stays cheap to render.
@@ -5122,6 +5152,7 @@ export interface components {
              *     caller needs the canonical backend shape.
              */
             output?: components["schemas"]["Port"];
+            resourcePool?: null | components["schemas"]["ResourcePoolClaim"];
             /**
              * @description Retry behaviour on execution failure/timeout. Defaults to 3
              *     immediate retries (the historical hardcoded value), so existing

@@ -295,6 +295,16 @@ pub enum WorkflowNodeData {
         /// round-trips unchanged (same precedent as `retry_policy`).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
+        /// Optional shared-capacity claim against the well-known resource-pool
+        /// net (`docs/14`). When `Some`, the inline executor body is wrapped
+        /// with a claim/register/release handshake against `resource-pool-net`
+        /// so contended infrastructure (GPUs, lab machines, LLM slots) is
+        /// admission-controlled by the Petri firing rule. `None` (absent) is
+        /// byte-identical to today's wire + lowering — same precedent as
+        /// `retry_policy` / `deployment_model`; guarded by
+        /// `automated_step_inline_unchanged`.
+        #[serde(rename = "resourcePool", default, skip_serializing_if = "Option::is_none")]
+        resource_pool: Option<ResourcePoolClaim>,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -1102,6 +1112,34 @@ pub struct ResourceConfig {
     pub memory_mb: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu: Option<u32>,
+}
+
+/// A shared-capacity claim against a resource-pool net (`docs/14`). Authored
+/// on an [`WorkflowNodeData::AutomatedStep`] (sibling to `deployment_model`);
+/// its presence makes the compiler wrap the inline body with a
+/// claim/register/release handshake against the well-known pool net so the
+/// engine's firing rule provides admission control + mutual exclusion for free.
+///
+/// All fields are forward-looking and optional so the v1 shape stays minimal
+/// — and so an absent claim is byte-identical to today's lowering. v1 ignores
+/// both fields (it always bridges to the single well-known global pool and
+/// treats every claim as 1 unit); they exist so the wire contract is stable
+/// when per-workspace pool resolution + weighted claims land (the
+/// "Productionization gate" in `docs/14`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcePoolClaim {
+    /// Which pool net to claim against. v1 **ignores** this and always uses
+    /// the well-known global (`well_known::RESOURCE_POOL_NET_ID`); a future
+    /// pass resolves a per-workspace `resource_alias` → pool net id here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    /// Capacity weight of this claim. v1 treats absent (and any value) as a
+    /// single unit — the deployed pool net grants one capacity token per
+    /// claim. Reserved for weighted/heterogeneous claims (capability sharding,
+    /// `docs/14`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<u32>,
 }
 
 /// LLM model + provider selection for an [`WorkflowNodeData::Agent`]. Mirrors
@@ -2409,6 +2447,8 @@ pub mod dsl {
                         retry_policy: exec.retry_policy.unwrap_or_default(),
                         // DSL does not model deployment topology — inline.
                         deployment_model: DeploymentModel::default(),
+                        // DSL does not model resource pools (yet).
+                        resource_pool: None,
                     })
                 }
                 "decision" => {

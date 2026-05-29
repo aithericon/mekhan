@@ -586,6 +586,7 @@ mod tests {
                     output: output_port.clone(),
                     retry_policy: RetryPolicy::default(),
                     deployment_model: DeploymentModel::default(),
+                    resource_pool: None,
                 },
                 parent_id: None,
                 width: None,
