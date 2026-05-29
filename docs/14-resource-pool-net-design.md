@@ -198,6 +198,28 @@ The freed GPU returns to `pool` and is immediately granted to a waiter.
 
 ## Generalization: one claim contract, pluggable pool backends (the real-world path)
 
+> **STATUS — IMPLEMENTED (branch `feat/resource-pool-net`).** This section was the
+> design; it is now built. Admission is consolidated onto `deploymentModel` (the
+> standalone `resourcePool` field is gone): an AutomatedStep is **`Executor { pool? }`**
+> (our executor daemon pool over the NATS work queue — `pool` = bounded admission via
+> a `token_pool` resource) or **`Scheduled { scheduler?, jobTemplate, operation: submit|lease }`**
+> (external cluster = a `datacenter` resource). Both `token_pool` and `datacenter` are
+> first-class workspace resource **kinds** (`shared/resources`), each with a typed
+> claim/lease schema in the pool-kind registry (`shared/resources/src/pool.rs`).
+> - **`token_pool`** (`Executor.pool`) → mekhan auto-deploys a `pool-<id>` capacity net
+>   (`service/src/petri/pool_net.rs::build_token_pool_net`); lease `{unit_id}`.
+> - **`datacenter`** (`Scheduled`, `operation: lease`) → mekhan auto-deploys a `pool-<id>`
+>   lease-adapter net (`build_datacenter_lease_adapter_net`) driving the replay-safe
+>   `resource_lease_acquire`/`release` engine effects (`engine/.../resource_lease_handlers.rs`)
+>   against an external allocator; lease `{node, gpu_uuid, alloc_id, expiry}`, the
+>   allocator stays source of truth (no DC mirror). This **realizes docs/13's datacenter
+>   primitive** — a datacenter is the scheduler-connection resource; `operation: submit`
+>   is today's proven scheduler-net job dispatch, `operation: lease` holds an allocation.
+> - **One shared lowering** (`lower_pooled_body`) does the claim/grant/register/release
+>   wrapping for *both* `Executor.pool` and `Scheduled.lease` — the claim contract is
+>   genuinely backend-agnostic, as designed below.
+> The `counter` backend (below) is the one spectrum point not yet built.
+
 The token-per-unit pool above is the *trivial end* of a spectrum. It is correct
 only when allocation is trivial and the resource is homogeneous and
 self-managed (N concurrency slots, N floating licenses, N identical workers) —
@@ -259,11 +281,16 @@ across all three. That is the seam that folds docs/13 (schedulers / datacenters
 as resources) and docs/14 (the lease lifecycle) into one model, and it is the
 first thing to build before any real use.
 
-## Productionization gate (out of scope for the prototype)
+## Productionization gate — remaining
 
-- **Registry-resolved per-workspace pools (the keystone — see above):**
-  `resource_alias` → pool backend via `service/src/petri/resource_resolver.rs`,
-  replacing the global well-known id. Prerequisite for every real use.
+- **Registry-resolved per-workspace pools (the keystone): ✅ DONE.** `deploymentModel`
+  alias → pool resource → backend (token_pool net / datacenter lease-adapter), via the
+  publish-time resource resolution; the global well-known id is removed. This was the
+  prerequisite for every real use and is built (R1–R4).
+- **`counter` backend (not built).** Platform-owned aggregate (count/vector, read-arc +
+  rewrite) for larger-N / multi-dim caps expressible as a guard — between `tokens` and
+  `scheduler`. Slots behind the same claim contract.
+- **Bound the steady-state marking (net design, not snapshots).** `done`
 - **Bound the steady-state marking (net design, not snapshots).** `done`
   currently accumulates one terminal token per completed job forever. Stop
   parking it: emit the freed-unit signal as a firing event / metric and route

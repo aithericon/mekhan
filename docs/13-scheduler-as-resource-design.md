@@ -1,6 +1,14 @@
 # 13 — Schedulers as resources (the datacenter connection layer)
 
-**Status:** design note / pre-implementation. No code yet.
+**Status:** partially realized by the resource-pool work (`feat/resource-pool-net`).
+A `datacenter` resource **kind** now exists (`shared/resources`), and an
+AutomatedStep binds it via `deploymentModel: Scheduled { scheduler: <alias>, operation }`:
+`operation: submit` is today's scheduler-net job dispatch (unchanged); `operation: lease`
+holds an allocation through the replay-safe `resource_lease` engine effect +
+a per-datacenter lease-adapter net. See `docs/14` ("one claim contract, pluggable
+backends"). Still pending here: engine-side Nomad/Slurm *connection* resolution for the
+submit path (today still env-global), job-templates as managed objects, and the real
+Slurm-`salloc`/Nomad-alloc lease adapters (the generic-HTTP allocator is the proven first cut).
 **Relates to:** the control-plane roadmap (env-configured scheduler → managed,
 org-scoped control plane: datacenters / job-templates / secrets), the resource
 model (`shared/resources`, docs implicit in `service/src/petri/resource_resolver.rs`),
