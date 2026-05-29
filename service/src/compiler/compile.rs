@@ -482,6 +482,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     crate::compiler::lower::apply_agent_tool_wirings(
         &mut ctx,
         &node_ports,
+        &interfaces,
         &fixups.agent_tool_wirings,
     )?;
 

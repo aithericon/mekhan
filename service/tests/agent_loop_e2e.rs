@@ -272,6 +272,70 @@ fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
     );
 }
 
+/// Regression for the agent SubWorkflow/AutomatedStep tool-result collection
+/// bug: `t_<agent>_collect_<tn>` must read the tool result from the child's
+/// PARKED data place (`p_<child>_data`), not from the child's slim control
+/// token. Any parked producer splits its output via `split_outputs` — the
+/// real payload is parked write-once in `p_<child>_data`, while the default
+/// output place carries only `_`-prefixed leaves + `task_id`/`status`. The
+/// old wiring fed the model that control token, so the tool result was empty
+/// and the agent could never chain to a downstream tool. The fix: read-arc
+/// the parked data for the payload, still consume the control token as the
+/// firing trigger.
+#[test]
+fn agent_tool_collect_reads_child_parked_data_not_control_token() {
+    let air = compile(
+        vec![
+            start_node("s"),
+            agent_node("a"),
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
+    );
+
+    // The AutomatedStep tool child is a parked producer, so its business
+    // output lands here write-once.
+    assert!(
+        place_ids(&air).iter().any(|p| p == "p_lookup_node_data"),
+        "parked-producer tool child must mint p_lookup_node_data"
+    );
+
+    let collect = air["transitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "t_a_collect_lookup")
+        .expect("t_a_collect_lookup must exist");
+    let inputs = collect["inputs"].as_array().unwrap();
+
+    // The payload comes from the parked data place via a READ-arc (non-
+    // consuming — the parked place is the borrow surface, write-once).
+    assert!(
+        inputs.iter().any(|a| a["place"] == "p_lookup_node_data"
+            && a["read"] == serde_json::json!(true)),
+        "collect must READ-arc the child's parked data place; inputs: {inputs:#?}"
+    );
+
+    // It must NOT pull the result off the slim control token — that's the
+    // exact bug. The control token (the child's default output place) is
+    // still CONSUMED as the firing trigger, but never as the payload source.
+    assert!(
+        !inputs.iter().any(|a| a["place"] == "p_lookup_node_ctrl"
+            && a["read"] == serde_json::json!(true)),
+        "collect must not read the payload from the control token; inputs: {inputs:#?}"
+    );
+    assert!(
+        inputs.iter().any(|a| a["place"] == "p_lookup_node_ctrl"
+            && a["read"] != serde_json::json!(true)),
+        "collect must still CONSUME the control token as the done-trigger; inputs: {inputs:#?}"
+    );
+}
+
 /// Every route-family transition (`t_a_route_final`, `t_a_route_dispatch_<tn>`,
 /// `t_a_route_unknown`) is pure Rhai. The agent-loop's branching decision is
 /// data-driven from the LLM response shape; no engine effect handler.
