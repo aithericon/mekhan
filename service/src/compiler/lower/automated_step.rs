@@ -16,13 +16,29 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // into it). `matches!` drops the borrow immediately so each delegate can
     // take `cx` mutably.
     //
-    //   - Scheduled              → lower_automated_step_scheduled (Submit = today's
-    //                              scheduler-net path, byte-identical; Lease = R4).
-    //   - Executor { pool: Some } → lower_automated_step_pooled (token_pool
-    //                              admission, R2/R3 machinery).
-    //   - Executor { pool: None } → falls through to the plain executor lowering
-    //                              below (BYTE-IDENTICAL — guarded by
-    //                              `automated_step_inline_unchanged`).
+    //   - Scheduled { op: Submit } → lower_automated_step_scheduled (today's
+    //                                scheduler-net path, byte-identical).
+    //   - Scheduled { op: Lease }  → lower_automated_step_scheduled_lease (R4 —
+    //                                hold a datacenter lease, REUSES the pooled
+    //                                claim/grant/register/release body-wrapping).
+    //   - Executor { pool: Some }  → lower_automated_step_pooled (token_pool
+    //                                admission, R2/R3 machinery — same wrapping).
+    //   - Executor { pool: None }  → falls through to the plain executor lowering
+    //                                below (BYTE-IDENTICAL — guarded by
+    //                                `automated_step_executor_unchanged`).
+    if matches!(
+        &cx.node.data,
+        WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Scheduled {
+                operation: ScheduledOperation::Lease,
+                ..
+            },
+            ..
+        }
+    ) {
+        return lower_automated_step_scheduled_lease(cx);
+    }
+
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
@@ -280,26 +296,20 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         job_template,
         resources,
         operation,
+        ..
     } = deployment_model
     else {
         unreachable!("lower_automated_step_scheduled on non-Scheduled step")
     };
-    // R4: leasing an allocation (vs submitting a job) is not yet implemented —
-    // it needs the `resource_lease` engine effect + the datacenter lease
-    // adapter. Reject at compile so a `Lease` step fails fast at publish rather
-    // than silently lowering as a submit.
-    if matches!(operation, ScheduledOperation::Lease) {
-        return Err(CompileError::Compilation(format!(
-            "node '{id}': Scheduled `operation: lease` is not yet implemented (R4) — \
-             use `operation: submit`"
-        )));
-    }
-    // `scheduler` binds a `datacenter` resource (docs/13). R-consolidate keeps
-    // the env-global scheduler-net path byte-identical: when `scheduler` is
-    // `None` (today's only shape) the lowering is unchanged. A `Some` alias is
-    // accepted at the surface but the datacenter-net binding lands in R4; for
-    // now it does not alter the lowering (the env-global scheduler-net still
-    // services the submit). Bound to acknowledge the field without changing AIR.
+    // This entry handles `operation: Submit` only — the dispatcher routes
+    // `operation: Lease` to `lower_automated_step_scheduled_lease` (R4).
+    debug_assert!(
+        matches!(operation, ScheduledOperation::Submit),
+        "lower_automated_step_scheduled must only see operation: submit"
+    );
+    // `scheduler` binds a `datacenter` resource (docs/13) for the LEASE path;
+    // for SUBMIT it is unused — the env-global scheduler-net services the submit
+    // (byte-identical). Bound to acknowledge the field without changing AIR.
     let _scheduler = scheduler.clone();
     let job_template = job_template.clone();
     let resources: Option<ResourceConfig> = resources.clone();
@@ -424,25 +434,31 @@ struct PoolBinding {
     request_rhai: String,
 }
 
-/// Resolve `Inline.pool` (alias required) → a [`PoolBinding`].
+/// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to a
+/// single `expected_kind`.
+///
+/// Shared by the two claim/grant/register/release entry points — they differ
+/// ONLY in which alias they resolve and which kind they require:
+/// - `Executor { pool: { alias } }` → `expected_kind = "token_pool"` (R2/R3).
+/// - `Scheduled { scheduler: alias, operation: lease }` → `expected_kind =
+///   "datacenter"` (R4). The downstream body-wrapping is identical; only the
+///   backing net + `Lease__<kind>` differ, which this binding carries.
 ///
 /// Errors:
-/// - alias names a resource not in `known_resources` → `WorkspaceResourceUnknown`
-///   (normally caught earlier at publish by `discover_known_resources`, but a
-///   direct `compile_to_air` caller could omit it).
-/// - alias resolves to a NON-pool kind (no `pool_kind`) → `ResourcePoolNotAPool`.
-/// - alias resolves to a pool kind that isn't `token_pool` (e.g. `datacenter`)
-///   → `ResourcePoolNotAPool` with a "bind under Scheduled" message. Inline
-///   admission is `token_pool`-only; an external cluster is a `Scheduled`
-///   `datacenter` (the consolidation-pivot split).
+/// - alias not in `known_resources` → `WorkspaceResourceUnknown` (normally
+///   caught earlier at publish by `discover_known_resources`).
+/// - alias resolves to a kind other than `expected_kind` → a kind-specific
+///   CompileError (`ResourcePoolNotAPool` for token_pool, `SchedulerNotADatacenter`
+///   for datacenter) steering the author to the right deployment model.
 /// - `request` fails validation against the kind's `claim_schema` →
 ///   `ResourcePoolRequestInvalid`.
-fn resolve_pool_binding(
+fn resolve_binding(
     node_id: &str,
-    binding: &ResourcePoolBinding,
+    alias: &str,
+    request: Option<&serde_json::Value>,
+    expected_kind: &str,
     known: &crate::compiler::resource_refs::KnownResources,
 ) -> Result<PoolBinding, CompileError> {
-    let alias = binding.alias.as_str();
     let resource = known.get(alias).ok_or_else(|| {
         CompileError::WorkspaceResourceUnknown {
             node_id: node_id.to_string(),
@@ -450,29 +466,35 @@ fn resolve_pool_binding(
         }
     })?;
     let kind = resource.type_name.clone();
-    // Must be a pool kind AND specifically `token_pool` — a `datacenter` is a
-    // scheduler resource and belongs under `Scheduled`. The `pool_kind` lookup
-    // gates "is it a pool at all"; the `== "token_pool"` gate enforces the
-    // Inline/Scheduled split.
-    let pool_desc = aithericon_resources::pool::pool_kind(&kind).ok_or_else(|| {
-        CompileError::ResourcePoolNotAPool {
-            node_id: node_id.to_string(),
-            alias: alias.to_string(),
-            kind: kind.clone(),
+
+    // The `pool_kind` lookup gates "is it a pool kind at all"; the
+    // `== expected_kind` gate enforces the Executor/Scheduled split (a
+    // token_pool belongs under Executor.pool, a datacenter under Scheduled).
+    // A wrong/non-pool kind yields the entry-point-appropriate error.
+    let wrong_kind = || -> CompileError {
+        if expected_kind == "datacenter" {
+            CompileError::SchedulerNotADatacenter {
+                node_id: node_id.to_string(),
+                alias: alias.to_string(),
+                kind: kind.clone(),
+            }
+        } else {
+            CompileError::ResourcePoolNotAPool {
+                node_id: node_id.to_string(),
+                alias: alias.to_string(),
+                kind: kind.clone(),
+            }
         }
-    })?;
-    if kind != "token_pool" {
-        return Err(CompileError::ResourcePoolNotAPool {
-            node_id: node_id.to_string(),
-            alias: alias.to_string(),
-            kind: kind.clone(),
-        });
+    };
+    let pool_desc = aithericon_resources::pool::pool_kind(&kind).ok_or_else(wrong_kind)?;
+    if kind != expected_kind {
+        return Err(wrong_kind());
     }
 
     // Validate `request` against the kind's claim_schema before we bake it into
     // the ClaimRequest. Same `jsonschema` crate/version the engine
     // `SchemaRegistry` uses, so compile-time and runtime agree.
-    let request_rhai = match &binding.request {
+    let request_rhai = match request {
         None => "()".to_string(),
         Some(req) => {
             let claim_schema = (pool_desc.claim_schema)();
@@ -588,30 +610,87 @@ fn sanitize_definition_schema(mut schema: serde_json::Value) -> serde_json::Valu
 /// crossed a plain `bridge_out` too). The tainted `p_held` never re-enters the
 /// pool, so capacity tokens stay clean and the pool does not wedge.
 fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let WorkflowNodeData::AutomatedStep {
+        deployment_model: DeploymentModel::Executor { pool: Some(binding) },
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_automated_step_pooled only runs for Executor pool:Some")
+    };
+    // Resolve `Executor.pool.alias` (required) against the workspace-resource
+    // manifest: a `token_pool` resource → `{resource_id, kind}` → the deterministic
+    // backing net `pool-<resource_id>`, validated `request`, and a typed,
+    // body-visible lease (R2/R3). A non-token_pool alias is a CompileError.
+    let pool_binding = resolve_binding(
+        &cx.node.id,
+        &binding.alias,
+        binding.request.as_ref(),
+        "token_pool",
+        cx.known_resources,
+    )?;
+    lower_pooled_body(cx, pool_binding)
+}
+
+/// `Scheduled { operation: Lease }` (R4): hold a lease on an external cluster
+/// (`datacenter` resource) for the step's duration. REUSES the exact same
+/// claim/grant/register/release body-wrapping as the token-pool path — the
+/// instance side is identical; only the backing net (`pool-<id>` = the R4b
+/// datacenter lease-adapter) and the lease kind (`Lease__datacenter`) differ,
+/// both of which `resolve_binding` carries on the [`PoolBinding`].
+///
+/// `Scheduled { operation: Submit }` stays the byte-identical scheduler-net
+/// path in [`lower_automated_step_scheduled`]; only the `Lease` operation routes
+/// here.
+fn lower_automated_step_scheduled_lease(cx: &mut LoweringCtx) -> Result<(), CompileError> {
+    let WorkflowNodeData::AutomatedStep {
+        deployment_model:
+            DeploymentModel::Scheduled {
+                scheduler,
+                request,
+                ..
+            },
+        ..
+    } = &cx.node.data
+    else {
+        unreachable!("lower_automated_step_scheduled_lease only runs for Scheduled operation:lease")
+    };
+    // `operation: lease` REQUIRES a `scheduler` alias — there is no env-global
+    // lease (the lease lifecycle is owned by a specific datacenter's allocator).
+    let Some(alias) = scheduler.as_deref().filter(|a| !a.is_empty()) else {
+        return Err(CompileError::Compilation(format!(
+            "node '{}': Scheduled `operation: lease` requires a `scheduler` datacenter alias \
+             (there is no env-global lease — the lease is held against a specific allocator)",
+            cx.node.id
+        )));
+    };
+    let binding = resolve_binding(
+        &cx.node.id,
+        alias,
+        request.as_ref(),
+        "datacenter",
+        cx.known_resources,
+    )?;
+    lower_pooled_body(cx, binding)
+}
+
+/// The shared claim/grant/register/release body-wrapping, parameterized by the
+/// resolved [`PoolBinding`]. Both `Executor { pool: Some }` and
+/// `Scheduled { operation: Lease }` call this with their respective binding;
+/// the topology + executor job-spec are byte-identical regardless of backend.
+fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<(), CompileError> {
     let id = cx.node.id.clone();
     let WorkflowNodeData::AutomatedStep {
         label,
         execution_spec,
         retry_policy,
         output,
-        deployment_model,
         ..
     } = &cx.node.data
     else {
-        unreachable!("lower_automated_step_pooled on non-AutomatedStep node")
-    };
-    let DeploymentModel::Executor { pool: Some(binding) } = deployment_model else {
-        unreachable!("lower_automated_step_pooled only runs for Executor pool:Some")
+        unreachable!("lower_pooled_body on non-AutomatedStep node")
     };
     let label = label.clone();
     let retry_policy = retry_policy.clone();
-
-    // Resolve `Inline.pool.alias` (required) against the workspace-resource
-    // manifest the publish handler threaded in: a `token_pool` resource →
-    // `{resource_id, kind}` → the kind's claim/lease schemas, the deterministic
-    // backing net `pool-<resource_id>`, validated `request`, and a typed,
-    // body-visible lease (R2/R3). A non-token_pool alias is a CompileError.
-    let pool_binding = resolve_pool_binding(&cx.node.id, binding, cx.known_resources)?;
     let backend_type = execution_spec.backend_type;
 
     // Same config offload + staged inputs + declared outputs as the inline

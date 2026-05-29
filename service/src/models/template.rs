@@ -1122,7 +1122,8 @@ pub enum DeploymentModel {
     /// `Submit` (today's queued dispatch) or `Lease` (R4: hold an allocation,
     /// run on it).
     Scheduled {
-        /// `datacenter` resource alias. `None` = env-global scheduler-net.
+        /// `datacenter` resource alias. `None` = env-global scheduler-net (only
+        /// valid for `operation: Submit`; `Lease` requires a concrete alias).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduler: Option<String>,
         #[serde(rename = "jobTemplate")]
@@ -1135,6 +1136,15 @@ pub enum DeploymentModel {
         /// is `operation`.
         #[serde(default)]
         operation: ScheduledOperation,
+        /// Claim-schema-shaped lease request params (the `datacenter` kind's
+        /// `claim_schema` in `aithericon_resources::pool` — `{ gpu_count,
+        /// gpu_type, max_duration_secs }`). Used only by `operation: Lease`,
+        /// where it is validated against the kind's `claim_schema` and carried
+        /// into the `ClaimRequest`. Ignored for `Submit`. `None` ⇒ the
+        /// allocator's default placement. Optional + skip-if-none so today's
+        /// `Submit` wire shape round-trips byte-identically.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request: Option<serde_json::Value>,
     },
 }
 

@@ -7363,6 +7363,9 @@
                 "$ref": "#/components/schemas/ScheduledOperation",
                 "description": "`Submit` (default) = today's proven dispatch. `Lease` = R4.\nNOTE: a DIFFERENT field name from the `mode` tag on purpose — `mode`\nalready discriminates inline/scheduled, so the submit/lease selector\nis `operation`."
               },
+              "request": {
+                "description": "Claim-schema-shaped lease request params (the `datacenter` kind's\n`claim_schema` in `aithericon_resources::pool` — `{ gpu_count,\ngpu_type, max_duration_secs }`). Used only by `operation: Lease`,\nwhere it is validated against the kind's `claim_schema` and carried\ninto the `ClaimRequest`. Ignored for `Submit`. `None` ⇒ the\nallocator's default placement. Optional + skip-if-none so today's\n`Submit` wire shape round-trips byte-identically."
+              },
               "resources": {
                 "oneOf": [
                   {
@@ -7378,7 +7381,7 @@
                   "string",
                   "null"
                 ],
-                "description": "`datacenter` resource alias. `None` = env-global scheduler-net."
+                "description": "`datacenter` resource alias. `None` = env-global scheduler-net (only\nvalid for `operation: Submit`; `Lease` requires a concrete alias)."
               }
             }
           }

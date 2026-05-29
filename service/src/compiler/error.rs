@@ -420,6 +420,25 @@ pub enum CompileError {
         kind: String,
     },
 
+    /// A `Scheduled.scheduler` alias resolved to a workspace resource that is
+    /// not a `datacenter`. The scheduler binding is `datacenter`-only (docs/13):
+    /// a `token_pool` is executor-pool admission (bind it under `Executor.pool`),
+    /// and a plain credential (`postgres`, …) is no scheduler at all.
+    #[error(
+        "node '{node_id}': scheduler alias '{alias}' is a '{kind}', not a datacenter — \
+         {}",
+        if kind == "token_pool" {
+            "a token_pool is executor-pool admission; bind it under Executor.pool"
+        } else {
+            "point it at a datacenter resource"
+        }
+    )]
+    SchedulerNotADatacenter {
+        node_id: String,
+        alias: String,
+        kind: String,
+    },
+
     /// `resourcePool.request` failed validation against the pool kind's
     /// `claim_schema`. `message` carries the first jsonschema error.
     #[error(
@@ -590,6 +609,7 @@ impl CompileError {
             Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
             Self::WorkspaceResourceUnknown { .. } => "workspace_resource_unknown",
             Self::ResourcePoolNotAPool { .. } => "resource_pool_not_a_pool",
+            Self::SchedulerNotADatacenter { .. } => "scheduler_not_a_datacenter",
             Self::ResourcePoolRequestInvalid { .. } => "resource_pool_request_invalid",
             Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
             Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
@@ -663,6 +683,7 @@ impl CompileError {
             | Self::LoopAccumulatorExprUnparseable { node_id, .. }
             | Self::WorkspaceResourceUnknown { node_id, .. }
             | Self::ResourcePoolNotAPool { node_id, .. }
+            | Self::SchedulerNotADatacenter { node_id, .. }
             | Self::ResourcePoolRequestInvalid { node_id, .. } => Some(node_id),
             _ => None,
         }

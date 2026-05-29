@@ -849,3 +849,276 @@ fn aliased_pool_bad_request_is_compile_error() {
         other => panic!("expected ResourcePoolRequestInvalid, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// R4c — Scheduled { operation: lease }: the datacenter lease path. REUSES the
+// exact same claim/grant/register/release body-wrapping as Executor.pool; only
+// the backing net (the R4b adapter, still `pool-<id>`) and the lease kind
+// (`Lease__datacenter`) differ. The instance-side AIR is otherwise identical.
+// ---------------------------------------------------------------------------
+
+/// A `KnownResources` map with `prod_dc` resolving to the given kind.
+fn known_with_prod_dc(type_name: &str) -> KnownResources {
+    let mut k = KnownResources::new();
+    k.insert(
+        "prod_dc".to_string(),
+        KnownResource {
+            id: prod_gpu_id(), // reuse the stable id so the net-id assertion is stable
+            type_name: type_name.to_string(),
+            latest_version: 1,
+        },
+    );
+    k
+}
+
+fn compile_scheduled_lease(known: &KnownResources) -> Result<Value, CompileError> {
+    let graph = load_graph("scheduled-lease.json");
+    compile_to_air_with_subworkflows_and_interfaces(
+        &graph,
+        "t",
+        "",
+        &HashMap::new(),
+        &HashMap::new(),
+        &SubWorkflowAir::new(),
+        known,
+    )
+    .map(|(air, _iface)| air)
+}
+
+/// The keystone for R4c: a `Scheduled { operation: lease, scheduler: <datacenter> }`
+/// step lowers to the SAME claim/grant/register/release wrapping as the token
+/// path — bridging to the resolved datacenter's backing net `pool-<id>`,
+/// declaring `Lease__datacenter`, typing the grant inbox, carrying the validated
+/// `request`, staging `lease.json` into the body, and merging the lease into the
+/// parked envelope so a downstream `<slug>.lease.gpu_uuid` borrow read-arcs.
+#[test]
+fn scheduled_lease_reuses_pooled_wrapping_with_datacenter_lease() {
+    let air = compile_scheduled_lease(&known_with_prod_dc("datacenter"))
+        .expect("scheduled-lease datacenter step should compile");
+
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    let expected_net = format!("pool-{}", prod_gpu_id());
+
+    // (1) The SAME three handshake bridges as the token path, targeting the
+    //     resolved datacenter adapter net `pool-<id>`.
+    for (pid, inbox) in [
+        ("p_render_claim_out", "claim_inbox"),
+        ("p_render_register_out", "register_inbox"),
+        ("p_render_release_out", "release_inbox"),
+    ] {
+        let p = places(&air).iter().find(|p| p["id"] == pid).unwrap();
+        assert_eq!(
+            p["bridge_out"]["target_net_id"], expected_net,
+            "{pid} must bridge to the resolved datacenter backing net"
+        );
+        assert_eq!(p["bridge_out"]["target_place_name"], inbox);
+    }
+
+    // (2) `Lease__datacenter` (NOT token_pool) is in definitions + types the
+    //     grant inbox, with the datacenter lease fields.
+    let lease = &air["definitions"]["Lease__datacenter"];
+    assert!(
+        lease.is_object(),
+        "Lease__datacenter must be registered, got: {:?}",
+        air["definitions"]
+    );
+    for f in ["node", "gpu_uuid", "alloc_id", "expiry"] {
+        assert!(
+            lease["properties"][f].is_object(),
+            "datacenter lease must declare `{f}`"
+        );
+    }
+    assert!(
+        air["definitions"].get("Lease__token_pool").is_none(),
+        "scheduled-lease must NOT emit the token_pool lease"
+    );
+    let grant_inbox = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_render_grant_inbox")
+        .unwrap();
+    assert_eq!(
+        grant_inbox["token_schema"], "#/definitions/Lease__datacenter",
+        "grant inbox must be typed as the datacenter lease"
+    );
+
+    // (3) The ClaimRequest carries the validated datacenter request params.
+    let claim_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_claim")
+        .unwrap()["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        claim_logic.contains("request:") && claim_logic.contains("gpu_count"),
+        "claim must carry the datacenter request params: {claim_logic}"
+    );
+
+    // (4) `lease.json` staged into the body (body reads `lease.gpu_uuid`).
+    let acquire_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_acquire")
+        .unwrap()["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        acquire_logic.contains(r#""name": "lease.json""#)
+            && acquire_logic.contains(r#""value": grant"#),
+        "acquire must stage lease.json into job_inputs: {acquire_logic}"
+    );
+
+    // (5) Success exit merges the lease into the parked envelope.
+    let to_output_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_to_output")
+        .unwrap()["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        to_output_logic.contains("out.lease = held"),
+        "to_output must merge the lease: {to_output_logic}"
+    );
+
+    // (6) Downstream `render.lease.gpu_uuid` guard synthesized a read-arc into
+    //     the parked data place.
+    let read_arc = transitions(&air).iter().any(|t| {
+        t["inputs"]
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|a| {
+                    a["place"] == "p_render_data" && a["read"] == serde_json::Value::Bool(true)
+                })
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        read_arc,
+        "a downstream `<slug>.lease.gpu_uuid` borrow must synthesize a read-arc into p_render_data"
+    );
+}
+
+/// Unknown scheduler alias → `WorkspaceResourceUnknown`.
+#[test]
+fn scheduled_lease_unknown_alias_is_compile_error() {
+    let err = compile_scheduled_lease(&KnownResources::new()).unwrap_err();
+    assert!(
+        matches!(err, CompileError::WorkspaceResourceUnknown { ref alias, .. } if alias == "prod_dc"),
+        "expected WorkspaceResourceUnknown, got {err:?}"
+    );
+}
+
+/// A non-datacenter scheduler alias (e.g. a token_pool) → `SchedulerNotADatacenter`,
+/// steering the author to bind it under `Executor.pool` instead.
+#[test]
+fn scheduled_lease_non_datacenter_kind_is_compile_error() {
+    let err = compile_scheduled_lease(&known_with_prod_dc("token_pool")).unwrap_err();
+    let msg = err.to_string();
+    match &err {
+        CompileError::SchedulerNotADatacenter { alias, kind, .. } => {
+            assert_eq!(alias, "prod_dc");
+            assert_eq!(kind, "token_pool");
+            assert!(
+                msg.contains("Executor.pool"),
+                "token_pool-under-scheduler error must steer to Executor.pool: {msg}"
+            );
+        }
+        other => panic!("expected SchedulerNotADatacenter, got {other:?}"),
+    }
+}
+
+/// A plain credential under `scheduler` → `SchedulerNotADatacenter`.
+#[test]
+fn scheduled_lease_plain_credential_is_compile_error() {
+    let err = compile_scheduled_lease(&known_with_prod_dc("postgres")).unwrap_err();
+    match err {
+        CompileError::SchedulerNotADatacenter { alias, kind, .. } => {
+            assert_eq!(alias, "prod_dc");
+            assert_eq!(kind, "postgres");
+        }
+        other => panic!("expected SchedulerNotADatacenter, got {other:?}"),
+    }
+}
+
+/// `operation: lease` with NO scheduler alias → CompileError (there is no
+/// env-global lease — the lease is held against a specific allocator).
+#[test]
+fn scheduled_lease_without_scheduler_is_compile_error() {
+    let mut graph = load_graph("scheduled-lease.json");
+    for node in &mut graph.nodes {
+        if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
+            deployment_model:
+                mekhan_service::models::template::DeploymentModel::Scheduled { scheduler, .. },
+            ..
+        } = &mut node.data
+        {
+            *scheduler = None;
+        }
+    }
+    let err = compile_to_air_with_subworkflows_and_interfaces(
+        &graph,
+        "t",
+        "",
+        &HashMap::new(),
+        &HashMap::new(),
+        &SubWorkflowAir::new(),
+        &KnownResources::new(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, CompileError::Compilation(ref m) if m.contains("scheduler")),
+        "lease without scheduler must be a Compilation error mentioning scheduler, got {err:?}"
+    );
+}
+
+/// `Scheduled { operation: submit }` stays the byte-identical scheduler-net
+/// path — NO pool bridges, NO Lease__ definition (the lease path is `lease`
+/// only). Mutate the lease fixture back to submit AND drop the lease-dependent
+/// guard (a submit step exposes no `lease` field — referencing it would be a
+/// legitimate `GuardUnresolved`, which is the point: submit ≠ lease).
+#[test]
+fn scheduled_submit_is_not_a_lease_path() {
+    use mekhan_service::models::template::{
+        DeploymentModel, ScheduledOperation, WorkflowNodeData,
+    };
+
+    let mut graph = load_graph("scheduled-lease.json");
+    for node in &mut graph.nodes {
+        match &mut node.data {
+            WorkflowNodeData::AutomatedStep {
+                deployment_model: DeploymentModel::Scheduled { operation, scheduler, .. },
+                ..
+            } => {
+                *operation = ScheduledOperation::Submit;
+                *scheduler = None; // env-global submit, today's path
+            }
+            // Drop the lease-dependent guard — submit has no lease to read.
+            WorkflowNodeData::Decision { conditions, .. } => {
+                for c in conditions.iter_mut() {
+                    c.guard = "input.status == \"ok\"".to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    // Submit needs no KnownResources (env-global scheduler-net).
+    let air = compile_to_air(&graph, "t", "", &HashMap::new())
+        .expect("scheduled submit should compile");
+
+    // Submit = scheduler-net bridge, NOT the pool claim/register/release.
+    assert!(
+        has_place(&air, "p_render_sched_out"),
+        "submit must emit the scheduler bridge_out"
+    );
+    assert!(
+        !has_place(&air, "p_render_claim_out"),
+        "submit must NOT emit the pool claim bridge"
+    );
+    assert!(
+        air["definitions"].get("Lease__datacenter").is_none(),
+        "submit must emit no Lease__ definition"
+    );
+}

@@ -19,7 +19,7 @@ pub(super) use crate::compiler::token_shape::YIELD_LOGIC;
 pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
-    PhaseUpdateStatus, Port, ResourceConfig, ResourcePoolBinding, ScheduledOperation,
+    PhaseUpdateStatus, Port, ResourceConfig, ScheduledOperation,
     WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 pub(super) use aithericon_executor_domain::InputSource;

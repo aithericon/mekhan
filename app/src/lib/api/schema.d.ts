@@ -2577,8 +2577,21 @@ export interface components {
              *     is `operation`.
              */
             operation?: components["schemas"]["ScheduledOperation"];
+            /**
+             * @description Claim-schema-shaped lease request params (the `datacenter` kind's
+             *     `claim_schema` in `aithericon_resources::pool` — `{ gpu_count,
+             *     gpu_type, max_duration_secs }`). Used only by `operation: Lease`,
+             *     where it is validated against the kind's `claim_schema` and carried
+             *     into the `ClaimRequest`. Ignored for `Submit`. `None` ⇒ the
+             *     allocator's default placement. Optional + skip-if-none so today's
+             *     `Submit` wire shape round-trips byte-identically.
+             */
+            request?: unknown;
             resources?: null | components["schemas"]["ResourceConfig"];
-            /** @description `datacenter` resource alias. `None` = env-global scheduler-net. */
+            /**
+             * @description `datacenter` resource alias. `None` = env-global scheduler-net (only
+             *     valid for `operation: Submit`; `Lease` requires a concrete alias).
+             */
             scheduler?: string | null;
         };
         /**

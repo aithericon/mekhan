@@ -1,0 +1,96 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 100 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "render",
+			"type": "automated_step",
+			"slug": "render",
+			"position": { "x": 250, "y": 250 },
+			"data": {
+				"type": "automated_step",
+				"label": "GPU Render",
+				"description": "Holds a lease on an external datacenter cluster for its duration",
+				"executionSpec": {
+					"backendType": "docker",
+					"config": {
+						"image": "alpine:latest"
+					}
+				},
+				"deploymentModel": {
+					"mode": "scheduled",
+					"operation": "lease",
+					"scheduler": "prod_dc",
+					"jobTemplate": "gpu-render",
+					"request": { "gpu_count": 1, "gpu_type": "a100" }
+				}
+			}
+		},
+		{
+			"id": "route",
+			"type": "decision",
+			"slug": "route",
+			"position": { "x": 250, "y": 400 },
+			"data": {
+				"type": "decision",
+				"label": "Route on lease",
+				"conditions": [
+					{
+						"edgeId": "have-gpu",
+						"label": "Have GPU",
+						"guard": "render.lease.gpu_uuid != \"\""
+					}
+				],
+				"defaultBranch": "default"
+			}
+		},
+		{
+			"id": "end-ok",
+			"type": "end",
+			"position": { "x": 120, "y": 560 },
+			"data": { "type": "end", "label": "End (have gpu)" }
+		},
+		{
+			"id": "end-default",
+			"type": "end",
+			"position": { "x": 400, "y": 560 },
+			"data": { "type": "end", "label": "End (default)" }
+		}
+	],
+	"edges": [
+		{
+			"id": "e1",
+			"source": "start-1",
+			"target": "render",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e2",
+			"source": "render",
+			"target": "route",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e3",
+			"source": "route",
+			"sourceHandle": "have-gpu",
+			"target": "end-ok",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e4",
+			"source": "route",
+			"sourceHandle": "default",
+			"target": "end-default",
+			"targetHandle": "in",
+			"type": "sequence"
+		}
+	]
+}

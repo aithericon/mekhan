@@ -1243,3 +1243,412 @@ async fn tokens_backend_r2_contract_two_capacity_four_jobs() {
 
     ctx.teardown().await;
 }
+
+// ===========================================================================
+// R4c — scheduler backend: the datacenter lease-adapter end to end.
+//
+// Proves the R4a `resource_lease` effects + the R4b adapter topology against a
+// MOCK HTTP allocator over real NATS. The adapter net here is a hand-built
+// PetriNet mirroring `mekhan_service::petri::pool_net::build_datacenter_lease_adapter_net`
+// (claim → resource_lease_acquire effect → grant; register → in_use carrying
+// alloc_id; release prep-join → resource_lease_release effect; reap drops the
+// hold) — its AIR is pinned to the mekhan builder by R4b's unit tests, closing
+// drift. The R4a effect HANDLERS are the real `petri_application` ones, driven
+// by a real `HttpAllocatorClient` pointed at a mock allocator.
+//
+// FIDELITY: hand-built adapter mirror + hand-built requesters (test-harness
+// can't depend on mekhan-service — workspace cycle, same as R3). The literal
+// mekhan-compiled instance + mekhan-built+auto-deployed adapter against a real
+// allocator is deferred to live dogfood (R5).
+// ===========================================================================
+
+use petri_application::resource_lease_handlers::{
+    HttpAllocatorClient, ResourceLeaseAcquireHandler, ResourceLeaseReleaseHandler,
+};
+
+/// A mock HTTP allocator. POST grants a fresh `{node,gpu_uuid,alloc_id,expiry}`
+/// (alloc-N, gpu-uuid-N); DELETE `/leases/<alloc_id>` records the release. Runs
+/// for the test's lifetime on a `tokio` accept loop (no `wiremock`/`hyper`
+/// dev-dep — same hand-rolled TCP approach as R4a's unit test).
+struct MockAllocator {
+    addr: std::net::SocketAddr,
+    granted: Arc<std::sync::Mutex<Vec<String>>>,
+    released: Arc<std::sync::Mutex<Vec<String>>>,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl MockAllocator {
+    async fn start() -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let granted = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let released = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let granted_srv = granted.clone();
+        let released_srv = released.clone();
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let task = tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                let granted_c = granted_srv.clone();
+                let released_c = released_srv.clone();
+                let counter_c = counter.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n = match sock.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => n,
+                    };
+                    let raw = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let first_line = raw.lines().next().unwrap_or("");
+                    let body = if first_line.starts_with("POST") {
+                        let i = counter_c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let alloc_id = format!("alloc-{i}");
+                        granted_c.lock().unwrap().push(alloc_id.clone());
+                        format!(
+                            r#"{{"node":"node-{i}","gpu_uuid":"gpu-uuid-{i}","alloc_id":"{alloc_id}","expiry":"2026-12-31T00:00:00Z"}}"#
+                        )
+                    } else if first_line.starts_with("DELETE") {
+                        // DELETE /leases/<alloc_id>
+                        let path = first_line.split_whitespace().nth(1).unwrap_or("");
+                        let alloc_id = path.rsplit('/').next().unwrap_or("").to_string();
+                        released_c.lock().unwrap().push(alloc_id);
+                        "{}".to_string()
+                    } else {
+                        "{}".to_string()
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.flush().await;
+                });
+            }
+        });
+
+        Self { addr, granted, released, _task: task }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}/leases", self.addr)
+    }
+    fn granted(&self) -> Vec<String> {
+        self.granted.lock().unwrap().clone()
+    }
+    fn released(&self) -> Vec<String> {
+        self.released.lock().unwrap().clone()
+    }
+}
+
+/// Datacenter adapter net mirroring `build_datacenter_lease_adapter_net`:
+/// claim → `resource_lease_acquire` effect (effect_config = allocator url+token)
+/// → grant_outbox; register → in_use (carries alloc_id); release prep-join
+/// (release_inbox + in_use → {grant_id, alloc_id}) → `resource_lease_release`
+/// effect; reap drops the hold. `effect_config` points at the mock allocator.
+fn build_datacenter_adapter_net_mirror(allocator_url: &str) -> (PetriNet, RegPoolPlaces) {
+    let mut net = PetriNet::new();
+
+    let in_use = Place::internal("in_use");
+    let done = Place::internal("done");
+    let release_prep = Place::internal("release_prep");
+    let claim_inbox = Place::bridge_in("claim_inbox");
+    let register_inbox = Place::bridge_in("register_inbox");
+    let release_inbox = Place::bridge_in("release_inbox");
+    let lease_expired = Place::signal("lease_expired");
+    let grant_outbox = Place::bridge_reply_channel("grant_outbox", "grant");
+
+    let in_use_id = in_use.id.clone();
+    let done_id = done.id.clone();
+    let release_prep_id = release_prep.id.clone();
+    let claim_id = claim_inbox.id.clone();
+    let register_id = register_inbox.id.clone();
+    let release_id = release_inbox.id.clone();
+    let lease_id = lease_expired.id.clone();
+    let grant_id = grant_outbox.id.clone();
+    for p in [
+        in_use, done, release_prep, claim_inbox, register_inbox, release_inbox, lease_expired,
+        grant_outbox,
+    ] {
+        net.add_place(p);
+    }
+
+    let effect_config = serde_json::json!({ "allocator_url": allocator_url, "token": "" });
+
+    // t_request: claim → resource_lease_acquire effect → grant (lease reply).
+    let t_request = Transition::new("t_request", "#{}")
+        .with_effect_handler("resource_lease_acquire")
+        .with_effect_config(effect_config.clone())
+        .with_input_port(Port::new("request"))
+        .with_output_port(Port::new("lease"));
+    let trq = t_request.id.clone();
+    net.add_transition(t_request);
+    net.add_arc(PetriArc::input(claim_id.clone(), trq.clone(), "request"));
+    net.add_arc(PetriArc::output(trq.clone(), "lease", grant_id));
+
+    // t_register: register_inbox → in_use (CLEAN hold carrying alloc_id + lease).
+    let t_register = Transition::new(
+        "t_register",
+        r#"#{ hold: #{ grant_id: reg.grant_id, alloc_id: reg.alloc_id, node: reg.node, gpu_uuid: reg.gpu_uuid, expiry: reg.expiry } }"#,
+    )
+    .with_input_port(Port::new("reg"))
+    .with_output_port(Port::new("hold"));
+    let trg = t_register.id.clone();
+    net.add_transition(t_register);
+    net.add_arc(PetriArc::input(register_id.clone(), trg.clone(), "reg"));
+    net.add_arc(PetriArc::output(trg.clone(), "hold", in_use_id.clone()));
+
+    // t_release_prep: release_inbox + in_use (correlate grant_id) →
+    // {grant_id, alloc_id} on release_prep + done record.
+    let t_release_prep = Transition::new(
+        "t_release_prep",
+        r#"#{ release: #{ grant_id: held.grant_id, alloc_id: held.alloc_id }, done: #{ grant_id: held.grant_id, alloc_id: held.alloc_id, outcome: "released" } }"#,
+    )
+    .with_input_port(Port::new("req"))
+    .with_input_port(Port::new("held"))
+    .with_guard("req.grant_id == held.grant_id")
+    .with_output_port(Port::new("release"))
+    .with_output_port(Port::new("done"));
+    let trp = t_release_prep.id.clone();
+    net.add_transition(t_release_prep);
+    net.add_arc(PetriArc::input(release_id.clone(), trp.clone(), "req"));
+    net.add_arc(PetriArc::input(in_use_id.clone(), trp.clone(), "held"));
+    net.add_arc(PetriArc::output(trp.clone(), "release", release_prep_id.clone()));
+    net.add_arc(PetriArc::output(trp.clone(), "done", done_id.clone()));
+
+    // t_release: release_prep → resource_lease_release effect (DELETE alloc).
+    let t_release = Transition::new("t_release", "#{}")
+        .with_effect_handler("resource_lease_release")
+        .with_effect_config(effect_config.clone())
+        .with_input_port(Port::new("release"))
+        .with_output_port(Port::new("released"));
+    let trl = t_release.id.clone();
+    net.add_transition(t_release);
+    net.add_arc(PetriArc::input(release_prep_id.clone(), trl.clone(), "release"));
+    net.add_arc(PetriArc::output(trl.clone(), "released", done_id.clone()));
+
+    // t_reap: lease_expired + in_use (correlate grant_id) → drop hold.
+    let t_reap = Transition::new(
+        "t_reap",
+        r#"#{ done: #{ grant_id: held.grant_id, alloc_id: held.alloc_id, outcome: "reaped" } }"#,
+    )
+    .with_input_port(Port::new("exp"))
+    .with_input_port(Port::new("held"))
+    .with_guard("exp.grant_id == held.grant_id")
+    .with_output_port(Port::new("done"));
+    let trp2 = t_reap.id.clone();
+    net.add_transition(t_reap);
+    net.add_arc(PetriArc::input(lease_id.clone(), trp2.clone(), "exp"));
+    net.add_arc(PetriArc::input(in_use_id.clone(), trp2.clone(), "held"));
+    net.add_arc(PetriArc::output(trp2.clone(), "done", done_id.clone()));
+
+    (
+        net,
+        RegPoolPlaces {
+            pool: in_use_id.clone(), // no capacity pool for a lease adapter; reuse field for in_use
+            in_use: in_use_id,
+            claim_inbox: claim_id,
+            register_inbox: register_id,
+            release_inbox: release_id,
+            lease_expired: lease_id,
+            done: done_id,
+        },
+    )
+}
+
+/// Datacenter requester mirroring R2's instance claim contract for the lease
+/// kind: claim `{grant_id, request}`; on grant, holds + echoes the WHOLE
+/// datacenter lease (incl. alloc_id) to register; on finish, releases
+/// `{grant_id}`.
+fn build_datacenter_requester_net(adapter_net_id: &str) -> (PetriNet, RegReqPlaces) {
+    let mut net = PetriNet::new();
+
+    let start = Place::internal("start");
+    let holding = Place::internal("holding");
+    let done = Place::internal("done");
+    let grant_inbox = Place::internal("grant_inbox");
+    let finish_trigger = Place::signal("finish_trigger");
+    let mut channels = HashMap::new();
+    channels.insert("grant".to_string(), "grant_inbox".to_string());
+    let claim_out =
+        Place::bridge_out_reply_channels("claim_out", adapter_net_id, "claim_inbox", channels);
+    let register_out = Place::bridge_out("register_out", adapter_net_id, "register_inbox");
+    let release_out = Place::bridge_out("release_out", adapter_net_id, "release_inbox");
+
+    let start_id = start.id.clone();
+    let holding_id = holding.id.clone();
+    let done_id = done.id.clone();
+    let grant_inbox_id = grant_inbox.id.clone();
+    let finish_id = finish_trigger.id.clone();
+    let claim_out_id = claim_out.id.clone();
+    let register_out_id = register_out.id.clone();
+    let release_out_id = release_out.id.clone();
+    for p in [
+        start, holding, done, grant_inbox, finish_trigger, claim_out, register_out, release_out,
+    ] {
+        net.add_place(p);
+    }
+
+    let t_claim = Transition::new("t_claim", r#"#{ claim_out: start }"#)
+        .with_input_port(Port::new("start"))
+        .with_output_port(Port::new("claim_out"));
+    let tc = t_claim.id.clone();
+    net.add_transition(t_claim);
+    net.add_arc(PetriArc::input(start_id.clone(), tc.clone(), "start"));
+    net.add_arc(PetriArc::output(tc.clone(), "claim_out", claim_out_id));
+
+    // On grant, the WHOLE datacenter lease is held + echoed to register (so the
+    // adapter's in_use hold carries alloc_id for release).
+    let t_receive = Transition::new(
+        "t_receive",
+        r#"#{ holding: grant, register: #{ grant_id: grant.grant_id, alloc_id: grant.alloc_id, node: grant.node, gpu_uuid: grant.gpu_uuid, expiry: grant.expiry } }"#,
+    )
+    .with_input_port(Port::new("grant"))
+    .with_output_port(Port::new("holding"))
+    .with_output_port(Port::new("register"));
+    let trc = t_receive.id.clone();
+    net.add_transition(t_receive);
+    net.add_arc(PetriArc::input(grant_inbox_id.clone(), trc.clone(), "grant"));
+    net.add_arc(PetriArc::output(trc.clone(), "holding", holding_id.clone()));
+    net.add_arc(PetriArc::output(trc.clone(), "register", register_out_id));
+
+    let t_finish = Transition::new(
+        "t_finish",
+        r#"#{ release: #{ grant_id: holding.grant_id }, local: holding }"#,
+    )
+    .with_input_port(Port::new("holding"))
+    .with_input_port(Port::new("trigger"))
+    .with_output_port(Port::new("release"))
+    .with_output_port(Port::new("local"));
+    let tf = t_finish.id.clone();
+    net.add_transition(t_finish);
+    net.add_arc(PetriArc::input(holding_id.clone(), tf.clone(), "holding"));
+    net.add_arc(PetriArc::input(finish_id.clone(), tf.clone(), "trigger"));
+    net.add_arc(PetriArc::output(tf.clone(), "release", release_out_id));
+    net.add_arc(PetriArc::output(tf.clone(), "local", done_id.clone()));
+
+    (
+        net,
+        RegReqPlaces {
+            start: start_id,
+            holding: holding_id,
+            done: done_id,
+            finish_trigger: finish_id,
+        },
+    )
+}
+
+/// R4c headline: K=2 instances lease GPUs from a mock datacenter allocator
+/// through the R4a effect + R4b adapter topology. Asserts each gets a real
+/// `{gpu_uuid, alloc_id}` lease from the allocator, the lease routes back
+/// body-visible, release fires a DELETE with the right alloc_id, and a
+/// `lease_expired` inject reaps the hold.
+#[tokio::test]
+async fn datacenter_lease_adapter_grants_and_releases_via_mock_allocator() {
+    const JOBS: usize = 2;
+    let allocator = MockAllocator::start().await;
+    let ctx = PoolTestContext::setup(JOBS).await;
+
+    // Build + initialise the adapter net, and register the REAL R4a handlers
+    // (driven by a real HttpAllocatorClient) on the adapter service.
+    let (adapter_net, pp) = build_datacenter_adapter_net_mirror(&allocator.url());
+    ctx.pool.initialize(adapter_net).await.unwrap();
+    let alloc_client = Arc::new(HttpAllocatorClient::new());
+    ctx.pool
+        .register_effect_handler(
+            "resource_lease_acquire",
+            Arc::new(ResourceLeaseAcquireHandler::new(
+                alloc_client.clone(),
+                "request",
+                "lease",
+            )),
+        )
+        .unwrap();
+    ctx.pool
+        .register_effect_handler(
+            "resource_lease_release",
+            Arc::new(ResourceLeaseReleaseHandler::new(alloc_client, "release", "released")),
+        )
+        .unwrap();
+
+    // K requesters claim leases.
+    let mut rps = Vec::new();
+    for (i, svc) in ctx.requesters.iter().enumerate() {
+        let (net, rp) = build_datacenter_requester_net(&ctx.pool_id);
+        svc.initialize(net).await.unwrap();
+        svc.create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({
+                "grant_id": format!("job-{i}"),
+                "request": { "gpu_count": 1, "gpu_type": "a100" }
+            })),
+        )
+        .await
+        .unwrap();
+        rps.push(rp);
+    }
+
+    settle(&ctx, 5).await;
+
+    // TYPED LEASE: every requester holds a lease with a REAL gpu_uuid + alloc_id
+    // from the allocator (no in-net capacity — the allocator is the source of truth).
+    let mut held_allocs = std::collections::HashSet::new();
+    for (svc, rp) in ctx.requesters.iter().zip(rps.iter()) {
+        let m = svc.get_marking().await;
+        let toks = m.tokens_at(&rp.holding);
+        assert_eq!(toks.len(), 1, "each requester holds exactly one lease");
+        if let TokenColor::Data(d) = &toks[0].color {
+            let gpu = d.get("gpu_uuid").and_then(|v| v.as_str()).expect("lease.gpu_uuid");
+            assert!(gpu.starts_with("gpu-uuid-"), "real allocator gpu_uuid, got {gpu}");
+            let alloc = d.get("alloc_id").and_then(|v| v.as_str()).expect("lease.alloc_id");
+            assert!(alloc.starts_with("alloc-"), "real allocator alloc_id, got {alloc}");
+            assert!(held_allocs.insert(alloc.to_string()), "alloc_ids must be distinct per lease");
+        }
+    }
+    assert_eq!(held_allocs.len(), JOBS, "K distinct leases granted");
+    assert_eq!(allocator.granted().len(), JOBS, "allocator granted K leases");
+
+    // Finish requester 0 → release fires a DELETE to the allocator for its alloc_id.
+    let alloc0 = {
+        let m = ctx.requesters[0].get_marking().await;
+        match &m.tokens_at(&rps[0].holding)[0].color {
+            TokenColor::Data(d) => d.get("alloc_id").and_then(|v| v.as_str()).unwrap().to_string(),
+            _ => panic!("hold not data"),
+        }
+    };
+    ctx.requesters[0]
+        .create_token(rps[0].finish_trigger.clone(), TokenColor::Unit)
+        .await
+        .unwrap();
+    settle(&ctx, 5).await;
+
+    let released = allocator.released();
+    assert!(
+        released.contains(&alloc0),
+        "release must DELETE the held alloc_id {alloc0} at the allocator; released={released:?}"
+    );
+
+    // REAP: requester 1 "crashes" (never finishes). Inject lease_expired for its
+    // grant_id → the adapter drops the hold (the allocator TTL already reclaimed it).
+    let in_use_before = ctx.pool.get_marking().await.token_count(&pp.in_use);
+    ctx.pool
+        .create_token(
+            pp.lease_expired.clone(),
+            TokenColor::Data(serde_json::json!({ "grant_id": "job-1" })),
+        )
+        .await
+        .unwrap();
+    settle(&ctx, 5).await;
+    let in_use_after = ctx.pool.get_marking().await.token_count(&pp.in_use);
+    assert!(
+        in_use_after < in_use_before,
+        "lease_expired inject must reap the hold: in_use {in_use_before} → {in_use_after}"
+    );
+
+    ctx.teardown().await;
+}

@@ -43,7 +43,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     default_output_port, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, Port,
-    Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    Position, ScheduledOperation, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -123,10 +123,12 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
                     deployment_model: DeploymentModel::Scheduled {
+                        scheduler: None,
                         job_template: "mekhan-executor-worker".to_string(),
                         resources: None,
+                        operation: ScheduledOperation::Submit,
+                        request: None,
                     },
-                    resource_pool: None,
                 },
                 parent_id: None,
                 width: None,

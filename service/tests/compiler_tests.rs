@@ -3968,6 +3968,7 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
                     job_template: "petri-mumax3-worker".to_string(),
                     resources: None,
                     operation: Default::default(),
+                    request: None,
                 },
             ),
             end_node("e"),
@@ -5367,6 +5368,7 @@ fn deployment_model_surface_round_trips() {
             job_template: "petri-mumax3-worker".to_string(),
             resources: None,
             operation: ScheduledOperation::Submit,
+            request: None,
         }
     );
     assert_eq!(

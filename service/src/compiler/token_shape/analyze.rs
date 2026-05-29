@@ -403,20 +403,32 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
         detail,
         p("executor result envelope — upstream token was consumed into spec.inputs"),
     );
-    // Registry-resolved pool steps (R2/R3) merge the granted typed lease into
-    // the parked data envelope under `lease` (see `lower_automated_step_pooled`'s
-    // `t_<id>_to_output`). Surface a `lease` field so a downstream
-    // `<slug>.lease.<field>` borrow resolves through the standard read-arc
-    // pipeline. Opaque (not the kind's typed lease schema) because shape
-    // analysis has no `known_resources` to resolve the kind here — the leaf is
-    // findable + the nested `.field` is appended verbatim, which is all the
-    // borrow resolver needs. Only emitted under `Executor { pool: Some }`; plain
-    // executor dispatch stages no lease and stays byte-identical.
-    if let WorkflowNodeData::AutomatedStep {
-        deployment_model: DeploymentModel::Executor { pool: Some(_) },
-        ..
-    } = &node.data
-    {
+    // Lease-bearing steps merge the granted typed lease into the parked data
+    // envelope under `lease` (see `lower_pooled_body`'s `t_<id>_to_output`).
+    // Surface a `lease` field so a downstream `<slug>.lease.<field>` borrow
+    // resolves through the standard read-arc pipeline. Opaque (not the kind's
+    // typed lease schema) because shape analysis has no `known_resources` to
+    // resolve the kind here — the leaf is findable + the nested `.field` is
+    // appended verbatim, which is all the borrow resolver needs. Emitted for
+    // BOTH lease-bearing paths (they share `lower_pooled_body`):
+    //   - `Executor { pool: Some }` (token_pool admission, R2/R3), and
+    //   - `Scheduled { operation: Lease }` (datacenter lease, R4).
+    // Plain executor dispatch + `Scheduled { operation: Submit }` stage no lease
+    // and stay byte-identical.
+    let holds_lease = matches!(
+        &node.data,
+        WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Executor { pool: Some(_) },
+            ..
+        } | WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Scheduled {
+                operation: crate::models::template::ScheduledOperation::Lease,
+                ..
+            },
+            ..
+        }
+    );
+    if holds_lease {
         o.insert(
             "lease",
             TokenShape::Opaque("typed pool lease (Lease__<kind>)".to_string()),
