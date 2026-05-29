@@ -815,7 +815,7 @@ resource-pool-up:
 resource-pool-demo n="4":
     #!/usr/bin/env bash
     set -euo pipefail
-    TID="00000000-0000-0000-0000-000000000013"
+    TID="00000000-0000-0000-0000-000000000060"
     BASE="http://localhost:13100"
     curl -sf --max-time 2 "$BASE/healthz" >/dev/null 2>&1 || {
       echo "✗ mekhan not reachable on :13100 — run 'just dev' first" >&2; exit 1; }
