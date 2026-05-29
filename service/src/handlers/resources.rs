@@ -490,6 +490,24 @@ pub async fn create_resource(
     user: AuthUser,
     Json(req): Json<CreateResourceRequest>,
 ) -> Result<(StatusCode, Json<ResourceSummary>), ApiError> {
+    let principal_id = user.subject_as_uuid();
+    let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
+    let summary = create_resource_internal(&state, &req, workspace_id, principal_id).await?;
+    Ok((StatusCode::CREATED, Json(summary)))
+}
+
+/// Core resource-creation flow, callable without an HTTP `AuthUser`. Used by
+/// [`create_resource`] (which derives `workspace_id`/`principal_id` from the
+/// session) and by the demo seeder, which provisions resource fixtures as the
+/// seeder principal. `workspace_id` and `principal_id` are passed explicitly
+/// so the caller owns scoping + attribution; the validation, Vault write, ACL
+/// grant, audit row, and pool-net hook are identical to the HTTP path.
+pub(crate) async fn create_resource_internal(
+    state: &AppState,
+    req: &CreateResourceRequest,
+    workspace_id: Uuid,
+    principal_id: Uuid,
+) -> Result<ResourceSummary, ApiError> {
     if !IDENT_REGEX.is_match(&req.path) {
         return Err(ApiError::bad_request(format!(
             "path '{}' must be a snake_case identifier (e.g. `local_pg`): \
@@ -500,15 +518,14 @@ pub async fn create_resource(
         )));
     }
     let descriptor = descriptor_or_400(&req.resource_type)?;
-    let (public, secret) = split_config(descriptor, req.config)?;
+    let (public, secret) = split_config(descriptor, req.config.clone())?;
 
-    let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
     let resource_id = Uuid::new_v4();
     let version = 1;
     let vault_path = vault_path_for(workspace_id, resource_id, version);
-    let principal_id = user.subject_as_uuid();
     let display_name = req
         .display_name
+        .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| req.path.clone());
 
@@ -581,7 +598,7 @@ pub async fn create_resource(
     // its backing net (idempotent, engine-down-tolerant). Runs after the
     // resource is durably persisted.
     ensure_pool_net_for_kind(
-        &state,
+        state,
         &req.resource_type,
         workspace_id,
         resource_id,
@@ -593,15 +610,15 @@ pub async fn create_resource(
     let dynamic_keys = extract_kv_keys(&public);
     let summary = ResourceSummary {
         id: resource_id,
-        path: req.path,
-        resource_type: req.resource_type,
+        path: req.path.clone(),
+        resource_type: req.resource_type.clone(),
         display_name,
         latest_version: version,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         dynamic_keys,
     };
-    Ok((StatusCode::CREATED, Json(summary)))
+    Ok(summary)
 }
 
 /// R3/R4b hook: for a pool-backed resource kind, (re)deploy its backing net

@@ -573,6 +573,104 @@ async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, Demo
 /// or a non-recoverable DB / S3 error surfaces. The caller (service main)
 /// treats the return value as advisory: the demo not being seeded must
 /// not prevent the service from accepting requests.
+/// Make the demo seeder principal an `owner` of the demo workspace. The
+/// publish-time resource resolver gates reads on `workspace_members`
+/// membership (the `resource_acl` table is auto-granted on create but not
+/// consulted on the read path), so without this the seeder — publishing as
+/// [`DEMO_SEEDER_AUTHOR_ID`], which never flows through the BFF
+/// `ensure_default_workspace_membership` path that real users do — cannot
+/// resolve any workspace resource a demo references. Idempotent.
+async fn ensure_seeder_workspace_membership(
+    state: &crate::AppState,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO workspace_members (workspace_id, user_id, role) \
+         VALUES ($1, $2, 'owner') \
+         ON CONFLICT (workspace_id, user_id) DO NOTHING",
+    )
+    .bind(DEMO_WORKSPACE_ID)
+    .bind(DEMO_SEEDER_AUTHOR_ID)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+/// Provision the resource fixtures demos bind, from `<root>/resources/*.json`.
+/// Each file is a [`CreateResourceRequest`] (path + resource_type + config);
+/// the workspace is forced to the demo workspace and the resource is created
+/// as the seeder principal (Vault secret + ACL + audit, identical to the HTTP
+/// CRUD path). Idempotent: a resource whose `path` already exists in the
+/// workspace is left as-is — mirrors the template seeder, never clobbers a
+/// user-edited resource or rewrites Vault every boot.
+///
+/// Runs BEFORE the demo loop so a demo that binds a workspace resource (e.g.
+/// `email-welcome`'s `send` step → the `mail` SMTP relay) can resolve it at
+/// publish time. Best-effort: a fixture failure is logged, never fatal — the
+/// dependent demo simply won't seed, like any other compile failure.
+async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
+    use crate::models::resource::CreateResourceRequest;
+    let dir = root.join("resources");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return, // no fixtures directory — nothing to provision
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo resource: read failed");
+                continue;
+            }
+        };
+        let req: CreateResourceRequest = match serde_json::from_str(&raw) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo resource: parse failed");
+                continue;
+            }
+        };
+        let existing: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
+            "SELECT id FROM resources \
+             WHERE workspace_id = $1 AND path = $2 AND deleted_at IS NULL",
+        )
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(&req.path)
+        .fetch_optional(&state.db)
+        .await;
+        match existing {
+            Ok(Some(_)) => {
+                tracing::info!(resource = %req.path, "demo resource already present — leaving as-is");
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(resource = %req.path, error = %e, "demo resource: existence check failed");
+                continue;
+            }
+        }
+        match crate::handlers::resources::create_resource_internal(
+            state,
+            &req,
+            DEMO_WORKSPACE_ID,
+            DEMO_SEEDER_AUTHOR_ID,
+        )
+        .await
+        {
+            Ok(s) => {
+                tracing::info!(resource = %s.path, resource_type = %s.resource_type, "demo resource seeded")
+            }
+            Err(e) => {
+                tracing::warn!(resource = %req.path, "demo resource seed failed: {e:?}")
+            }
+        }
+    }
+}
+
 pub async fn seed_all(
     state: &crate::AppState,
     root: &Path,
@@ -583,6 +681,15 @@ pub async fn seed_all(
         tracing::info!(root = %root.display(), "no demos found");
         return Ok(results);
     }
+
+    // Workspace prerequisites, before any demo compiles: the seeder must be a
+    // member of the demo workspace (so the resource resolver resolves), and
+    // resource fixtures a demo binds must already exist. Both best-effort —
+    // a failure here only blocks the resource-dependent demos, never startup.
+    if let Err(e) = ensure_seeder_workspace_membership(state).await {
+        tracing::warn!(error = %e, "demo seeder: ensure workspace membership failed");
+    }
+    seed_demo_resources(state, root).await;
     // A SubWorkflow demo can reference a CHILD demo whose directory sorts
     // AFTER it (e.g. `09-agent-tool-loop` -> `09b-collect-feedback`: `-` <
     // `b`, so the parent is attempted first and its child isn't published
