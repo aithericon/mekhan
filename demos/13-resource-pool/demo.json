@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000013",
+  "name": "13 · Resource Pool (GPU contention)",
+  "description": "Reference pattern for CONTENDED infrastructure on the event-sourced Petri substrate — resources are places, claims are tokens. The single AutomatedStep 'GPU Render' declares `resourcePool`, so the compiler wraps its body behind a capacity claim against the long-lived `resource-pool-net` (deploy it with `just dev resource-pool-up`). Launch K instances against an N-unit pool: exactly N run while the rest queue in the pool's claim_inbox (admission control = the firing rule), and each release frees a slot for a waiter. The body is a ~12s mock render (Python sleep) so the 2-running / 2-waiting contention is legible in the /nets/resource-pool dashboard. Money shot: inject `lease_expired` for a stuck grant_id (`aithericon inject resource-pool-net lease_expired ...`) to reap a crashed holder and watch the freed GPU get re-granted. See docs/14-resource-pool-net-design.md."
+}

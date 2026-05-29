@@ -1,0 +1,74 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Render {{ job_name }}",
+        "initial": {
+          "id": "in",
+          "label": "Render Job",
+          "fields": [
+            {
+              "name": "job_name",
+              "label": "Job Name",
+              "kind": "text",
+              "required": true,
+              "placeholder": "e.g. shot-042"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "render",
+      "type": "automated_step",
+      "position": { "x": 360, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "GPU Render",
+        "description": "Runs on a GPU drawn from the shared resource-pool-net. The compiler wraps this body behind a claim/grant/release against the pool: the step waits in the pool's claim_inbox until a unit is free (admission control), holds it for the duration of the render, and returns it on every exit (success or error). A ~12s mock render makes the contention observable.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Render Result",
+          "fields": [
+            { "name": "rendered", "label": "Rendered", "kind": "text", "required": true },
+            { "name": "gpu", "label": "GPU", "kind": "text", "required": false }
+          ]
+        },
+        "resourcePool": {}
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 680, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "rendered", "expression": "render.rendered" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_render", "source": "start", "target": "render", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_render_end",   "source": "render", "target": "end",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

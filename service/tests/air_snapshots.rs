@@ -39,6 +39,12 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "07-ocr-classify-extract",
     "08-failure-handling",
     "10-delay-timeout",
+    "11-http-call",
+    // 13-resource-pool: exercises the M3 resource-pool claim lowering
+    // (claim/grant/register/release wrapping an inline Python body). The
+    // golden AIR pins the leak-prevention wiring — every body exit arcs to
+    // p_render_release_out — against compiler refactors.
+    "13-resource-pool",
 ];
 
 fn repo_root() -> PathBuf {
@@ -201,6 +207,16 @@ fn snapshot_08_failure_handling() {
 #[test]
 fn snapshot_10_delay_timeout() {
     run("10-delay-timeout");
+}
+
+#[test]
+fn snapshot_11_http_call() {
+    run("11-http-call");
+}
+
+#[test]
+fn snapshot_13_resource_pool() {
+    run("13-resource-pool");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
