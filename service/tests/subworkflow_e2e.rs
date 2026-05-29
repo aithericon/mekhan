@@ -97,6 +97,7 @@ fn subworkflow(id: &str, child_family: Uuid, pin: VersionPin) -> WorkflowNode {
 
 fn text_field(name: &str) -> PortField {
     PortField {
+        schema: None,
         name: name.to_string(),
         label: name.to_string(),
         kind: FieldKind::Text,

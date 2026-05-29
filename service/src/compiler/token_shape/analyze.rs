@@ -254,7 +254,10 @@ pub(crate) fn out_shape_start(node: &WorkflowNode, _in_shape: &TokenShape) -> To
 /// response envelope, with the user-entered fields under `data`. This
 /// is the divergence the flat editor model erases.
 pub(crate) fn out_shape_human_task(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
-    let WorkflowNodeData::HumanTask { steps, .. } = &node.data else {
+    let WorkflowNodeData::HumanTask {
+        steps, steps_ref, ..
+    } = &node.data
+    else {
         unreachable!("out_shape_human_task on non-HumanTask variant");
     };
     let mut o = in_shape.clone();
@@ -268,6 +271,32 @@ pub(crate) fn out_shape_human_task(node: &WorkflowNode, in_shape: &TokenShape) -
         TokenShape::Scalar(ScalarTy::String),
         Provenance::new(node, "human-task outcome (HumanTaskResponse.status)"),
     );
+    // Dynamic form: the form block list (and thus its output field names) is
+    // sourced at runtime from a producer ref, so the result envelope is opaque
+    // at compile time. Keep the title/steps request-scaffold leaves, but the
+    // `data` submission envelope degrades to `Any` (no per-Input-field union).
+    if steps_ref.is_some() {
+        o.insert(
+            "data",
+            TokenShape::Any,
+            Provenance::new(
+                node,
+                "dynamic form submission envelope — field names unknown at compile time",
+            ),
+        );
+        for (k, note) in [
+            ("title", "human-task request scaffold"),
+            ("instructions_mdsvex", "human-task request scaffold"),
+        ] {
+            o.insert(k, TokenShape::Any, Provenance::new(node, note));
+        }
+        o.insert(
+            "steps",
+            TokenShape::Array(Box::new(TokenShape::Any)),
+            Provenance::new(node, "human-task request scaffold (dynamic steps)"),
+        );
+        return o;
+    }
     let mut form = port_to_shape(
         &crate::models::template::derive_human_task_output_port(steps),
         node,
@@ -896,6 +925,11 @@ pub fn collect_scope_tree(shape: &TokenShape, prov_anchor: Option<&ScalarTy>) ->
         },
         TokenShape::Any => TyDescriptor::Any,
         TokenShape::Opaque(n) => TyDescriptor::Opaque { name: n.clone() },
+        // A rich-schema leaf is opaque to the picker (it can't render an
+        // arbitrary JSON Schema as drill-down rows); surface it as Opaque.
+        TokenShape::Schema(_) => TyDescriptor::Opaque {
+            name: "Schema".to_string(),
+        },
     }
 }
 

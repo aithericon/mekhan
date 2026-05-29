@@ -538,11 +538,28 @@ pub(crate) fn build_human_task_injection_logic(target_node: &WorkflowNode) -> St
         task_title,
         instructions_mdsvex,
         steps,
+        steps_ref,
         ..
     } = &target_node.data
     {
-        let steps_value = serde_json::to_value(steps).unwrap_or_else(|_| json!([]));
-        let steps_rhai = json_to_rhai_interpolated(&steps_value);
+        // Dynamic form: source `d.steps` at runtime from a producer-namespaced
+        // `<slug>.<field>` ref via `__pluck(input, [segs])`. The wire-edge
+        // rewrite (`apply_human_task_borrows`) retargets `input` → `d_<producer>`
+        // once the read-arc is wired — exactly the Repeater path. Falls back to
+        // the static literal when no/invalid ref is set, staying byte-identical.
+        let steps_rhai = match steps_ref.as_deref().and_then(parse_steps_ref_segments) {
+            Some(segs) => {
+                let quoted: Vec<String> = segs
+                    .iter()
+                    .map(|s| format!("\"{}\"", rhai_str_escape(s)))
+                    .collect();
+                format!("__pluck(input, [{}])", quoted.join(", "))
+            }
+            None => {
+                let steps_value = serde_json::to_value(steps).unwrap_or_else(|_| json!([]));
+                json_to_rhai_interpolated(&steps_value)
+            }
+        };
         let instructions_expr =
             interpolate_to_rhai_expr(instructions_mdsvex.as_deref().unwrap_or(""));
         let title_expr = interpolate_to_rhai_expr(task_title);
@@ -577,6 +594,22 @@ pub(crate) fn build_human_task_injection_logic(target_node: &WorkflowNode) -> St
     } else {
         "#{ output: input }".to_string()
     }
+}
+
+/// Parse a HumanTask `steps_ref` into pluck path segments. Returns `None` when
+/// the ref is empty, single-segment, or carries a `[*]` wildcard (the dynamic
+/// steps borrow is a whole-value pluck, never an iteration boundary), so the
+/// injection silently degrades to the static `steps` literal.
+fn parse_steps_ref_segments(raw: &str) -> Option<Vec<String>> {
+    let t = raw.trim();
+    if t.is_empty() || t.contains("[*]") {
+        return None;
+    }
+    let segs: Vec<String> = t.split('.').map(str::to_string).collect();
+    if segs.len() < 2 || segs.iter().any(|s| s.is_empty()) {
+        return None;
+    }
+    Some(segs)
 }
 
 /// Parse a Repeater `items_ref` into `(head, pre)` — the slug + the
@@ -689,6 +722,7 @@ mod tests {
                 task_title: task_title.to_string(),
                 instructions_mdsvex: instructions_mdsvex.map(str::to_string),
                 steps,
+                steps_ref: None,
             },
             parent_id: None,
             width: None,

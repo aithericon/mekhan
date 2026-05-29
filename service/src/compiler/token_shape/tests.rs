@@ -34,6 +34,7 @@ mod port_contract_tests {
 
     fn field(name: &str, kind: FieldKind, required: bool) -> PortField {
         PortField {
+            schema: None,
             name: name.to_string(),
             label: name.to_string(),
             kind,

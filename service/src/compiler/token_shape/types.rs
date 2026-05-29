@@ -58,6 +58,11 @@ pub enum TokenShape {
     /// executor's `detail`: real, typed elsewhere, but not worth reproducing
     /// here). Carries a human note.
     Opaque(String),
+    /// A leaf carrying an explicit JSON Schema — the field declared a rich
+    /// `schema` override (`PortField::schema`) too structured for the flat
+    /// scalar vocabulary. `to_json_schema` emits the inner schema verbatim so
+    /// the runtime `SchemaRegistry` enforces it on the produced value.
+    Schema(Box<Value>),
 }
 
 /// A field of an [`TokenShape::Object`]: its shape plus *where it came from*.
@@ -191,6 +196,7 @@ impl TokenShape {
             TokenShape::Scalar(s) => s.label().to_string(),
             TokenShape::Any => "Any".to_string(),
             TokenShape::Opaque(n) => format!("Opaque({n})"),
+            TokenShape::Schema(_) => "Schema".to_string(),
         }
     }
 
@@ -242,6 +248,9 @@ impl TokenShape {
             | TokenShape::Scalar(ScalarTy::Json)
             | TokenShape::Any
             | TokenShape::Opaque(_) => serde_json::json!({}),
+            // Explicit override: the inner schema IS the constraint the runtime
+            // `SchemaRegistry` enforces.
+            TokenShape::Schema(v) => (**v).clone(),
         }
     }
 
@@ -266,6 +275,7 @@ impl TokenShape {
             TokenShape::Scalar(t) => t.label().to_string(),
             TokenShape::Any => "Any".to_string(),
             TokenShape::Opaque(n) => format!("Opaque<{n}>"),
+            TokenShape::Schema(_) => "Schema".to_string(),
         }
     }
 }

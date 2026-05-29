@@ -266,6 +266,7 @@ fn derive_output_port(config: &Value) -> Port {
                 (Some("object"), Some(props)) => {
                     for (name, prop) in props.iter() {
                         fields.push(PortField {
+                            schema: None,
                             name: name.clone(),
                             label: prop
                                 .get("title")
@@ -307,6 +308,7 @@ fn derive_output_port(config: &Value) -> Port {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
                     fields.push(PortField {
+                        schema: None,
                         name: "response".into(),
                         label,
                         kind: schema.map(kind_from_json_schema).unwrap_or(FieldKind::Textarea),
@@ -331,6 +333,7 @@ fn derive_output_port(config: &Value) -> Port {
 
     // Metadata fields — always present in the runtime envelope.
     fields.push(PortField {
+        schema: None,
         name: "usage".into(),
         label: "Token usage".into(),
         kind: FieldKind::Json,
@@ -340,6 +343,7 @@ fn derive_output_port(config: &Value) -> Port {
         accept: None,
     });
     fields.push(PortField {
+        schema: None,
         name: "finish_reason".into(),
         label: "Finish reason".into(),
         kind: FieldKind::Text,
@@ -349,6 +353,7 @@ fn derive_output_port(config: &Value) -> Port {
         accept: None,
     });
     fields.push(PortField {
+        schema: None,
         name: "model".into(),
         label: "Model".into(),
         kind: FieldKind::Text,
@@ -367,6 +372,7 @@ fn derive_output_port(config: &Value) -> Port {
 
 fn text_response_field() -> PortField {
     PortField {
+        schema: None,
         name: "response".into(),
         label: "Response".into(),
         kind: FieldKind::Textarea,

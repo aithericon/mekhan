@@ -29,6 +29,7 @@ pub fn extract_human_task_refs(node: &WorkflowNode) -> Vec<HumanTaskRef> {
         task_title,
         instructions_mdsvex,
         steps,
+        steps_ref,
         ..
     } = &node.data
     else {
@@ -43,7 +44,30 @@ pub fn extract_human_task_refs(node: &WorkflowNode) -> Vec<HumanTaskRef> {
     for step in steps {
         scan_step(step, &mut out);
     }
+    // Opt-in dynamic form: the whole `steps` list is borrowed from a producer's
+    // `<slug>.<field>` output. Surface that producer ref so the borrow planner
+    // synthesizes a read-arc + the wire-edge rewrite retargets `__pluck(input,…)`.
+    // We reuse the placeholder scanner by synthesizing a `{{ <ref> }}` site, so
+    // the emitted `HumanTaskRef` is byte-identical in shape to a real placeholder
+    // ref (no dependence on the struct's internal field layout).
+    if let Some(sr) = steps_ref {
+        if is_well_formed_steps_ref(sr) {
+            scan_into(&format!("{{{{ {} }}}}", sr.trim()), &mut out);
+        }
+    }
     out
+}
+
+/// A `steps_ref` is borrow-eligible when it is a plain `<head>.<attr>[.<more>…]`
+/// dotted path (at least two non-empty segments, no `[*]` wildcard). Malformed
+/// refs are ignored so the dynamic form silently degrades to its static `steps`.
+fn is_well_formed_steps_ref(raw: &str) -> bool {
+    let t = raw.trim();
+    if t.is_empty() || t.contains("[*]") {
+        return false;
+    }
+    let segs: Vec<&str> = t.split('.').collect();
+    segs.len() >= 2 && !segs.iter().any(|s| s.is_empty())
 }
 
 fn scan_step(step: &TaskStepConfig, out: &mut Vec<HumanTaskRef>) {
@@ -191,6 +215,7 @@ mod tests {
                 task_title: task_title.into(),
                 instructions_mdsvex: instructions_mdsvex.map(str::to_string),
                 steps,
+                steps_ref: None,
             },
             parent_id: None,
             width: None,

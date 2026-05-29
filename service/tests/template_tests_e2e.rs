@@ -282,6 +282,7 @@ async fn seed_template_with_human_task(
                 id: "initial".to_string(),
                 label: "Input".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "amount".to_string(),
                     label: "Amount".to_string(),
                     kind: mekhan_service::models::template::FieldKind::Number,
@@ -309,6 +310,7 @@ async fn seed_template_with_human_task(
             task_title: "Review".to_string(),
             instructions_mdsvex: None,
             steps: vec![],
+            steps_ref: None,
         },
         parent_id: None,
         width: None,

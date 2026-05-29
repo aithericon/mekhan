@@ -216,6 +216,7 @@ fn derive_output_port(config: &Value) -> Port {
                 .as_str()
                 .map(|s| format!("Mapped from `{s}`"));
             fields.push(PortField {
+                schema: None,
                 name: name.clone(),
                 label: name.clone(),
                 kind: FieldKind::Json,

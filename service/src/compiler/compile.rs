@@ -7,8 +7,8 @@ use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, ConfigStorage, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::validate::{
-    validate, validate_edges_typed, validate_guards, validate_maps, validate_repeaters,
-    validate_schema_refs, validate_triggers,
+    validate, validate_edges_typed, validate_guards, validate_human_task_steps_refs, validate_maps,
+    validate_repeaters, validate_schema_refs, validate_triggers,
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
@@ -580,6 +580,10 @@ fn run_validations(
     crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;
     validate_schema_refs(graph)?;
     validate_repeaters(graph)?;
+    // HumanTask dynamic-form `stepsRef` — rejects a malformed ref string (the
+    // silent-degrade-to-empty-form gap) and a concrete non-array producer shape.
+    // Unresolved producers fall through to `validate_guards` above.
+    validate_human_task_steps_refs(graph)?;
     Ok(())
 }
 
@@ -1493,6 +1497,7 @@ mod tests {
                         content: "![invoice]({{ invoice_file.url }})".to_string(),
                     }],
                 }],
+                steps_ref: None,
             },
             parent_id: None,
             width: None,
@@ -1821,6 +1826,7 @@ mod tests {
                         task_title: "Review Task".to_string(),
                         instructions_mdsvex: Some("Please review".to_string()),
                         steps: vec![],
+                        steps_ref: None,
                     },
                     parent_id: None,
                     width: None,
@@ -3307,6 +3313,7 @@ mod tests {
                     id: "in".to_string(),
                     label: "Initial".to_string(),
                     fields: vec![PortField {
+                        schema: None,
                         name: field.to_string(),
                         label: field.to_string(),
                         kind: FieldKind::Text,
@@ -3336,6 +3343,7 @@ mod tests {
                 task_title: title.to_string(),
                 instructions_mdsvex: None,
                 steps: vec![],
+                steps_ref: None,
             },
             parent_id: None,
             width: None,
@@ -3970,6 +3978,7 @@ mod tests {
                     id: "out".to_string(),
                     label: "Out".to_string(),
                     fields: vec![PortField {
+                        schema: None,
                         name: "greeting".to_string(),
                         label: "Greeting".to_string(),
                         kind: FieldKind::Text,
