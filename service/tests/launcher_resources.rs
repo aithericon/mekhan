@@ -30,6 +30,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use mekhan_service::compiler::resource_refs::{KnownResource, KnownResources};
+use mekhan_service::handlers::resources::vault_path_for;
 use mekhan_service::petri::resource_resolver::{splice_resources_into_air, ResourceResolver};
 
 // ── Seeding helpers (mirrors resource_resolver.rs) ────────────────────────
@@ -43,10 +44,7 @@ async fn seed_resource(
     public_config: serde_json::Value,
 ) -> Uuid {
     let resource_id = Uuid::new_v4();
-    let vault_path = format!(
-        "aithericon/resources/{}/{}/v1",
-        workspace_id, resource_id
-    );
+    let vault_path = vault_path_for(workspace_id, resource_id, 1);
 
     // The resources_workspace_fk (migration 20240126) requires the workspace
     // row to exist before a resource can reference it. Seed it idempotently so

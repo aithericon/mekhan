@@ -119,6 +119,43 @@ pub struct RunContext {
     pub backend_state: serde_json::Value,
 }
 
+impl RunContext {
+    /// Build a minimal `RunContext` for tests.
+    ///
+    /// Sets the four fields that actually vary across test fixtures
+    /// (`execution_id`, `spec`, `run_dir`, `timeout`) and defaults every other
+    /// field to empty. Fixtures that also customize a field use struct-update
+    /// syntax, e.g. `RunContext { env, ..RunContext::for_test(id, spec, rd, t) }`.
+    ///
+    /// Not `#[cfg(test)]`-gated: the executor conformance kits are ordinary
+    /// library code (consumed by integration-test binaries), so they need this
+    /// constructor available without the `test` cfg.
+    pub fn for_test(
+        execution_id: impl Into<String>,
+        spec: ExecutionSpec,
+        run_dir: RunDirectory,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            execution_id: execution_id.into(),
+            spec,
+            run_dir,
+            timeout,
+            env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
+            metadata: HashMap::new(),
+            staged_inputs: HashMap::new(),
+            expected_outputs: HashMap::new(),
+            staged_events: Vec::new(),
+            backend_state: serde_json::Value::Null,
+        }
+    }
+}
+
 /// Hand-written `Debug` impl that elides the `resolved_*` fields.
 ///
 /// Defense in depth against accidental `tracing::debug!(?ctx, …)` writing

@@ -14,8 +14,18 @@ use tracing::{debug, error, info};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use crate::Subjects;
+
 pub const TIMER_KV_BUCKET: &str = "PETRI_TIMERS";
-pub const SIGNAL_PREFIX: &str = "petri.signal";
+
+/// Build the NATS KV key for a durable timer.
+///
+/// A typo here would make `cancel` look up a different key than `schedule`
+/// wrote, silently turning cancellation into a no-op — so both paths share
+/// this single helper.
+fn timer_kv_key(net_id: &str, place_id: &str, correlation_id: &uuid::Uuid) -> String {
+    format!("timer.{}.{}.{}", net_id, place_id, correlation_id)
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TimerValue {
@@ -56,12 +66,7 @@ impl TimerClient for NatsTimerClient {
         
         let expires_at_ms = now_ms + request.delay_ms;
         
-        let key = format!(
-            "timer.{}.{}.{}",
-            request.net_id,
-            request.place_id,
-            request.correlation_id
-        );
+        let key = timer_kv_key(&request.net_id, &request.place_id, &request.correlation_id);
 
         let value = TimerValue {
             net_id: request.net_id,
@@ -84,10 +89,7 @@ impl TimerClient for NatsTimerClient {
     }
 
     async fn cancel(&self, request: TimerCancelRequest) -> Result<bool, TimerError> {
-        let key = format!(
-            "timer.{}.{}.{}",
-            request.net_id, request.place_id, request.correlation_id
-        );
+        let key = timer_kv_key(&request.net_id, &request.place_id, &request.correlation_id);
 
         // Check if timer exists before deleting
         match self.kv.get(&key).await {
@@ -121,7 +123,7 @@ pub struct Clockmaster {
 
 impl Clockmaster {
     pub async fn new(js: jetstream::Context) -> Result<Self, String> {
-        Self::with_options(js, TIMER_KV_BUCKET, SIGNAL_PREFIX).await
+        Self::with_options(js, TIMER_KV_BUCKET, Subjects::SIGNAL_PREFIX).await
     }
 
     pub async fn with_options(
@@ -230,8 +232,30 @@ impl Clockmaster {
             let drift_ms = now_ms.saturating_sub(timer.expires_at_ms);
 
             // Convert to ISO 8601
-            let scheduled_at_dt = Utc.timestamp_millis_opt(timer.expires_at_ms as i64).unwrap();
-            let triggered_at_dt = Utc.timestamp_millis_opt(now_ms as i64).unwrap();
+            let scheduled_at_dt = match Utc.timestamp_millis_opt(timer.expires_at_ms as i64).single() {
+                Some(dt) => dt,
+                None => {
+                    error!(
+                        net_id = %timer.net_id,
+                        place_id = %timer.place_id,
+                        expires_at_ms = timer.expires_at_ms,
+                        "Timer scheduled_at timestamp out of range; skipping fire"
+                    );
+                    return;
+                }
+            };
+            let triggered_at_dt = match Utc.timestamp_millis_opt(now_ms as i64).single() {
+                Some(dt) => dt,
+                None => {
+                    error!(
+                        net_id = %timer.net_id,
+                        place_id = %timer.place_id,
+                        now_ms = now_ms,
+                        "Timer triggered_at timestamp out of range; skipping fire"
+                    );
+                    return;
+                }
+            };
 
             info!(
                 net_id = %timer.net_id, 
@@ -258,7 +282,13 @@ impl Clockmaster {
             };
 
             let signal_subject = format!("{}.{}.{}", prefix, timer.net_id, timer.place_id);
-            let payload = serde_json::to_vec(&signal).unwrap();
+            let payload = match serde_json::to_vec(&signal) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!(error = %e, "Failed to serialize timer signal; skipping fire");
+                    return;
+                }
+            };
 
             match js.publish(signal_subject, payload.into()).await {
                 Ok(ack_future) => {

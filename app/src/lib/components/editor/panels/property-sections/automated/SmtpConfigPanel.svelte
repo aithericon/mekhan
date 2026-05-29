@@ -28,6 +28,7 @@
 	import InsertRefButton from '../InsertRefButton.svelte';
 	import ResourcePicker from '../shared/ResourcePicker.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type TemplateSource = { label: string; source: string };
 	type AttachmentSpec = { filename: string; input_name: string; mime?: string };
@@ -138,8 +139,11 @@
 		setAttachments(attachments.filter((_, i) => i !== idx));
 	}
 
-	function appendSnippet(target: string, snippet: string): string {
-		return target.length === 0 ? snippet : `${target}${snippet}`;
+	// SmtpConfigPanel uses sep='' (no space) — snippets are inserted directly
+	// adjacent to the cursor position in Tera templates. The shared util
+	// defaults to sep=' '; we pass sep='' explicitly here.
+	function smtpAppend(target: string, snippet: string): string {
+		return appendSnippet(target, snippet, '');
 	}
 </script>
 
@@ -171,7 +175,7 @@
 					{scope}
 					disabled={readonly}
 					placeholder="Insert ref…"
-					oninsert={(s) => updateRecipient(field, idx, appendSnippet(addr, s))}
+					oninsert={(s) => updateRecipient(field, idx, smtpAppend(addr, s))}
 				/>
 			</div>
 		{/if}
@@ -238,7 +242,7 @@
 			{scope}
 			disabled={readonly}
 			placeholder="Insert ref into From…"
-			oninsert={(s) => patch({ from: appendSnippet(fromOverride, s) })}
+			oninsert={(s) => patch({ from: smtpAppend(fromOverride, s) })}
 		/>
 	{/if}
 </div>
@@ -261,7 +265,7 @@
 			{scope}
 			disabled={readonly}
 			placeholder="Insert ref into Subject…"
-			oninsert={(s) => setSubjectSource(appendSnippet(subjectSrc, s))}
+			oninsert={(s) => setSubjectSource(smtpAppend(subjectSrc, s))}
 		/>
 	{/if}
 </div>
@@ -293,7 +297,7 @@
 				{scope}
 				disabled={readonly}
 				placeholder="Insert ref into text body…"
-				oninsert={(s) => setBodyText(appendSnippet(bodyText.source, s))}
+				oninsert={(s) => setBodyText(smtpAppend(bodyText.source, s))}
 			/>
 		{/if}
 	{/if}
@@ -326,7 +330,7 @@
 				{scope}
 				disabled={readonly}
 				placeholder="Insert ref into HTML body…"
-				oninsert={(s) => setBodyHtml(appendSnippet(bodyHtml.source, s))}
+				oninsert={(s) => setBodyHtml(smtpAppend(bodyHtml.source, s))}
 			/>
 		{/if}
 	{/if}

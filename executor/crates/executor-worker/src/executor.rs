@@ -726,16 +726,8 @@ async fn upload_output(
     config: &aithericon_executor_domain::OutputUploadConfig,
     resolved_storage: Option<&serde_json::Value>,
 ) -> Result<String, ExecutorError> {
-    let resolved_storage_owned: Option<aithericon_executor_storage::StorageConfig> =
-        if let Some(json) = resolved_storage {
-            Some(serde_json::from_value(json.clone()).map_err(|e| {
-                ExecutorError::StagingFailed(format!(
-                    "deserialize resolved storage config for output '{output_name}': {e}"
-                ))
-            })?)
-        } else {
-            None
-        };
+    let resolved_storage_owned =
+        crate::staging::deserialize_resolved_storage(resolved_storage, "output", output_name)?;
     let effective_storage = resolved_storage_owned.as_ref().unwrap_or(&config.storage);
 
     let (operator, prefix) =

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import type { components } from '$lib/api/schema';
+	import { getTriggerHistory } from '$lib/api/client';
 
 	type FireResult = components['schemas']['FireResult'];
 
@@ -25,16 +26,11 @@
 		if (!nodeId) return;
 		loading = true;
 		try {
-			const res = await fetch(`/api/v1/triggers/${encodeURIComponent(nodeId)}/history`);
-			if (!res.ok) {
-				error = `History fetch failed: ${res.status}`;
-				return;
-			}
-			const body = await res.json();
+			const body = await getTriggerHistory(nodeId);
 			history = body.history ?? [];
 			error = null;
 		} catch (e) {
-			error = String(e);
+			error = e instanceof Error ? e.message : String(e);
 		} finally {
 			loading = false;
 		}
