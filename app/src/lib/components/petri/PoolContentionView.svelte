@@ -91,21 +91,23 @@
 	data-testid="pool-contention-view"
 >
 	<!-- Header ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── -->
-	<div class="flex items-center justify-between gap-2">
-		<div class="flex items-center gap-2">
-			<Cpu class="size-4 text-muted-foreground" />
-			<span class="font-semibold text-foreground">Resource Pool</span>
-			<span class="font-mono text-sm text-muted-foreground">{netId}</span>
+	<div class="flex items-start justify-between gap-2">
+		<div class="flex min-w-0 items-center gap-2">
+			<Cpu class="size-4 shrink-0 text-muted-foreground" />
+			<div class="flex min-w-0 flex-col leading-tight">
+				<span class="font-semibold whitespace-nowrap text-foreground">Resource Pool</span>
+				<span class="truncate font-mono text-sm text-muted-foreground" title={netId}>{netId}</span>
+			</div>
 		</div>
-		<div class="flex items-center gap-1.5">
+		<div class="flex shrink-0 items-center gap-1">
 			{#if store.status === 'loading'}
 				<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
-				<span class="text-sm text-muted-foreground">Loading…</span>
+				<span class="whitespace-nowrap text-sm text-muted-foreground">Loading…</span>
 			{:else if store.status === 'live'}
-				<span class="inline-block size-2 rounded-full bg-green-500"></span>
+				<span class="inline-block size-2 shrink-0 rounded-full bg-green-500"></span>
 				<span class="text-sm text-muted-foreground">Live</span>
 			{:else if store.status === 'net-not-found'}
-				<span class="text-sm text-muted-foreground">Net not deployed</span>
+				<span class="whitespace-nowrap text-sm text-muted-foreground">Not deployed</span>
 			{:else if store.status === 'error'}
 				<XCircle class="size-3.5 text-destructive" />
 				<span class="text-sm text-destructive">Error</span>
@@ -144,14 +146,14 @@
 	<!-- Pool drain section ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── -->
 	{#if store.status === 'live' || store.status === 'loading'}
 		<div class="flex flex-col gap-2">
-			<div class="flex items-center justify-between">
-				<span class="text-sm font-medium text-foreground">Pool utilisation</span>
+			<div class="flex flex-col gap-0.5">
+				<span class="whitespace-nowrap text-sm font-medium text-foreground">Pool utilisation</span>
 				<div class="flex items-center gap-1.5 text-sm text-muted-foreground">
 					{#if store.conservationOk}
-						<CheckCircle2 class="size-3.5 text-green-600" />
-						<span>{store.capacity} GPUs accounted for ({store.poolCount} free + {store.inUseCount} held)</span>
+						<CheckCircle2 class="size-3.5 shrink-0 text-green-600" />
+						<span>{store.capacity}/{store.capacity} GPUs accounted · {store.poolCount} free, {store.inUseCount} held</span>
 					{:else if store.status === 'loading'}
-						<Loader2 class="size-3.5 animate-spin" />
+						<Loader2 class="size-3.5 shrink-0 animate-spin" />
 						<span>Loading…</span>
 					{/if}
 				</div>
