@@ -1366,6 +1366,129 @@ pub(crate) fn validate_maps(graph: &WorkflowGraph) -> Result<(), CompileError> {
     Ok(())
 }
 
+// --- HumanTask dynamic-form `stepsRef` shape validation ---
+
+/// Walk every HumanTask with an opt-in `stepsRef` and reject the two failure
+/// modes the rest of the pipeline doesn't already catch.
+///
+/// When set, the form block list is sourced at RUNTIME from `<slug>.<field>`:
+/// the compiler emits a read-arc borrow (exactly like Map's `itemsRef`) and the
+/// runtime `SchemaRegistry` validates the produced blocks against the producer's
+/// declared output schema. That means producer/field RESOLUTION is already a
+/// hard fail via the guard/borrow net (`GuardUnresolved`), and the runtime SHAPE
+/// of well-typed producers is already enforced. This pass adds only:
+///
+///   1. **Malformed ref string** — a `stepsRef` that isn't a plain
+///      `<slug>.<field>[.<more>…]` path (empty, `[*]` wildcard, or <2 non-empty
+///      segments). The borrow planner *skips* malformed refs, so without this
+///      check the rhai would fall back to the empty static `steps` literal and
+///      silently render a blank form with no authoring-time signal. This is the
+///      one gap nothing else covers.
+///   2. **Non-array shape at publish** — when the ref DOES resolve to a known
+///      producer field whose declared shape is a concrete non-array scalar,
+///      reject early rather than waiting for the runtime schema gate. Untyped
+///      producers (`Any`/`Opaque`/`Json`) are accepted and deferred to runtime.
+///
+/// Unresolved producers/fields are intentionally NOT reported here — they fall
+/// through to `validate_guards` so we don't emit a redundant second error for
+/// the same ref. Grammar must stay in lockstep with `is_well_formed_steps_ref`
+/// in `human_task_refs.rs` (the borrow-eligibility gate) and
+/// `parse_steps_ref_segments` in `rhai_gen.rs` (the `__pluck` emitter): all
+/// three accept exactly the same shape, so a ref that borrows + plucks is the
+/// same ref that validates.
+pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    use crate::compiler::token_shape::{analyze, is_parked_producer, slug_index, TokenShape};
+
+    // Short-circuit when no HumanTask carries a stepsRef — avoids the analyze
+    // pass on graphs that don't use the dynamic-form opt-in.
+    if !graph.nodes.iter().any(|n| {
+        matches!(&n.data, WorkflowNodeData::HumanTask { steps_ref: Some(_), .. })
+    }) {
+        return Ok(());
+    }
+
+    let report = analyze(graph)?;
+    let slugs = slug_index(graph)?;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::HumanTask { steps_ref: Some(raw), .. } = &node.data else {
+            continue;
+        };
+
+        // (1) Grammar: plain `<slug>.<field>[.<more>…]`, no `[*]` wildcard, ≥2
+        // non-empty segments. Mirrors `is_well_formed_steps_ref`. Hard reject —
+        // this is the silent-degrade gap nothing else covers.
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.contains("[*]") {
+            return Err(CompileError::HumanTaskStepsRefMalformed {
+                node_id: node.id.clone(),
+                ref_value: raw.clone(),
+            });
+        }
+        let Some((head, rest)) = trimmed.split_once('.') else {
+            return Err(CompileError::HumanTaskStepsRefMalformed {
+                node_id: node.id.clone(),
+                ref_value: raw.clone(),
+            });
+        };
+        let segs: Vec<&str> = rest.split('.').collect();
+        if head.is_empty() || segs.iter().any(|s| s.is_empty()) {
+            return Err(CompileError::HumanTaskStepsRefMalformed {
+                node_id: node.id.clone(),
+                ref_value: raw.clone(),
+            });
+        }
+
+        // (2) Best-effort non-array shape check. If the ref resolves to a known
+        // parked producer field, reject a concrete non-array shape here. When it
+        // DOESN'T resolve (unknown slug / not parked / field absent), fall
+        // through silently — `validate_guards` owns the unresolved-ref error, so
+        // emitting one here would be redundant.
+        let Some(prod_id) = slugs.node_for(head).map(str::to_string) else {
+            continue;
+        };
+        if !is_parked_producer(graph, &prod_id) {
+            continue;
+        }
+
+        // Resolve the field path against the producer's outbound shape —
+        // `find_by_leaf` maps the author's leaf to the physical parked path
+        // (e.g. a Python step's `detail.outputs.<field>`), then literal descent.
+        let resolved = report.node_out.get(&prod_id).and_then(|s| {
+            let (phys, _ty, _prov) = s.find_by_leaf(segs[0])?;
+            let mut path: Vec<String> = phys.split('.').map(str::to_string).collect();
+            for extra in &segs[1..] {
+                path.push((*extra).to_string());
+            }
+            s.resolve(&path).map(|(t, _)| t.clone())
+        });
+
+        if let Some(other) = resolved {
+            match other {
+                TokenShape::Array(_)
+                | TokenShape::Any
+                | TokenShape::Opaque(_)
+                | TokenShape::Scalar(crate::compiler::token_shape::ScalarTy::Json) => {
+                    // Array (canonical), or Any/Opaque/Json (the producer
+                    // declared arbitrary JSON it'll deliver as the block list at
+                    // runtime). Accept; defer the strict shape to the runtime
+                    // SchemaRegistry.
+                }
+                concrete => {
+                    return Err(CompileError::HumanTaskStepsRefNotArray {
+                        node_id: node.id.clone(),
+                        ref_value: raw.clone(),
+                        actual_kind: concrete.kind_label(),
+                    });
+                }
+            }
+        }
+        // resolved == None → unresolved field; leave it to `validate_guards`.
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod repeater_tests {
     use super::*;

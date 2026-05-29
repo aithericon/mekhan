@@ -418,6 +418,7 @@ pub struct DefaultPortField {
 impl DefaultPortField {
     pub fn into_port_field(self) -> PortField {
         PortField {
+            schema: None,
             name: self.name.to_string(),
             label: self.label.to_string(),
             kind: self.kind,

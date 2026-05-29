@@ -44,9 +44,20 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // Derived single `out` port whose fields are the union of every Input
     // block's `TaskFieldConfig` across all steps (first-wins on duplicate
     // names). Matches the central arm in `WorkflowNodeData::output_ports`.
-    let WorkflowNodeData::HumanTask { steps, .. } = data else {
+    let WorkflowNodeData::HumanTask {
+        steps, steps_ref, ..
+    } = data
+    else {
         unreachable!("human_task::output_ports on non-HumanTask variant");
     };
+    if steps_ref.is_some() {
+        // Dynamic form: field names are unknown at compile time → opaque port.
+        return vec![Port {
+            id: "out".to_string(),
+            label: "Output".to_string(),
+            fields: vec![],
+        }];
+    }
     vec![derive_human_task_output_port(steps)]
 }
 
@@ -60,6 +71,7 @@ fn yjs_encode(
         task_title,
         instructions_mdsvex,
         steps,
+        steps_ref,
         ..
     } = data
     else {
@@ -68,6 +80,9 @@ fn yjs_encode(
     config.insert(txn, "taskTitle", task_title.clone());
     if let Some(inst) = instructions_mdsvex {
         config.insert(txn, "instructionsMdsvex", inst.clone());
+    }
+    if let Some(sr) = steps_ref {
+        config.insert(txn, "stepsRef", sr.clone());
     }
     let steps_val = serde_json::to_value(steps).unwrap_or(serde_json::Value::Array(vec![]));
     config.insert(txn, "steps", json_value_to_any(&steps_val));

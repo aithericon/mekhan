@@ -308,6 +308,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                schema: None,
                 name: "customer_id".to_string(),
                 label: "Customer ID".to_string(),
                 kind: FieldKind::Text,
@@ -335,6 +336,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                schema: None,
                 name: "customer_id".to_string(),
                 label: "Customer ID".to_string(),
                 kind: FieldKind::Text,
@@ -375,6 +377,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                schema: None,
                 name: "amount".to_string(),
                 label: "Amount".to_string(),
                 kind: FieldKind::Number,
@@ -409,6 +412,7 @@ mod tests {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                schema: None,
                 name: "customer_id".to_string(),
                 label: "Customer ID".to_string(),
                 kind: FieldKind::Text,

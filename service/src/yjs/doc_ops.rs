@@ -548,6 +548,7 @@ mod tests {
             label: "Out".to_string(),
             fields: vec![
                 PortField {
+                    schema: None,
                     name: "vendor".to_string(),
                     label: "Vendor".to_string(),
                     kind: FieldKind::Text,
@@ -557,6 +558,7 @@ mod tests {
                     accept: None,
                 },
                 PortField {
+                    schema: None,
                     name: "amount".to_string(),
                     label: "Amount".to_string(),
                     kind: FieldKind::Number,

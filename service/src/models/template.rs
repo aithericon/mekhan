@@ -262,6 +262,10 @@ pub enum WorkflowNodeData {
         #[serde(rename = "instructionsMdsvex", skip_serializing_if = "Option::is_none")]
         instructions_mdsvex: Option<String>,
         steps: Vec<TaskStepConfig>,
+        /// Opt-in: source the form block list at RUNTIME from a producer-namespaced
+        /// `<slug>.<field>` reference instead of the static `steps` literal.
+        #[serde(rename = "stepsRef", default, skip_serializing_if = "Option::is_none")]
+        steps_ref: Option<String>,
     },
     #[serde(rename = "automated_step")]
     AutomatedStep {
@@ -741,6 +745,7 @@ pub(crate) fn derive_human_task_output_port(steps: &[TaskStepConfig]) -> Port {
             if let TaskBlockConfig::Input { field } = block {
                 if seen.insert(field.name.clone()) {
                     fields.push(PortField {
+                        schema: None,
                         name: field.name.clone(),
                         label: field.label.clone(),
                         kind: FieldKind::from(field.kind),
@@ -758,6 +763,27 @@ pub(crate) fn derive_human_task_output_port(steps: &[TaskStepConfig]) -> Port {
         label: "Output".to_string(),
         fields,
     }
+}
+
+/// Single-source JSON Schema for a dynamic-form step list — `Vec<TaskStepConfig>`,
+/// the runtime shape an upstream producer (agent or script) must emit to drive a
+/// HumanTask whose `stepsRef` points at it.
+///
+/// This ONE artifact is reused so the two consumers can't drift:
+///   1. **Advertised** to an agent — surfaced on the HumanTask input port (via
+///      `PortField::schema`) and thence into the agent tool's `input_schema`, so
+///      the model is told the exact block grammar to produce.
+///   2. **Enforced** at runtime — emitted as a colored-token `definition` bound
+///      to the place the produced blocks land in, so the engine's
+///      `SchemaRegistry` validates them like any other typed token.
+///
+/// Generated from the `#[derive(schemars::JsonSchema)]` on `TaskStepConfig` /
+/// `TaskBlockConfig` / `TaskFieldConfig` and friends — the Rust types are the
+/// single source of truth, mirroring the `ResourceType` schema precedent in
+/// `shared/resources`.
+pub fn task_step_list_json_schema() -> serde_json::Value {
+    let schema = schemars::schema_for!(Vec<TaskStepConfig>);
+    serde_json::to_value(schema).expect("TaskStepConfig JsonSchema must serialize cleanly")
 }
 
 impl From<TaskFieldKind> for FieldKind {
@@ -791,7 +817,7 @@ impl From<TaskFieldKind> for FieldKind {
 
 // --- Task step configuration (maps to human-ui TaskStep) ---
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskStepConfig {
     pub id: String,
@@ -801,7 +827,7 @@ pub struct TaskStepConfig {
     pub blocks: Vec<TaskBlockConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(tag = "type")]
 pub enum TaskBlockConfig {
     #[serde(rename = "input")]
@@ -907,7 +933,7 @@ pub enum TaskBlockConfig {
 
 /// One entry in a `download` task block. Mirrors the frontend `DownloadItem`
 /// (`app/src/lib/hpi/types.ts`) field-for-field on the wire.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 pub struct DownloadItemConfig {
     pub url: String,
     pub filename: String,
@@ -924,7 +950,7 @@ pub struct DownloadItemConfig {
 /// Severity for callout blocks. Snake-case on the wire (`"info"`,
 /// `"warning"`, `"error"`, `"success"`) to keep the byte-for-byte shape that
 /// the editor and human-task UI already produce/consume.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CalloutSeverity {
     Info,
@@ -935,7 +961,7 @@ pub enum CalloutSeverity {
 
 /// Layout mode for image blocks. Snake-case wire values: `"single"`,
 /// `"grid"`, `"gallery"`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageDisplay {
     #[default]
@@ -1171,7 +1197,7 @@ fn default_item_var() -> String {
     "item".to_string()
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 pub struct TaskFieldConfig {
     pub name: String,
     pub label: String,
@@ -1236,7 +1262,7 @@ pub struct TaskFieldConfig {
 /// submits / what guards downstream compare against; `label` is what the
 /// UI renders. Authors typically write `{value, label}`; the deserializer
 /// also accepts a bare string and stretches it to `{value: s, label: s}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 pub struct SelectOption {
     pub value: String,
     pub label: String,
@@ -1320,7 +1346,7 @@ where
 /// `TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the
 /// compiler accepts an author's choice that the engine rejects (or
 /// vice-versa).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskFieldKind {
     #[default]
@@ -1416,6 +1442,19 @@ pub struct PortField {
     /// the expected formats. Ignored for non-file kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept: Option<String>,
+    /// Optional rich JSON Schema override for this field's value, for the cases
+    /// where the flat `kind` vocabulary (`Json` being the only escape hatch)
+    /// can't express the real structure. When present it is the field's
+    /// authoritative schema everywhere a richer-than-scalar shape is needed:
+    /// it becomes the agent-tool `input_schema` property (so a model calling a
+    /// node as a tool is told the exact nested shape to produce), and it feeds
+    /// the colored-token definition the runtime `SchemaRegistry` enforces. The
+    /// canonical use is the dynamic-form HumanTask: its `steps` input field
+    /// carries [`task_step_list_json_schema`] so the agent and the runtime
+    /// share one single-sourced `TaskStepConfig[]` contract. Not author-facing
+    /// — derived by node lowering, never hand-edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 /// A named bundle of typed fields exchanged at a block boundary. Two ports
@@ -1567,6 +1606,7 @@ pub fn default_output_port(backend: ExecutionBackendType) -> Port {
 pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
     vec![
         PortField {
+            schema: None,
             name: "turn".to_string(),
             label: "Final turn count".to_string(),
             kind: FieldKind::Number,
@@ -1578,6 +1618,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            schema: None,
             name: "history_ref".to_string(),
             label: "Conversation transcript blob".to_string(),
             kind: FieldKind::Text,
@@ -1591,6 +1632,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            schema: None,
             name: "final_response".to_string(),
             label: "Full LLM turn result".to_string(),
             kind: FieldKind::Json,
@@ -1602,6 +1644,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             accept: None,
         },
         PortField {
+            schema: None,
             name: "input".to_string(),
             label: "Original input".to_string(),
             kind: FieldKind::Json,
@@ -2143,6 +2186,10 @@ pub mod dsl {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub steps: Option<Vec<DslTaskStep>>,
 
+        /// Opt-in dynamic form: runtime `<slug>.<field>` ref for the step list.
+        #[serde(rename = "stepsRef", default, skip_serializing_if = "Option::is_none")]
+        pub steps_ref: Option<String>,
+
         // automated_step
         #[serde(skip_serializing_if = "Option::is_none")]
         pub execution: Option<DslExecution>,
@@ -2338,6 +2385,7 @@ pub mod dsl {
                             .unwrap_or_else(|| label.to_string()),
                         instructions_mdsvex: step.instructions.clone(),
                         steps: task_steps,
+                        steps_ref: step.steps_ref.clone(),
                     })
                 }
                 "agent" => {
@@ -2502,6 +2550,7 @@ pub mod dsl {
                 task_title: None,
                 instructions: None,
                 steps: None,
+                steps_ref: None,
                 execution: None,
                 agent: None,
                 conditions: None,
@@ -2528,10 +2577,12 @@ pub mod dsl {
                     task_title,
                     instructions_mdsvex,
                     steps: task_steps,
+                    steps_ref,
                     ..
                 } => {
                     step.task_title = Some(task_title.clone());
                     step.instructions = instructions_mdsvex.clone();
+                    step.steps_ref = steps_ref.clone();
                     if !task_steps.is_empty() {
                         step.steps = Some(
                             task_steps
@@ -2692,6 +2743,7 @@ mod tests {
 
     fn pf(name: &str, kind: FieldKind, required: bool) -> PortField {
         PortField {
+            schema: None,
             name: name.to_string(),
             label: name.to_string(),
             kind,
@@ -2947,6 +2999,7 @@ mod tests {
                 task_title: "Do it".to_string(),
                 instructions_mdsvex: None,
                 steps: vec![],
+                steps_ref: None,
             },
             parent_id: Some("scope1".to_string()),
             width: None,

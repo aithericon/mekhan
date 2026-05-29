@@ -404,6 +404,7 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
                         id: "in".to_string(),
                         label: "Input".to_string(),
                         fields: vec![PortField {
+                            schema: None,
                             name: "customer_id".to_string(),
                             label: "Customer ID".to_string(),
                             kind: FieldKind::Text,

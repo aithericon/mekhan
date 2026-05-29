@@ -563,6 +563,7 @@ flow:
                                 },
                             ],
                         }],
+                        steps_ref: None,
                     },
                     parent_id: None,
                     width: None,
@@ -704,6 +705,7 @@ flow:
             label: "Order Input".to_string(),
             fields: vec![
                 PortField {
+                    schema: None,
                     name: "order_id".to_string(),
                     label: "Order ID".to_string(),
                     kind: FieldKind::Text,
@@ -713,6 +715,7 @@ flow:
                     accept: None,
                 },
                 PortField {
+                    schema: None,
                     name: "amount".to_string(),
                     label: "Amount".to_string(),
                     kind: FieldKind::Number,
