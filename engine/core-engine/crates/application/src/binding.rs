@@ -307,7 +307,19 @@ fn build_binding_for_indices(
                 return None;
             }
 
-            let token = tokens[token_idx];
+            // Read arcs are non-consuming and borrow a parked value. When a
+            // place accumulates tokens across loop iterations (a loop-body
+            // producer re-parks each pass — e.g. a Map's `itemsRef` producer or
+            // a loop accumulator's body-child output), the borrow must see the
+            // MOST RECENT parked value, not the stale oldest one plain FIFO
+            // indexing picks. The marking Vec is append-ordered, so the last
+            // token is the newest park (deterministic → replay-safe). Single-
+            // token places (the common, non-loop case) are unaffected.
+            let token = if arc.read {
+                tokens.last().copied().unwrap_or(tokens[token_idx])
+            } else {
+                tokens[token_idx]
+            };
 
             // Merge reply_routing from consumed tokens (skip read arcs)
             if !arc.read {
