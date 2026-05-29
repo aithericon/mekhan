@@ -37,6 +37,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+use aithericon_executor_domain::sanitize_subject_token;
+
 use crate::nats::MekhanNats;
 
 /// Bounded retention but not bounded sends — the drainer reads at NATS
@@ -180,22 +182,6 @@ pub async fn drain_silent_drops(
         }
     }
     tracing::warn!("silent drop drainer exited (channel closed)");
-}
-
-/// NATS subject tokens accept `[A-Za-z0-9_-]`; the `kind` strings used
-/// at call sites are already that shape, but defensively replace any
-/// stray character with `_` so a future site adding `.` or `>` doesn't
-/// silently mis-route to a different broker subject pattern.
-fn sanitize_subject_token(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

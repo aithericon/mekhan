@@ -50,6 +50,7 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // pinned by `compiler_e2e`'s aliased-pool tests instead; the live pool
     // showcase is an R5 dogfood step.
     "13-resource-pool",
+    "13-dynamic-form",
 ];
 
 fn repo_root() -> PathBuf {
@@ -229,6 +230,11 @@ fn snapshot_13_resource_pool() {
     run("13-resource-pool");
 }
 
+#[test]
+fn snapshot_13_dynamic_form() {
+    run("13-dynamic-form");
+}
+
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
 /// a snapshot test, fail loudly. Comparison against the curated list above
 /// rather than the disk so we can intentionally exclude (e.g. subworkflow
@@ -261,8 +267,14 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     // that the bare `compile_to_air` entry-point can't resolve (the publish
     // handler runs the resolver). 09's `lookup_order` tool is a SubWorkflow
     // (the 08a-order-lookup child), so it joins 06 here.
+    // 06/09 reference a child template by id the bare entry-point can't
+    // resolve. 12a-bo-catalog-trigger carries a Trigger node whose catalogue
+    // wiring is resolved at publish time, not by `compile_to_air` — same class
+    // of "needs the publish handler" exclusion.
     let documented_skip: std::collections::HashSet<&str> =
-        ["06-subworkflow", "09-agent-tool-loop"].into_iter().collect();
+        ["06-subworkflow", "09-agent-tool-loop", "12a-bo-catalog-trigger"]
+            .into_iter()
+            .collect();
 
     for d in &numbered {
         let s = d.as_str();

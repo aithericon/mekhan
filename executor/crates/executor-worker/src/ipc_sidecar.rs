@@ -21,6 +21,48 @@ use aithericon_executor_logs::LogSink;
 use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_storage::ArtifactStore;
 
+/// Max time to wait for an accepted IPC connection to drain its in-flight
+/// request handlers after the child process has exited. Bounded so a child
+/// that crashes mid-stream (leaving its half of the socket open) can never
+/// wedge the worker — we proceed with whatever state was collected.
+const IPC_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Non-blocking poll of the listener for an already-queued connection.
+///
+/// Used after `child_exited` fires to drain a connection the child opened
+/// just before it exited (the K-concurrent race), without ever blocking.
+fn try_accept(
+    listener: &UnixListener,
+) -> Option<std::io::Result<(tokio::net::UnixStream, tokio::net::unix::SocketAddr)>> {
+    let waker = futures::task::noop_waker();
+    let mut cx = std::task::Context::from_waker(&waker);
+    match listener.poll_accept(&mut cx) {
+        std::task::Poll::Ready(result) => Some(result),
+        std::task::Poll::Pending => None,
+    }
+}
+
+/// True when a `serve_connection` error is the expected signature of a client
+/// that closed its socket after finishing its RPCs (e.g. the Python SDK's
+/// `aithericon.shutdown()` → `_channel.close()` teardown). These are benign:
+/// the request handlers already ran and mutated state before the close.
+fn is_benign_disconnect(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = source {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            use std::io::ErrorKind::*;
+            if matches!(
+                io.kind(),
+                NotConnected | BrokenPipe | ConnectionReset | ConnectionAborted | UnexpectedEof
+            ) {
+                return true;
+            }
+        }
+        source = e.source();
+    }
+    false
+}
+
 /// Result of the IPC sidecar after the child process exits.
 #[derive(Debug, Clone)]
 pub struct SidecarResult {
@@ -332,11 +374,34 @@ pub async fn start_ipc_sidecar(
         //
         // If the child exits without ever connecting, child_exited fires
         // and we skip straight to building an empty SidecarResult.
+        //
+        // CONCURRENCY RACE (K children scattering at once): `child_exited`
+        // is cancelled by the caller the instant `backend.execute()` returns
+        // — i.e. the instant the child *process* exits. A well-behaved child
+        // connects, streams its `set_output` frames, acks shutdown, then
+        // exits. Those last two happen back-to-back, so when many children
+        // race the async runtime there is a window where the connection is
+        // already sitting in the listener's accept queue (or even mid-RPC)
+        // at the moment `child_exited` fires. The old `select!` could then
+        // take the `child_exited` branch and drop the connection wholesale —
+        // discarding every output the child sent — yielding the observed
+        // `output_count=0`. So: if `child_exited` wins the race, do NOT bail
+        // immediately — try one final non-blocking accept to drain a
+        // connection that landed before the child exited.
         let accepted = tokio::select! {
+            biased;
             result = listener.accept() => Some(result),
             _ = child_exited.cancelled() => {
-                debug!("IPC sidecar: child exited without connecting");
-                None
+                // The child has exited. A connection it opened just before
+                // exiting may already be queued — drain it so we don't lose
+                // the outputs it already wrote. `try_accept` is non-blocking.
+                match try_accept(&listener) {
+                    Some(result) => Some(result),
+                    None => {
+                        debug!("IPC sidecar: child exited without connecting");
+                        None
+                    }
+                }
             }
         };
 
@@ -355,19 +420,79 @@ pub async fn start_ipc_sidecar(
                     .initial_connection_window_size(1024 * 1024)
                     .max_frame_size(16 * 1024)
                     .adaptive_window(true);
-                if let Err(e) = builder.serve_connection(io, hyper_svc).await {
-                    error!(
-                        error = %e,
-                        error_debug = ?e,
-                        "IPC sidecar connection error — sidecar state \
-                         (outputs, artifacts, metrics, logs) may be incomplete"
-                    );
+
+                // Serve the connection to completion, but never let a child
+                // that crashes mid-stream (or a client that never closes its
+                // half of the socket) wedge the worker forever. We drive the
+                // connection as a pinned future and, once `child_exited` has
+                // fired, give it a bounded grace window to drain any in-flight
+                // request handlers (a `set_output` RPC whose response is still
+                // being flushed) before forcing a graceful HTTP/2 shutdown.
+                //
+                // This is the second half of the fix: even after the
+                // connection is accepted, hyper aborts in-flight request
+                // futures if the underlying socket resets — so a child that
+                // sends `set_output` then immediately drops the channel (the
+                // Python SDK's `aithericon.shutdown()` path) could have its
+                // final output handler cancelled before `state.outputs.insert`
+                // ran. Initiating shutdown from our side and awaiting the
+                // connection lets queued handlers complete first.
+                let conn = builder.serve_connection(io, hyper_svc);
+                tokio::pin!(conn);
+
+                let outcome = tokio::select! {
+                    biased;
+                    res = &mut conn => res,
+                    _ = child_exited.cancelled() => {
+                        // Child process is gone — it has sent everything it
+                        // will ever send. Ask the connection to finish its
+                        // outstanding streams, then await it under a bounded
+                        // timeout so we never block the worker indefinitely.
+                        conn.as_mut().graceful_shutdown();
+                        match tokio::time::timeout(
+                            IPC_DRAIN_TIMEOUT,
+                            &mut conn,
+                        )
+                        .await
+                        {
+                            Ok(res) => res,
+                            Err(_) => {
+                                warn!(
+                                    timeout_ms = IPC_DRAIN_TIMEOUT.as_millis() as u64,
+                                    "IPC sidecar: connection drain timed out after child exit — \
+                                     proceeding with whatever state was collected"
+                                );
+                                Ok(())
+                            }
+                        }
+                    }
+                };
+
+                if let Err(e) = outcome {
+                    // A client that closes its socket abruptly after acking
+                    // shutdown (the normal Python SDK teardown) surfaces here
+                    // as a benign IO/NotConnected error — the request handlers
+                    // already ran, so this is expected, not data loss. Only
+                    // genuinely unexpected errors warrant an error-level log.
+                    if is_benign_disconnect(&e) {
+                        debug!(
+                            error = %e,
+                            "IPC sidecar: client closed connection (expected on child teardown)"
+                        );
+                    } else {
+                        error!(
+                            error = %e,
+                            error_debug = ?e,
+                            "IPC sidecar connection error — sidecar state \
+                             (outputs, artifacts, metrics, logs) may be incomplete"
+                        );
+                    }
                 }
             }
             Some(Err(e)) => {
                 warn!(error = %e, "IPC sidecar: accept failed");
             }
-            None => {} // child_exited fired, nothing to serve
+            None => {} // child_exited fired and nothing was queued
         }
 
         // Drain pending background artifact uploads before building results.
@@ -1221,5 +1346,209 @@ fn convert_phase_status(status: proto::PhaseStatus) -> PhaseStatus {
         proto::PhaseStatus::Completed => PhaseStatus::Completed,
         proto::PhaseStatus::Failed => PhaseStatus::Failed,
         proto::PhaseStatus::Skipped => PhaseStatus::Skipped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aithericon_executor_ipc::ExecutorSidecarClient;
+    use tokio::net::UnixStream;
+    use tonic::transport::{Endpoint, Uri};
+    use tower::service_fn;
+
+    /// Connect a gRPC client to the sidecar UDS, mimicking the Python SDK /
+    /// `ipc_test_client` connect path (forced `localhost` authority).
+    async fn connect_client(
+        socket_path: PathBuf,
+    ) -> ExecutorSidecarClient<tonic::transport::Channel> {
+        let channel = Endpoint::try_from("http://[::]:50051")
+            .expect("endpoint")
+            .connect_with_connector(service_fn(move |_: Uri| {
+                let path = socket_path.clone();
+                async move {
+                    let stream = UnixStream::connect(path).await?;
+                    Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
+                }
+            }))
+            .await
+            .expect("connect to sidecar UDS");
+        ExecutorSidecarClient::new(channel)
+    }
+
+    /// Drive one sidecar: start it, connect a client, send a unique
+    /// `set_output` + `shutdown_ack`, then DROP the channel (the abrupt
+    /// teardown the Python SDK does via `_channel.close()`), signal
+    /// `child_exited`, and return the collected outputs.
+    ///
+    /// This is the per-child unit-of-work the K-concurrent test fans out.
+    async fn run_one_sidecar(idx: usize, dir: PathBuf) -> HashMap<String, serde_json::Value> {
+        let socket_path = dir.join(format!("ipc-{idx}.sock"));
+        let artifacts_dir = dir.join(format!("artifacts-{idx}"));
+        let child_exited = CancellationToken::new();
+
+        let handle = start_ipc_sidecar(
+            socket_path.clone(),
+            format!("exec-{idx}"),
+            "test".to_string(),
+            HashMap::new(),
+            None,
+            artifacts_dir,
+            None,
+            None,
+            SidecarLogConfig::default(),
+            child_exited.clone(),
+            None,
+        )
+        .await
+        .expect("start sidecar");
+
+        {
+            let mut client = connect_client(socket_path).await;
+
+            // The output every child must have captured. Value is unique per
+            // child so a dropped/crossed output is unambiguous.
+            client
+                .set_output(proto::SetOutputRequest {
+                    name: "result".to_string(),
+                    value_json: format!("{{\"idx\": {idx}}}"),
+                })
+                .await
+                .expect("set_output rpc");
+
+            client
+                .shutdown_ack(proto::ShutdownAckRequest { exit_code: 0 })
+                .await
+                .expect("shutdown_ack rpc");
+
+            // Drop the channel here (end of scope) — the abrupt teardown the
+            // Python SDK does via `_channel.close()` right after the final RPC.
+        }
+
+        // The child "process" has exited — signal it, exactly as the executor
+        // does the instant `backend.execute()` returns.
+        child_exited.cancel();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(20), handle)
+            .await
+            .expect("sidecar did not hang")
+            .expect("sidecar task");
+
+        result.outputs
+    }
+
+    #[test]
+    fn benign_disconnect_classifies_client_close_kinds() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::NotConnected,
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::UnexpectedEof,
+        ] {
+            let e = Error::new(kind, "x");
+            assert!(
+                is_benign_disconnect(&e),
+                "{kind:?} should be classed benign (expected on child teardown)"
+            );
+        }
+        // A nested IO error inside a wrapper is still detected via .source().
+        #[derive(Debug)]
+        struct Wrap(std::io::Error);
+        impl std::fmt::Display for Wrap {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "wrap")
+            }
+        }
+        impl std::error::Error for Wrap {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let wrapped = Wrap(Error::new(ErrorKind::NotConnected, "inner"));
+        assert!(is_benign_disconnect(&wrapped));
+
+        // A genuinely unexpected error must NOT be swallowed.
+        let other = Error::new(ErrorKind::InvalidData, "protocol error");
+        assert!(!is_benign_disconnect(&other));
+    }
+
+    /// `try_accept` drains an already-queued connection (the accept-race
+    /// salvage path) and returns `None` when the queue is empty.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn try_accept_drains_queued_connection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("ta.sock");
+        let listener = UnixListener::bind(&sock).expect("bind");
+
+        // Nothing queued yet.
+        assert!(try_accept(&listener).is_none());
+
+        // Open a connection and let it land in the accept queue.
+        let _client = UnixStream::connect(&sock).await.expect("connect");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Now a non-blocking accept must salvage it.
+        let drained = try_accept(&listener);
+        assert!(
+            matches!(drained, Some(Ok(_))),
+            "queued connection should be drained by try_accept"
+        );
+    }
+
+    /// Sequential sanity check: a lone child's output is always captured.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn single_sdk_output_captured() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outputs = run_one_sidecar(0, dir.path().to_path_buf()).await;
+        assert_eq!(
+            outputs.get("result"),
+            Some(&serde_json::json!({ "idx": 0 })),
+            "lone child output must be captured"
+        );
+    }
+
+    /// Regression for the K-concurrent output-drop bug: K children each set a
+    /// declared output and tear down concurrently. EVERY child's output must
+    /// be captured — zero dropped (the bug surfaced as `output_count=0` for
+    /// several of the K).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_sdk_outputs_all_captured() {
+        const K: usize = 16;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path().to_path_buf();
+
+        let mut joins = Vec::with_capacity(K);
+        for idx in 0..K {
+            let base = base.clone();
+            joins.push(tokio::spawn(
+                async move { run_one_sidecar(idx, base).await },
+            ));
+        }
+
+        let mut dropped = Vec::new();
+        let mut crossed = Vec::new();
+        for (idx, join) in joins.into_iter().enumerate() {
+            let outputs = join.await.expect("child task");
+            match outputs.get("result") {
+                None => dropped.push(idx),
+                Some(v) if *v != serde_json::json!({ "idx": idx }) => {
+                    crossed.push((idx, v.clone()))
+                }
+                Some(_) => {}
+            }
+        }
+
+        assert!(
+            dropped.is_empty(),
+            "{}/{K} concurrent sdk outputs were DROPPED (indices {dropped:?}) — \
+             the sidecar built an empty result before draining the connection",
+            dropped.len()
+        );
+        assert!(
+            crossed.is_empty(),
+            "outputs crossed sidecars (per-execution state leak): {crossed:?}"
+        );
     }
 }

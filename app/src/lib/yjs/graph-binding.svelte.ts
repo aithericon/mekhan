@@ -188,8 +188,12 @@ export class YjsGraphBinding {
 					type: 'human_task',
 					taskTitle: (config?.taskTitle as string) ?? '',
 					instructionsMdsvex: config?.instructionsMdsvex as string | undefined,
-					steps: (config?.steps as WorkflowNodeData extends { steps: infer S } ? S : never) ?? []
-				};
+					steps: (config?.steps as WorkflowNodeData extends { steps: infer S } ? S : never) ?? [],
+					// Opt-in dynamic-steps source: a `<slug>.<field>` ref to an upstream
+					// producer that emits the form blocks at runtime. Undefined ⇒ static
+					// `steps` authoring. (Not yet in the generated schema → cast.)
+					stepsRef: config?.stepsRef as string | undefined
+				} as WorkflowNodeData;
 			case 'automated_step': {
 				const spec = (config?.executionSpec as {
 					backendType: 'python';
@@ -719,6 +723,13 @@ export class YjsGraphBinding {
 				config.set('taskTitle', data.taskTitle);
 				if (data.instructionsMdsvex) config.set('instructionsMdsvex', data.instructionsMdsvex);
 				config.set('steps', data.steps);
+				// Dynamic-steps source ref. Persist when set; delete to fall back to
+				// static `steps` authoring. (Not yet in generated schema → cast.)
+				if ((data as { stepsRef?: string }).stepsRef) {
+					config.set('stepsRef', (data as { stepsRef?: string }).stepsRef);
+				} else {
+					config.delete('stepsRef');
+				}
 				break;
 			case 'automated_step':
 				config.set('executionSpec', data.executionSpec);

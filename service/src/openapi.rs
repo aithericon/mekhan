@@ -95,6 +95,9 @@ use utoipa::OpenApi;
             aithericon_executor_storage_types::RetryConfig,
             aithericon_executor_domain::LlmToolCall,
             aithericon_executor_domain::ToolSchema,
+            aithericon_executor_domain::PhaseStatus,
+            aithericon_executor_domain::Phase,
+            aithericon_executor_domain::Progress,
         ),
     ),
     tags(

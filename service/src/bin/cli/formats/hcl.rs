@@ -62,6 +62,7 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
         task_title: get_attr_str(body, "task_title"),
         instructions: get_attr_str(body, "instructions"),
         steps: None,
+        steps_ref: get_attr_str(body, "steps_ref"),
         execution: None,
         agent: None,
         conditions: None,

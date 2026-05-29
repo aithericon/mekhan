@@ -719,24 +719,41 @@ fn port_to_input_schema(port: &crate::models::template::Port) -> serde_json::Val
     let mut properties = serde_json::Map::new();
     let mut required: Vec<String> = Vec::new();
     for f in &port.fields {
-        let type_str: &str = match f.kind {
-            FieldKind::Number => "number",
-            FieldKind::Bool => "boolean",
-            FieldKind::Json => "object",
-            _ => "string",
-        };
-        let mut prop = serde_json::Map::new();
-        prop.insert("type".to_string(), json!(type_str));
         let description = f
             .description
             .as_deref()
             .filter(|s| !s.trim().is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| f.label.clone());
-        if !description.is_empty() {
-            prop.insert("description".to_string(), json!(description));
-        }
-        properties.insert(f.name.clone(), serde_json::Value::Object(prop));
+        // A rich schema override IS the property schema — the model is told the
+        // exact (possibly deeply nested) shape to produce, not a flat scalar.
+        let prop_value = if let Some(rich) = &f.schema {
+            let mut rich = rich.clone();
+            // Attach the field description if the rich schema is an object that
+            // doesn't already carry one; leave an existing description intact.
+            if !description.is_empty() {
+                if let serde_json::Value::Object(map) = &mut rich {
+                    if !map.contains_key("description") {
+                        map.insert("description".to_string(), json!(description));
+                    }
+                }
+            }
+            rich
+        } else {
+            let type_str: &str = match f.kind {
+                FieldKind::Number => "number",
+                FieldKind::Bool => "boolean",
+                FieldKind::Json => "object",
+                _ => "string",
+            };
+            let mut prop = serde_json::Map::new();
+            prop.insert("type".to_string(), json!(type_str));
+            if !description.is_empty() {
+                prop.insert("description".to_string(), json!(description));
+            }
+            serde_json::Value::Object(prop)
+        };
+        properties.insert(f.name.clone(), prop_value);
         if f.required {
             required.push(f.name.clone());
         }

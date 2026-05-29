@@ -533,6 +533,45 @@ pub enum CompileError {
         output_slug: String,
     },
 
+    // --- Dynamic-form `stepsRef` (opt-in runtime-sourced form blocks). The
+    //     HumanTask sources its whole `steps` list at runtime from a
+    //     producer-namespaced `<slug>.<field>` ref instead of static authoring.
+    //     The ref rides the same read-arc borrow machinery as Repeater/Map, so
+    //     two of the three failure modes are ALREADY covered and need no
+    //     dedicated error here: (1) an unknown producer/field is hard-failed by
+    //     the guard/borrow net as `GuardUnresolved` (the ref is surfaced as a
+    //     borrow site), and (2) the SHAPE of the runtime-produced blocks is
+    //     enforced by the colored-token `SchemaRegistry` when the producer's
+    //     output field is typed. The two variants below cover the gaps those
+    //     don't: a malformed ref STRING (which would otherwise silently degrade
+    //     to an empty static form with NO authoring signal), and a publish-time
+    //     non-array shape check (cheaper/earlier than waiting for the runtime
+    //     schema gate).
+    /// `stepsRef` is not a plain `<slug>.<field>[.<more>…]` dotted path: it is
+    /// empty, carries a `[*]` wildcard (steps are sourced whole, not iterated),
+    /// or has fewer than two non-empty segments. This is the one failure mode
+    /// nothing else catches — a malformed ref is skipped by the borrow planner,
+    /// so without this it would silently render an empty form.
+    #[error(
+        "human task '{node_id}': stepsRef '{ref_value}' is malformed — expected a producer-namespaced `<slug>.<field>` path with no `[*]` wildcard"
+    )]
+    HumanTaskStepsRefMalformed { node_id: String, ref_value: String },
+
+    /// `stepsRef` resolves to a producer field whose declared shape is not an
+    /// array — the dynamic form needs a list of step/block objects. Mirrors
+    /// `MapItemsRefNotArray`; `Any`/`Opaque`/`Json` are accepted (the producer
+    /// declared arbitrary JSON, so the strict shape is deferred to the runtime
+    /// `SchemaRegistry`). Unresolved producers are NOT reported here — they fall
+    /// through to the guard pass's `GuardUnresolved`, avoiding a redundant error.
+    #[error(
+        "human task '{node_id}': stepsRef '{ref_value}' resolves to {actual_kind}, not an array — the dynamic form needs a list of step blocks"
+    )]
+    HumanTaskStepsRefNotArray {
+        node_id: String,
+        ref_value: String,
+        actual_kind: String,
+    },
+
     // --- Loop accumulator (fold/scan state) guards. Each accumulator var
     //     becomes a parked field in the loop's `p_<id>_data` envelope and is
     //     addressed downstream as `<loop_slug>.<var>`; the init/merge_expr are
@@ -617,6 +656,8 @@ impl CompileError {
             Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
             Self::RepeaterOutputSlugInvalid { .. } => "repeater_output_slug_invalid",
             Self::RepeaterNested { .. } => "repeater_nested",
+            Self::HumanTaskStepsRefMalformed { .. } => "human_task_steps_ref_malformed",
+            Self::HumanTaskStepsRefNotArray { .. } => "human_task_steps_ref_not_array",
             Self::LoopAccumulatorVarInvalid { .. } => "loop_accumulator_var_invalid",
             Self::LoopAccumulatorVarReserved { .. } => "loop_accumulator_var_reserved",
             Self::LoopAccumulatorDuplicateVar { .. } => "loop_accumulator_duplicate_var",
@@ -677,6 +718,8 @@ impl CompileError {
             | Self::RepeaterItemsRefNotArray { node_id, .. }
             | Self::RepeaterOutputSlugInvalid { node_id, .. }
             | Self::RepeaterNested { node_id, .. }
+            | Self::HumanTaskStepsRefMalformed { node_id, .. }
+            | Self::HumanTaskStepsRefNotArray { node_id, .. }
             | Self::LoopAccumulatorVarInvalid { node_id, .. }
             | Self::LoopAccumulatorVarReserved { node_id, .. }
             | Self::LoopAccumulatorDuplicateVar { node_id, .. }

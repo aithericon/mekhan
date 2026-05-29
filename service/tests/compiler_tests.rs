@@ -249,6 +249,7 @@ fn human_task_produces_group_signal_and_transitions() {
                             },
                         }],
                     }],
+                    steps_ref: None,
                 },
                 parent_id: None,
                 width: None,
@@ -510,6 +511,7 @@ fn parallel_split_join_produces_fork_and_join() {
                     task_title: "Do A".to_string(),
                     instructions_mdsvex: None,
                     steps: vec![],
+                    steps_ref: None,
                 },
                 parent_id: None,
                 width: None,
@@ -526,6 +528,7 @@ fn parallel_split_join_produces_fork_and_join() {
                     task_title: "Do B".to_string(),
                     instructions_mdsvex: None,
                     steps: vec![],
+                    steps_ref: None,
                 },
                 parent_id: None,
                 width: None,
@@ -649,6 +652,7 @@ fn loop_produces_enter_continue_exit() {
                     task_title: "Body".to_string(),
                     instructions_mdsvex: None,
                     steps: vec![],
+                    steps_ref: None,
                 },
                 parent_id: Some("lp".to_string()),
                 width: None,
@@ -746,6 +750,7 @@ fn unreachable_node_fails() {
                     task_title: "unreachable".to_string(),
                     instructions_mdsvex: None,
                     steps: vec![],
+                    steps_ref: None,
                 },
                 parent_id: None,
                 width: None,
@@ -1016,6 +1021,7 @@ fn cycle_in_non_loop_edges_fails() {
                     task_title: "A".to_string(),
                     instructions_mdsvex: None,
                     steps: vec![],
+                    steps_ref: None,
                 },
                 parent_id: None,
                 width: None,
@@ -1032,6 +1038,7 @@ fn cycle_in_non_loop_edges_fails() {
                     task_title: "B".to_string(),
                     instructions_mdsvex: None,
                     steps: vec![],
+                    steps_ref: None,
                 },
                 parent_id: None,
                 width: None,
@@ -1582,6 +1589,7 @@ fn scope_creates_group_in_air() {
                     task_title: "Review".to_string(),
                     instructions_mdsvex: None,
                     steps: vec![],
+                    steps_ref: None,
                 },
                 parent_id: Some("my_scope".to_string()),
                 width: None,
@@ -1712,6 +1720,7 @@ fn edge_type_mismatch_fails_when_target_port_has_required_fields() {
                 id: "in".to_string(),
                 label: "Terminal".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "approval".to_string(),
                     label: "Approval".to_string(),
                     kind: FieldKind::Bool,
@@ -1761,6 +1770,7 @@ fn edge_empty_target_port_accepts_anything() {
                 id: "in".to_string(),
                 label: "Input".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "anything".to_string(),
                     label: "Anything".to_string(),
                     kind: FieldKind::Text,
@@ -1822,6 +1832,7 @@ fn start_node_with_bool_field(id: &str, field: &str) -> WorkflowNode {
                 id: "in".to_string(),
                 label: "Input".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: field.to_string(),
                     label: field.to_string(),
                     kind: FieldKind::Bool,
@@ -2030,6 +2041,7 @@ fn guard_multi_hop_scope_walk() {
                 id: "out".to_string(),
                 label: "Output".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "processed".to_string(),
                     label: "Processed".to_string(),
                     kind: FieldKind::Bool,
@@ -2117,6 +2129,7 @@ fn loop_condition_can_reference_iteration_local() {
     };
 
     let _ = (FieldKind::Number, PortField {
+        schema: None,
         name: "x".to_string(),
         label: "x".to_string(),
         kind: FieldKind::Number,
@@ -2140,6 +2153,7 @@ fn loop_condition_can_reference_iteration_local() {
             task_title: "Body".to_string(),
             instructions_mdsvex: None,
             steps: vec![],
+            steps_ref: None,
         },
         parent_id: Some("lp".to_string()),
         width: None,
@@ -2234,6 +2248,7 @@ fn loop_with_accumulators_graph(
                 id: "out".to_string(),
                 label: "Output".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "value".to_string(),
                     label: "Value".to_string(),
                     kind: FieldKind::Number,
@@ -2519,6 +2534,7 @@ fn human_task_node_with_field(id: &str, field_name: &str, kind: TaskFieldKind) -
                     },
                 }],
             }],
+            steps_ref: None,
         },
         parent_id: None,
         width: None,
@@ -2789,6 +2805,7 @@ fn start_with_field(id: &str, field: &str, required: bool) -> WorkflowNode {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                schema: None,
                 name: field.to_string(),
                 label: field.to_string(),
                 kind: FieldKind::Text,
@@ -3019,6 +3036,7 @@ fn trigger_payload_mapping_rejects_unknown_field() {
         id: "in".to_string(),
         label: "Input".to_string(),
         fields: vec![PortField {
+            schema: None,
             name: "customer_id".to_string(),
             label: "Customer".to_string(),
             kind: FieldKind::Text,
@@ -3180,6 +3198,7 @@ fn start_node_with_fields(
                 fields: fields
                     .iter()
                     .map(|(name, kind)| PortField {
+                        schema: None,
                         name: name.to_string(),
                         label: name.to_string(),
                         kind: *kind,
@@ -4186,6 +4205,7 @@ fn timeout_node_compiles_with_body_in_body_out_race_and_drain() {
             task_title: "Approve".to_string(),
             instructions_mdsvex: None,
             steps: vec![],
+            steps_ref: None,
         },
         parent_id: None,
         width: None,
@@ -4453,6 +4473,7 @@ fn start_node_with_items(id: &str) -> WorkflowNode {
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                schema: None,
                 name: "items".to_string(),
                 label: "Items".to_string(),
                 kind: FieldKind::Json,
@@ -4485,6 +4506,7 @@ fn map_node(id: &str, slug: &str, items_ref: &str, result_var: &str) -> Workflow
                 id: "out".to_string(),
                 label: "Element".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "score".to_string(),
                     label: "Score".to_string(),
                     kind: FieldKind::Number,
@@ -4856,6 +4878,7 @@ fn start_node_with_scalar_items(id: &str, kind: mekhan_service::models::template
             id: "in".to_string(),
             label: "Input".to_string(),
             fields: vec![PortField {
+                schema: None,
                 name: "items".to_string(),
                 label: "Items".to_string(),
                 kind,
@@ -5064,6 +5087,7 @@ fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
                 id: "out".to_string(),
                 label: "Output".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "score".to_string(),
                     label: "Score".to_string(),
                     kind: FieldKind::Number,

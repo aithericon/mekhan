@@ -570,10 +570,9 @@ fn plain_executor_step_emits_no_pool_bridges() {
 // R2 — registry-resolved pool binding + typed body-visible lease
 // ---------------------------------------------------------------------------
 
-use mekhan_service::compiler::compile_to_air_with_subworkflows_and_interfaces;
 use mekhan_service::compiler::resource_refs::{KnownResource, KnownResources};
 use mekhan_service::compiler::CompileError;
-use mekhan_service::compiler::SubWorkflowAir;
+use mekhan_service::compiler::{compile_to_air_with_options, CompileOptions};
 
 /// Fixed resource id for `prod_gpu` so the backing-net id assertion is stable.
 fn prod_gpu_id() -> uuid::Uuid {
@@ -597,16 +596,17 @@ fn known_with_prod_gpu(type_name: &str) -> KnownResources {
 
 fn compile_aliased(known: &KnownResources) -> Result<Value, CompileError> {
     let graph = load_graph("resource-pool-aliased.json");
-    compile_to_air_with_subworkflows_and_interfaces(
+    compile_to_air_with_options(
         &graph,
         "t",
         "",
         &HashMap::new(),
-        &HashMap::new(),
-        &SubWorkflowAir::new(),
-        known,
+        CompileOptions {
+            known_resources: known,
+            ..Default::default()
+        },
     )
-    .map(|(air, _iface)| air)
+    .map(|a| a.air)
 }
 
 /// The keystone: an `Executor { pool: { alias } }` step resolves to the
@@ -765,16 +765,17 @@ fn plain_executor_is_byte_identical_regardless_of_manifest() {
     // Compile with an empty manifest (today's public entry) ...
     let air_empty = compile_to_air(&graph, "t", "", &HashMap::new()).unwrap();
     // ... and with a populated manifest a plain-executor step ignores.
-    let air_known = compile_to_air_with_subworkflows_and_interfaces(
+    let air_known = compile_to_air_with_options(
         &graph,
         "t",
         "",
         &HashMap::new(),
-        &HashMap::new(),
-        &SubWorkflowAir::new(),
-        &known_with_prod_gpu("token_pool"),
+        CompileOptions {
+            known_resources: &known_with_prod_gpu("token_pool"),
+            ..Default::default()
+        },
     )
-    .map(|(air, _)| air)
+    .map(|a| a.air)
     .unwrap();
 
     assert_eq!(
@@ -832,15 +833,17 @@ fn aliased_pool_bad_request_is_compile_error() {
             binding.request = Some(serde_json::json!({ "units": "lots" }));
         }
     }
-    let err = compile_to_air_with_subworkflows_and_interfaces(
+    let err = compile_to_air_with_options(
         &graph,
         "t",
         "",
         &HashMap::new(),
-        &HashMap::new(),
-        &SubWorkflowAir::new(),
-        &known_with_prod_gpu("token_pool"),
+        CompileOptions {
+            known_resources: &known_with_prod_gpu("token_pool"),
+            ..Default::default()
+        },
     )
+    .map(|a| a.air)
     .unwrap_err();
     match err {
         CompileError::ResourcePoolRequestInvalid { alias, .. } => {
@@ -873,16 +876,17 @@ fn known_with_prod_dc(type_name: &str) -> KnownResources {
 
 fn compile_scheduled_lease(known: &KnownResources) -> Result<Value, CompileError> {
     let graph = load_graph("scheduled-lease.json");
-    compile_to_air_with_subworkflows_and_interfaces(
+    compile_to_air_with_options(
         &graph,
         "t",
         "",
         &HashMap::new(),
-        &HashMap::new(),
-        &SubWorkflowAir::new(),
-        known,
+        CompileOptions {
+            known_resources: known,
+            ..Default::default()
+        },
     )
-    .map(|(air, _iface)| air)
+    .map(|a| a.air)
 }
 
 /// The keystone for R4c: a `Scheduled { operation: lease, scheduler: <datacenter> }`
@@ -1058,15 +1062,17 @@ fn scheduled_lease_without_scheduler_is_compile_error() {
             *scheduler = None;
         }
     }
-    let err = compile_to_air_with_subworkflows_and_interfaces(
+    let err = compile_to_air_with_options(
         &graph,
         "t",
         "",
         &HashMap::new(),
-        &HashMap::new(),
-        &SubWorkflowAir::new(),
-        &KnownResources::new(),
+        CompileOptions {
+            known_resources: &KnownResources::new(),
+            ..Default::default()
+        },
     )
+    .map(|a| a.air)
     .unwrap_err();
     assert!(
         matches!(err, CompileError::Compilation(ref m) if m.contains("scheduler")),

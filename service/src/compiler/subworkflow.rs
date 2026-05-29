@@ -234,6 +234,7 @@ pub fn derive_child_io(child_graph: &WorkflowGraph) -> (Port, Port) {
                 continue;
             }
             fields.push(PortField {
+                schema: None,
                 name: name.to_string(),
                 label: name.to_string(),
                 kind: FieldKind::Json,
@@ -384,6 +385,7 @@ mod tests {
 
     fn field(name: &str, kind: FieldKind) -> PortField {
         PortField {
+            schema: None,
             name: name.to_string(),
             label: name.to_string(),
             kind,

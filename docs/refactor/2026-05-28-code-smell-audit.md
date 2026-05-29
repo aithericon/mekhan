@@ -7,11 +7,17 @@ grouped by theme and ranked by impact within each group.
 
 File:line references were accurate as of commit `c550a48` (main) on 2026-05-28.
 
-## Status (re-verified at `0f425a2`, 2026-05-28)
+## Status (round 2 landed on main `f82a2bd`, 2026-05-29)
 
-A re-scan after the first refactor round (`ac8fdfd`, `4d04351`, `676b07e` —
-service query cleanup; plus the `fe-dispatch` and `config-schema` editor merges)
-checked every finding against current code. Each item below is tagged:
+> **Round 2 is merged into `main`** (`e02fa23`). The headline outcome table is in the
+> next section; it is the authoritative tally. The per-workspace body sections further
+> below were written as the **pre-round-2 baseline** and were NOT re-tagged after the
+> merge — so a `⬜ OPEN`/`🟡 PARTIAL` tag in a body section is stale wherever the
+> round-2 table lists that finding as resolved. Treat the **round-2 table + the
+> "Still open on `main`" list** as ground truth; read the body sections for the
+> original context only.
+
+Tag legend (as originally scanned at `0f425a2`):
 
 - **✅ FIXED** — resolved (or determined to be a non-issue / intentional).
 - **🟡 PARTIAL** — improved or fixed in some call sites; copies remain.
@@ -19,17 +25,19 @@ checked every finding against current code. Each item below is tagged:
 
 **Scoreboard (pre-round-2):** 5 fixed, 13 partial, 33 open (of 51 findings). The first round
 was almost entirely service-side query plumbing; the 🔴 wire-type drift and the
-canonical-builder cleanups are still untouched. Line numbers below are refreshed
-to `0f425a2` where a finding moved.
+canonical-builder cleanups were still untouched at that point. Line numbers in the body
+sections are as of `0f425a2`; round 2 has since moved many of them.
 
 ---
 
-## Round 2 outcome (2026-05-29) — branch `refactor/code-smell-round-2-int`
+## Round 2 outcome (2026-05-29) — ✅ MERGED TO MAIN at `e02fa23`
 
 Round 2 ran as a 5-lane agent fan-out (one worktree per workspace) merged into an
-integration branch. **27 findings resolved this round** (mix of DONE / partial-by-design),
-all verified compiling per workspace. See `ROUND-2-PROGRESS.md` for the orchestration log
-and the concurrent-session / branch-move note.
+integration branch (`refactor/code-smell-round-2-int`), which then **landed on `main`
+at `e02fa23`**. **27 findings resolved this round** (mix of DONE / partial-by-design),
+all verified compiling per workspace. See `ROUND-2-PROGRESS.md` for the orchestration log;
+the concurrent-session / branch-move concern it raised is now resolved (the `stepsRef`
+work also landed independently, at `f970467`).
 
 | Lane | Resolved | Notes |
 |---|---|---|
@@ -40,11 +48,32 @@ and the concurrent-session / branch-move note.
 | **build** | BR1, BR2 | shared `just/cargo.just`; NATS tag aligned |
 | **cross-cut** | **B2** | `cancel_subject`/`cancel_subject_filter` in executor-domain, all 3 sites routed + unit test |
 
-**Still open after round 2:**
-- **S6** (compile_to_air → CompileOptions) — deliberately skipped; needs a dedicated PR for the ~150-site caller migration.
-- **🔴 Batch 4 wire-types (A1, A2, A3)** — NOT attempted this round. It's a 3-binary
-  rebuild/restart/republish change, and a concurrent session was actively editing the exact
-  service/compiler files A2 touches. Deferred — see the handoff at the bottom of this doc.
+**Still open on `main` (re-verified at `f82a2bd`, 2026-05-29):**
+- **🔴 Batch 4 wire-types (A1, A2, A3)** — confirmed still present:
+  - **A1** — `ExecutionStatus` is still mirrored in both `engine/core-engine/crates/domain/src/executor.rs:30` and `executor/crates/executor-domain/src/status.rs:10`.
+  - **A2** — `service`'s hand-mirrored `PhaseUpdateStatus` (`models/template.rs:1015`) and `StepStatus` (`projections/step_executions/projector.rs:55`) both still exist.
+  - **A3** — two divergent `sanitize_subject_token` (`service/src/observability.rs:189` vs `executor/crates/executor-domain/src/status.rs:109`).
+  - It's a 3-binary rebuild/restart/republish arc — see the handoff at the bottom of this doc.
+- **S6** (compile_to_air → CompileOptions) — ✅ **DONE on unmerged branch `refactor/s6-compile-options`**
+  (2026-05-29). The audit's "~150-site" fear was wrong: the simple `compile_to_air(graph,name,desc,files)`
+  has 157 callers but is the *non-smell* case — left untouched. The actual smell was only the 3 additive
+  `_with_subworkflows{_inline,_and_interfaces,_interfaces_and_configs}` wrappers (~17 call sites, mostly
+  `demos.rs`), now collapsed into one `compile_to_air_with_options(.., CompileOptions)` returning a named
+  `CompileArtifacts`. `compile_to_air_with_shapes` (`token_shape/annotate.rs:27`, 0 callers) left as-is
+  (orthogonal axis). Verified: `cargo check --all-targets` clean; lib 467 / air_snapshots 12 (goldens
+  byte-identical) / compiler_tests 104 pass. **Not yet merged to main.**
+- **Engine internals not in round 2:** E7 (`std::sync::RwLock` → `parking_lot` across ~44 sites
+  in `application/src/service.rs`), E8 (`block_in_place(block_on(...))` adapter callbacks),
+  `notify_adapters` near-dup (`api/src/handlers.rs` vs `net_registry.rs`), and the `ExternalSignal`
+  serde roundtrip test still duplicated across crates. (E2/E5/E6/E9/E11 all landed.)
+- **Executor not in round 2:** `resolved_storage_owned` deser+fallback dup (`staging.rs`/`executor.rs`),
+  the 339-line `LlmBackend::execute`, and the Docker prepare/execute config re-parse (X5 addressed the
+  caching gap; the structural split did not land). (X1–X4, X7–X10 landed.)
+- **Frontend follow-ups not in round 2:** P3 (LLM-panel `SchemaForm` migration / `useJsonDraft`),
+  P8 (`text-sm font-medium text-muted-foreground` label still ~76×), P9 (`TriggerNodeSection` 707-line
+  split + inline Rhai `rootRefs` parser), P10 (`worldPosOf` IIFE, `BlockTypePicker` 9 `add*` fns),
+  P11 (Svelte-4-ism modernization). (P1/P2/P4/P5/P6/P7 landed.)
+- **B4** (divergent NATS dev ports across executor/engine/service) — dev-ergonomics footgun, accept-as-is.
 - Items previously marked PARTIAL whose *remaining* copies were intentional (S11's 2 divergent
   sites, S12, E1/E3/E4/E10) — no action, correct as-is.
 
@@ -170,11 +199,19 @@ Small util duplication is mostly untouched.
 
 ## Next round — scoping
 
+> **Status update (main `f82a2bd`):** Batches 1–3 below all **landed in round 2**
+> (`e02fa23`). They are kept here for the historical plan-of-record. What actually
+> remains is **Batch 4** (wire-types A1/A2/A3) + **S6** (compile_to_air collapse,
+> deliberately skipped) + the leftover engine/executor/frontend items enumerated in
+> the "Still open on `main`" list above. The Batch-4 handoff at the very bottom is the
+> live next step, and its sequencing precondition ("after `stepsRef` and round-2 land")
+> is now **satisfied** — both are on `main`.
+
 The first round cleared the service-side query plumbing. The remaining work
 sorts into four reviewable batches, ordered by value-per-risk. Batches 1–3 are
 each a single self-contained PR; Batch 4 is a deliberate multi-binary arc.
 
-### Batch 1 — Silent-correctness fixes (do first; cheap, scattered, bug-shaped)
+### Batch 1 — Silent-correctness fixes ✅ LANDED in round 2
 
 These drop or mis-handle data silently. Small diffs, high value, no API surface.
 
@@ -184,7 +221,7 @@ These drop or mis-handle data silently. Small diffs, high value, no API surface.
 - **X10** — replace the `target_file.unwrap()` in `kreuzberg/backend.rs:121` with a checked error.
 - **E9** + service `templates.rs:99,500` — turn the remaining runtime `.unwrap()`s on serialize/timestamp into `map_err`.
 
-### Batch 2 — Canonical builders (low risk, aligns with "single source of truth")
+### Batch 2 — Canonical builders ✅ LANDED in round 2
 
 Pure extraction, no behavior change. Kills the typo-silent magic strings.
 
@@ -194,9 +231,9 @@ Pure extraction, no behavior change. Kills the typo-silent magic strings.
 - **B1** finish the S3 `paths` module so the compiler's `ConfigStorage::key()` and `s3.rs::node_config_key()` share one formatter.
 - **S4** widen `compiler::backend_configs::validate_placeholders` visibility, delete the `smtp.rs` copy. (Trivial; the comment already asks for it.)
 
-### Batch 3 — Mechanical dedup (independent, parallelizable)
+### Batch 3 — Mechanical dedup ✅ LANDED in round 2 (except S6, P3, P8–P11, and the leftover engine/executor items)
 
-Lower risk ergonomic debt. Good for incremental review.
+Lower risk ergonomic debt. The bulk landed; the exceptions are tracked in "Still open on `main`" above.
 
 - **executor**: `publish_event(...)` (X1), `ExecutionResult::cancelled()/timed_out()` (X2), shared `DEFAULT_MAX_OUTPUT_BYTES` (X3), blanket `from_spec<T>` (X4), `subject_for()`/`stream_name_for()` (X7), `RunContext::for_test(...)` (X8).
 - **service**: `write_resource_version(...)` (S5), `chain_root_id()` (S10), `CompileOptions` collapse (S6), finish the `map_err`→`?` sweep (S2), collapse the two `resources.rs` regexes (S9).
@@ -228,8 +265,11 @@ so it's its own arc, not folded into the above.
 ## Batch 4 handoff — wire-type consolidation (deferred from round 2)
 
 Round 2 deliberately did NOT touch A1/A2/A3. This is the concrete plan for a dedicated PR.
-Do it **after** the `stepsRef` concurrent work and round-2 (`refactor/code-smell-round-2-int`)
-have both landed on main, so the 3-binary state is stable.
+
+> **Precondition now satisfied (main `f82a2bd`):** both the `stepsRef`/dynamic-human-task
+> work (`f970467`) and round 2 (`e02fa23`) have landed on `main`, so the 3-binary state is
+> stable and this PR is unblocked. All three mirrors re-confirmed present (see "Still open on
+> `main`" above) — A1/A2/A3 are exactly as described below.
 
 **Why it was deferred:** (1) it requires all three binaries rebuilt + restarted + republished
 (the engine's typed `ExecutionSpec` roundtrip silently drops unknown fields, so a mismatch is a

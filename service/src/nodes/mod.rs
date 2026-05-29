@@ -575,6 +575,7 @@ mod tests {
             task_title: "task".to_string(),
             instructions_mdsvex: None,
             steps: vec![],
+            steps_ref: None,
         };
         let decl = lookup_by_variant(&data).expect("human_task registered");
         assert_eq!(decl.wire_name, "human_task");

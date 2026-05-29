@@ -11,10 +11,9 @@
 //! follow-up that wires tool subnets.
 
 use mekhan_service::compiler::{
-    compile_to_air, compile_to_air_with_subworkflows_interfaces_and_configs, ConfigStorage,
+    compile_to_air, compile_to_air_with_options, CompileArtifacts, CompileOptions, ConfigStorage,
     ResolvedChild, SubWorkflowAir,
 };
-use mekhan_service::compiler::resource_refs::KnownResources;
 use mekhan_service::models::template::{FieldKind, PortField};
 use mekhan_service::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, ModelRef, Port,
@@ -797,6 +796,7 @@ fn tool_input_schema_reflects_declared_input_port() {
     if let WorkflowNodeData::AutomatedStep { input, .. } = &mut tool.data {
         input.fields = vec![
             PortField {
+                schema: None,
                 name: "order_id".to_string(),
                 label: "Order ID".to_string(),
                 kind: FieldKind::Text,
@@ -806,6 +806,7 @@ fn tool_input_schema_reflects_declared_input_port() {
                 accept: None,
             },
             PortField {
+                schema: None,
                 name: "include_history".to_string(),
                 label: "Include history".to_string(),
                 kind: FieldKind::Bool,
@@ -831,15 +832,19 @@ fn tool_input_schema_reflects_declared_input_port() {
     };
     let inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> = Default::default();
     let files = mekhan_service::compiler::node_files_inline(&inline);
-    let (_air, _iface, configs) = compile_to_air_with_subworkflows_interfaces_and_configs(
+    let CompileArtifacts {
+        node_configs: configs,
+        ..
+    } = compile_to_air_with_options(
         &graph,
         "t",
         "",
         &files,
-        &inline,
-        &SubWorkflowAir::new(),
-        &KnownResources::new(),
-        ConfigStorage::ephemeral(),
+        CompileOptions {
+            inline_sources: &inline,
+            config_storage: ConfigStorage::ephemeral(),
+            ..Default::default()
+        },
     )
     .expect("compile");
 
@@ -908,15 +913,18 @@ fn tool_input_schema_reflects_declared_input_port() {
         instance_concurrency: Default::default(),
         definitions: Default::default(),
     };
-    let (_air2, _iface2, configs2) = compile_to_air_with_subworkflows_interfaces_and_configs(
+    let CompileArtifacts {
+        node_configs: configs2,
+        ..
+    } = compile_to_air_with_options(
         &graph2,
         "t",
         "",
         &files,
-        &inline,
-        &SubWorkflowAir::new(),
-        &KnownResources::new(),
-        ConfigStorage::ephemeral(),
+        CompileOptions {
+            inline_sources: &inline,
+            ..Default::default()
+        },
     )
     .expect("compile (bare tool)");
     let bare_schema = configs2["a"]["tools"][0]["input_schema"].clone();
@@ -978,6 +986,7 @@ fn subworkflow_tool(id: &str, label: &str, child_template_id: uuid::Uuid) -> Wor
                 id: "out".to_string(),
                 label: "Out".to_string(),
                 fields: vec![PortField {
+                    schema: None,
                     name: "status".to_string(),
                     label: "Status".to_string(),
                     kind: FieldKind::Text,
@@ -1038,17 +1047,23 @@ fn compile_with_sub_air(
     let inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
         Default::default();
     let files = mekhan_service::compiler::node_files_inline(&inline);
-    compile_to_air_with_subworkflows_interfaces_and_configs(
+    let CompileArtifacts {
+        air,
+        interfaces,
+        node_configs,
+    } = compile_to_air_with_options(
         graph,
         "t",
         "",
         &files,
-        &inline,
-        sub_air,
-        &KnownResources::new(),
-        ConfigStorage::ephemeral(),
+        CompileOptions {
+            inline_sources: &inline,
+            sub_air,
+            ..Default::default()
+        },
     )
-    .expect("compile agent with subworkflow tool")
+    .expect("compile agent with subworkflow tool");
+    (air, interfaces, node_configs)
 }
 
 /// The LLM-facing tool `input_schema` for a SubWorkflow tool must reflect
@@ -1066,6 +1081,7 @@ fn subworkflow_tool_input_schema_reflects_child_start() {
         label: "Initial".to_string(),
         fields: vec![
             PortField {
+                schema: None,
                 name: "order_id".to_string(),
                 label: "Order ID".to_string(),
                 kind: FieldKind::Text,
@@ -1075,6 +1091,7 @@ fn subworkflow_tool_input_schema_reflects_child_start() {
                 accept: None,
             },
             PortField {
+                schema: None,
                 name: "include_history".to_string(),
                 label: "Include history".to_string(),
                 kind: FieldKind::Bool,

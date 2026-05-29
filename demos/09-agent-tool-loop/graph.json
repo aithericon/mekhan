@@ -32,14 +32,14 @@
       "data": {
         "type": "agent",
         "label": "Triage Agent",
-        "description": "Reads the customer's message and decides whether to look up an order. The `lookup_order` tool is wired via the `tools` handle to a SubWorkflow node; the agent compiler derives the tool's input schema from that child's Start contract and emits the dispatch/collect transitions automatically.",
+        "description": "Reads the customer's message and decides whether to (a) look up an order via the `lookup_order` tool, and/or (b) collect structured input from a human via the `collect_feedback` tool. Both tools are SubWorkflows wired via the `tools` handle; the agent compiler derives each tool's input schema from its child's Start contract and emits the dispatch/collect transitions automatically. `collect_feedback` is the dynamic-form-as-agent-tool case: the agent DESIGNS the form by passing a `steps` array (TaskStepConfig[]) as the tool args; the child's Start declares `steps` (with the TaskStepConfig[] schema inline, so the LLM is told the exact grammar), a HumanTask renders it via `stepsRef = \"start.steps\"`, and the operator's answers come back as the tool result.",
         "model": {
           "provider": "ollama",
           "model": "qwen3.5:9b",
           "baseUrl": "http://localhost:11434",
           "temperature": 0
         },
-        "systemPrompt": "You are a concise customer-service agent. When the customer mentions an order id (e.g. ORD-42), call the lookup_order tool with that id to fetch the current shipping status, then reply in one sentence. If no order id is mentioned, reply directly without calling any tools.",
+        "systemPrompt": "You are a concise customer-service agent. When the customer mentions an order id (e.g. ORD-42), call the lookup_order tool with that id to fetch the current shipping status. When you need structured input from a human teammate, call the collect_feedback tool: DESIGN the form by passing a `steps` array — each step is {id, title, blocks}, and each block is either {type:\"mdsvex\", content} for display text or {type:\"input\", field:{name, label, kind, required}} where kind is text|textarea|number|select|checkbox|radio|date. Then reply in one sentence using everything you gathered. If nothing is needed, reply directly without calling tools.",
         "userPrompt": "{{ start.customer_message }}",
         "maxTurns": 4,
         "onToolError": "feedback"
@@ -67,9 +67,29 @@
       }
     },
     {
+      "id": "collect_feedback",
+      "type": "sub_workflow",
+      "position": { "x": 820, "y": 60 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "collect_feedback",
+        "description": "The human-feedback tool, realized as a sub-workflow (the 09b-collect-feedback child). The child's Start declares `steps` (a TaskStepConfig[] with the form-block schema inline) — THAT Start contract is what the agent compiler turns into this tool's LLM-facing input schema, so the model knows to compose a form. Inside the child, a HumanTask renders the agent-designed form via `stepsRef = \"start.steps\"`, and the End returns the operator's `answers` as the tool result the agent feeds to its next turn.",
+        "templateId": "00000000-0000-0000-0000-00000000009b",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [],
+        "output": {
+          "id": "out",
+          "label": "Collected answers",
+          "fields": [
+            { "name": "answers", "label": "Operator answers", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
       "id": "end",
       "type": "end",
-      "position": { "x": 820, "y": 200 },
+      "position": { "x": 1300, "y": 200 },
       "data": {
         "type": "end",
         "label": "Done",
@@ -83,6 +103,7 @@
   "edges": [
     { "id": "e_start_agent", "source": "start", "target": "agent", "targetHandle": "in", "type": "sequence" },
     { "id": "e_agent_end",   "source": "agent", "target": "end",   "targetHandle": "in", "type": "sequence" },
-    { "id": "e_agent_lookup_tool", "source": "agent", "sourceHandle": "tools", "target": "lookup_order", "targetHandle": "in", "type": "tools" }
+    { "id": "e_agent_lookup_tool", "source": "agent", "sourceHandle": "tools", "target": "lookup_order", "targetHandle": "in", "type": "tools" },
+    { "id": "e_agent_feedback_tool", "source": "agent", "sourceHandle": "tools", "target": "collect_feedback", "targetHandle": "in", "type": "tools" }
   ]
 }
