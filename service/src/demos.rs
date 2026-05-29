@@ -1694,7 +1694,11 @@ mod tests {
         // is the loop, `branin`'s parent is the map.
         assert_eq!(mp.parent_id.as_deref(), Some("lp"), "Map nests in the Loop body");
 
-        // The Loop carries exactly four accumulators, none reserved-named.
+        // The Loop carries five accumulators, none reserved-named. `budget`
+        // captures `input.max_iterations` at enter and is carried constant, so
+        // the stop condition reads PARKED loop state (`bo.iteration < bo.budget`)
+        // instead of a token-resident `input.max_iterations` — which an
+        // AutomatedStep body (the Map's `gather`) strips off the control token.
         let lp = demo
             .graph
             .nodes
@@ -1702,14 +1706,27 @@ mod tests {
             .find(|n| n.id == "lp")
             .expect("loop node `lp`");
         match &lp.data {
-            WorkflowNodeData::Loop { accumulators, .. } => {
-                assert_eq!(accumulators.len(), 4, "loop must carry 4 accumulators");
+            WorkflowNodeData::Loop {
+                accumulators,
+                loop_condition,
+                ..
+            } => {
+                assert_eq!(accumulators.len(), 5, "loop must carry 5 accumulators");
                 assert!(
                     accumulators.iter().all(|a| a.var != "iteration"),
                     "no accumulator may be named `iteration` (reserved)"
                 );
                 let vars: Vec<&str> = accumulators.iter().map(|a| a.var.as_str()).collect();
-                assert_eq!(vars, ["observations", "f_best", "best_a", "best_d"]);
+                assert_eq!(
+                    vars,
+                    ["observations", "f_best", "best_a", "best_d", "budget"]
+                );
+                // Stop condition must read parked loop state, not a token leaf
+                // stripped by the AutomatedStep body.
+                assert!(
+                    loop_condition.contains("bo.budget"),
+                    "loop_condition must gate on the parked `bo.budget`, got: {loop_condition}"
+                );
             }
             other => panic!("`lp` must be a Loop, got {other:?}"),
         }
