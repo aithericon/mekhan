@@ -18,6 +18,7 @@
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import Network from '@lucide/svelte/icons/network';
 	import FlaskConical from '@lucide/svelte/icons/flask-conical';
+	import CornerLeftUp from '@lucide/svelte/icons/corner-left-up';
 
 	let saveAsTestOpen = $state(false);
 
@@ -150,6 +151,20 @@
 		</div>
 	{:else if ctx.instance}
 		<div class="border-b border-border bg-card px-4 py-2 shrink-0">
+			{#if ctx.instance.parent_instance_id}
+				<!-- This run was spawned by a SubWorkflow node in a parent run.
+				     A plain <a> is correct: navigating to the parent is a fresh
+				     /instances/[id] mount (new InstanceContext). Each ancestor
+				     page shows its own parent link, so the chain is climbable. -->
+				<a
+					href={`/instances/${ctx.instance.parent_instance_id}/workflow`}
+					class="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+					data-testid="parent-instance-breadcrumb"
+				>
+					<CornerLeftUp class="size-3.5" />
+					Parent run
+				</a>
+			{/if}
 			<div class="flex items-center justify-between gap-3">
 				<div class="flex items-center gap-3 min-w-0">
 					<h1 class="shrink-0 text-base font-semibold text-foreground">
