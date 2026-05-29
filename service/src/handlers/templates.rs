@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::auth::{require_role, AuthUser, MembershipError, Role};
 use crate::compiler::{
-    compile_to_air, compile_to_air_with_subworkflows_inline, derive_child_io, generate_py_io_files,
+    compile_to_air, compile_to_air_with_options, derive_child_io, generate_py_io_files,
     node_files_inline, node_files_storage_path, node_input_scopes, node_namespace_scopes,
-    node_output_fields, TyDescriptor,
+    node_output_fields, CompileOptions, TyDescriptor,
 };
 use crate::handlers::require_template;
 use crate::handlers::template_tests::{run_test, RunContext};
@@ -1382,18 +1382,22 @@ pub async fn compile_preview(
 
     let sub_air = resolve_subworkflow_air(&state, publishing_family, &graph).await?;
 
-    let air = compile_to_air_with_subworkflows_inline(
+    let air = compile_to_air_with_options(
         &graph,
         &existing.name,
         &existing.description,
         &files,
-        &ydoc_files,
-        &sub_air,
+        CompileOptions {
+            inline_sources: &ydoc_files,
+            sub_air: &sub_air,
+            ..Default::default()
+        },
     )
     .map_err(|e| {
         let view = e.to_view();
         ApiError::compile(format!("compilation failed: {e}"), vec![view])
-    })?;
+    })?
+    .air;
 
     Ok(Json(air))
 }

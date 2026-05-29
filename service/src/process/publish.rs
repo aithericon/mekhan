@@ -16,10 +16,10 @@ use uuid::Uuid;
 
 use crate::compiler::resource_refs::{KnownResource, KnownResources};
 use crate::compiler::{
-    compile_to_air_with_subworkflows_interfaces_and_configs, derive_child_io,
-    generate_py_io_files, make_child_callable, node_files_storage_path, node_input_scopes,
-    node_namespace_scopes, node_output_fields, CompileError, ConfigStorage, InterfaceRegistry,
-    NodeKind, ResolvedChild, SubWorkflowAir,
+    compile_to_air_with_options, derive_child_io, generate_py_io_files, make_child_callable,
+    node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
+    CompileArtifacts, CompileError, CompileOptions, ConfigStorage, InterfaceRegistry, NodeKind,
+    ResolvedChild, SubWorkflowAir,
 };
 use crate::models::error::ApiError;
 use crate::models::template::{
@@ -126,21 +126,26 @@ impl<'a> PublishService<'a> {
             version,
             key_fn: None,
         };
-        let (mut air_json, interface_json, node_configs) =
-            compile_to_air_with_subworkflows_interfaces_and_configs(
-                &compiled_graph,
-                name,
-                description,
-                &air_files,
-                files,
-                &sub_air,
-                &known_resources,
+        let CompileArtifacts {
+            air: mut air_json,
+            interfaces: interface_json,
+            node_configs,
+        } = compile_to_air_with_options(
+            &compiled_graph,
+            name,
+            description,
+            &air_files,
+            CompileOptions {
+                inline_sources: files,
+                sub_air: &sub_air,
+                known_resources: &known_resources,
                 config_storage,
-            )
-            .map_err(|e| {
-                let view = e.to_view();
-                ApiError::compile(format!("compilation failed: {e}"), vec![view])
-            })?;
+            },
+        )
+        .map_err(|e| {
+            let view = e.to_view();
+            ApiError::compile(format!("compilation failed: {e}"), vec![view])
+        })?;
 
         // Resolve every known resource against the workspace + ACL, write
         // audit rows, and splice the envelope into the AIR. The launcher

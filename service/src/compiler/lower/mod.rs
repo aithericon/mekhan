@@ -42,9 +42,9 @@ pub(super) use std::collections::HashMap;
 ///
 /// The borrow planner needs source TEXT to detect `<slug>.<field>`
 /// access. Callers using `StoragePath` here must pass an inline source
-/// map to `compile_to_air_with_subworkflows_inline` so the planner
-/// still has something to scan. Callers using `Raw` can use the
-/// derive-from-files plain `compile_to_air*` entry points.
+/// map via `CompileOptions::inline_sources` to `compile_to_air_with_options`
+/// so the planner still has something to scan. Callers using `Raw` can use
+/// the derive-from-files plain `compile_to_air` entry point.
 pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
 
 /// Wrap inline `node_id → filename → content` into a [`NodeFiles`]
@@ -55,8 +55,8 @@ pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
 /// the per-execution job spec dispatched over NATS; on workflows with
 /// many or sizeable code files that blows the message budget. Use
 /// [`node_files_storage_path`] instead and pass the inline source map
-/// to `compile_to_air_with_subworkflows_inline` so the borrow planner
-/// can still scan.
+/// via `CompileOptions::inline_sources` to `compile_to_air_with_options`
+/// so the borrow planner can still scan.
 pub fn node_files_inline(
     inline: &HashMap<String, HashMap<String, String>>,
 ) -> NodeFiles {
@@ -87,7 +87,7 @@ pub fn node_files_inline(
 /// stay small — the right primitive for publish + apply.
 ///
 /// Pair with the original `ydoc_files` inline map passed as
-/// `inline_sources` to `compile_to_air_with_subworkflows_inline` so the
+/// `CompileOptions::inline_sources` to `compile_to_air_with_options` so the
 /// borrow planner has source text to scan.
 pub fn node_files_storage_path(
     template_id: uuid::Uuid,

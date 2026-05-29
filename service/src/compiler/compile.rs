@@ -201,9 +201,10 @@ pub type SubWorkflowAir = HashMap<String, ResolvedChild>;
 ///
 /// Derives the Python-source map for the borrow planner from any `Raw`
 /// entries in `files`. Callers that pass `StoragePath` (publish path)
-/// should use [`compile_to_air_with_subworkflows_inline`] and provide
-/// the inline source map explicitly — otherwise the borrow planner
-/// can't scan source and silently emits no `<slug>.json` staging.
+/// should use [`compile_to_air_with_options`] and provide the inline source
+/// map explicitly via [`CompileOptions::inline_sources`] — otherwise the
+/// borrow planner can't scan source and silently emits no `<slug>.json`
+/// staging.
 pub fn compile_to_air(
     graph: &WorkflowGraph,
     name: &str,
@@ -225,90 +226,112 @@ pub fn compile_to_air(
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
 }
 
-/// Publish-path entry: `files` may carry `InputSource::StoragePath` for
-/// scaling (per-job-dispatch NATS payload stays small), and the
-/// `inline_sources` map carries the Python source the borrow planner
-/// needs to detect `<slug>.<field>` accesses. The two are decoupled —
-/// the executor stages whatever `files` says; the planner scans whatever
-/// `inline_sources` says.
-pub fn compile_to_air_with_subworkflows_inline(
-    graph: &WorkflowGraph,
-    name: &str,
-    description: &str,
-    files: &NodeFiles,
-    inline_sources: &HashMap<String, HashMap<String, String>>,
-    sub_air: &SubWorkflowAir,
-) -> Result<Value, CompileError> {
-    let known = KnownResources::new();
-    let scenario = compile_to_scenario_with_inline_sources(
-        graph,
-        name,
-        description,
-        files,
-        inline_sources,
-        sub_air,
-        &known,
-    )?;
-    serde_json::to_value(&scenario)
-        .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))
+/// Options bag for the unified options-based compile entry point
+/// [`compile_to_air_with_options`]. Collapses the three additive
+/// `compile_to_air_with_subworkflows_*` wrappers into one struct so adding a
+/// future axis is a field, not a new fn + delegation hop.
+///
+/// SEMANTIC CONTRACT (must be preserved by every caller):
+/// `inline_sources` is the Python/template source map the borrow planner scans
+/// for `<slug>.<field>` accesses. It is DECOUPLED from `files` (which may carry
+/// `InputSource::StoragePath` — the publish path stages whatever `files` says,
+/// the planner scans whatever `inline_sources` says, so per-job NATS payloads
+/// stay small). `Default` gives an EMPTY map — and an empty map makes the
+/// borrow planner emit NO `<slug>.json` staging. So a caller that previously
+/// passed a populated `inline_sources` MUST keep setting it; never rely on the
+/// default to stand in for a populated map. (This is why bare `compile_to_air`
+/// — which DERIVES inline from Raw files — is intentionally NOT folded in here.)
+pub struct CompileOptions<'a> {
+    /// Source map for the borrow planner. EMPTY by default → no `<slug>.json`
+    /// staging. Equivalent to the `inline_sources` arg of the old wrappers.
+    pub inline_sources: &'a HashMap<String, HashMap<String, String>>,
+    /// Resolved child AIR per `SubWorkflow` node. Empty by default.
+    pub sub_air: &'a SubWorkflowAir,
+    /// Workspace-resource manifest (publish-time `discover_known_resources`).
+    /// Empty by default (preview / tests / analyze).
+    pub known_resources: &'a KnownResources,
+    /// Static-config S3 key context. `ConfigStorage::ephemeral()` by default
+    /// (no upload — synthetic nil template id / version 0). The per-node static
+    /// config blobs that result are returned via [`CompileArtifacts::node_configs`]
+    /// for the caller to upload to S3.
+    pub config_storage: ConfigStorage<'a>,
 }
 
-/// Publish-path entry returning both AIR JSON and the per-node interface
-/// registry JSON. The publish handler persists `interface_json` alongside
-/// `air_json` so a parent's `SubWorkflow` resolver can read it back without
-/// re-deriving boundary places from string conventions. See
-/// `service/src/process/publish.rs::resolve_subworkflow_air`.
-pub fn compile_to_air_with_subworkflows_and_interfaces(
-    graph: &WorkflowGraph,
-    name: &str,
-    description: &str,
-    files: &NodeFiles,
-    inline_sources: &HashMap<String, HashMap<String, String>>,
-    sub_air: &SubWorkflowAir,
-    known_resources: &KnownResources,
-) -> Result<(Value, Value), CompileError> {
-    let (air, iface, _) = compile_to_air_with_subworkflows_interfaces_and_configs(
-        graph,
-        name,
-        description,
-        files,
-        inline_sources,
-        sub_air,
-        known_resources,
-        ConfigStorage::ephemeral(),
-    )?;
-    Ok((air, iface))
+// Default needs 'static-borrowable empties. ConfigStorage::ephemeral() is
+// fine (owns nil uuid / 0 / None). For the three empty maps we hand out
+// references to process-lifetime statics via OnceLock so `Default` can return
+// borrows that satisfy any 'a. (Alternative: derive Default only when the maps
+// are owned — rejected, because every current caller already HAS the maps and
+// borrows them; owning would force clones at the widest sites for no gain.)
+impl Default for CompileOptions<'_> {
+    fn default() -> Self {
+        use std::sync::OnceLock;
+        static EMPTY_INLINE: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
+        static EMPTY_SUB_AIR: OnceLock<SubWorkflowAir> = OnceLock::new();
+        static EMPTY_KNOWN: OnceLock<KnownResources> = OnceLock::new();
+        Self {
+            inline_sources: EMPTY_INLINE.get_or_init(HashMap::new),
+            sub_air: EMPTY_SUB_AIR.get_or_init(HashMap::new),
+            known_resources: EMPTY_KNOWN.get_or_init(KnownResources::new),
+            config_storage: ConfigStorage::ephemeral(),
+        }
+    }
 }
 
-/// Publish-path entry that also returns the per-node static config blobs the
-/// caller uploads to S3 (keyed by node id, value is the resolved JSON the
-/// compiler would previously have inlined into the Rhai prepare-transition).
-/// Pass [`ConfigStorage::ephemeral`] for previews / tests that don't upload.
-pub fn compile_to_air_with_subworkflows_interfaces_and_configs(
+/// Result of [`compile_to_air_with_options`]. Named fields supersede the old
+/// `Value` / `(Value, Value)` / `(Value, Value, HashMap)` tuple variants.
+/// Callers pull exactly the surface they need: `.air`, `(.air, .interfaces)`,
+/// or all three. `interfaces` and `node_configs` are ALWAYS computed (the real
+/// pipeline produces them regardless) — old `_inline` / `_and_interfaces`
+/// callers simply ignore the fields they didn't ask for.
+///
+/// `interfaces` is the per-node interface registry JSON: the publish handler
+/// persists it alongside `air` so a parent's `SubWorkflow` resolver can read it
+/// back without re-deriving boundary places from string conventions (see
+/// `service/src/process/publish.rs::resolve_subworkflow_air`). `node_configs`
+/// holds the per-node static config blobs the caller uploads to S3 (keyed by
+/// node id, value the resolved JSON the compiler would previously have inlined
+/// into the Rhai prepare-transition).
+pub struct CompileArtifacts {
+    /// Serialized AIR JSON (`ScenarioDefinition` → `Value`).
+    pub air: Value,
+    /// Serialized per-node interface registry JSON.
+    pub interfaces: Value,
+    /// Per-node static config blobs to upload to S3, keyed by node id.
+    pub node_configs: HashMap<String, serde_json::Value>,
+}
+
+/// Unified options-based compile entry. Replaces the three additive
+/// `compile_to_air_with_subworkflows_inline` / `_and_interfaces` /
+/// `_interfaces_and_configs` wrappers. Bare [`compile_to_air`] (which derives
+/// inline sources from Raw files) is intentionally separate — see
+/// [`CompileOptions`] doc on the inline-source hazard.
+pub fn compile_to_air_with_options(
     graph: &WorkflowGraph,
     name: &str,
     description: &str,
     files: &NodeFiles,
-    inline_sources: &HashMap<String, HashMap<String, String>>,
-    sub_air: &SubWorkflowAir,
-    known_resources: &KnownResources,
-    config_storage: ConfigStorage<'_>,
-) -> Result<(Value, Value, HashMap<String, serde_json::Value>), CompileError> {
+    opts: CompileOptions<'_>,
+) -> Result<CompileArtifacts, CompileError> {
     let (scenario, interfaces, node_configs) = compile_to_scenario_and_interfaces_with_configs(
         graph,
         name,
         description,
         files,
-        inline_sources,
-        sub_air,
-        known_resources,
-        config_storage,
+        opts.inline_sources,
+        opts.sub_air,
+        opts.known_resources,
+        opts.config_storage,
     )?;
     let air = serde_json::to_value(&scenario)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))?;
-    let iface = serde_json::to_value(&interfaces)
+    let interfaces = serde_json::to_value(&interfaces)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize interfaces: {e}")))?;
-    Ok((air, iface, node_configs))
+    Ok(CompileArtifacts {
+        air,
+        interfaces,
+        node_configs,
+    })
 }
 
 /// Run the full build/validate/lower/wire pipeline and return the typed
@@ -2827,16 +2850,19 @@ mod tests {
             },
         );
 
-        let (air, _iface) = crate::compiler::compile_to_air_with_subworkflows_and_interfaces(
-            &graph,
-            "smtp-resource-test",
-            "test",
-            &files,
-            &inline_sources,
-            &crate::compiler::SubWorkflowAir::new(),
-            &known_resources,
-        )
-        .expect("compile must succeed with known_resources");
+        let crate::compiler::CompileArtifacts { air, .. } =
+            crate::compiler::compile_to_air_with_options(
+                &graph,
+                "smtp-resource-test",
+                "test",
+                &files,
+                crate::compiler::CompileOptions {
+                    inline_sources: &inline_sources,
+                    known_resources: &known_resources,
+                    ..Default::default()
+                },
+            )
+            .expect("compile must succeed with known_resources");
 
         // Look at the send/prepare transition specifically. If the resource
         // borrow was emitted, its Rhai source contains the `mail.json`
@@ -4073,15 +4099,18 @@ mod tests {
             },
         );
 
-        let air = compile_to_air_with_subworkflows_inline(
+        let air = compile_to_air_with_options(
             &parent,
             "test",
             "",
             &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            &sub_air,
+            CompileOptions {
+                sub_air: &sub_air,
+                ..Default::default()
+            },
         )
-        .expect("compile parent with sub_air");
+        .expect("compile parent with sub_air")
+        .air;
         let transitions = air["transitions"].as_array().unwrap();
 
         // (1) Join logic unwraps exit_code.value before projecting declared

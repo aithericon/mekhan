@@ -21,10 +21,8 @@ pub(crate) mod validate;
 mod wire;
 
 pub use compile::{
-    compile_to_air, compile_to_air_with_subworkflows_and_interfaces,
-    compile_to_air_with_subworkflows_inline,
-    compile_to_air_with_subworkflows_interfaces_and_configs, compile_to_scenario, ResolvedChild,
-    SubWorkflowAir,
+    compile_to_air, compile_to_air_with_options, compile_to_scenario, CompileArtifacts,
+    CompileOptions, ResolvedChild, SubWorkflowAir,
 };
 pub use error::{CompileError, CompileErrorView};
 pub use interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
