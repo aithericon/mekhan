@@ -56,5 +56,8 @@ deploy/zitadel/pat/*.json
 mekhan.local.toml
 service/mekhan.local.toml
 
+# Per-machine mekhan CLI auth token (sourced by .envrc); never commit
+.mekhan.token
+
 # air_snapshots debug sidecars (written only on drift; never tracked)
 service/tests/snapshots/air/*.json.new
