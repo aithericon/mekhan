@@ -8,7 +8,8 @@ use utoipa::ToSchema;
 /// Discriminator selecting which executor backend handles an automated step.
 ///
 /// Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
-/// `"llm"`, `"file_ops"`, `"kreuzberg"`, `"smtp"`, `"catalogue_query"`.
+/// `"llm"`, `"file_ops"`, `"kreuzberg"`, `"surya"`, `"smtp"`,
+/// `"catalogue_query"`.
 ///
 /// This is the canonical OpenAPI discriminator, the Y.Doc-stored string in
 /// production templates, and the executor's `ExecutionSpec.backend` value.
@@ -23,6 +24,13 @@ pub enum ExecutionBackendType {
     Llm,
     FileOps,
     Kreuzberg,
+    /// Surya OCR. Sibling OCR backend to Kreuzberg, running Surya's
+    /// detection + recognition + layout predictors in a managed Python
+    /// subprocess (`aithericon-executor-surya`). Surfaces per-word bounding
+    /// boxes (normalised `0..1`) + a flattened reading-order word list so a
+    /// downstream step can map extracted fields back to source-document
+    /// coordinates.
+    Surya,
     /// SMTP mailer with Tera-templated subject/body/recipients. Consumes an
     /// `smtp` resource binding for host/port/auth and produces a structured
     /// `outcome` envelope describing success or the precise failure mode.
@@ -46,6 +54,7 @@ impl ExecutionBackendType {
             Self::Llm => "llm",
             Self::FileOps => "file_ops",
             Self::Kreuzberg => "kreuzberg",
+            Self::Surya => "surya",
             Self::Smtp => "smtp",
             Self::CatalogueQuery => "catalogue_query",
         }
@@ -63,6 +72,7 @@ impl ExecutionBackendType {
             "llm" => Some(Self::Llm),
             "file_ops" => Some(Self::FileOps),
             "kreuzberg" => Some(Self::Kreuzberg),
+            "surya" => Some(Self::Surya),
             "smtp" => Some(Self::Smtp),
             "catalogue_query" => Some(Self::CatalogueQuery),
             _ => None,

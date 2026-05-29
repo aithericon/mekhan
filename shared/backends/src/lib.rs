@@ -31,6 +31,6 @@ mod types;
 
 pub use registry::{
     lookup, BackendMeta, BACKENDS, CATALOGUE_QUERY_META, DOCKER_META, FILE_OPS_META, HTTP_META,
-    KREUZBERG_META, LLM_META, PROCESS_META, PYTHON_META, SMTP_META,
+    KREUZBERG_META, LLM_META, PROCESS_META, PYTHON_META, SMTP_META, SURYA_META,
 };
 pub use types::{DispatchMode, ExecutionBackendType, ResourceChannel};

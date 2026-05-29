@@ -34,7 +34,7 @@ use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 // existing callers can keep importing from `crate::backends::*`.
 pub use aithericon_backends::{
     BackendMeta, DispatchMode, ResourceChannel, CATALOGUE_QUERY_META, DOCKER_META, FILE_OPS_META,
-    HTTP_META, KREUZBERG_META, LLM_META, PROCESS_META, PYTHON_META, SMTP_META,
+    HTTP_META, KREUZBERG_META, LLM_META, PROCESS_META, PYTHON_META, SMTP_META, SURYA_META,
 };
 
 pub mod catalogue_query;
@@ -46,6 +46,7 @@ pub mod llm;
 pub mod process;
 pub mod python;
 pub mod smtp;
+pub mod surya;
 
 /// Build a self-contained JSON Schema for a `ToSchema` config type `T`.
 ///
@@ -446,6 +447,7 @@ pub static BACKENDS: &[&BackendDecl] = &[
     &process::PROCESS_DECL,
     &python::PYTHON_DECL,
     &smtp::SMTP_DECL,
+    &surya::SURYA_DECL,
 ];
 
 /// Look up the decl for a backend type. Returns `None` only if `BACKENDS`
@@ -562,6 +564,7 @@ mod tests {
             ExecutionBackendType::Llm,
             ExecutionBackendType::FileOps,
             ExecutionBackendType::Kreuzberg,
+            ExecutionBackendType::Surya,
             ExecutionBackendType::Smtp,
             ExecutionBackendType::CatalogueQuery,
         ] {

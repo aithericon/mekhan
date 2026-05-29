@@ -235,6 +235,15 @@ fn success_result_single(
 ) -> ExecutionResult {
     let mut outputs: HashMap<String, serde_json::Value> = HashMap::from([
         ("ocr_text".into(), serde_json::json!(response.ocr_text)),
+        ("full_text".into(), serde_json::json!(response.full_text)),
+        // Structured geometry — the bbox-carrying surfaces the visual-ref
+        // cascade consumes. `words` is the flattened reading-order list
+        // (each entry: {text, bbox{x,y,w,h ∈ 0..1}, confidence, word_index,
+        // page}); `pages` carries per-page dimensions + nested words/lines.
+        // Declared as step outputs so a downstream step can borrow
+        // `{{ <slug>.words }}` / `{{ <slug>.pages }}` / `{{ <slug>.full_text }}`.
+        ("words".into(), serde_json::json!(response.words)),
+        ("pages".into(), serde_json::json!(response.pages)),
         ("page_count".into(), serde_json::json!(response.page_count)),
         ("engine".into(), serde_json::json!(response.engine)),
         ("mime_type".into(), serde_json::json!(response.mime_type)),
@@ -669,6 +678,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config,
+            config_ref: None,
         }
     }
 
@@ -696,6 +706,11 @@ mod tests {
             run_dir: RunDirectory::new(&std::env::temp_dir(), &id),
             timeout,
             env: HashMap::new(),
+            resolved_env: HashMap::new(),
+            resolved_config: None,
+            resolved_input_storage: HashMap::new(),
+            resolved_output_storage: HashMap::new(),
+            resolved_inline_inputs: HashMap::new(),
             metadata: HashMap::new(),
             staged_inputs: HashMap::new(),
             expected_outputs: HashMap::new(),
@@ -727,6 +742,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: serde_json::json!({}),
+            config_ref: None,
         };
         assert!(!backend.supports(&spec));
     }
@@ -742,6 +758,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![],
             config: serde_json::json!({}),
+            config_ref: None,
         };
         assert!(!backend.supports(&spec));
     }

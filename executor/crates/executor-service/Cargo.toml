@@ -33,6 +33,7 @@ aithericon-executor-python = { workspace = true, optional = true }
 aithericon-executor-llm = { workspace = true, optional = true }
 aithericon-executor-file-ops = { workspace = true, optional = true }
 aithericon-executor-kreuzberg = { workspace = true, optional = true }
+aithericon-executor-surya = { workspace = true, optional = true }
 aithericon-executor-smtp = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
 # Shared backend metadata — drives `build_executor`'s registration loop.
@@ -53,6 +54,7 @@ llm = ["dep:aithericon-executor-llm"]
 vault = ["aithericon-secrets/vault", "aithericon-executor-worker/vault"]
 file-ops = ["dep:aithericon-executor-file-ops", "opendal", "aithericon-executor-test-harness/file-ops"]
 kreuzberg = ["dep:aithericon-executor-kreuzberg", "aithericon-executor-kreuzberg/full"]
+surya = ["dep:aithericon-executor-surya"]
 smtp = ["dep:aithericon-executor-smtp"]
 
 [dev-dependencies]

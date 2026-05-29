@@ -15,6 +15,8 @@ use aithericon_executor_process::ProcessBackend;
 use aithericon_executor_python::PythonBackend;
 #[cfg(feature = "kreuzberg")]
 use aithericon_executor_kreuzberg::KreuzbergBackend;
+#[cfg(feature = "surya")]
+use aithericon_executor_surya::SuryaBackend;
 #[cfg(feature = "llm")]
 use aithericon_executor_llm::LlmBackend;
 #[cfg(feature = "smtp")]
@@ -570,6 +572,11 @@ fn register_executor_backend(
         "kreuzberg" => {
             info!("kreuzberg backend registered");
             registry.register(KreuzbergBackend::new())
+        }
+        #[cfg(feature = "surya")]
+        "surya" => {
+            info!("surya backend registered");
+            registry.register(SuryaBackend::new())
         }
         #[cfg(feature = "smtp")]
         "smtp" => {

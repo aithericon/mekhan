@@ -73,8 +73,33 @@ async fn spawn_mock_surya(behaviour: MockBehaviour) -> (String, CancellationToke
                             full_text,
                             page_count,
                         } => {
+                            // Emit each page with a single word carrying a
+                            // normalised bounding box + global word_index, so
+                            // the round-trip exercises the structured
+                            // geometry surface (words / pages / bbox), not
+                            // just full_text.
                             let pages = (0..*page_count)
-                                .map(|i| serde_json::json!({"page_number": i + 1}))
+                                .map(|i| {
+                                    serde_json::json!({
+                                        "page_number": i + 1,
+                                        "width_px": 1000.0,
+                                        "height_px": 1400.0,
+                                        "words": [
+                                            {
+                                                "text": "word",
+                                                "bbox": {
+                                                    "x": 0.1,
+                                                    "y": 0.2 + (i as f64) * 0.01,
+                                                    "w": 0.05,
+                                                    "h": 0.03
+                                                },
+                                                "confidence": 0.95,
+                                                "word_index": i
+                                            }
+                                        ],
+                                        "lines": []
+                                    })
+                                })
                                 .collect::<Vec<_>>();
                             Json(serde_json::json!({
                                 "full_text": full_text,
@@ -167,6 +192,7 @@ fn make_spec(config: serde_json::Value) -> ExecutionSpec {
         inputs: vec![],
         outputs: vec![],
         config,
+        config_ref: None,
     }
 }
 
@@ -201,6 +227,11 @@ fn make_run_context(
         run_dir: RunDirectory::new(&std::env::temp_dir(), &id),
         timeout,
         env,
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
         metadata: HashMap::new(),
         staged_inputs: staged,
         expected_outputs: HashMap::new(),
@@ -231,7 +262,7 @@ async fn execute_single_success_round_trip() {
     let ctx = backend.prepare(&job, ctx).await.expect("prepare");
 
     let result = backend
-        .execute(&ctx, noop_status_cb(), CancellationToken::new())
+        .execute(&ctx, noop_status_cb(), None, CancellationToken::new())
         .await
         .expect("execute");
 
@@ -241,9 +272,39 @@ async fn execute_single_success_round_trip() {
         result.outcome
     );
     assert_eq!(result.outputs["ocr_text"], serde_json::json!("hello world"));
+    assert_eq!(result.outputs["full_text"], serde_json::json!("hello world"));
     assert_eq!(result.outputs["page_count"], serde_json::json!(2));
     assert_eq!(result.outputs["engine"], serde_json::json!("surya"));
     assert_eq!(result.outputs["mime_type"], serde_json::json!("application/pdf"));
+
+    // Structured geometry surfaces: the flattened `words` list carries one
+    // word per page (2 here), each with a normalised bounding box and the
+    // global word_index, and the `page` backfilled from its page envelope.
+    let words = result.outputs["words"]
+        .as_array()
+        .expect("`words` must be an array output");
+    assert_eq!(words.len(), 2, "one word per page expected");
+    assert_eq!(words[0]["text"], serde_json::json!("word"));
+    assert_eq!(words[0]["word_index"], serde_json::json!(0));
+    assert_eq!(words[0]["page"], serde_json::json!(1), "page backfilled");
+    assert_eq!(words[1]["page"], serde_json::json!(2));
+    // bbox is normalised 0..1 — matches the frontend visual_ref contract.
+    assert_eq!(words[0]["bbox"]["x"], serde_json::json!(0.1));
+    assert_eq!(words[0]["bbox"]["w"], serde_json::json!(0.05));
+
+    // `pages` carries per-page dimensions + nested words/lines.
+    let pages = result.outputs["pages"]
+        .as_array()
+        .expect("`pages` must be an array output");
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0]["page_number"], serde_json::json!(1));
+    assert_eq!(pages[0]["width_px"], serde_json::json!(1000.0));
+    assert_eq!(
+        pages[0]["words"].as_array().map(|w| w.len()),
+        Some(1),
+        "page 1 carries its nested word"
+    );
+
     // Honest-absence: no error log entries on success.
     assert_eq!(
         result.logs.as_ref().and_then(|l| l.count_by_level.get("error")).copied(),
@@ -275,7 +336,7 @@ async fn execute_single_cancellation_returns_cancelled_outcome() {
     });
 
     let result = backend
-        .execute(&ctx, noop_status_cb(), request_cancel)
+        .execute(&ctx, noop_status_cb(), None, request_cancel)
         .await
         .expect("execute");
 
@@ -311,7 +372,7 @@ async fn execute_single_timeout_returns_timed_out_outcome() {
     let ctx = backend.prepare(&job, ctx).await.expect("prepare");
 
     let result = backend
-        .execute(&ctx, noop_status_cb(), CancellationToken::new())
+        .execute(&ctx, noop_status_cb(), None, CancellationToken::new())
         .await
         .expect("execute");
 
@@ -345,7 +406,7 @@ async fn execute_single_http_500_maps_to_backend_error() {
     let ctx = backend.prepare(&job, ctx).await.expect("prepare");
 
     let result = backend
-        .execute(&ctx, noop_status_cb(), CancellationToken::new())
+        .execute(&ctx, noop_status_cb(), None, CancellationToken::new())
         .await
         .expect("execute");
 
@@ -403,7 +464,7 @@ async fn execute_batch_success_round_trip_two_files() {
     let ctx = backend.prepare(&job, ctx).await.expect("prepare");
 
     let result = backend
-        .execute(&ctx, noop_status_cb(), CancellationToken::new())
+        .execute(&ctx, noop_status_cb(), None, CancellationToken::new())
         .await
         .expect("execute");
 
