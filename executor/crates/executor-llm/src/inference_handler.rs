@@ -196,6 +196,16 @@ pub(crate) async fn run_completion(
         (StatusCode::UNPROCESSABLE_ENTITY, msg)
     })?;
 
+    // Reasoning models (e.g. qwen3.6) return the structured answer as text — a
+    // think-preamble followed by a fenced JSON code block — rather than a
+    // provider-native structured field. When the adapter didn't already surface
+    // `structured_output`, best-effort parse it from the raw content so
+    // downstream transitions consume parsed fields instead of a string blob.
+    let structured_output = completion
+        .structured_output
+        .clone()
+        .or_else(|| extract_structured_output(&completion.content));
+
     Ok(InferenceResponse {
         output: completion.content,
         model: completion.model,
@@ -205,7 +215,7 @@ pub(crate) async fn run_completion(
             output_tokens: completion.usage.output_tokens,
             total_tokens: completion.usage.total_tokens,
         },
-        structured_output: completion.structured_output,
+        structured_output,
     })
 }
 
@@ -235,6 +245,87 @@ pub(crate) fn extract_bearer(headers: &HeaderMap) -> Result<String, (StatusCode,
             )
         })?;
     Ok(token.to_string())
+}
+
+/// Best-effort extraction of a structured JSON object from a model's raw text
+/// completion. Reasoning models emit a think-preamble (delimited by
+/// `</think>`) followed by the answer, often inside a JSON code fence. This
+/// drops the think block, unwraps a fenced code block when present, and parses
+/// the first balanced JSON object. Returns `None` when no JSON object is found
+/// — callers then leave `structured_output` absent rather than failing.
+fn extract_structured_output(content: &str) -> Option<serde_json::Value> {
+    // Drop a leading think-reasoning block, if present.
+    let body = match content.rfind("</think>") {
+        Some(idx) => &content[idx + "</think>".len()..],
+        None => content,
+    };
+    // Prefer the contents of a fenced code block; otherwise scan the body.
+    let candidate = extract_fenced_block(body).unwrap_or_else(|| body.to_string());
+    let trimmed = candidate.trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if v.is_object() {
+            return Some(v);
+        }
+    }
+    // Fall back to the first balanced {…} object embedded in the text.
+    let slice = balanced_object_slice(trimmed)?;
+    serde_json::from_str::<serde_json::Value>(slice)
+        .ok()
+        .filter(serde_json::Value::is_object)
+}
+
+/// Return the inner text of the first fenced code block (skipping an optional
+/// one-word language tag such as `json`), or `None` when there is no closing
+/// fence.
+fn extract_fenced_block(text: &str) -> Option<String> {
+    let fence = "```";
+    let start = text.find(fence)?;
+    let after = &text[start + fence.len()..];
+    // Skip an optional one-word language tag on the opening fence line.
+    let after = match after.find('\n') {
+        Some(nl)
+            if !after[..nl].trim().is_empty()
+                && after[..nl].trim().chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            &after[nl + 1..]
+        }
+        _ => after,
+    };
+    let end = after.find(fence)?;
+    Some(after[..end].to_string())
+}
+
+/// Return the substring spanning the first balanced `{…}` object in `text`,
+/// respecting string literals and escapes. `None` when unbalanced or absent.
+fn balanced_object_slice(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut esc = false;
+    for (i, c) in text[start..].char_indices() {
+        if in_str {
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..start + i + c.len_utf8()]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -511,5 +602,41 @@ mod tests {
         let headers = bearer_headers("my-lease-token-xyz");
         let token = extract_bearer(&headers).expect("valid bearer accepted");
         assert_eq!(token, "my-lease-token-xyz");
+    }
+
+    // ── structured_output extraction (reasoning-model text → JSON) ───────────
+
+    #[test]
+    fn test_extract_structured_output_strips_think_and_fence() {
+        let raw = "<think>The user wants JSON.\nLet me build it.</think>```json\n{\"document_type\":\"lab_result\",\"fields\":[{\"key\":\"a\",\"value\":\"1\"}]}\n```";
+        let v = extract_structured_output(raw).expect("should parse");
+        assert_eq!(v["document_type"], "lab_result");
+        assert_eq!(v["fields"][0]["key"], "a");
+    }
+
+    #[test]
+    fn test_extract_structured_output_plain_json() {
+        let v = extract_structured_output("{\"ok\":true}").expect("plain json");
+        assert_eq!(v["ok"], true);
+    }
+
+    #[test]
+    fn test_extract_structured_output_none_when_no_json() {
+        assert!(extract_structured_output("just some prose, no json here").is_none());
+    }
+
+    #[test]
+    fn test_extract_structured_output_braces_in_strings() {
+        let raw = "prefix {\"note\":\"a } brace in a string\",\"x\":1} suffix";
+        let v = extract_structured_output(raw).expect("balanced");
+        assert_eq!(v["x"], 1);
+        assert_eq!(v["note"], "a } brace in a string");
+    }
+
+    #[test]
+    fn test_extract_structured_output_bare_fence_no_lang() {
+        let raw = "```\n{\"a\":2}\n```";
+        let v = extract_structured_output(raw).expect("bare fence");
+        assert_eq!(v["a"], 2);
     }
 }
