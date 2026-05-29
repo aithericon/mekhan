@@ -18,10 +18,12 @@
 //! cheap; if it ever isn't, the obvious optimization is an in-memory per-net
 //! buffer that backfills lazily on cache miss.
 
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 
 use futures::StreamExt;
-use petri_domain::PersistedEvent;
+use petri_domain::{DomainEvent, PersistedEvent};
 use uuid::Uuid;
 
 use crate::compiler::InterfaceRegistry;
@@ -30,6 +32,26 @@ use crate::observability::record_silent_drop_with;
 use crate::petri::events::fetch_events;
 
 use super::projector::{project_step_executions, StepExecutionRow};
+
+/// Upper bound on simultaneously-buffered nets. Terminal nets are evicted
+/// eagerly (see `process_event`); this only guards against unbounded growth
+/// from many long-lived / never-terminating nets. An evicted net re-bootstraps
+/// from `fetch_events` on its next event.
+const MAX_BUFFERED_NETS: usize = 512;
+
+/// Per-net in-memory projection input: the full event log for one net plus the
+/// (stable) instance/template context and decoded interface registry.
+///
+/// The previous design re-fetched the entire net history from NATS — a fresh
+/// ephemeral consumer with a blocking read timeout — on EVERY delivered
+/// message, which could not keep up under load. Instead we bootstrap the log
+/// once on cache miss, then append each subsequently-delivered event and
+/// re-fold from memory.
+struct NetBuffer {
+    ctx: InstanceContext,
+    registry: InterfaceRegistry,
+    events: Vec<PersistedEvent>,
+}
 
 /// Start the step-executions ingest consumer. Spawned alongside the lifecycle
 /// and causality consumers in `main.rs`. Runs until the message stream ends or
@@ -53,6 +75,10 @@ pub async fn start_step_executions_ingest(nats: MekhanNats, db: PgPool) {
 
     tracing::info!("step-executions ingest started on petri.events.>");
 
+    // Per-net event buffers, backfilled lazily on cache miss. Avoids re-reading
+    // the whole net history from NATS on every message.
+    let mut buffers: HashMap<String, NetBuffer> = HashMap::new();
+
     while let Some(msg_result) = messages.next().await {
         let msg = match msg_result {
             Ok(m) => m,
@@ -63,7 +89,7 @@ pub async fn start_step_executions_ingest(nats: MekhanNats, db: PgPool) {
         };
 
         let subject = msg.subject.as_str();
-        let result = process_event(&nats, &db, subject, &msg.payload).await;
+        let result = process_event(&nats, &db, &mut buffers, subject, &msg.payload).await;
 
         match result {
             Ok(()) => {
@@ -86,6 +112,7 @@ pub async fn start_step_executions_ingest(nats: MekhanNats, db: PgPool) {
 async fn process_event(
     nats: &MekhanNats,
     db: &PgPool,
+    buffers: &mut HashMap<String, NetBuffer>,
     subject: &str,
     payload: &[u8],
 ) -> anyhow::Result<()> {
@@ -95,8 +122,7 @@ async fn process_event(
         return Ok(());
     };
 
-    // Parse only to validate the wire shape; we re-fetch the full log below.
-    let _envelope: PersistedEvent = match serde_json::from_slice(payload) {
+    let incoming: PersistedEvent = match serde_json::from_slice(payload) {
         Ok(p) => p,
         Err(e) => {
             record_silent_drop_with(
@@ -109,37 +135,74 @@ async fn process_event(
         }
     };
 
-    // Look up the owning instance + template (skip events for nets that
-    // aren't workflow instances — e.g. demo nets started outside the
-    // service).
-    let Some(ctx) = load_instance_context(db, net_id).await? else {
-        return Ok(());
-    };
+    let is_terminal = matches!(
+        incoming.event,
+        DomainEvent::NetCompleted { .. }
+            | DomainEvent::NetCancelled { .. }
+            | DomainEvent::NetFailed { .. }
+    );
 
-    // Re-fetch the full event log and project. The projector is pure;
-    // duplicate replay is harmless since upsert keys on PK.
-    let events = fetch_events(nats, net_id).await?;
-    if events.is_empty() {
-        return Ok(());
+    if !buffers.contains_key(net_id) {
+        // Cache miss: first event seen for this net since startup. Resolve the
+        // owning instance/template + bootstrap the FULL event log once (covers
+        // events that predate this process / the durable cursor). Nets that
+        // aren't workflow instances, or whose template predates interface_json,
+        // are skipped — and deliberately NOT cached, so non-instance nets stay
+        // cheap misses rather than holding state.
+        let Some(ctx) = load_instance_context(db, net_id).await? else {
+            return Ok(());
+        };
+        let registry: InterfaceRegistry = match serde_json::from_value(ctx.interface_json.clone())
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(
+                    net_id = %net_id,
+                    template_id = %ctx.template_id,
+                    "step-executions: cannot decode interface_json — skipping: {e}",
+                );
+                return Ok(());
+            }
+        };
+        let events = fetch_events(nats, net_id).await?;
+
+        // Bound memory: if a flood of long-lived nets has accumulated, evict
+        // one (it re-bootstraps on its next event).
+        if buffers.len() >= MAX_BUFFERED_NETS {
+            if let Some(victim) = buffers.keys().next().cloned() {
+                buffers.remove(&victim);
+            }
+        }
+        buffers.insert(
+            net_id.to_string(),
+            NetBuffer {
+                ctx,
+                registry,
+                events,
+            },
+        );
+    } else {
+        // Cache hit: append the freshly-delivered event. The bootstrap fetch may
+        // already include it (timing), so dedupe by sequence; keep the buffer
+        // sequence-ordered for a correct re-fold.
+        let buf = buffers.get_mut(net_id).expect("contains_key checked");
+        if !buf.events.iter().any(|e| e.sequence == incoming.sequence) {
+            buf.events.push(incoming);
+            buf.events.sort_by_key(|e| e.sequence);
+        }
     }
 
-    let registry: InterfaceRegistry = match serde_json::from_value(ctx.interface_json.clone()) {
-        Ok(r) => r,
-        Err(e) => {
-            // Pre-prototype templates (interface_json missing or in an old
-            // shape) just skip — there's no attribution path without the
-            // registry. The instance view falls back to the raw petri canvas.
-            tracing::debug!(
-                net_id = %net_id,
-                template_id = %ctx.template_id,
-                "step-executions: cannot decode interface_json — skipping: {e}",
-            );
-            return Ok(());
-        }
-    };
+    let buf = buffers.get(net_id).expect("inserted/hit above");
+    if !buf.events.is_empty() {
+        // Pure fold over the in-memory buffer; idempotent upsert keys on PK.
+        let rows = project_step_executions(&buf.events, &buf.registry);
+        upsert_rows(db, &buf.ctx, &rows).await?;
+    }
 
-    let rows = project_step_executions(&events, &registry);
-    upsert_rows(db, &ctx, &rows).await?;
+    // Free the buffer once the net is done — its rows are now final.
+    if is_terminal {
+        buffers.remove(net_id);
+    }
     Ok(())
 }
 
