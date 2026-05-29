@@ -196,7 +196,7 @@ pub async fn scancel(ssh: &SshSession, alloc_id: &str) -> Result<(), AllocError>
 ///
 /// `--jobid=` attaches the step to the existing allocation rather than queuing
 /// a new one, so the work runs on the leased nodes. Returns the command's
-/// stdout. Used by the L2 body-exec path.
+/// stdout. Used by the L2 body-exec path's bare-command form (e.g. tests).
 pub async fn srun_into_alloc(
     ssh: &SshSession,
     alloc_id: &str,
@@ -207,6 +207,40 @@ pub async fn srun_into_alloc(
     let command = format!("srun --jobid='{}' -- bash -c '{}'", sq(alloc_id), sq(cmd));
     let output = ssh.exec(&command).await?;
     Ok(output)
+}
+
+/// Build the `srun --jobid=<alloc_id> … <template_path>` command string.
+///
+/// The L2 body-dispatch form: instead of `sbatch <template>` (which queues a
+/// NEW job), this attaches a step to an already-held allocation via
+/// `--jobid=<alloc_id>`, so the worker template runs ON the leased nodes. It
+/// mirrors `SlurmClient::submit`'s sbatch command shape exactly, minus the
+/// batch-only flags (`--parsable`):
+///
+/// - `--comment='<routing-json>'` — watcher routing metadata (same as sbatch).
+/// - `--job-name='petri-<signal_key>'` — discoverability (same as sbatch).
+/// - `--export=ALL,PETRI_TOKEN_DATA='…',EXECUTOR_TARGET_EXEC_ID='…'` — the job
+///   token data + the executor PerJob consumer target exec id (same as sbatch).
+/// - `<template_path>` — the same worker template script the sbatch path runs.
+///
+/// All embedded values are single-quote escaped via [`sq`].
+pub fn srun_into_alloc_template_command(
+    alloc_id: &str,
+    comment_json: &str,
+    job_name: &str,
+    token_data_json: &str,
+    execution_id: &str,
+    template_path: &str,
+) -> String {
+    format!(
+        "srun --jobid='{}' --comment='{}' --job-name='petri-{}' --export=ALL,PETRI_TOKEN_DATA='{}',EXECUTOR_TARGET_EXEC_ID='{}' {}",
+        sq(alloc_id),
+        sq(comment_json),
+        sq(job_name),
+        sq(token_data_json),
+        sq(execution_id),
+        template_path,
+    )
 }
 
 #[cfg(test)]
@@ -271,5 +305,45 @@ mod tests {
         let cmd = "echo lease-ok";
         let expected = format!("srun --jobid='{}' -- bash -c '{}'", alloc_id, cmd);
         assert_eq!(expected, "srun --jobid='12345' -- bash -c 'echo lease-ok'");
+    }
+
+    #[test]
+    fn test_srun_template_command_shape() {
+        // The L2 body-dispatch form: srun into a held alloc running the worker
+        // template, carrying the same routing/env flags as the sbatch path.
+        let cmd = srun_into_alloc_template_command(
+            "12345",
+            "{\"petri_net_id\":\"n\"}",
+            "key:0",
+            "{\"run_id\":\"r\"}",
+            "exec-1",
+            "/opt/petri/templates/default.sh",
+        );
+        assert!(cmd.starts_with("srun --jobid='12345'"), "{}", cmd);
+        assert!(cmd.contains("--comment='{\"petri_net_id\":\"n\"}'"), "{}", cmd);
+        assert!(cmd.contains("--job-name='petri-key:0'"), "{}", cmd);
+        assert!(
+            cmd.contains("--export=ALL,PETRI_TOKEN_DATA='{\"run_id\":\"r\"}',EXECUTOR_TARGET_EXEC_ID='exec-1'"),
+            "{}",
+            cmd
+        );
+        assert!(cmd.ends_with(" /opt/petri/templates/default.sh"), "{}", cmd);
+        // No batch-only --parsable flag (srun is not sbatch).
+        assert!(!cmd.contains("--parsable"), "{}", cmd);
+    }
+
+    #[test]
+    fn test_srun_template_command_escapes() {
+        // A signal key with a quote must not break out of the single-quoted arg.
+        let cmd = srun_into_alloc_template_command(
+            "a'b",
+            "{}",
+            "k'1",
+            "{}",
+            "e'1",
+            "/t.sh",
+        );
+        assert!(cmd.contains("--jobid='a'\\''b'"), "{}", cmd);
+        assert!(cmd.contains("--job-name='petri-k'\\''1'"), "{}", cmd);
     }
 }

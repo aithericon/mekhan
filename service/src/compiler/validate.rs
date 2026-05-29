@@ -725,13 +725,25 @@ pub fn node_output_fields(
                 }
                 out.insert(node.id.clone(), fields);
             }
-            WorkflowNodeData::Loop { accumulators, .. } => {
+            WorkflowNodeData::Loop {
+                accumulators,
+                lease,
+                ..
+            } => {
                 let mut fields = std::collections::BTreeMap::new();
                 fields.insert("iteration".to_string(), FieldKind::Number);
                 // Accumulators are opaque-Rhai parked fields: `Json` escape
                 // hatch (mirrors the `TokenShape::Any` declared shape).
                 for acc in accumulators {
                     fields.insert(acc.var.clone(), FieldKind::Json);
+                }
+                // L3: a loop-scoped lease parks the held grant under `lease`
+                // (incl. `alloc_id`/`gpu_uuid`/…) in the same `p_<loop>_data`
+                // envelope. Declare it as a `Json` namespace so body iterations
+                // and downstream blocks borrow `<loop>.lease.<field>` (e.g.
+                // `<loop>.lease.alloc_id`) through the standard read-arc pipeline.
+                if lease.is_some() {
+                    fields.insert("lease".to_string(), FieldKind::Json);
                 }
                 out.insert(node.id.clone(), fields);
             }

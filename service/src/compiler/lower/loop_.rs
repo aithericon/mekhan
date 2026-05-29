@@ -23,6 +23,7 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         max_iterations,
         loop_condition,
         accumulators,
+        lease,
         ..
     } = &cx.node.data
     else {
@@ -39,6 +40,43 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             node_id: id.clone(),
         });
     }
+
+    // L3 — loop-scoped lease. When the author bound a `datacenter` lease, the
+    // loop HOISTS the claim/grant/register/release handshake from
+    // `lower_pooled_body` (which holds a lease PER STEP) up to loop scope so ONE
+    // allocation backs every iteration. Resolve the binding (kind `datacenter`)
+    // BEFORE the `&mut *cx.ctx` reborrow blocks `cx.fixups` / `cx.known_resources`.
+    let leased: Option<super::automated_step::PoolBinding> = match lease {
+        None => None,
+        Some(lb) => {
+            let alias = lb.scheduler.trim();
+            if alias.is_empty() {
+                return Err(CompileError::Compilation(format!(
+                    "loop '{}': `lease.scheduler` must name a datacenter resource alias \
+                     (a loop lease is held against a specific allocator)",
+                    id
+                )));
+            }
+            let binding = super::automated_step::resolve_binding(
+                id,
+                alias,
+                lb.request.as_ref(),
+                "datacenter",
+                cx.known_resources,
+            )?;
+            // Record the typed-lease definition + the grant-inbox place to type
+            // while we still hold `cx` (the `&mut *cx.ctx` reborrow below blocks
+            // `cx.fixups`). `compile_to_air` drains these after `ctx.build()` —
+            // identical to the per-step pooled path.
+            cx.fixups
+                .lease_definitions
+                .push((binding.lease_def_name.clone(), binding.lease_schema.clone()));
+            cx.fixups
+                .lease_inbox_schemas
+                .push((format!("p_{id}_grant_inbox"), binding.lease_def_name.clone()));
+            Some(binding)
+        }
+    };
 
     let scope_group = cx.fixups.scope_groups.get(id).cloned();
     let ctx = &mut *cx.ctx;
@@ -100,27 +138,152 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // leaves the pre-wired arcs alone (skipping the read-arc add that would
     // otherwise duplicate). One rewrite pipeline, one binding name.
 
-    // t_{id}_enter — initialize the parked counter, hand off to body via
-    // p_body_in. The workflow token (input) passes through unchanged: no
-    // namespace addition. Body children's outgoing edges back to the loop
-    // carry `targetHandle: "body_out"` (wire.rs routes those to p_body_out
-    // via `input_handles`); the body's incoming edge from the loop carries
-    // `sourceHandle: "body_in"` (wire.rs routes from p_body_in via the
-    // matching entry in `output_places`).
-    ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Loop"))
-        .auto_input("input", &p_input)
-        .auto_output("body", &p_body_in)
-        .auto_output("data", &p_data)
-        .logic_rhai(format!(
-            "#{{ body: input, data: #{{ iteration: 0{acc_enter} }} }}"
-        ))
-        .done();
+    // ── Lease-carrying data fragments ──────────────────────────────────────
+    // When the loop holds a lease, the held grant (incl. `alloc_id`) lives in
+    // the parked `p_{id}_data` envelope under a `lease` key. ENTER seeds it from
+    // the freshly-acquired grant; CONTINUE re-folds `{slug}.lease` forward so
+    // the SAME lease survives every iteration (read off the parked place via the
+    // pre-wired `d_<slug>` binding, like `iteration`). Body iterations and
+    // downstream blocks then borrow `<slug>.lease.alloc_id` through the standard
+    // read-arc pipeline — that is how each iteration's body dispatches ONTO the
+    // held allocation (the L2 `spec.alloc_id` wire reads `<slug>.lease.alloc_id`).
+    let lease_enter_frag = if leased.is_some() { ", lease: grant" } else { "" };
+    let lease_continue_frag = if leased.is_some() {
+        format!(", lease: {slug}.lease")
+    } else {
+        String::new()
+    };
+
+    match &leased {
+        None => {
+            // ── No lease (byte-identical to the pre-L3 topology) ────────────
+            // t_{id}_enter — initialize the parked counter, hand off to body via
+            // p_body_in. The workflow token (input) passes through unchanged: no
+            // namespace addition. Body children's outgoing edges back to the loop
+            // carry `targetHandle: "body_out"` (wire.rs routes those to p_body_out
+            // via `input_handles`); the body's incoming edge from the loop carries
+            // `sourceHandle: "body_in"` (wire.rs routes from p_body_in via the
+            // matching entry in `output_places`).
+            ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Loop"))
+                .auto_input("input", &p_input)
+                .auto_output("body", &p_body_in)
+                .auto_output("data", &p_data)
+                .logic_rhai(format!(
+                    "#{{ body: input, data: #{{ iteration: 0{acc_enter} }} }}"
+                ))
+                .done();
+        }
+        Some(binding) => {
+            // ── Loop-scoped lease: HOIST claim/grant/register/release here so
+            //    ONE allocation backs every iteration. Mirrors
+            //    `lower_pooled_body` but at loop scope: the grant_id is keyed on
+            //    the LOOP node id (not a body id), so exactly one grant exists
+            //    per (instance, loop) and the hold persists across iterations.
+            let pool_net_id: &str = &binding.backing_net_id;
+            let grant_inbox_place = format!("p_{id}_grant_inbox");
+
+            // Grant reply lands here (typed `Lease__datacenter` via the fixup).
+            let p_grant_inbox: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
+                grant_inbox_place.clone(),
+                format!("{label} - Grant Inbox"),
+                "grant",
+            );
+            // Claim bridge_out, routing the pool's "grant" reply back to grant_inbox.
+            let p_claim_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
+                format!("p_{id}_claim_out"),
+                format!("{label} - Claim Lease"),
+                pool_net_id,
+                well_known::POOL_CLAIM_INBOX,
+                &[("grant", grant_inbox_place.as_str())],
+            );
+            // Register + release bridges are PLAIN (no reply routing) so the
+            // pool's recycled capacity tokens stay clean (docs/14 taint note).
+            let p_register_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
+                format!("p_{id}_register_out"),
+                format!("{label} - Register Hold"),
+                pool_net_id,
+                well_known::POOL_REGISTER_INBOX,
+            );
+            let p_release_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
+                format!("p_{id}_release_out"),
+                format!("{label} - Release Lease"),
+                pool_net_id,
+                well_known::POOL_RELEASE_INBOX,
+            );
+            // Internal parking places.
+            let p_pending: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_pending"),
+                format!("{label} - Pending (input + grant_id, awaiting grant)"),
+            );
+            let p_held: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_held"),
+                format!("{label} - Held (lease, release echo)"),
+            );
+
+            // grant_id = pure fn of journaled token data: `<_instance_id>:<loop_id>`.
+            // Keyed on the LOOP id so the grant is loop-scoped (one per loop
+            // instance), replay-deterministic (no RNG/clock) — the same argument
+            // as `lower_pooled_body`.
+            let grant_id_expr = format!(r#"(input._instance_id + ":{id}")"#);
+            let claim_payload =
+                format!("#{{ grant_id: gid, request: {} }}", binding.request_rhai);
+
+            // t_{id}_claim — mint grant_id, emit ClaimRequest, park {input, grant_id}.
+            ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim Lease"))
+                .auto_input("input", &p_input)
+                .auto_output("claim", &p_claim_out)
+                .auto_output("pending", &p_pending)
+                .logic_rhai(format!(
+                    r#"let gid = {grant_id_expr}; #{{ claim: {claim_payload}, pending: #{{ input: input, grant_id: gid }} }}"#
+                ))
+                .done();
+
+            // t_{id}_enter (acquire) — grant arrived: correlate {pending, grant}
+            // on grant_id, register the hold (plain bridge), park the whole lease
+            // on p_held for the release echo, and ENTER the loop (seed the parked
+            // counter envelope with `lease: grant`). The body token is the
+            // original upstream input parked in `pending.input`.
+            ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Loop (acquire)"))
+                .auto_input("pending", &p_pending)
+                .auto_input("grant", &p_grant_inbox)
+                .correlate("grant", "pending", "grant_id")
+                .auto_output("body", &p_body_in)
+                .auto_output("data", &p_data)
+                .auto_output("reg", &p_register_out)
+                .auto_output("held", &p_held)
+                .logic_rhai(format!(
+                    "let input = pending.input; #{{ body: input, data: #{{ iteration: 0{acc_enter}{lease_enter_frag} }}, reg: grant, held: grant }}"
+                ))
+                .done();
+
+            // t_{id}_exit (release) — single normal terminal. Consume the body's
+            // final token + the read-arced counter AND the held lease, forward
+            // the token, and arc to release_out. The single `p_held` token is the
+            // structural guarantee that release bridges EXACTLY ONCE on the loop's
+            // terminal exit (docs/14 every-terminal-releases invariant). A body
+            // failure propagates out the body's own error output and is handled
+            // by the surrounding graph; the loop's own terminal is this exit.
+            ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit (release)"))
+                .auto_input("input", &p_body_out)
+                .read_input(d_slug.clone(), &p_data)
+                .auto_input("held", &p_held)
+                .auto_output("output", &p_output)
+                .auto_output("release", &p_release_out)
+                .guard_rhai(format!(
+                    "{slug}.iteration >= {max_iterations} || !({loop_condition})"
+                ))
+                .logic_rhai("#{ output: input, release: #{ grant_id: held.grant_id } }")
+                .done();
+        }
+    }
 
     // t_{id}_continue — loop back: consume body_out + the parked counter,
     // increment, produce a fresh body_in token AND a new parked counter.
     // The token is forwarded unchanged (body can do whatever to it — even
     // strip everything via an AutomatedStep envelope — and the loop still
-    // works because the counter lives in `d_<slug>`, not the token).
+    // works because the counter lives in `d_<slug>`, not the token). When
+    // leased, the held lease is re-folded forward (`lease: {slug}.lease`) so it
+    // survives every iteration unchanged.
     ctx.transition(format!("t_{id}_continue"), format!("{label} - Continue"))
         .auto_input("input", &p_body_out)
         .auto_input(d_slug.clone(), &p_data)
@@ -130,22 +293,25 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             "{slug}.iteration < {max_iterations} && ({loop_condition})"
         ))
         .logic_rhai(format!(
-            "#{{ body: input, data: #{{ iteration: {slug}.iteration + 1{acc_continue} }} }}"
+            "#{{ body: input, data: #{{ iteration: {slug}.iteration + 1{acc_continue}{lease_continue_frag} }} }}"
         ))
         .done();
 
-    // t_{id}_exit — read-arc the counter (non-consuming, so it stays parked
-    // for post-loop consumers' `<slug>.iteration` borrows), forward the
-    // body's final token unchanged.
-    ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit"))
-        .auto_input("input", &p_body_out)
-        .read_input(d_slug.clone(), &p_data)
-        .auto_output("output", &p_output)
-        .guard_rhai(format!(
-            "{slug}.iteration >= {max_iterations} || !({loop_condition})"
-        ))
-        .logic_rhai("#{ output: input }")
-        .done();
+    // t_{id}_exit (no-lease) — read-arc the counter (non-consuming, so it stays
+    // parked for post-loop consumers' `<slug>.iteration` borrows), forward the
+    // body's final token unchanged. The leased path emits its own
+    // held-consuming exit above (so it is NOT re-emitted here).
+    if leased.is_none() {
+        ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit"))
+            .auto_input("input", &p_body_out)
+            .read_input(d_slug.clone(), &p_data)
+            .auto_output("output", &p_output)
+            .guard_rhai(format!(
+                "{slug}.iteration >= {max_iterations} || !({loop_condition})"
+            ))
+            .logic_rhai("#{ output: input }")
+            .done();
+    }
 
     cx.fixups
         .groups

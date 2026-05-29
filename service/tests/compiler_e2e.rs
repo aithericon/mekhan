@@ -1128,3 +1128,262 @@ fn scheduled_submit_is_not_a_lease_path() {
         "submit must emit no Lease__ definition"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L3 — loop-scoped Slurm/datacenter lease: acquire once at enter, body
+// iterations dispatch onto the held alloc, release once at every loop exit.
+// ---------------------------------------------------------------------------
+
+/// Stage a stub `main.py` for the leased loop's Python body so the backend
+/// validator is satisfied (mirrors the invoice-processing loop-body staging).
+fn leased_loop_files() -> HashMap<String, HashMap<String, InputSource>> {
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut stub = HashMap::new();
+    stub.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "score = 1.0\n".to_string(),
+        },
+    );
+    files.insert("step".to_string(), stub);
+    files
+}
+
+fn compile_leased_loop(known: &KnownResources) -> Result<Value, CompileError> {
+    let graph = load_graph("leased-loop.json");
+    let files = leased_loop_files();
+    compile_to_air_with_options(
+        &graph,
+        "t",
+        "",
+        &files,
+        CompileOptions {
+            known_resources: known,
+            ..Default::default()
+        },
+    )
+    .map(|a| a.air)
+}
+
+/// The keystone for L3: a `Loop { lease: { scheduler: <datacenter> } }` lowers to
+/// the SAME claim/grant/register/release wrapping as the per-step lease — but
+/// HOISTED to loop scope (acquire once at enter, release once at exit). The held
+/// lease (incl. `alloc_id`) is parked into the loop's `p_<id>_data` envelope so a
+/// downstream `<loop>.lease.alloc_id` borrow read-arcs.
+#[test]
+fn leased_loop_hoists_claim_to_loop_scope_and_releases_on_exit() {
+    let air = compile_leased_loop(&known_with_prod_dc("datacenter"))
+        .expect("leased loop should compile");
+
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    let expected_net = format!("pool-{}", prod_gpu_id());
+
+    // (1) The three handshake bridges live at LOOP scope (`p_aloop_*`) and target
+    //     the resolved datacenter backing net `pool-<id>`.
+    for (pid, inbox) in [
+        ("p_aloop_claim_out", "claim_inbox"),
+        ("p_aloop_register_out", "register_inbox"),
+        ("p_aloop_release_out", "release_inbox"),
+    ] {
+        let p = places(&air)
+            .iter()
+            .find(|p| p["id"] == pid)
+            .unwrap_or_else(|| panic!("missing loop-scoped bridge place {pid}"));
+        assert_eq!(
+            p["bridge_out"]["target_net_id"], expected_net,
+            "{pid} must bridge to the resolved datacenter backing net"
+        );
+        assert_eq!(p["bridge_out"]["target_place_name"], inbox);
+    }
+
+    // (2) `Lease__datacenter` is in definitions and types the LOOP's grant inbox.
+    let lease = &air["definitions"]["Lease__datacenter"];
+    assert!(
+        lease.is_object(),
+        "Lease__datacenter must be registered, got: {:?}",
+        air["definitions"]
+    );
+    for f in ["node", "gpu_uuid", "alloc_id", "expiry"] {
+        assert!(
+            lease["properties"][f].is_object(),
+            "datacenter lease must declare `{f}`"
+        );
+    }
+    let grant_inbox = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_aloop_grant_inbox")
+        .expect("loop grant inbox");
+    assert_eq!(
+        grant_inbox["token_schema"], "#/definitions/Lease__datacenter",
+        "loop grant inbox must be typed as the datacenter lease"
+    );
+
+    // (3) ACQUIRE-AT-ENTER: t_aloop_claim mints the loop-scoped grant_id and the
+    //     enter transition correlates {pending, grant}, registers the hold, parks
+    //     the lease on p_aloop_held, AND seeds the parked counter with `lease: grant`.
+    let claim_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_aloop_claim")
+        .expect("loop claim transition")["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        claim_logic.contains(":aloop") && claim_logic.contains("_instance_id"),
+        "grant_id must be loop-scoped (instance_id:loop_id): {claim_logic}"
+    );
+    assert!(
+        claim_logic.contains("request:") && claim_logic.contains("gpu_count"),
+        "claim must carry the validated datacenter request params: {claim_logic}"
+    );
+    let enter_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_aloop_enter")
+        .expect("loop enter (acquire) transition")["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        enter_logic.contains("lease: grant"),
+        "enter must seed the parked envelope with the held lease: {enter_logic}"
+    );
+    assert!(
+        enter_logic.contains("iteration: 0"),
+        "enter must still initialize the iteration counter: {enter_logic}"
+    );
+
+    // (4) RELEASE-ON-EXIT: the loop's terminal exit consumes p_aloop_held AND arcs
+    //     to release_out — the every-terminal-releases invariant at loop scope.
+    let exit = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_aloop_exit")
+        .expect("loop exit transition");
+    let exit_inputs: Vec<&str> = exit["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["place"].as_str())
+        .collect();
+    let exit_outputs: Vec<&str> = exit["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["place"].as_str())
+        .collect();
+    assert!(
+        exit_inputs.contains(&"p_aloop_held"),
+        "exit must consume the held lease: {exit_inputs:?}"
+    );
+    assert!(
+        exit_outputs.contains(&"p_aloop_output") && exit_outputs.contains(&"p_aloop_release_out"),
+        "exit must arc to BOTH output and release_out: {exit_outputs:?}"
+    );
+    let exit_logic = exit["logic"]["source"].as_str().unwrap();
+    assert!(
+        exit_logic.contains("grant_id: held.grant_id"),
+        "release must key on the held grant_id: {exit_logic}"
+    );
+
+    // (5) REUSE-ACROSS-ITERATIONS: continue re-folds the held lease forward so the
+    //     SAME allocation backs every iteration (no per-iteration re-claim).
+    let cont_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_aloop_continue")
+        .expect("loop continue transition")["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        cont_logic.contains("lease:") && cont_logic.contains("aloop.lease"),
+        "continue must carry the held lease forward each iteration: {cont_logic}"
+    );
+    // The loop must NOT re-claim per iteration — exactly one claim transition.
+    let claim_count = transitions(&air)
+        .iter()
+        .filter(|t| {
+            t["id"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("t_aloop_claim"))
+        })
+        .count();
+    assert_eq!(claim_count, 1, "exactly one (loop-scoped) claim transition");
+
+    // (6) BODY DISPATCH CARRIES alloc_id: the downstream `aloop.lease.alloc_id`
+    //     guard synthesizes a read-arc into the loop's parked data place — the
+    //     same pipeline that lets a body iteration read `aloop.lease.alloc_id`.
+    let read_arc = transitions(&air).iter().any(|t| {
+        t["inputs"]
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|a| {
+                    a["place"] == "p_aloop_data" && a["read"] == serde_json::Value::Bool(true)
+                })
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        read_arc,
+        "a downstream `<loop>.lease.alloc_id` borrow must synthesize a read-arc into p_aloop_data"
+    );
+}
+
+/// A NO-lease loop is byte-identical to the pre-L3 topology: the plain
+/// enter/continue/exit transitions, the parked counter, and NONE of the lease
+/// bridges. Guards the leased path from leaking into ordinary loops.
+#[test]
+fn loop_without_lease_emits_no_lease_topology() {
+    let graph = load_graph("leased-loop.json");
+    // Strip the lease binding AND the lease-dependent guard (an ordinary loop
+    // exposes no `lease` field — referencing it would be a legitimate
+    // GuardUnresolved, which is the point: a no-lease loop ≠ a lease loop).
+    let mut graph = graph;
+    for node in &mut graph.nodes {
+        match &mut node.data {
+            mekhan_service::models::template::WorkflowNodeData::Loop { lease, .. } => {
+                *lease = None;
+            }
+            mekhan_service::models::template::WorkflowNodeData::Decision {
+                conditions, ..
+            } => {
+                for c in conditions.iter_mut() {
+                    c.guard = "input.status == \"ok\"".to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    // No KnownResources needed — a plain loop resolves no datacenter.
+    let air = compile_to_air(&graph, "t", "", &leased_loop_files())
+        .expect("plain loop should compile");
+
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    // The classic loop transitions are present...
+    assert!(has_transition(&air, "t_aloop_enter"), "enter");
+    assert!(has_transition(&air, "t_aloop_continue"), "continue");
+    assert!(has_transition(&air, "t_aloop_exit"), "exit");
+    assert!(has_place(&air, "p_aloop_data"), "parked counter");
+
+    // ...and NONE of the lease bridges / parking places.
+    for pid in [
+        "p_aloop_claim_out",
+        "p_aloop_register_out",
+        "p_aloop_release_out",
+        "p_aloop_grant_inbox",
+        "p_aloop_pending",
+        "p_aloop_held",
+    ] {
+        assert!(!has_place(&air, pid), "no-lease loop must not emit {pid}");
+    }
+    assert!(
+        !has_transition(&air, "t_aloop_claim"),
+        "no-lease loop must not emit a claim transition"
+    );
+    assert!(
+        air["definitions"].get("Lease__datacenter").is_none(),
+        "no-lease loop must emit no Lease__ definition"
+    );
+}

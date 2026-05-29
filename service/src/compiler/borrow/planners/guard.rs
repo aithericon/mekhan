@@ -127,6 +127,28 @@ pub(crate) enum RefResolution {
     MapMissingStar { map_slug: String },
 }
 
+/// True when some proper prefix of `path` resolves to an `Any`/`Opaque`
+/// (compiler-opaque) shape — i.e. the remaining tail addresses INTO an opaque
+/// namespace, which the borrow model treats permissively (the runtime value is
+/// a free-form JSON map). Used for a loop-scoped lease parked under
+/// `<slug>.lease` (declared `Any`): `<slug>.lease.alloc_id` cannot resolve
+/// exactly (the `Any` boundary stops `TokenShape::resolve`), but the access is
+/// sound — it mirrors the parked-producer `find_by_leaf` path for AutomatedStep
+/// lease borrows (`<step>.lease.gpu_uuid`).
+fn resolves_under_opaque(shape: &TokenShape, path: &[String]) -> bool {
+    // Walk growing prefixes; if any prefix lands on an opaque node, the tail is
+    // permissive. Stop before the full path (a full-path Any leaf is handled by
+    // the exact `resolve` check the caller already ran).
+    for n in 1..path.len() {
+        if let Some((sub, _)) = shape.resolve(&path[..n]) {
+            if matches!(sub, TokenShape::Any | TokenShape::Opaque(_)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// The single resolver shared by `reachable_scope`, `check_guard` and
 /// `guard_readarc_plan` — the picker offers exactly what this binds, and no
 /// diagnostic contradicts it.
@@ -216,7 +238,14 @@ pub(crate) fn resolve_ref(
                 };
                 let mut full: Vec<String> = vec![root.clone()];
                 full.extend(gref.segs.iter().cloned());
-                if shape.resolve(&full).is_none() {
+                // Resolve the full path. A loop-scoped lease parks an `Any`
+                // namespace under `<slug>.lease` (the held grant is opaque to
+                // the compiler), so an exact resolve of `<slug>.lease.alloc_id`
+                // fails at the `Any` boundary. Accept it when SOME prefix of the
+                // path resolves to an `Any`/`Opaque` shape — sub-access into an
+                // opaque namespace is permissive, mirroring the parked-producer
+                // `find_by_leaf` path below (`<step>.lease.gpu_uuid`).
+                if shape.resolve(&full).is_none() && !resolves_under_opaque(shape, &full) {
                     return RefResolution::Unresolved;
                 }
                 let prov = shape

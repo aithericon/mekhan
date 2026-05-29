@@ -413,17 +413,17 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
 
 /// Everything the pooled lowering needs once `Inline.pool.alias` has been
 /// resolved to a `token_pool` resource.
-struct PoolBinding {
+pub(super) struct PoolBinding {
     /// Deterministic backing net id (`pool-<resource_id>`) the claim/register/
     /// release bridges target.
-    backing_net_id: String,
+    pub(super) backing_net_id: String,
     /// `Lease__<kind>` — the AIR definition name for the typed grant/lease.
-    lease_def_name: String,
+    pub(super) lease_def_name: String,
     /// The kind's lease JSON Schema, registered into `scenario.definitions`.
-    lease_schema: serde_json::Value,
+    pub(super) lease_schema: serde_json::Value,
     /// The validated `request` params rendered as a Rhai literal (`()` when
     /// `binding.request` is absent).
-    request_rhai: String,
+    pub(super) request_rhai: String,
 }
 
 /// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to a
@@ -444,7 +444,7 @@ struct PoolBinding {
 ///   for datacenter) steering the author to the right deployment model.
 /// - `request` fails validation against the kind's `claim_schema` →
 ///   `ResourcePoolRequestInvalid`.
-fn resolve_binding(
+pub(super) fn resolve_binding(
     node_id: &str,
     alias: &str,
     request: Option<&serde_json::Value>,

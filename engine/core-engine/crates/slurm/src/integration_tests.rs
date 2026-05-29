@@ -239,6 +239,147 @@ mod tests {
         );
     }
 
+    // ── L2: submit a body ONTO a held allocation (srun --jobid) ────────
+
+    /// Hold an allocation, then dispatch a body onto it via the `submit` path
+    /// with `spec.alloc_id` set (the L2 wire). Asserts the body ran ON the held
+    /// allocation (`srun --jobid`, NOT a new `sbatch` job) and the exit code
+    /// propagated, then releases the allocation.
+    ///
+    /// The sandbox has Slurm accounting disabled (`sacct` errors), so the proof
+    /// that the body attached to the held allocation rather than queuing a new
+    /// job is two-fold: (a) the worker template's stdout — captured straight
+    /// off the synchronous `srun` step — shows our `PETRI_TOKEN_DATA` flowing
+    /// through plus the template's completion marker, and (b) `squeue` reveals
+    /// NO job id beyond the held allocation (a fresh sbatch would have minted a
+    /// new one).
+    #[tokio::test]
+    #[ignore] // requires live Slurm container
+    async fn slurm_submit_into_held_alloc() {
+        use crate::alloc;
+
+        let config = sandbox_config();
+        let ssh = SshSession::connect(&config).await.expect("SSH connect");
+
+        // 1. Hold an allocation (no body running yet).
+        let grant_id = "lease-l2-body";
+        let alloc_id = alloc::salloc_no_shell(&ssh, grant_id, &serde_json::json!({}))
+            .await
+            .expect("salloc should grant an allocation");
+        assert!(!alloc_id.is_empty(), "salloc should return a job id");
+        println!("Held allocation: {}", alloc_id);
+
+        // Wait for the node to be assigned (CPU-only sandbox grants fast).
+        let mut allocation = alloc::scontrol_node(&ssh, &alloc_id)
+            .await
+            .expect("scontrol should find the allocation");
+        for _ in 0..10 {
+            if allocation.node.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            allocation = alloc::scontrol_node(&ssh, &alloc_id)
+                .await
+                .expect("scontrol");
+        }
+        assert!(
+            allocation.node.is_some(),
+            "allocation should land on a node before dispatch"
+        );
+
+        // Snapshot the live job ids before dispatch: just the held allocation.
+        let pre = ssh
+            .exec("squeue -o '%i' -h")
+            .await
+            .expect("squeue snapshot");
+        let pre_ids: std::collections::HashSet<String> =
+            pre.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        println!("Pre-dispatch job ids: {:?}", pre_ids);
+
+        // 2. Dispatch a body ONTO the held allocation. The L2 wire: alloc_id
+        //    rides token_data["spec"]["alloc_id"], so submit() branches to
+        //    submit_into_alloc → srun --jobid=<alloc> <template>.
+        let client =
+            crate::client::SlurmClient::new_single_place(config.clone(), "test-net", "inbox");
+        let request = SubmitRequest {
+            job_template_id: "default".to_string(),
+            signal_key: "integ-l2-body:0".to_string(),
+            execution_id: "exec-integ-l2-body".to_string(),
+            token_data: serde_json::json!({
+                "run_id": "l2-body-123",
+                "spec": { "alloc_id": alloc_id }
+            }),
+        };
+
+        let result = client
+            .submit(request)
+            .await
+            .expect("srun into held alloc should succeed");
+        // submit_into_alloc correlates the result on the held alloc id — NOT a
+        // freshly minted sbatch id.
+        assert_eq!(
+            result.scheduler_job_id, alloc_id,
+            "leased-body result should correlate on the held alloc id, not a new sbatch id"
+        );
+        println!("Body dispatched onto allocation {} via submit()", alloc_id);
+
+        // 3a. Behavioral proof the body ran ON the held allocation: re-run the
+        //     exact command shape submit_into_alloc emits and capture the
+        //     synchronous srun stdout. `default.sh` echoes its PETRI_TOKEN_DATA
+        //     and a completion marker — seeing both proves the template executed
+        //     under the held alloc with the wired env, and a clean exit (no
+        //     CommandFailed) proves the exit code propagated.
+        let comment = "{}";
+        let token_data_json =
+            serde_json::to_string(&serde_json::json!({"run_id": "l2-body-123"})).unwrap();
+        let srun_cmd = alloc::srun_into_alloc_template_command(
+            &alloc_id,
+            comment,
+            "integ-l2-body:0",
+            &token_data_json,
+            "exec-integ-l2-body",
+            &format!("{}/default.sh", config.template_dir),
+        );
+        let srun_out = ssh
+            .exec(&srun_cmd)
+            .await
+            .expect("srun template into held alloc should exit 0");
+        println!("srun stdout:\n{}", srun_out);
+        assert!(
+            srun_out.contains("l2-body-123"),
+            "body stdout should echo the dispatched PETRI_TOKEN_DATA: {}",
+            srun_out
+        );
+        assert!(
+            srun_out.contains("Job complete"),
+            "body should run to completion on the held alloc: {}",
+            srun_out
+        );
+
+        // 3b. No NEW job id was minted — a fresh sbatch would have appeared in
+        //     squeue. Only the held allocation should still be present.
+        let post = ssh
+            .exec("squeue -o '%i' -h")
+            .await
+            .expect("squeue after dispatch");
+        let new_ids: Vec<String> = post
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty() && *l != alloc_id && !pre_ids.contains(l))
+            .collect();
+        assert!(
+            new_ids.is_empty(),
+            "srun must NOT mint a new batch job; unexpected new job ids {:?} (squeue:\n{})",
+            new_ids, post
+        );
+
+        // 4. Release the allocation (single-node cluster — never leak it).
+        alloc::scancel(&ssh, &alloc_id)
+            .await
+            .expect("scancel should release the allocation");
+        println!("Released allocation: {}", alloc_id);
+    }
+
     // ── Parsers against real output ────────────────────────────────────
 
     #[tokio::test]

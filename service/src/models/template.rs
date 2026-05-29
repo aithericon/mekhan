@@ -378,6 +378,18 @@ pub enum WorkflowNodeData {
         /// Downstream blocks read them via `<loop_slug>.<var>` borrows.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         accumulators: Vec<LoopAccumulator>,
+        /// Optional datacenter lease held for the WHOLE loop (acquire once at
+        /// enter, reuse across every iteration, release once on exit). Declared,
+        /// not inferred — a Loop holds a lease only when the author explicitly
+        /// binds one. When set, `lower_loop` hoists the
+        /// claim/grant/register/release handshake to loop scope (the same
+        /// machinery `lower_pooled_body` uses per-step) so ONE allocation backs
+        /// all iterations; the held lease (incl. `alloc_id`) is parked into the
+        /// loop's `p_<id>_data` envelope under a `lease` key, so body iterations
+        /// and downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.
+        /// `<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<LeaseBinding>,
     },
     #[serde(rename = "scope")]
     Scope {
@@ -1232,6 +1244,32 @@ pub struct ResourcePoolBinding {
     /// `aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`
     /// and validated against the kind's `claim_schema`. `None` ⇒ the kind's
     /// default placement (e.g. one token).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<serde_json::Value>,
+}
+
+/// A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives
+/// under [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`
+/// hoist the claim/grant/register/release handshake to loop scope — ONE
+/// allocation held across all iterations, released exactly once on exit.
+///
+/// Mirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +
+/// `request: Option<Value>` and [`ResourcePoolBinding`] so the existing
+/// `resolve_binding(..., "datacenter", ...)` + lease-definition machinery
+/// applies unchanged. The field is named `scheduler` (not `alias`) for symmetry
+/// with the `Scheduled` lease path the loop body would otherwise inherit
+/// per-step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaseBinding {
+    /// `datacenter` resource alias (workspace alias) the loop holds a lease
+    /// against. Resolved at publish to `pool-<resource_id>` + the
+    /// `Lease__datacenter` schema, the same path as `Scheduled.scheduler`
+    /// (`resolve_binding("datacenter")`).
+    pub scheduler: String,
+    /// Claim-schema-shaped request params (`gpu_count`/`gpu_type`/
+    /// `max_duration_secs`); validated against the datacenter kind's
+    /// `claim_schema`. `None` ⇒ the allocator's default placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<serde_json::Value>,
 }
@@ -2244,8 +2282,9 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef, Port, RetryPolicy,
-        TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
+        ExecutionSpecConfig, JoinMode, LeaseBinding, LoopAccumulator, MergeStrategy, ModelRef, Port,
+        RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
+        WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -2315,6 +2354,9 @@ pub mod dsl {
 
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub accumulators: Vec<LoopAccumulator>,
+
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lease: Option<LeaseBinding>,
 
         // scope
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2616,6 +2658,7 @@ pub mod dsl {
                         max_iterations: max_iter,
                         loop_condition: condition,
                         accumulators: step.accumulators.clone(),
+                        lease: step.lease.clone(),
                     })
                 }
                 "scope" => Ok(WorkflowNodeData::Scope {
@@ -2660,6 +2703,7 @@ pub mod dsl {
                 max_iterations: None,
                 loop_condition: None,
                 accumulators: Vec::new(),
+                lease: None,
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
@@ -2787,11 +2831,13 @@ pub mod dsl {
                     max_iterations,
                     loop_condition,
                     accumulators,
+                    lease,
                     ..
                 } => {
                     step.max_iterations = Some(*max_iterations);
                     step.loop_condition = Some(loop_condition.clone());
                     step.accumulators = accumulators.clone();
+                    step.lease = lease.clone();
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }

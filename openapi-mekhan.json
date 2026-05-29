@@ -8867,6 +8867,22 @@
           }
         }
       },
+      "LeaseBinding": {
+        "type": "object",
+        "description": "A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives\nunder [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`\nhoist the claim/grant/register/release handshake to loop scope — ONE\nallocation held across all iterations, released exactly once on exit.\n\nMirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +\n`request: Option<Value>` and [`ResourcePoolBinding`] so the existing\n`resolve_binding(..., \"datacenter\", ...)` + lease-definition machinery\napplies unchanged. The field is named `scheduler` (not `alias`) for symmetry\nwith the `Scheduled` lease path the loop body would otherwise inherit\nper-step.",
+        "required": [
+          "scheduler"
+        ],
+        "properties": {
+          "request": {
+            "description": "Claim-schema-shaped request params (`gpu_count`/`gpu_type`/\n`max_duration_secs`); validated against the datacenter kind's\n`claim_schema`. `None` ⇒ the allocator's default placement."
+          },
+          "scheduler": {
+            "type": "string",
+            "description": "`datacenter` resource alias (workspace alias) the loop holds a lease\nagainst. Resolved at publish to `pool-<resource_id>` + the\n`Lease__datacenter` schema, the same path as `Scheduled.scheduler`\n(`resolve_binding(\"datacenter\")`)."
+          }
+        }
+      },
       "LineageResponse": {
         "type": "object",
         "description": "Lineage response: artifacts grouped by iteration/step.",
@@ -13785,6 +13801,17 @@
               },
               "label": {
                 "type": "string"
+              },
+              "lease": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LeaseBinding",
+                    "description": "Optional datacenter lease held for the WHOLE loop (acquire once at\nenter, reuse across every iteration, release once on exit). Declared,\nnot inferred — a Loop holds a lease only when the author explicitly\nbinds one. When set, `lower_loop` hoists the\nclaim/grant/register/release handshake to loop scope (the same\nmachinery `lower_pooled_body` uses per-step) so ONE allocation backs\nall iterations; the held lease (incl. `alloc_id`) is parked into the\nloop's `p_<id>_data` envelope under a `lease` key, so body iterations\nand downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.\n`<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline."
+                  }
+                ]
               },
               "loopCondition": {
                 "type": "string"

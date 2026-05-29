@@ -3139,6 +3139,34 @@ export interface components {
             ocr?: null | components["schemas"]["OcrSettings"];
             pdf?: null | components["schemas"]["PdfSettings"];
         };
+        /**
+         * @description A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives
+         *     under [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`
+         *     hoist the claim/grant/register/release handshake to loop scope — ONE
+         *     allocation held across all iterations, released exactly once on exit.
+         *
+         *     Mirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +
+         *     `request: Option<Value>` and [`ResourcePoolBinding`] so the existing
+         *     `resolve_binding(..., "datacenter", ...)` + lease-definition machinery
+         *     applies unchanged. The field is named `scheduler` (not `alias`) for symmetry
+         *     with the `Scheduled` lease path the loop body would otherwise inherit
+         *     per-step.
+         */
+        LeaseBinding: {
+            /**
+             * @description Claim-schema-shaped request params (`gpu_count`/`gpu_type`/
+             *     `max_duration_secs`); validated against the datacenter kind's
+             *     `claim_schema`. `None` ⇒ the allocator's default placement.
+             */
+            request?: unknown;
+            /**
+             * @description `datacenter` resource alias (workspace alias) the loop holds a lease
+             *     against. Resolved at publish to `pool-<resource_id>` + the
+             *     `Lease__datacenter` schema, the same path as `Scheduled.scheduler`
+             *     (`resolve_binding("datacenter")`).
+             */
+            scheduler: string;
+        };
         /** @description Lineage response: artifacts grouped by iteration/step. */
         LineageResponse: {
             process_id: string;
@@ -5436,6 +5464,7 @@ export interface components {
             accumulators?: components["schemas"]["LoopAccumulator"][];
             description?: string | null;
             label: string;
+            lease?: null | components["schemas"]["LeaseBinding"];
             loopCondition: string;
             /** Format: int32 */
             maxIterations: number;

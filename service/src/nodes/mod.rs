@@ -510,6 +510,7 @@ mod tests {
             max_iterations: 10,
             loop_condition: "false".to_string(),
             accumulators: vec![],
+            lease: None,
         };
         let decl = lookup_by_variant(&data).expect("loop registered");
         assert_eq!(decl.wire_name, "loop");
@@ -705,6 +706,7 @@ mod tests {
             max_iterations: 3,
             loop_condition: "i < 3".to_string(),
             accumulators: vec![],
+            lease: None,
         };
         assert_eq!(guard_rhai_sources(&loop_), vec!["i < 3"]);
 
@@ -755,6 +757,7 @@ mod tests {
             max_iterations: 1,
             loop_condition: "   ".to_string(),
             accumulators: vec![],
+            lease: None,
         };
         assert!(guard_rhai_sources(&blank).is_empty());
     }
@@ -785,6 +788,7 @@ mod tests {
                 max_iterations: 1,
                 loop_condition: "true".to_string(),
                 accumulators: vec![],
+                lease: None,
             },
             WorkflowNodeData::Delay {
                 label: "d".to_string(),
