@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000130",
+  "name": "13 · Dynamic Form",
+  "description": "An upstream script DESIGNS the form at runtime: a Python step emits a `form` block list (TaskStepConfig[]), and a HumanTask with `stepsRef = \"design.form\"` renders whatever it produced — no statically-authored steps. The operator fills it in, the End maps the answers back. Proves the agent/script -> dynamic form -> human submit -> answers loop. The same path an Agent node uses: it would emit `form` as a tool output instead of a script."
+}
