@@ -118,12 +118,52 @@ impl MekhanNats {
         &self.jetstream
     }
 
+    /// Resolve a JetStream stream, waiting (bounded) for it to be created.
+    ///
+    /// `PETRI_GLOBAL` is created by the ENGINE (`petri_nats::stream_config`),
+    /// never by mekhan. On a cold `just dev` mekhan can boot before the engine
+    /// has created it, so a one-shot `get_stream` would `Err` and the consumer
+    /// task would log-and-return forever — the projection then silently never
+    /// populates until a full mekhan restart. Retry with backoff so the
+    /// consumer simply blocks inside its first await until the stream exists.
+    ///
+    /// The cap (60 attempts, 0.5s→5s backoff → ~2 min worst case) exists so a
+    /// genuinely-misconfigured NATS (stream never appears) still surfaces the
+    /// original error to the caller's existing `Err => error!; return` arm
+    /// rather than hanging the task forever.
+    async fn get_stream_with_retry(
+        &self,
+        name: &str,
+    ) -> Result<jetstream::stream::Stream, async_nats::Error> {
+        const MAX_ATTEMPTS: u32 = 60;
+        let mut delay = Duration::from_millis(500);
+        let mut attempt = 0u32;
+        loop {
+            match self.jetstream.get_stream(name).await {
+                Ok(s) => return Ok(s),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= MAX_ATTEMPTS {
+                        return Err(e.into());
+                    }
+                    tracing::warn!(
+                        stream = name,
+                        attempt,
+                        "stream not available yet (engine may still be starting); retrying in {delay:?}: {e}"
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_secs(5));
+                }
+            }
+        }
+    }
+
     /// Create or get the durable consumer for Mekhan lifecycle events.
     /// Filters on `petri.events.*.net.>` to catch NetCompleted/NetCancelled.
     /// Note: NATS `*` matches an entire dot-delimited token; net IDs like
     /// `mekhan-{uuid}` are single tokens (no dots), so `*` matches them.
     pub async fn lifecycle_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
         let durable = self.durable_name("mekhan-lifecycle");
         let consumer = stream
             .get_or_create_consumer(
@@ -307,7 +347,7 @@ impl MekhanNats {
     /// Consumes petri domain events and bridge transfers from PETRI_GLOBAL
     /// for causality projection and cross-net link tracking.
     pub async fn causality_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
         let durable = self.durable_name("mekhan-causality-ingest");
         let consumer = stream
             .get_or_create_consumer(
@@ -331,7 +371,7 @@ impl MekhanNats {
     /// Consumes `petri.events.>` and folds events into per-step rows via the
     /// projector in `service/src/projections/step_executions/`.
     pub async fn step_executions_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
-        let stream = self.jetstream.get_stream("PETRI_GLOBAL").await?;
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
         let durable = self.durable_name("mekhan-step-executions");
         let consumer = stream
             .get_or_create_consumer(

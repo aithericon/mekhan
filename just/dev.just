@@ -77,6 +77,7 @@ up:
     @just dev::up-ollama
     @just dev::up-executor
     @just dev::up-engine
+    @just dev::_wait-engine-stream
     @just dev::up-mekhan
     @just dev::up-app
     @just dev::_summary
@@ -91,6 +92,7 @@ up-auth:
     @just dev::up-ollama
     @just dev::up-executor
     @just dev::up-engine
+    @just dev::_wait-engine-stream
     @just dev::up-mekhan bff
     @just dev::up-app
     @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
@@ -553,12 +555,15 @@ up-executor:
     # everything under `~/.cache/cargo-targets/...`; the bare workspace
     # fallback is what cargo uses when no env var is set.
     bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
-    nohup env RUST_LOG="info,aithericon_executor=debug" \
-      VAULT_ADDR="{{vault_addr}}" \
-      bash -c 'cd "{{work_dir}}/executor" && exec "$0"' "$bin" \
-      > "{{log_dir}}/executor.log" 2>&1 &
-    echo $! > "{{pid_dir}}/executor.pid"
-    echo "  ✓ executor (pid $(cat {{pid_dir}}/executor.pid))  log: {{log_dir}}/executor.log"
+    # Robust launch: fully detached + early-crash detection (no phantom ✓ /
+    # empty-log mystery). spawn-daemon.sh writes the pidfile, prints the live
+    # PID, and `exit 1`s with the log tail if the binary dies within 1s —
+    # which (set -euo pipefail active) aborts `up` instead of lying.
+    pid=$(just/scripts/spawn-daemon.sh executor "{{pid_dir}}/executor.pid" "{{log_dir}}/executor.log" \
+      -- env RUST_LOG="info,aithericon_executor=debug" \
+        VAULT_ADDR="{{vault_addr}}" \
+        bash -c 'cd "{{work_dir}}/executor" && exec "$0"' "$bin")
+    echo "  ✓ executor (pid $pid)  log: {{log_dir}}/executor.log"
 
 down-executor:
     @just dev::_kill executor
@@ -618,19 +623,18 @@ up-engine scheduler="off":
     # single-use wrapping token attached to the job. Without these env
     # vars, secrets travel unresolved and the executor's PlanSecretsHook
     # falls back to EnvVarSecretStore (which can't resolve resource paths).
-    nohup env \
-      RUST_LOG="info,petri_application=debug,petri_api=debug" \
-      NATS_URL="{{nats_url}}" \
-      EXECUTOR_NATS_URL="{{nats_url}}" \
-      EXECUTOR_ENABLED="true" \
-      EXECUTOR_NAMESPACE="executor" \
-      VAULT_ADDR="{{vault_addr}}" \
-      VAULT_TOKEN="{{vault_token}}" \
-      PORT="{{engine_port}}" \
-      "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine" \
-      > "{{log_dir}}/engine.log" 2>&1 &
-    echo $! > "{{pid_dir}}/engine.pid"
-    echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  {{engine_url}}  log: {{log_dir}}/engine.log"
+    pid=$(just/scripts/spawn-daemon.sh engine "{{pid_dir}}/engine.pid" "{{log_dir}}/engine.log" \
+      -- env \
+        RUST_LOG="info,petri_application=debug,petri_api=debug" \
+        NATS_URL="{{nats_url}}" \
+        EXECUTOR_NATS_URL="{{nats_url}}" \
+        EXECUTOR_ENABLED="true" \
+        EXECUTOR_NAMESPACE="executor" \
+        VAULT_ADDR="{{vault_addr}}" \
+        VAULT_TOKEN="{{vault_token}}" \
+        PORT="{{engine_port}}" \
+        "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine")
+    echo "  ✓ engine (pid $pid)  {{engine_url}}  log: {{log_dir}}/engine.log"
 
 down-engine:
     @just dev::_kill engine
@@ -1037,24 +1041,23 @@ up-mekhan auth_mode="dev_noop":
     # to a real VaultResourceStore. Resource secrets created via the
     # `/api/v1/resources` CRUD path now land in Vault and survive restarts
     # (until `just dev reset` wipes the dev vault container).
-    nohup env \
-      RUST_LOG="info,mekhan_service=debug" \
-      MEKHAN__DATABASE_URL="{{database_url}}" \
-      MEKHAN__NATS_URL="{{nats_url}}" \
-      MEKHAN__PORT="{{service_port}}" \
-      MEKHAN__PETRI_LAB_URL="{{engine_url}}" \
-      MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
-      MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
-      MEKHAN__S3__SECRET_KEY="rustfsadmin" \
-      MEKHAN__DEMOS__SEED="true" \
-      MEKHAN__DEMOS__DIR="$PWD/demos" \
-      VAULT_ADDR="{{vault_addr}}" \
-      VAULT_TOKEN="{{vault_token}}" \
-      ${mode_assign:+"$mode_assign"} \
-      "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service" \
-      > "{{log_dir}}/mekhan.log" 2>&1 &
-    echo $! > "{{pid_dir}}/mekhan.pid"
-    echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  {{service_url}}  log: {{log_dir}}/mekhan.log"
+    pid=$(just/scripts/spawn-daemon.sh mekhan "{{pid_dir}}/mekhan.pid" "{{log_dir}}/mekhan.log" \
+      -- env \
+        RUST_LOG="info,mekhan_service=debug" \
+        MEKHAN__DATABASE_URL="{{database_url}}" \
+        MEKHAN__NATS_URL="{{nats_url}}" \
+        MEKHAN__PORT="{{service_port}}" \
+        MEKHAN__PETRI_LAB_URL="{{engine_url}}" \
+        MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
+        MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
+        MEKHAN__S3__SECRET_KEY="rustfsadmin" \
+        MEKHAN__DEMOS__SEED="true" \
+        MEKHAN__DEMOS__DIR="$PWD/demos" \
+        VAULT_ADDR="{{vault_addr}}" \
+        VAULT_TOKEN="{{vault_token}}" \
+        ${mode_assign:+"$mode_assign"} \
+        "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service")
+    echo "  ✓ mekhan-service (pid $pid)  {{service_url}}  log: {{log_dir}}/mekhan.log"
 
 down-mekhan:
     @just dev::_kill mekhan
@@ -1095,6 +1098,28 @@ down-app:
 
 _dirs:
     @mkdir -p "{{pid_dir}}" "{{log_dir}}" "{{work_dir}}"
+
+# Block until the engine has created the PETRI_GLOBAL JetStream stream, so a
+# cold `just dev` doesn't race up-mekhan ahead of stream creation (mekhan's
+# lifecycle/causality/step-execution consumers attach to PETRI_GLOBAL). This
+# is the happy-path belt; the suspenders are the bounded Rust retry in
+# MekhanNats::get_stream_with_retry, so a timeout here only WARNS, never fails.
+_wait-engine-stream:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "▶ waiting for engine PETRI_GLOBAL stream…"
+    for _ in $(seq 1 60); do
+      if command -v nats >/dev/null 2>&1; then
+        if nats --server "{{nats_url}}" stream info PETRI_GLOBAL >/dev/null 2>&1; then
+          echo "  ✓ PETRI_GLOBAL ready"; exit 0
+        fi
+      elif curl -sf --max-time 2 "{{nats_mon_url}}/jsz?streams=true&accounts=true" 2>/dev/null \
+             | grep -q PETRI_GLOBAL; then
+        echo "  ✓ PETRI_GLOBAL ready"; exit 0
+      fi
+      sleep 1
+    done
+    echo "  ⚠ PETRI_GLOBAL not seen after 60s — mekhan consumers will retry" >&2
 
 # Kill a tracked process group cleanly. SIGTERM first, then SIGKILL after 5s
 # if it's still alive (cargo-spawned children sometimes ignore one signal).
