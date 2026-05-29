@@ -524,6 +524,15 @@ pub(crate) fn validate_edges_typed(graph: &WorkflowGraph) -> Result<(), CompileE
         if tgt.fields.is_empty() {
             continue;
         }
+        // HumanTask's input port is a *pass-through router*: it routes the whole
+        // inbound token straight to its form-rendering effect, and per-step
+        // inputs are derived from outputs, not edge contracts. Its single
+        // `steps` field exists only to advertise the `TaskStepConfig[]` schema
+        // to an agent calling the node as a tool (`port_to_input_schema`); it is
+        // not a sequence-edge contract, so skip field-set type-checking here.
+        if matches!(tgt_node.data, WorkflowNodeData::HumanTask { .. }) {
+            continue;
+        }
         if !ports_type_compatible(&src, &tgt) {
             let mut expected: Vec<String> = src
                 .fields

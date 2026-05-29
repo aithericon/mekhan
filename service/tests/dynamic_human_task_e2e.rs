@@ -14,8 +14,8 @@
 //! Mirrors `repeater_e2e.rs` — same `compile_to_air` / `surface_types` contract.
 
 use aithericon_executor_domain::InputSource;
-use mekhan_service::compiler::{compile_to_air, surface_types};
-use mekhan_service::models::template::WorkflowGraph;
+use mekhan_service::compiler::{compile_to_air, surface_types, CompileError};
+use mekhan_service::models::template::{WorkflowGraph, WorkflowNodeData};
 use std::collections::HashMap;
 
 /// Python AutomatedSteps in the fixture need a `main.py` entry — the compiler
@@ -73,6 +73,24 @@ fn graph() -> WorkflowGraph {
       ]
     }"#;
     serde_json::from_str(json).unwrap_or_else(|e| panic!("deser dynamic-form fixture: {e}"))
+}
+
+/// Same canonical graph but with an arbitrary `stepsRef` value on the review
+/// HumanTask, for exercising the validation grammar / shape checks. The
+/// producer still declares `form: json` (an array-eligible Json shape) so a
+/// well-formed ref pointing at `producer.form` resolves; pass a malformed or
+/// mis-targeted ref to trip the validator.
+fn graph_with_steps_ref(steps_ref: &str) -> WorkflowGraph {
+    let mut g = graph();
+    for node in &mut g.nodes {
+        if let WorkflowNodeData::HumanTask {
+            steps_ref: sr, ..
+        } = &mut node.data
+        {
+            *sr = Some(steps_ref.to_string());
+        }
+    }
+    g
 }
 
 /// A well-formed dynamic HumanTask compiles cleanly and lands in the AIR with
@@ -204,5 +222,76 @@ fn dynamic_review_output_is_opaque() {
     assert!(
         unexpected.is_empty(),
         "dynamic review must expose no inferred form-field entries, got unexpected: {unexpected:?} (all review paths: {review_paths:?})"
+    );
+}
+
+/// A malformed `stepsRef` (here: a `[*]` wildcard, which the dynamic form never
+/// allows — the block list is sourced whole, not iterated) is a HARD compile
+/// error, not a silent degrade to an empty static form. This is the one failure
+/// mode neither the guard/borrow net nor the runtime SchemaRegistry catches:
+/// the borrow planner *skips* malformed refs, so without the dedicated check the
+/// rhai would fall back to the empty `steps` literal and render a blank form.
+#[test]
+fn malformed_steps_ref_is_hard_compile_error() {
+    let g = graph_with_steps_ref("producer.form[*]");
+    let err = compile_to_air(&g, "dynht_e2e", "", &python_files())
+        .expect_err("malformed stepsRef must hard-fail at compile");
+    match err {
+        CompileError::HumanTaskStepsRefMalformed { ref_value, .. } => {
+            assert_eq!(ref_value, "producer.form[*]");
+        }
+        other => panic!("expected HumanTaskStepsRefMalformed, got {other:?}"),
+    }
+}
+
+/// A single-segment `stepsRef` (no `<slug>.<field>` split) is likewise malformed.
+#[test]
+fn single_segment_steps_ref_is_malformed() {
+    let g = graph_with_steps_ref("producer");
+    let err = compile_to_air(&g, "dynht_e2e", "", &python_files())
+        .expect_err("single-segment stepsRef must hard-fail");
+    assert!(
+        matches!(err, CompileError::HumanTaskStepsRefMalformed { .. }),
+        "expected HumanTaskStepsRefMalformed, got {err:?}"
+    );
+}
+
+/// The HumanTask input port advertises the full `TaskStepConfig[]` JSON Schema
+/// on its `steps` field, so an agent calling the node as a tool is told the
+/// exact dynamic-form grammar to produce (`port_to_input_schema` surfaces
+/// `f.schema` verbatim). This is the single-sourced contract — the SAME schema
+/// the runtime `SchemaRegistry` enforces on a typed producer.
+#[test]
+fn human_task_input_port_advertises_task_step_schema() {
+    let g = graph();
+    let review = g
+        .nodes
+        .iter()
+        .find(|n| n.id == "review")
+        .expect("review node present");
+    let ports = review.data.input_ports();
+    let port = ports.first().expect("HumanTask has one input port");
+    let steps_field = port
+        .fields
+        .iter()
+        .find(|f| f.name == "steps")
+        .expect("input port advertises a `steps` field");
+
+    let schema = steps_field
+        .schema
+        .as_ref()
+        .expect("`steps` field carries a rich JSON Schema override");
+
+    // The schema is the schemars output for `Vec<TaskStepConfig>` — an array
+    // whose element definition reaches the discriminated TaskBlockConfig union.
+    // Assert structurally without pinning schemars' exact `$ref` spelling.
+    assert_eq!(
+        schema["type"], "array",
+        "advertised steps schema must be an array, got: {schema}"
+    );
+    let serialized = serde_json::to_string(schema).expect("schema serializes");
+    assert!(
+        serialized.contains("TaskStepConfig") || serialized.contains("TaskBlockConfig"),
+        "advertised schema must reference the TaskStepConfig/TaskBlockConfig types, got: {serialized}"
     );
 }

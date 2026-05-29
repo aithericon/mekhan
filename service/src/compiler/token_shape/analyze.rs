@@ -925,6 +925,11 @@ pub fn collect_scope_tree(shape: &TokenShape, prov_anchor: Option<&ScalarTy>) ->
         },
         TokenShape::Any => TyDescriptor::Any,
         TokenShape::Opaque(n) => TyDescriptor::Opaque { name: n.clone() },
+        // A rich-schema leaf is opaque to the picker (it can't render an
+        // arbitrary JSON Schema as drill-down rows); surface it as Opaque.
+        TokenShape::Schema(_) => TyDescriptor::Opaque {
+            name: "Schema".to_string(),
+        },
     }
 }
 

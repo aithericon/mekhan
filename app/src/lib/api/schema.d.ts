@@ -3646,6 +3646,20 @@ export interface components {
              */
             options?: components["schemas"]["SelectOption"][] | null;
             required?: boolean;
+            /**
+             * @description Optional rich JSON Schema override for this field's value, for the cases
+             *     where the flat `kind` vocabulary (`Json` being the only escape hatch)
+             *     can't express the real structure. When present it is the field's
+             *     authoritative schema everywhere a richer-than-scalar shape is needed:
+             *     it becomes the agent-tool `input_schema` property (so a model calling a
+             *     node as a tool is told the exact nested shape to produce), and it feeds
+             *     the colored-token definition the runtime `SchemaRegistry` enforces. The
+             *     canonical use is the dynamic-form HumanTask: its `steps` input field
+             *     carries [`task_step_list_json_schema`] so the agent and the runtime
+             *     share one single-sourced `TaskStepConfig[]` contract. Not author-facing
+             *     — derived by node lowering, never hand-edited.
+             */
+            schema?: unknown;
         };
         Position: {
             /** Format: double */
@@ -5092,6 +5106,11 @@ export interface components {
             instructionsMdsvex?: string | null;
             label: string;
             steps: components["schemas"]["TaskStepConfig"][];
+            /**
+             * @description Opt-in: source the form block list at RUNTIME from a producer-namespaced
+             *     `<slug>.<field>` reference instead of the static `steps` literal.
+             */
+            stepsRef?: string | null;
             taskTitle: string;
             /** @enum {string} */
             type: "human_task";

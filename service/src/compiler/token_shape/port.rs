@@ -49,6 +49,17 @@ pub(crate) fn repeater_element_to_shape(
 pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> TokenShape {
     let mut o = TokenShape::object();
     for f in &port.fields {
+        // A rich `schema` override takes precedence over the flat kind — the
+        // declared JSON Schema becomes the emitted `Data__*` definition the
+        // runtime `SchemaRegistry` enforces verbatim.
+        if let Some(schema) = &f.schema {
+            o.insert(
+                &f.name,
+                TokenShape::Schema(Box::new(schema.clone())),
+                Provenance::new(node, note),
+            );
+            continue;
+        }
         let (shape, prov) = match f.kind {
             // A File field is *both* a `FileRef` scalar handle (what
             // Kreuzberg/LLM consume via `{{ <slug>.<file> }}`) AND an
@@ -145,7 +156,10 @@ pub fn validate_token_against_port(
             TokenShape::Scalar(ScalarTy::FileRef)
             | TokenShape::Scalar(ScalarTy::Json)
             | TokenShape::Any
-            | TokenShape::Opaque(_) => true,
+            | TokenShape::Opaque(_)
+            // Permissive at the boundary — the strict enforcement is the
+            // runtime `SchemaRegistry` against the emitted `Data__*` schema.
+            | TokenShape::Schema(_) => true,
         };
         if !ok {
             let expected = match &f.shape {

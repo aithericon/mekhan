@@ -10287,6 +10287,9 @@
           },
           "required": {
             "type": "boolean"
+          },
+          "schema": {
+            "description": "Optional rich JSON Schema override for this field's value, for the cases\nwhere the flat `kind` vocabulary (`Json` being the only escape hatch)\ncan't express the real structure. When present it is the field's\nauthoritative schema everywhere a richer-than-scalar shape is needed:\nit becomes the agent-tool `input_schema` property (so a model calling a\nnode as a tool is told the exact nested shape to produce), and it feeds\nthe colored-token definition the runtime `SchemaRegistry` enforces. The\ncanonical use is the dynamic-form HumanTask: its `steps` input field\ncarries [`task_step_list_json_schema`] so the agent and the runtime\nshare one single-sourced `TaskStepConfig[]` contract. Not author-facing\n— derived by node lowering, never hand-edited."
           }
         }
       },
@@ -13300,6 +13303,13 @@
                 "items": {
                   "$ref": "#/components/schemas/TaskStepConfig"
                 }
+              },
+              "stepsRef": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Opt-in: source the form block list at RUNTIME from a producer-namespaced\n`<slug>.<field>` reference instead of the static `steps` literal."
               },
               "taskTitle": {
                 "type": "string"
