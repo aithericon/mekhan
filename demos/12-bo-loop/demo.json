@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-0000000000c0",
+  "name": "12 · Bayesian Optimization Loop",
+  "description": "Closed-loop Bayesian optimization over a 2-D Branin objective. A Loop carries the campaign state (observations, incumbent f_best, best_a/best_d) across iterations. Each iteration: `propose` fits a surrogate over the accumulated observations and emits K candidate points; a `Map` scatters those K candidates and runs the `branin` objective once per candidate (data-parallel); `gather` folds the K evaluations back into the observation set and updates the incumbent. Showcases Map nested inside a Loop body (scatter/gather inside a fold), loop accumulators seeded from the entering token (`input.*` init scope), and `<map_slug>[*].<field>` collection borrows. `propose` fits a scikit-learn Matern-5/2 Gaussian-process surrogate and proposes candidates by Expected Improvement, with a numpy/stdlib fallback proposer if the scientific deps are unavailable at runtime."
+}
