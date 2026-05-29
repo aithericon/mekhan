@@ -7960,58 +7960,6 @@
       ]
     },
     {
-      "id": "t_mp_body_noop",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "body",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_mp_body_in",
-          "port": "body",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ out: body }",
-        "type": "rhai"
-      },
-      "name": "Evaluate K candidates - Body Noop",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "out",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_mp_body_out",
-          "port": "out",
-          "weight": 1
-        }
-      ]
-    },
-    {
       "id": "t_mp_collect",
       "input_ports": [
         {

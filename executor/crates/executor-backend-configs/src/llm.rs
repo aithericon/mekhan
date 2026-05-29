@@ -89,7 +89,7 @@ impl<'de> Deserialize<'de> for ResponseFormat {
             "json_schema" => {
                 let schema = raw.schema.ok_or_else(|| {
                     serde::de::Error::custom(
-                        "json_schema response_format requires a non-null schema field",
+                        "json_schema response_format requires a non-null output_schema",
                     )
                 })?;
                 Ok(ResponseFormat::JsonSchema { schema })

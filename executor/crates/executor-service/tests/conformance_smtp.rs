@@ -330,14 +330,35 @@ async fn smtp_e2e_send_via_mailhog_lands_in_inbox() {
     )
     .unwrap();
 
-    let tera_ctx = template::build_context(
-        &dir.inputs_dir,
-        Some(alias),
-        &resource,
-        &HashMap::new(),
-        "conformance-exec",
-    )
-    .expect("tera context");
+    // `build_context` reads the staged `<slug>.json` envelopes from the
+    // RunContext's `run_dir.inputs_dir` — point a RunContext at the same dir
+    // we staged into above.
+    let run_context = RunContext {
+        execution_id: "conformance-exec".into(),
+        spec: ExecutionSpec {
+            backend: "smtp".into(),
+            inputs: vec![],
+            outputs: vec![],
+            config: serde_json::json!({}),
+            config_ref: None,
+        },
+        run_dir: RunDirectory::new(tmp.path(), "smtp-conformance-send"),
+        timeout: Duration::from_secs(60),
+        env: HashMap::new(),
+        resolved_env: HashMap::new(),
+        resolved_config: None,
+        resolved_input_storage: HashMap::new(),
+        resolved_output_storage: HashMap::new(),
+        resolved_inline_inputs: HashMap::new(),
+        metadata: HashMap::new(),
+        staged_inputs: HashMap::new(),
+        expected_outputs: HashMap::new(),
+        staged_events: vec![],
+        backend_state: serde_json::Value::Null,
+    };
+
+    let tera_ctx = template::build_context(&run_context, Some(alias), &resource, &HashMap::new())
+        .expect("tera context");
 
     let subject = template::render("Welcome, {{ intake.name }}!", &tera_ctx, "subject.tera")
         .expect("subject render");
