@@ -577,6 +577,10 @@ pub async fn create_resource(
 
     write_audit(&state.db, resource_id, version, principal_id, AuditAction::Create).await?;
 
+    // R3: if this is a token_pool, deploy its backing pool net (idempotent,
+    // engine-down-tolerant). Runs after the resource is durably persisted.
+    ensure_pool_net_for_kind(&state, &req.resource_type, resource_id, &public).await;
+
     let dynamic_keys = extract_kv_keys(&public);
     let summary = ResourceSummary {
         id: resource_id,
@@ -589,6 +593,38 @@ pub async fn create_resource(
         dynamic_keys,
     };
     Ok((StatusCode::CREATED, Json(summary)))
+}
+
+/// R3 hook: for a `token_pool` resource, (re)deploy its backing pool net
+/// `pool-<id>` to the engine with the capacity from `public_config`. No-op for
+/// every other resource kind. Idempotent + engine-down-tolerant (see
+/// [`crate::petri::pool_net::ensure_token_pool_net_deployed`]). Called on
+/// create AND version bump so a capacity change re-seeds the net.
+async fn ensure_pool_net_for_kind(
+    state: &AppState,
+    resource_type: &str,
+    resource_id: Uuid,
+    public: &JsonMap<String, Value>,
+) {
+    if resource_type != "token_pool" {
+        return;
+    }
+    // `capacity` is a required public field of the TokenPool kind (R1), so
+    // `split_config` guarantees it is present + a u32-shaped number. Defend
+    // against a malformed blob by skipping (the deploy is best-effort anyway).
+    let Some(capacity) = public
+        .get("capacity")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32)
+    else {
+        tracing::warn!(
+            %resource_id,
+            "token_pool resource has no numeric `capacity` in public_config; skipping pool-net deploy"
+        );
+        return;
+    };
+    crate::petri::pool_net::ensure_token_pool_net_deployed(&state.petri, resource_id, capacity)
+        .await;
 }
 
 /// Pull the `__kv_keys` array out of a `public_config` blob. Returns
@@ -740,6 +776,11 @@ pub async fn update_resource(
         .await?;
 
         write_audit(&state.db, row.id, latest_version, principal_id, AuditAction::Update).await?;
+
+        // R3: re-deploy the pool net on a token_pool version bump so a capacity
+        // change takes effect (idempotent, engine-down-tolerant).
+        ensure_pool_net_for_kind(&state, &row.resource_type, row.id, &public).await;
+
         new_kv_keys = extract_kv_keys(&public);
     }
 

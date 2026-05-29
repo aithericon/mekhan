@@ -889,3 +889,357 @@ async fn crashed_holder_lease_is_reaped_and_regranted() {
 
     ctx.teardown().await;
 }
+
+// ===========================================================================
+// R3 — tokens backend: the mekhan `build_token_pool_net` contract end to end.
+//
+// This proves the chain the R3 milestone delivers: mekhan's parameterized
+// token-pool net (capacity N, `pool-<resource_id>`) contended for by K
+// instances whose claim/grant/register/release follow the **R2 compiled
+// contract** exactly:
+//
+//   * the grant reply is the TYPED LEASE `{ grant_id, unit_id }` — R1's
+//     `TokenPoolLease { unit_id }` + R2's `Lease__token_pool` schema. `unit_id`
+//     (NOT `gpu_id`) is the body-visible lease field; `grant_id` rides for
+//     correlation. (Field-name alignment is pinned on the mekhan side by
+//     `mekhan_service::petri::pool_net::tests::grant_reply_is_typed_lease_unit_id`.)
+//   * the claim carries `{ grant_id, request }` (R2's `t_claim`). v1 grants one
+//     unit per claim and ignores `request` — asserted here by sending a
+//     non-trivial `request` and confirming the grant still flows.
+//   * register echoes `{ grant_id, unit_id }` over a PLAIN bridge; release is
+//     `{ grant_id }`.
+//
+// FIDELITY: the pool net + requesters here are hand-built domain `PetriNet`s
+// that MIRROR mekhan's builder + R2 lowering (a literal cross-workspace call
+// is impossible — `petri-test-harness` is in the engine workspace and cannot
+// depend on `mekhan-service`). The mekhan-side unit tests pin the real builder
+// AIR to this same contract, so the two cannot drift silently. Loading the
+// actual mekhan-compiled instance AIR is deferred to live dogfood on the dev
+// stack (R5).
+// ===========================================================================
+
+/// Pool net mirroring `mekhan_service::petri::pool_net::build_token_pool_net`:
+/// `unit_id`-typed lease, request-tolerant `t_grant`, registration pattern.
+fn build_token_pool_net_mirror() -> (PetriNet, RegPoolPlaces) {
+    let mut net = PetriNet::new();
+
+    let pool = Place::internal("pool");
+    let in_use = Place::internal("in_use");
+    let done = Place::internal("done");
+    let claim_inbox = Place::bridge_in("claim_inbox");
+    let register_inbox = Place::bridge_in("register_inbox");
+    let release_inbox = Place::bridge_in("release_inbox");
+    let lease_expired = Place::signal("lease_expired");
+    let grant_outbox = Place::bridge_reply_channel("grant_outbox", "grant");
+
+    let pool_id = pool.id.clone();
+    let in_use_id = in_use.id.clone();
+    let done_id = done.id.clone();
+    let claim_id = claim_inbox.id.clone();
+    let register_id = register_inbox.id.clone();
+    let release_id = release_inbox.id.clone();
+    let lease_id = lease_expired.id.clone();
+    let grant_id = grant_outbox.id.clone();
+    for p in [
+        pool, in_use, done, claim_inbox, register_inbox, release_inbox, lease_expired, grant_outbox,
+    ] {
+        net.add_place(p);
+    }
+
+    // t_grant: claim + cap → grant reply ONLY. The grant IS the typed lease
+    // `{ grant_id, unit_id }`. `claim.request` is intentionally not read (v1
+    // grants one unit/claim); a present `request` field is ignored, never a
+    // fault.
+    let t_grant = Transition::new(
+        "t_grant",
+        r#"#{ grant: #{ grant_id: claim.grant_id, unit_id: cap.unit_id } }"#,
+    )
+    .with_input_port(Port::new("claim"))
+    .with_input_port(Port::new("cap"))
+    .with_output_port(Port::new("grant"));
+    let tg = t_grant.id.clone();
+    net.add_transition(t_grant);
+    net.add_arc(PetriArc::input(claim_id.clone(), tg.clone(), "claim"));
+    net.add_arc(PetriArc::input(pool_id.clone(), tg.clone(), "cap"));
+    net.add_arc(PetriArc::output(tg.clone(), "grant", grant_id));
+
+    // t_register: register_inbox → in_use (CLEAN hold, carries unit_id).
+    let t_register = Transition::new(
+        "t_register",
+        r#"#{ hold: #{ grant_id: reg.grant_id, unit_id: reg.unit_id } }"#,
+    )
+    .with_input_port(Port::new("reg"))
+    .with_output_port(Port::new("hold"));
+    let tr = t_register.id.clone();
+    net.add_transition(t_register);
+    net.add_arc(PetriArc::input(register_id.clone(), tr.clone(), "reg"));
+    net.add_arc(PetriArc::output(tr.clone(), "hold", in_use_id.clone()));
+
+    // t_release: release + in_use (correlate grant_id) → pool + done.
+    let t_release = Transition::new(
+        "t_release",
+        r#"#{ cap: #{ unit_id: held.unit_id }, done: #{ grant_id: held.grant_id, outcome: "released" } }"#,
+    )
+    .with_input_port(Port::new("req"))
+    .with_input_port(Port::new("held"))
+    .with_guard("req.grant_id == held.grant_id")
+    .with_output_port(Port::new("cap"))
+    .with_output_port(Port::new("done"));
+    let trel = t_release.id.clone();
+    net.add_transition(t_release);
+    net.add_arc(PetriArc::input(release_id.clone(), trel.clone(), "req"));
+    net.add_arc(PetriArc::input(in_use_id.clone(), trel.clone(), "held"));
+    net.add_arc(PetriArc::output(trel.clone(), "cap", pool_id.clone()));
+    net.add_arc(PetriArc::output(trel.clone(), "done", done_id.clone()));
+
+    // t_reap: lease_expired + in_use (correlate grant_id) → pool + done.
+    let t_reap = Transition::new(
+        "t_reap",
+        r#"#{ cap: #{ unit_id: held.unit_id }, done: #{ grant_id: held.grant_id, outcome: "reaped" } }"#,
+    )
+    .with_input_port(Port::new("exp"))
+    .with_input_port(Port::new("held"))
+    .with_guard("exp.grant_id == held.grant_id")
+    .with_output_port(Port::new("cap"))
+    .with_output_port(Port::new("done"));
+    let trp = t_reap.id.clone();
+    net.add_transition(t_reap);
+    net.add_arc(PetriArc::input(lease_id.clone(), trp.clone(), "exp"));
+    net.add_arc(PetriArc::input(in_use_id.clone(), trp.clone(), "held"));
+    net.add_arc(PetriArc::output(trp.clone(), "cap", pool_id.clone()));
+    net.add_arc(PetriArc::output(trp.clone(), "done", done_id.clone()));
+
+    (
+        net,
+        RegPoolPlaces {
+            pool: pool_id,
+            in_use: in_use_id,
+            claim_inbox: claim_id,
+            register_inbox: register_id,
+            release_inbox: release_id,
+            lease_expired: lease_id,
+            done: done_id,
+        },
+    )
+}
+
+/// Requester mirroring R2's `lower_automated_step_pooled` (alias branch):
+/// claim carries `{ grant_id, request }`; on grant, holds + registers the lease
+/// echo `{ grant_id, unit_id }`; on finish, releases `{ grant_id }`. The
+/// `holding` token IS the typed lease (so the test can assert `unit_id`).
+fn build_r2_contract_requester_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces) {
+    let mut net = PetriNet::new();
+
+    let start = Place::internal("start");
+    let holding = Place::internal("holding");
+    let done = Place::internal("done");
+    let grant_inbox = Place::internal("grant_inbox");
+    let finish_trigger = Place::signal("finish_trigger");
+    let mut channels = HashMap::new();
+    channels.insert("grant".to_string(), "grant_inbox".to_string());
+    let claim_out =
+        Place::bridge_out_reply_channels("claim_out", pool_net_id, "claim_inbox", channels);
+    let register_out = Place::bridge_out("register_out", pool_net_id, "register_inbox");
+    let release_out = Place::bridge_out("release_out", pool_net_id, "release_inbox");
+
+    let start_id = start.id.clone();
+    let holding_id = holding.id.clone();
+    let done_id = done.id.clone();
+    let grant_inbox_id = grant_inbox.id.clone();
+    let finish_id = finish_trigger.id.clone();
+    let claim_out_id = claim_out.id.clone();
+    let register_out_id = register_out.id.clone();
+    let release_out_id = release_out.id.clone();
+    for p in [
+        start, holding, done, grant_inbox, finish_trigger, claim_out, register_out, release_out,
+    ] {
+        net.add_place(p);
+    }
+
+    // t_claim: start → claim_out. The claim carries `{ grant_id, request }`
+    // exactly like R2's `t_claim` (`#{ grant_id: gid, request: <...> }`). The
+    // start token already holds both.
+    let t_claim = Transition::new("t_claim", r#"#{ claim_out: start }"#)
+        .with_input_port(Port::new("start"))
+        .with_output_port(Port::new("claim_out"));
+    let tc = t_claim.id.clone();
+    net.add_transition(t_claim);
+    net.add_arc(PetriArc::input(start_id.clone(), tc.clone(), "start"));
+    net.add_arc(PetriArc::output(tc.clone(), "claim_out", claim_out_id));
+
+    // t_receive: grant_inbox → holding + register_out. R2's `t_acquire` parks
+    // the WHOLE grant on `p_held` (`held: grant`) and echoes `reg: grant`, so
+    // `holding` is the full typed lease `{ grant_id, unit_id }`.
+    let t_receive = Transition::new(
+        "t_receive",
+        r#"#{ holding: grant, register: #{ grant_id: grant.grant_id, unit_id: grant.unit_id } }"#,
+    )
+    .with_input_port(Port::new("grant"))
+    .with_output_port(Port::new("holding"))
+    .with_output_port(Port::new("register"));
+    let trc = t_receive.id.clone();
+    net.add_transition(t_receive);
+    net.add_arc(PetriArc::input(grant_inbox_id.clone(), trc.clone(), "grant"));
+    net.add_arc(PetriArc::output(trc.clone(), "holding", holding_id.clone()));
+    net.add_arc(PetriArc::output(trc.clone(), "register", register_out_id));
+
+    // t_finish: holding + finish_trigger → release_out + done. R2's
+    // `t_to_output`/`t_to_error`: release is `{ grant_id: held.grant_id }`.
+    let t_finish = Transition::new(
+        "t_finish",
+        r#"#{ release: #{ grant_id: holding.grant_id }, local: holding }"#,
+    )
+    .with_input_port(Port::new("holding"))
+    .with_input_port(Port::new("trigger"))
+    .with_output_port(Port::new("release"))
+    .with_output_port(Port::new("local"));
+    let tf = t_finish.id.clone();
+    net.add_transition(t_finish);
+    net.add_arc(PetriArc::input(holding_id.clone(), tf.clone(), "holding"));
+    net.add_arc(PetriArc::input(finish_id.clone(), tf.clone(), "trigger"));
+    net.add_arc(PetriArc::output(tf.clone(), "release", release_out_id));
+    net.add_arc(PetriArc::output(tf.clone(), "local", done_id.clone()));
+
+    (
+        net,
+        RegReqPlaces {
+            start: start_id,
+            holding: holding_id,
+            done: done_id,
+            finish_trigger: finish_id,
+        },
+    )
+}
+
+/// R3 headline: mekhan's token-pool contract, capacity=2, K=4 contending
+/// instances. Proves contention (≤2 hold, 2 queue), the typed `{ unit_id }`
+/// lease routes back to each requester, releases free waiters, all 4 complete,
+/// and capacity is conserved.
+#[tokio::test]
+async fn tokens_backend_r2_contract_two_capacity_four_jobs() {
+    const CAP: usize = 2;
+    const JOBS: usize = 4;
+    let ctx = PoolTestContext::setup(JOBS).await;
+
+    let (pool_net, pp) = build_token_pool_net_mirror();
+    ctx.pool.initialize(pool_net).await.unwrap();
+    // Seed CAP clean `{ unit_id }` capacity tokens — exactly how the mekhan
+    // builder's `seed_one(&pool, DynamicToken({ unit_id: "unit-i" }))` does.
+    for i in 0..CAP {
+        ctx.pool
+            .create_token(
+                pp.pool.clone(),
+                TokenColor::Data(serde_json::json!({ "unit_id": format!("unit-{i}") })),
+            )
+            .await
+            .unwrap();
+    }
+
+    let mut rps = Vec::new();
+    for (i, svc) in ctx.requesters.iter().enumerate() {
+        let (net, rp) = build_r2_contract_requester_net(&ctx.pool_id);
+        svc.initialize(net).await.unwrap();
+        // Start token carries grant_id AND a non-trivial `request` (the R2
+        // claim shape). v1 ignores `request`; we include it to prove the pool
+        // doesn't choke on its presence.
+        svc.create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({
+                "grant_id": format!("job-{i}"),
+                "request": { "units": 1 }
+            })),
+        )
+        .await
+        .unwrap();
+        rps.push(rp);
+    }
+
+    // Everyone claims; the pool grants up to CAP and registers their holds.
+    settle(&ctx, 4).await;
+
+    // CONTENTION: never more than CAP holders; exactly CAP while backlogged.
+    assert!(
+        pool_in_use(&ctx, &pp).await <= CAP,
+        "in_use exceeded capacity — serialization broken"
+    );
+    let initial_holders: usize = {
+        let mut n = 0;
+        for (svc, rp) in ctx.requesters.iter().zip(rps.iter()) {
+            n += svc.get_marking().await.token_count(&rp.holding);
+        }
+        n
+    };
+    assert_eq!(initial_holders, CAP, "exactly CAP jobs running, the rest queued");
+
+    // TYPED LEASE: every current holder's `holding` token carries a `unit_id`
+    // (the R1/R2 lease field) drawn from the seeded pool — never `gpu_id`.
+    let mut seen_units = std::collections::HashSet::new();
+    for (svc, rp) in ctx.requesters.iter().zip(rps.iter()) {
+        let m = svc.get_marking().await;
+        for tok in m.tokens_at(&rp.holding) {
+            if let TokenColor::Data(d) = &tok.color {
+                let unit = d
+                    .get("unit_id")
+                    .and_then(|v| v.as_str())
+                    .expect("holding token must carry the typed lease field `unit_id`");
+                assert!(
+                    unit.starts_with("unit-"),
+                    "lease unit_id must come from the seeded pool, got {unit}"
+                );
+                assert!(d.get("gpu_id").is_none(), "lease must be unit_id-typed, not gpu_id");
+                assert!(seen_units.insert(unit.to_string()), "two holders share a unit — mutex broken");
+            }
+        }
+    }
+    assert_eq!(seen_units.len(), CAP, "CAP distinct units leased");
+
+    // Release holders one at a time; each freed unit is handed to a waiter.
+    let mut completed = 0usize;
+    for _ in 0..JOBS {
+        let mut holder = None;
+        for (i, (svc, rp)) in ctx.requesters.iter().zip(rps.iter()).enumerate() {
+            if svc.get_marking().await.token_count(&rp.holding) >= 1 {
+                holder = Some(i);
+                break;
+            }
+        }
+        let h = match holder {
+            Some(h) => h,
+            None => break,
+        };
+        ctx.requesters[h]
+            .create_token(rps[h].finish_trigger.clone(), TokenColor::Unit)
+            .await
+            .unwrap();
+        settle(&ctx, 4).await;
+        completed += 1;
+        assert!(
+            pool_in_use(&ctx, &pp).await <= CAP,
+            "in_use exceeded capacity after release {completed}"
+        );
+    }
+
+    settle(&ctx, 4).await;
+
+    // CONSERVATION: all units back in the pool, no holds, every job done once.
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        CAP,
+        "all units returned to the pool"
+    );
+    assert_eq!(pool_in_use(&ctx, &pp).await, 0, "no holds outstanding");
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.done),
+        JOBS,
+        "every job completed exactly once"
+    );
+    for (i, rp) in rps.iter().enumerate() {
+        assert_eq!(
+            ctx.requesters[i].get_marking().await.token_count(&rp.done),
+            1,
+            "requester {i} completed"
+        );
+    }
+
+    ctx.teardown().await;
+}
