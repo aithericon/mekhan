@@ -18,6 +18,17 @@ breaks read-arc synthesis.
 observations = start.observations
 last_z = start.last_z
 
+# Catalogue `user_metadata` is a proto map<string,string>, so the trigger's
+# payloadMapping lands these as STRINGS. Parse them back to runtime types.
+# (Authoring the Start fields as kind:json keeps the strict Start-contract gate
+# lenient — see token_shape/port.rs Json escape hatch — while still letting the
+# producer ship complex values through string-only metadata.)
+import json
+if isinstance(observations, str):
+    observations = json.loads(observations) if observations else []
+if isinstance(last_z, str):
+    last_z = float(last_z) if last_z else None
+
 n_seen = len(observations) if observations else 0
 log_info(f"refit: observations={n_seen} last_z={last_z}")
 

@@ -1,0 +1,70 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Seed observation",
+        "processName": "BO Observation Producer",
+        "initial": {
+          "id": "in",
+          "label": "Observation seed",
+          "fields": [
+            { "name": "a", "label": "Candidate a", "kind": "number", "required": false },
+            { "name": "d", "label": "Candidate d", "kind": "number", "required": false },
+            { "name": "z", "label": "Evaluated z", "kind": "number", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "emit",
+      "type": "automated_step",
+      "slug": "emit",
+      "position": { "x": 360, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Write + log observation artifact",
+        "description": "Writes obs.json and logs it as a `metric` artifact with a `kind: bo_observation` user_metadata sentinel (+ json-encoded observations and a string-encoded z). The catalogue_register effect downstream projects these into the catalogue entry that fires the 12a trigger. Reads the seed point off the Start token by slug (read-arc synthesized).",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Result",
+          "fields": [
+            { "name": "logged", "label": "Logged", "kind": "bool", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 680, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "logged", "expression": "emit.logged" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_emit", "source": "start", "target": "emit", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_emit_end",   "source": "emit",  "target": "end",  "targetHandle": "in", "type": "sequence" }
+  ]
+}
