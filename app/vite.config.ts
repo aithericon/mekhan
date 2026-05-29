@@ -2,6 +2,14 @@ import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
+// Per-worktree dev isolation: the dev server port and the mekhan proxy target
+// are read from the env exported by just/scripts/dev-ports.sh (via direnv /
+// the `just dev up-app` recipe), falling back to the historical fixed values
+// when unset. Lets concurrent worktrees run isolated stacks. Build/preview are
+// unaffected — these only touch the dev `server` block.
+const appPort = Number(process.env.MEKHAN_APP_PORT) || 15173;
+const mekhanUrl = process.env.MEKHAN_SERVICE_URL || 'http://localhost:13100';
+
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	resolve: {
@@ -23,25 +31,25 @@ export default defineConfig({
 		]
 	},
 	server: {
-		port: 15173,
+		port: appPort,
 		proxy: {
 			// Yjs WebSocket — must come before generic /api so the upgrade is preserved
 			'/api/yjs': {
-				target: 'http://localhost:13100',
+				target: mekhanUrl,
 				ws: true,
 				changeOrigin: true
 			},
 			// All /api/* requests → mekhan-service (includes /api/v1/* JSON API,
 			// /api/auth/* OAuth bootstrap, /api/triggers/webhook/*).
 			'/api': {
-				target: 'http://localhost:13100',
+				target: mekhanUrl,
 				changeOrigin: true
 			},
 			// Engine traffic also flows through mekhan in dev for parity with
 			// prod single-origin serving. mekhan's `/petri/*` proxy strips the
 			// prefix and forwards to `config.petri_lab_url` (default :3030).
 			'/petri': {
-				target: 'http://localhost:13100',
+				target: mekhanUrl,
 				changeOrigin: true
 			}
 		}

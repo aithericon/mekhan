@@ -36,12 +36,29 @@ work_dir  := ".dev/work"
 # normal.
 executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,vault"
 
-# Local infra endpoints (also baked into service/mekhan.toml + engine env)
-nats_url     := "nats://localhost:14333"
-database_url := "postgres://mekhan:mekhan@localhost:15439/mekhan"
-s3_endpoint  := "http://localhost:19005"
-vault_addr   := "http://localhost:18200"
+# Local infra + daemon endpoints. These read the per-worktree env exported by
+# just/scripts/dev-ports.sh (via direnv / .envrc), falling back to the historical
+# fixed ports when unset (slot 0 / no direnv / CI). This is the single knob that
+# lets concurrent worktrees run isolated `just dev` stacks — see CLAUDE.md
+# "Per-worktree dev stacks". Keep these in sync with dev-ports.sh's defaults.
+nats_url     := env_var_or_default("MEKHAN_NATS_URL", "nats://localhost:14333")
+nats_mon_url := env_var_or_default("MEKHAN_NATS_MON_URL", "http://localhost:18333")
+database_url := env_var_or_default("MEKHAN_DATABASE_URL", "postgres://mekhan:mekhan@localhost:15439/mekhan")
+s3_endpoint  := env_var_or_default("MEKHAN_S3_ENDPOINT", "http://localhost:19005")
+vault_addr   := env_var_or_default("MEKHAN_VAULT_ADDR", "http://localhost:18200")
 vault_token  := "root"
+service_url  := env_var_or_default("MEKHAN_SERVICE_URL", "http://localhost:13100")
+engine_url   := env_var_or_default("MEKHAN_ENGINE_URL", "http://localhost:13030")
+service_port := env_var_or_default("MEKHAN_SERVICE_PORT", "13100")
+engine_port  := env_var_or_default("MEKHAN_ENGINE_PORT", "13030")
+cancel_port  := env_var_or_default("MEKHAN_CANCEL_PORT", "13105")
+app_port     := env_var_or_default("MEKHAN_APP_PORT", "15173")
+s3_console_port := env_var_or_default("MEKHAN_S3_CONSOLE_PORT", "19006")
+nats_port    := env_var_or_default("MEKHAN_NATS_PORT", "14333")
+s3_port      := env_var_or_default("MEKHAN_S3_PORT", "19005")
+mailpit_smtp_port := env_var_or_default("MEKHAN_MAILPIT_SMTP_PORT", "1025")
+mailpit_ui_port   := env_var_or_default("MEKHAN_MAILPIT_UI_PORT", "8025")
+httpbin_port := env_var_or_default("MEKHAN_HTTPBIN_PORT", "13110")
 
 # ── Entrypoints ──────────────────────────────────────────────────────────────
 
@@ -189,15 +206,24 @@ worktree-add name *args:
     # isn't yet committed, the new worktree won't contain it, so we invoke
     # the main repo's copy by absolute path.
     setup_script="$(pwd)/just/scripts/setup-cargo-cache.sh"
+    # Allocate the lowest free dev-stack slot ≥ 1 (slot 0 = the main checkout).
+    # Each worktree records its slot in the gitignored .dev/slot file; scan
+    # them all so two worktrees never share a slot (= never collide on
+    # ports/compose). Reads happen from the main repo root (this recipe's CWD).
+    used="$( { cat .dev/slot .claude/worktrees/*/.dev/slot ; } 2>/dev/null | grep -oE '^[0-9]+$' | sort -nu || true)"
+    slot=1
+    while printf '%s\n' "$used" | grep -qx "$slot"; do slot=$((slot + 1)); done
+    echo "▶ assigning dev-stack slot $slot to {{name}}"
     git worktree add "$wt" {{args}}
-    # Run the setup script inside the new worktree. Idempotent: if .envrc
-    # files are already tracked + checked out, it just direnv-allows them;
-    # if they're missing (e.g. not yet committed), it writes them. Either
-    # way the new worktree picks up RUSTC_WRAPPER=sccache on first cd.
-    (cd "$wt" && "$setup_script")
+    # Run the setup script inside the new worktree. Idempotent: writes the
+    # sccache + dev-env (WORKTREE_SLOT) .envrc blocks and direnv-allows them, so
+    # the new worktree picks up RUSTC_WRAPPER=sccache + its private port block on
+    # first cd.
+    (cd "$wt" && "$setup_script" --slot "$slot")
     echo
-    echo "✓ worktree ready: $wt"
-    echo "  cd $wt   # direnv loads RUSTC_WRAPPER=sccache automatically"
+    echo "✓ worktree ready: $wt   (dev slot $slot)"
+    echo "  cd $wt   # direnv loads sccache + WORKTREE_SLOT=$slot automatically"
+    echo "  just dev # brings up this worktree's isolated stack (ports: 200${slot}x range)"
 
 # Regenerate openapi-mekhan.json (from the mekhan-service binary, no infra
 # needed) and refresh the SvelteKit app's typed schema from it. Run this
@@ -225,7 +251,7 @@ openapi:
 demos-reset:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo run --quiet --bin mekhan -- --server http://localhost:13100 demos reset
+    cargo run --quiet --bin mekhan -- --server {{service_url}} demos reset
 
 # Reset seeded demos to pristine: remove every seeded family, then re-seed
 # from ./demos. Overwrites any edits made via the editor. Wrapper over
@@ -233,7 +259,7 @@ demos-reset:
 demos-reseed:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo run --quiet --bin mekhan -- --server http://localhost:13100 demos reseed
+    cargo run --quiet --bin mekhan -- --server {{service_url}} demos reseed
 
 # ── Infra ────────────────────────────────────────────────────────────────────
 
@@ -252,7 +278,7 @@ _infra-down:
 _infra-wipe:
     #!/usr/bin/env bash
     set -euo pipefail
-    project="$(basename "$PWD")"
+    project="${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}"
     echo "▶ wiping infra data volumes (postgres + nats + rustfs)…"
     for vol in mekhan-pgdata mekhan-natsdata mekhan-rustfs-data mekhan-rustfs-logs; do
       if docker volume rm "${project}_${vol}" >/dev/null 2>&1; then
@@ -272,7 +298,7 @@ _wait-infra:
     done
     echo "▶ waiting for nats…"
     for _ in $(seq 1 30); do
-      curl -sf http://localhost:18333/healthz >/dev/null 2>&1 && break
+      curl -sf "{{nats_mon_url}}/healthz" >/dev/null 2>&1 && break
       sleep 1
     done
     echo "▶ waiting for rustfs…"
@@ -387,29 +413,29 @@ mailhog-up:
     #!/usr/bin/env bash
     set -euo pipefail
     tag="${MAILHOG_TAG:-mailhog/mailhog:latest}"
-    container="mekhan-mailhog"
+    container="${COMPOSE_PROJECT_NAME:-mekhan}-mailhog"
     if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
       echo "  ✓ mailhog already running (container: $container)"
-      echo "    SMTP   localhost:1025"
-      echo "    UI     http://localhost:8025"
+      echo "    SMTP   localhost:{{mailpit_smtp_port}}"
+      echo "    UI     http://localhost:{{mailpit_ui_port}}"
       exit 0
     fi
     if docker ps -a --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
       docker start "$container" >/dev/null
     else
-      echo "▶ starting mailhog (image: $tag) — SMTP :1025, UI :8025"
+      echo "▶ starting mailhog (image: $tag) — SMTP :{{mailpit_smtp_port}}, UI :{{mailpit_ui_port}}"
       docker run -d --rm --name "$container" \
-        -p 1025:1025 -p 8025:8025 \
+        -p {{mailpit_smtp_port}}:1025 -p {{mailpit_ui_port}}:8025 \
         "$tag" >/dev/null
     fi
     echo "  ✓ mailhog up"
-    echo "    SMTP   localhost:1025  (host=localhost port=1025 in your `smtp` resource)"
-    echo "    UI     http://localhost:8025  (received messages land here)"
+    echo "    SMTP   localhost:{{mailpit_smtp_port}}  (host=localhost port={{mailpit_smtp_port}} in your `smtp` resource)"
+    echo "    UI     http://localhost:{{mailpit_ui_port}}  (received messages land here)"
 
 mailhog-down:
     #!/usr/bin/env bash
     set -euo pipefail
-    container="mekhan-mailhog"
+    container="${COMPOSE_PROJECT_NAME:-mekhan}-mailhog"
     if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
       docker stop "$container" >/dev/null
       echo "  ✓ mailhog stopped"
@@ -433,27 +459,27 @@ httpbin-up:
     #!/usr/bin/env bash
     set -euo pipefail
     tag="${HTTPBIN_TAG:-mccutchen/go-httpbin:v2.15.0}"
-    container="mekhan-httpbin"
+    container="${COMPOSE_PROJECT_NAME:-mekhan}-httpbin"
     if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
       echo "  ✓ httpbin already running (container: $container)"
-      echo "    echo   http://localhost:13110/anything/<path>"
+      echo "    echo   http://localhost:{{httpbin_port}}/anything/<path>"
       exit 0
     fi
     if docker ps -a --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
       docker start "$container" >/dev/null
     else
-      echo "▶ starting httpbin (image: $tag) — echo :13110"
+      echo "▶ starting httpbin (image: $tag) — echo :{{httpbin_port}}"
       docker run -d --rm --name "$container" \
-        -p 13110:8080 \
+        -p {{httpbin_port}}:8080 \
         "$tag" >/dev/null
     fi
     echo "  ✓ httpbin up"
-    echo "    echo   http://localhost:13110/anything/<path>  (used by the 11-http-call demo)"
+    echo "    echo   http://localhost:{{httpbin_port}}/anything/<path>  (used by the 11-http-call demo)"
 
 httpbin-down:
     #!/usr/bin/env bash
     set -euo pipefail
-    container="mekhan-httpbin"
+    container="${COMPOSE_PROJECT_NAME:-mekhan}-httpbin"
     if docker ps --format '{{{{.Names}}}}' | grep -Fxq "$container"; then
       docker stop "$container" >/dev/null
       echo "  ✓ httpbin stopped"
@@ -513,7 +539,7 @@ up-executor:
     [cancel]
     nats      = true
     http      = true
-    http_port = 13105
+    http_port = {{cancel_port}}
     EOF
 
     echo "▶ starting executor…"
@@ -585,7 +611,7 @@ up-engine scheduler="off":
       export SLURM_TEMPLATE_DIR="/opt/petri/templates"
     fi
 
-    echo "▶ starting engine on :13030…"
+    echo "▶ starting engine on :{{engine_port}}…"
     # VAULT_ADDR + VAULT_TOKEN flip the engine's `executor-vault-secrets`
     # path on: at job-submit time it scans the spec for secret-template
     # refs, resolves them via VaultSecretStore, and wraps them into a
@@ -600,11 +626,11 @@ up-engine scheduler="off":
       EXECUTOR_NAMESPACE="executor" \
       VAULT_ADDR="{{vault_addr}}" \
       VAULT_TOKEN="{{vault_token}}" \
-      PORT="13030" \
+      PORT="{{engine_port}}" \
       "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine" \
       > "{{log_dir}}/engine.log" 2>&1 &
     echo $! > "{{pid_dir}}/engine.pid"
-    echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  http://localhost:13030  log: {{log_dir}}/engine.log"
+    echo "  ✓ engine (pid $(cat {{pid_dir}}/engine.pid))  {{engine_url}}  log: {{log_dir}}/engine.log"
 
 down-engine:
     @just dev::_kill engine
@@ -731,10 +757,10 @@ scheduler-up:
     just dev::up-engine nomad
     echo "▶ waiting for engine API…"
     for _ in $(seq 1 30); do
-      curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 && break
+      curl -sf {{engine_url}}/api/nets/metadata >/dev/null 2>&1 && break
       sleep 1
     done
-    curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 || {
+    curl -sf {{engine_url}}/api/nets/metadata >/dev/null 2>&1 || {
       echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
     sleep 2  # let the Nomad + executor watchers connect
 
@@ -750,7 +776,7 @@ scheduler-up:
     echo ""
     echo "✓ Nomad scheduler layer up:"
     echo "  nomad        → http://localhost:4646/ui"
-    echo "  scheduler-net + executor-net deployed & running on :13030"
+    echo "  scheduler-net + executor-net deployed & running on :{{engine_port}}"
     echo "  engine now started with SCHEDULER_BACKEND=nomad (Scheduled steps dispatch)"
     echo "  dev daemon executor PAUSED — Nomad worker is the sole consumer"
     echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
@@ -854,7 +880,7 @@ slurm-up:
     cat > "$tpl" <<'TEMPLATE'
     #!/bin/bash
     #SBATCH --output=/tmp/petri-executor-%j.out
-    export EXECUTOR_NATS_URL=nats://host.docker.internal:14333
+    export EXECUTOR_NATS_URL=nats://host.docker.internal:{{nats_port}}
     export EXECUTOR_NAMESPACE=executor
     export EXECUTOR_SOURCE=nats_queue
     export EXECUTOR_LIFETIME=run_to_completion
@@ -866,7 +892,7 @@ slurm-up:
     export EXECUTOR_IDLE_TIMEOUT_SECS=15
     export AITHERICON_SDK_PATH=/opt/petri/aithericon-sdk
     export EXECUTOR_STORAGE__BACKEND=s3
-    export EXECUTOR_STORAGE__ENDPOINT=http://host.docker.internal:19005
+    export EXECUTOR_STORAGE__ENDPOINT=http://host.docker.internal:{{s3_port}}
     export EXECUTOR_STORAGE__BUCKET=mekhan-artifacts
     export EXECUTOR_STORAGE__REGION=us-east-1
     export EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY=rustfsadmin
@@ -920,10 +946,10 @@ slurm-up:
     just dev::up-engine slurm
     echo "▶ waiting for engine API…"
     for _ in $(seq 1 30); do
-      curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 && break
+      curl -sf {{engine_url}}/api/nets/metadata >/dev/null 2>&1 && break
       sleep 1
     done
-    curl -sf http://localhost:13030/api/nets/metadata >/dev/null 2>&1 || {
+    curl -sf {{engine_url}}/api/nets/metadata >/dev/null 2>&1 || {
       echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
     sleep 2  # let the Slurm + executor watchers connect
 
@@ -938,7 +964,7 @@ slurm-up:
     echo ""
     echo "✓ Slurm scheduler layer up:"
     echo "  slurm        → docker compose (login: ssh -p 2222 testuser@localhost)"
-    echo "  scheduler-net + executor-net deployed & running on :13030"
+    echo "  scheduler-net + executor-net deployed & running on :{{engine_port}}"
     echo "  engine now started with SCHEDULER_BACKEND=slurm (Scheduled steps dispatch)"
     echo "  dev daemon executor PAUSED — Slurm worker is the sole consumer"
     echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
@@ -1001,10 +1027,10 @@ up-mekhan auth_mode="dev_noop":
         echo "  run: bash deploy/zitadel/bootstrap.sh" >&2
         exit 1
       fi
-      echo "▶ starting mekhan-service on :13100 (auth: BFF + Zitadel PAT introspection)…"
+      echo "▶ starting mekhan-service on :{{service_port}} (auth: BFF + Zitadel PAT introspection)…"
     else
       mode_assign="MEKHAN__AUTH__MODE=dev_noop"
-      echo "▶ starting mekhan-service on :13100 (auth: dev_noop — offline)…"
+      echo "▶ starting mekhan-service on :{{service_port}} (auth: dev_noop — offline)…"
     fi
     # VAULT_ADDR + VAULT_TOKEN promote the resource_store from the
     # in-memory placeholder (which loses secrets on every mekhan restart)
@@ -1015,8 +1041,8 @@ up-mekhan auth_mode="dev_noop":
       RUST_LOG="info,mekhan_service=debug" \
       MEKHAN__DATABASE_URL="{{database_url}}" \
       MEKHAN__NATS_URL="{{nats_url}}" \
-      MEKHAN__PORT="13100" \
-      MEKHAN__PETRI_LAB_URL="http://localhost:13030" \
+      MEKHAN__PORT="{{service_port}}" \
+      MEKHAN__PETRI_LAB_URL="{{engine_url}}" \
       MEKHAN__S3__ENDPOINT="{{s3_endpoint}}" \
       MEKHAN__S3__ACCESS_KEY="rustfsadmin" \
       MEKHAN__S3__SECRET_KEY="rustfsadmin" \
@@ -1028,7 +1054,7 @@ up-mekhan auth_mode="dev_noop":
       "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service" \
       > "{{log_dir}}/mekhan.log" 2>&1 &
     echo $! > "{{pid_dir}}/mekhan.pid"
-    echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  http://localhost:13100  log: {{log_dir}}/mekhan.log"
+    echo "  ✓ mekhan-service (pid $(cat {{pid_dir}}/mekhan.pid))  {{service_url}}  log: {{log_dir}}/mekhan.log"
 
 down-mekhan:
     @just dev::_kill mekhan
@@ -1052,11 +1078,15 @@ up-app:
     # dev user (no redirect, fully offline). Remove any stale env override a
     # previous (pre-BFF) `just dev` may have written so it can't shadow things.
     rm -f app/.env.development.local
-    echo "▶ starting SvelteKit dev server on :15173…"
-    nohup bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0 --port 15173' \
+    echo "▶ starting SvelteKit dev server on :{{app_port}}…"
+    # vite.config.ts reads MEKHAN_APP_PORT (own port) + MEKHAN_SERVICE_URL
+    # (proxy target) from the env; pass them explicitly so this works even
+    # when the recipe runs outside a direnv-hooked shell.
+    nohup env MEKHAN_APP_PORT="{{app_port}}" MEKHAN_SERVICE_URL="{{service_url}}" \
+      bash -c 'cd "$PWD/app" && exec pnpm run dev -- --host 0.0.0.0' \
       > "{{log_dir}}/app.log" 2>&1 &
     echo $! > "{{pid_dir}}/app.pid"
-    echo "  ✓ app (pid $(cat {{pid_dir}}/app.pid))  http://localhost:15173  log: {{log_dir}}/app.log"
+    echo "  ✓ app (pid $(cat {{pid_dir}}/app.pid))  http://localhost:{{app_port}}  log: {{log_dir}}/app.log"
 
 down-app:
     @just dev::_kill app
@@ -1097,16 +1127,16 @@ _kill name:
 
 _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo ""
-    @echo "✓ dev stack up:"
-    @echo "  postgres   → localhost:15439             (db: mekhan / user: mekhan / pw: mekhan)"
-    @echo "  nats       → localhost:14333             (http monitor: http://localhost:18333)"
-    @echo "  rustfs     → http://localhost:19005      (console: http://localhost:19006 / admin: rustfsadmin)"
-    @echo "  vault      → http://localhost:18200      (dev mode; root token: root; KV v2 at secret/)"
-    @echo "  ollama     → http://localhost:11434      (native /api/chat; up if installed, see just/dev.just::up-ollama)"
-    @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:13105)"
-    @echo "  engine     → http://localhost:13030"
-    @echo "  mekhan     → http://localhost:13100"
-    @echo "  app (dev)  → http://localhost:15173"
+    @echo "✓ dev stack up:  (slot {{env_var_or_default("WORKTREE_SLOT", "0")}}, project {{env_var_or_default("COMPOSE_PROJECT_NAME", "aithericon-platform")}})"
+    @echo "  postgres   → localhost:{{env_var_or_default("MEKHAN_PG_PORT", "15439")}}             (db: mekhan / user: mekhan / pw: mekhan)"
+    @echo "  nats       → {{nats_url}}             (http monitor: {{nats_mon_url}})"
+    @echo "  rustfs     → {{s3_endpoint}}      (console: http://localhost:{{s3_console_port}} / admin: rustfsadmin)"
+    @echo "  vault      → {{vault_addr}}      (dev mode; root token: root; KV v2 at secret/)"
+    @echo "  ollama     → http://localhost:11434      (shared across worktrees; native /api/chat)"
+    @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:{{cancel_port}})"
+    @echo "  engine     → {{engine_url}}"
+    @echo "  mekhan     → {{service_url}}"
+    @echo "  app (dev)  → http://localhost:{{app_port}}"
     @echo ""
     @echo "  auth       → {{auth}}"
     @echo ""

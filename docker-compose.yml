@@ -1,13 +1,18 @@
+# Host ports + the compose project name are parameterized for per-worktree
+# isolation (see just/scripts/dev-ports.sh). `${VAR:-legacy}` keeps the
+# historical fixed ports when the env is unset (slot 0 / no direnv / CI), and
+# COMPOSE_PROJECT_NAME (set only for slot ≥ 1) namespaces containers, networks,
+# and volumes so concurrent worktrees never collide. Container names are
+# intentionally NOT pinned so the project prefix takes effect.
 services:
   postgres:
     image: timescale/timescaledb:latest-pg16
-    container_name: mekhan-postgres
     environment:
       POSTGRES_DB: mekhan
       POSTGRES_USER: mekhan
       POSTGRES_PASSWORD: mekhan
     ports:
-      - "15439:5432"
+      - "${MEKHAN_PG_PORT:-15439}:5432"
     volumes:
       - mekhan-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,11 +23,10 @@ services:
 
   nats:
     image: nats:2.12-alpine
-    container_name: mekhan-nats
     command: ["--jetstream", "-m", "8222", "--store_dir", "/data"]
     ports:
-      - "14333:4222"   # client
-      - "18333:8222"   # http monitoring
+      - "${MEKHAN_NATS_PORT:-14333}:4222"        # client
+      - "${MEKHAN_NATS_MON_PORT:-18333}:8222"    # http monitoring
     volumes:
       - mekhan-natsdata:/data
     healthcheck:
@@ -43,7 +47,6 @@ services:
   # pg/nats/rustfs) so resources start clean.
   vault:
     image: hashicorp/vault:1.18
-    container_name: mekhan-vault
     cap_add:
       - IPC_LOCK
     environment:
@@ -51,7 +54,7 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
       VAULT_ADDR: "http://127.0.0.1:8200"
     ports:
-      - "18200:8200"
+      - "${MEKHAN_VAULT_PORT:-18200}:8200"
     healthcheck:
       # Dev mode: unsealed + active from boot. 200 = standby-allowed active leader.
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8200/v1/sys/health?standbyok=true"]
@@ -61,10 +64,9 @@ services:
 
   rustfs:
     image: rustfs/rustfs:latest
-    container_name: mekhan-rustfs
     ports:
-      - "19005:9000"   # S3 API (mekhan + executor artifact store)
-      - "19006:9001"   # web console
+      - "${MEKHAN_S3_PORT:-19005}:9000"          # S3 API (mekhan + executor artifact store)
+      - "${MEKHAN_S3_CONSOLE_PORT:-19006}:9001"  # web console
     environment:
       RUSTFS_ROOT_USER: rustfsadmin
       RUSTFS_ROOT_PASSWORD: rustfsadmin
@@ -86,13 +88,12 @@ services:
   # create the OIDC application and write app/.env.local.
   zitadel-db:
     image: postgres:16-alpine
-    container_name: zitadel-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: zitadel
     ports:
-      - "15440:5432"
+      - "${MEKHAN_ZITADEL_DB_PORT:-15440}:5432"
     volumes:
       - zitadel-pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -103,7 +104,6 @@ services:
 
   zitadel:
     image: ghcr.io/zitadel/zitadel:v4.15.0
-    container_name: zitadel
     restart: unless-stopped
     # FirstInstance config (admin user, machine user, PAT path) is supplied
     # via `--steps /zitadel-config/zitadel.yaml`. Database + external URL
@@ -127,7 +127,7 @@ services:
       ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: postgres
       ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
       ZITADEL_EXTERNALDOMAIN: localhost
-      ZITADEL_EXTERNALPORT: 18080
+      ZITADEL_EXTERNALPORT: ${MEKHAN_ZITADEL_PORT:-18080}
       ZITADEL_EXTERNALSECURE: "false"
       ZITADEL_TLS_ENABLED: "false"
     expose:
@@ -149,7 +149,6 @@ services:
   # admin's PAT that FirstInstance writes to /pat.
   zitadel-login:
     image: ghcr.io/zitadel/zitadel-login:v4.15.0
-    container_name: zitadel-login
     restart: unless-stopped
     environment:
       # Route the login UI's internal API calls back through caddy so the
@@ -171,10 +170,9 @@ services:
   # to zitadel core, so the whole stack appears on a single host port.
   zitadel-proxy:
     image: caddy:2-alpine
-    container_name: zitadel-proxy
     restart: unless-stopped
     ports:
-      - "18080:8080"
+      - "${MEKHAN_ZITADEL_PORT:-18080}:8080"
     volumes:
       - ./deploy/zitadel/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
