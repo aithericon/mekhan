@@ -64,6 +64,23 @@ pub struct DemoMetadata {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Catalogue visibility for the seeded row. Absent ⇒ `public` — the
+    /// historical default, so every existing demo keeps showing up in the
+    /// root catalogue cross-workspace. Set `"private"` for a sub-workflow /
+    /// agent-tool child (e.g. `08a`, `09b`) that should be hidden from the
+    /// catalogue and embeddable only by its owning parent demo. A `private`
+    /// demo MUST also declare `ownerTemplateId` (mirrors the
+    /// `workflow_templates` CHECK that pairs `visibility='private'` with a
+    /// non-null owner); `workspace`/`public` MUST NOT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    /// Owning parent family base id — the `templateId` of the parent demo
+    /// whose graph embeds this one as a SubWorkflow node. Required iff
+    /// `visibility == "private"`. Seeded demos are born v1 with
+    /// `base_template_id = id`, so the parent's family base IS its own
+    /// `templateId` — paste it here verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_template_id: Option<String>,
 }
 
 /// One parsed demo directory.
@@ -463,6 +480,14 @@ pub enum DemoSeedError {
     Load(#[from] DemoLoadError),
     #[error("metadata templateId `{0}` is not a valid UUID")]
     InvalidTemplateId(String),
+    #[error("metadata ownerTemplateId `{0}` is not a valid UUID")]
+    InvalidOwnerTemplateId(String),
+    #[error("visibility `{0}` is invalid — must be `workspace`, `public`, or `private`")]
+    InvalidVisibility(String),
+    #[error("visibility `private` requires `ownerTemplateId` (the embedding parent demo's templateId)")]
+    PrivateMissingOwner,
+    #[error("`ownerTemplateId` is only valid with `visibility: private`")]
+    OwnerOnNonPrivate,
     #[error("db error: {0}")]
     Db(#[from] sqlx::Error),
     #[error("compile failed: {0}")]
@@ -601,6 +626,25 @@ pub async fn seed_one(
         .parse()
         .map_err(|_| DemoSeedError::InvalidTemplateId(demo.metadata.template_id.clone()))?;
 
+    // Resolve + validate the declared visibility against the same invariant
+    // the DB CHECK enforces (`private` ⇔ owner present). Absent ⇒ `public`,
+    // the historical seed default. Doing it here turns a malformed demo.json
+    // into an actionable seed-error line instead of an opaque constraint
+    // violation on INSERT.
+    let visibility = demo.metadata.visibility.as_deref().unwrap_or("public");
+    let owner_template_id: Option<uuid::Uuid> = match (visibility, &demo.metadata.owner_template_id)
+    {
+        ("workspace" | "public", None) => None,
+        ("workspace" | "public", Some(_)) => return Err(DemoSeedError::OwnerOnNonPrivate),
+        ("private", None) => return Err(DemoSeedError::PrivateMissingOwner),
+        ("private", Some(owner)) => Some(
+            owner
+                .parse()
+                .map_err(|_| DemoSeedError::InvalidOwnerTemplateId(owner.clone()))?,
+        ),
+        (other, _) => return Err(DemoSeedError::InvalidVisibility(other.to_string())),
+    };
+
     // Idempotency: the stable id is the contract with the rest of the
     // platform (frontend lookup, e2e tests, hand-edited copies). If a
     // row already exists under it — whether seeded last boot or
@@ -657,8 +701,8 @@ pub async fn seed_one(
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
-             interface_json, author_id, workspace_id, visibility)
-        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, 'public')
+             interface_json, author_id, workspace_id, visibility, owner_template_id)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
         "#,
     )
@@ -670,6 +714,8 @@ pub async fn seed_one(
     .bind(&interface_json)
     .bind(DEMO_SEEDER_AUTHOR_ID)
     .bind(DEMO_WORKSPACE_ID)
+    .bind(visibility)
+    .bind(owner_template_id)
     .fetch_one(&state.db)
     .await?;
 
@@ -677,24 +723,31 @@ pub async fn seed_one(
     // `base_template_id` (= `template_id` here, since this is v1), so the
     // attachment follows the live `is_latest` version automatically.
     // Best-effort: a grouping failure must not fail the seed.
-    match ensure_demo_project(state).await {
-        Ok(project_id) => {
-            if let Err(e) = sqlx::query(
-                "INSERT INTO project_templates (project_id, base_template_id, added_by) \
-                      VALUES ($1, $2, $3) \
-                 ON CONFLICT (project_id, base_template_id) DO NOTHING",
-            )
-            .bind(project_id)
-            .bind(template_id)
-            .bind(DEMO_SEEDER_AUTHOR_ID)
-            .execute(&state.db)
-            .await
-            {
-                tracing::warn!(template_id = %template_id, error = %e, "attach demo to project failed (skipped)");
+    //
+    // Private children are skipped: they're hidden from the catalogue (and
+    // the project listing already filters `visibility <> 'private'`), so a
+    // `project_templates` row for them would be dead weight, not a demo a
+    // user can open from the project view.
+    if visibility != "private" {
+        match ensure_demo_project(state).await {
+            Ok(project_id) => {
+                if let Err(e) = sqlx::query(
+                    "INSERT INTO project_templates (project_id, base_template_id, added_by) \
+                          VALUES ($1, $2, $3) \
+                     ON CONFLICT (project_id, base_template_id) DO NOTHING",
+                )
+                .bind(project_id)
+                .bind(template_id)
+                .bind(DEMO_SEEDER_AUTHOR_ID)
+                .execute(&state.db)
+                .await
+                {
+                    tracing::warn!(template_id = %template_id, error = %e, "attach demo to project failed (skipped)");
+                }
             }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "ensure demo project failed — demo seeded without project grouping");
+            Err(e) => {
+                tracing::warn!(error = %e, "ensure demo project failed — demo seeded without project grouping");
+            }
         }
     }
 
@@ -2504,10 +2557,10 @@ mod tests {
 
     #[test]
     fn demos_without_tests_dir_yield_empty_tests_vec() {
-        // 02-human-form has no tests/ directory — must not error, must
-        // return an empty Vec rather than e.g. `None`.
-        let demo = load_demo(&repo_root().join("demos/02-human-form"))
-            .expect("02-human-form must load");
+        // 07-ocr-classify-extract has no tests/ directory — must not error,
+        // must return an empty Vec rather than e.g. `None`.
+        let demo = load_demo(&repo_root().join("demos/07-ocr-classify-extract"))
+            .expect("07-ocr-classify-extract must load");
         assert!(demo.tests.is_empty());
     }
 }
