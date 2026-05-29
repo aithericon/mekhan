@@ -303,6 +303,43 @@ pub const PROCESS_LOG_MESSAGE: EffectDescriptor = EffectDescriptor {
     default_output_schema: None,
 };
 
+/// Acquire a lease/allocation on an external cluster (datacenter resource).
+///
+/// R4: the `scheduler` deployment backend's `lease` operation. The handler
+/// (`ResourceLeaseAcquireHandler`) POSTs the claim request to the allocator URL
+/// (resolved per-fire from the datacenter resource secret in `effect_config`)
+/// and emits the typed lease (`{ grant_id, node, gpu_uuid, alloc_id, expiry }`)
+/// — the `DatacenterLease` shape from `aithericon_resources::pool`. The
+/// allocator is the source of truth; the net holds only the lease handle.
+///
+/// Idempotency/replay: `grant_id` (replay-safe `instance_id:node_id`) is the
+/// allocator idempotency key, and replay re-emits the journaled lease without
+/// calling the allocator. Categorised under [`ServiceCategory::Scheduler`] — a
+/// lease is "external cluster" admission, the same subsystem as submit.
+pub const RESOURCE_LEASE_ACQUIRE: EffectDescriptor = EffectDescriptor {
+    handler_id: "resource_lease_acquire",
+    default_input_port: "request",
+    default_output_port: "lease",
+    category: ServiceCategory::Scheduler,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
+/// Release a previously acquired cluster lease/allocation.
+///
+/// Symmetric to [`RESOURCE_LEASE_ACQUIRE`]: the handler
+/// (`ResourceLeaseReleaseHandler`) DELETEs the allocation at the allocator
+/// (`{allocator_url}/{alloc_id}`) and emits `{ grant_id }`. Replay re-emits the
+/// journaled result without calling the allocator.
+pub const RESOURCE_LEASE_RELEASE: EffectDescriptor = EffectDescriptor {
+    handler_id: "resource_lease_release",
+    default_input_port: "release",
+    default_output_port: "released",
+    category: ServiceCategory::Scheduler,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
 /// All built-in effect descriptors.
 pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &SCHEDULER_SUBMIT,
@@ -326,6 +363,8 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &PROCESS_PROGRESS,
     &PROCESS_LOG_METRIC,
     &PROCESS_LOG_MESSAGE,
+    &RESOURCE_LEASE_ACQUIRE,
+    &RESOURCE_LEASE_RELEASE,
 ];
 
 /// Look up a built-in descriptor by handler_id.
@@ -380,7 +419,7 @@ mod tests {
 
     #[test]
     fn all_builtin_covers_all_handlers() {
-        assert_eq!(ALL_BUILTIN.len(), 21);
+        assert_eq!(ALL_BUILTIN.len(), 23);
         let ids: Vec<&str> = ALL_BUILTIN.iter().map(|d| d.handler_id).collect();
         assert!(ids.contains(&"scheduler_submit"));
         assert!(ids.contains(&"scheduler_cancel"));
@@ -402,6 +441,8 @@ mod tests {
         assert!(ids.contains(&"process_progress"));
         assert!(ids.contains(&"process_log_metric"));
         assert!(ids.contains(&"process_log_message"));
+        assert!(ids.contains(&"resource_lease_acquire"));
+        assert!(ids.contains(&"resource_lease_release"));
     }
 
     #[test]

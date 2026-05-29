@@ -23,13 +23,14 @@ use petri_application::pre_dispatch::{
     PreDispatchHookConfig, PreDispatchRuntime, PreDispatchTransport, RegistrationError,
 };
 use petri_application::{
-    AdapterScheduler, EventRepository, MockSchedulerClient, PetriNetService,
+    AdapterScheduler, EventRepository, HttpAllocatorClient, MockSchedulerClient, PetriNetService,
     ProcessCompleteHandler, ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
-    ProcessStartHandler, ProcessStatusDetailHandler,
-    SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection,
+    ProcessStartHandler, ProcessStatusDetailHandler, ResourceLeaseAcquireHandler,
+    ResourceLeaseReleaseHandler, SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection,
     subworkflow_handlers::SubWorkflowCancelHandler, TimerCancelHandler, TimerScheduleHandler,
     TopologyRepository,
 };
+use petri_application::resource_lease_handlers::AllocatorClient;
 #[cfg(feature = "catalogue")]
 use petri_application::{
     CatalogueLookupHandler, CatalogueRegisterHandler, CatalogueSubscribeHandler,
@@ -850,6 +851,36 @@ where
             .expect("register process_progress effect handler");
 
         tracing::info!(net_id = %net_id, "Registered process lifecycle effect handlers (start + complete + fail + metric + log + phase + progress)");
+
+        // Register resource-lease effect handlers (always — R4 `scheduler`
+        // backend's `lease` operation). The allocator connection
+        // (url + token) arrives per-FIRE via the transition's `effect_config`
+        // (resolved from the datacenter resource secret just-in-time), NOT at
+        // net-create — so one stateless `HttpAllocatorClient` serves every
+        // datacenter, no per-net connection state. Mirror the process-lifecycle
+        // always-on block.
+        let allocator_client: Arc<dyn AllocatorClient> = Arc::new(HttpAllocatorClient::new());
+        service
+            .register_effect_handler(
+                effects::RESOURCE_LEASE_ACQUIRE.handler_id,
+                Arc::new(ResourceLeaseAcquireHandler::new(
+                    allocator_client.clone(),
+                    effects::RESOURCE_LEASE_ACQUIRE.default_input_port,
+                    effects::RESOURCE_LEASE_ACQUIRE.default_output_port,
+                )),
+            )
+            .expect("register resource_lease_acquire effect handler");
+        service
+            .register_effect_handler(
+                effects::RESOURCE_LEASE_RELEASE.handler_id,
+                Arc::new(ResourceLeaseReleaseHandler::new(
+                    allocator_client,
+                    effects::RESOURCE_LEASE_RELEASE.default_input_port,
+                    effects::RESOURCE_LEASE_RELEASE.default_output_port,
+                )),
+            )
+            .expect("register resource_lease_release effect handler");
+        tracing::info!(net_id = %net_id, "Registered resource_lease effect handlers (acquire + release)");
 
         // Register timer effect handlers if configured
         if let Some(ref timer_client) = self.timer_client {
