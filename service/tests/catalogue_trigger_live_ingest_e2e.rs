@@ -244,6 +244,48 @@ fn template_graph(category: &str) -> Value {
     })
 }
 
+/// Catalog Trigger filtering on `category=metric` AND a `user_metadata.kind`
+/// sentinel, with a non-empty `payloadMapping` projecting two user_metadata
+/// fields onto kind:json Start fields. This is the shape the (fixed) 12a demo
+/// uses — the bare `template_graph` above proves spawn but never exercises
+/// user_metadata filtering or payloadMapping projection, which is the actual
+/// Phase-4 gap.
+fn template_graph_with_metadata(kind_sentinel: &str) -> Value {
+    json!({
+        "nodes": [
+            { "id": "trig", "type": "trigger", "position": { "x": 0, "y": 0 },
+              "data": { "type": "trigger", "label": "On BO Observation",
+                        "enabled": true,
+                        "source": {
+                            "kind": "catalog",
+                            "filters": {
+                                "category": { "eq": "metric" },
+                                "user_metadata.kind": { "eq": kind_sentinel }
+                            },
+                            "backfill": false
+                        },
+                        "payloadMapping": [
+                            { "targetField": "observations", "expression": "user_metadata.observations" },
+                            { "targetField": "last_z", "expression": "user_metadata.z" }
+                        ] } },
+            { "id": "start", "type": "start", "position": { "x": 200, "y": 0 },
+              "data": { "type": "start", "label": "Start",
+                        "initial": { "id": "in", "label": "Input", "fields": [
+                            { "name": "observations", "label": "Observations", "kind": "json", "required": true },
+                            { "name": "last_z", "label": "Latest z", "kind": "json", "required": true }
+                        ] } } },
+            { "id": "end", "type": "end", "position": { "x": 400, "y": 0 },
+              "data": { "type": "end", "label": "Done", "resultMapping": [] } }
+        ],
+        "edges": [
+            { "id": "e_trig_start", "source": "trig", "target": "start",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "e_start_end", "source": "start", "target": "end",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    })
+}
+
 async fn create_template(app: &axum::Router, name: &str, graph: Value) -> Uuid {
     let resp = app
         .clone()
@@ -376,6 +418,77 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
     // missing-`created_at` bug this test was originally written for, and
     // the sibling `malformed_catalogue_register_bumps_silent_drops` test
     // proves the loud-failure wiring still works.)
+}
+
+/// Phase-4 cycle-closure with a REAL trigger shape: prove that a catalogue
+/// entry carrying `category=metric` + a `user_metadata.kind` sentinel fires a
+/// trigger that filters on BOTH the category and the sentinel, projects two
+/// user_metadata fields through a non-empty payloadMapping onto kind:json
+/// Start fields, passes the strict Start-contract gate (no number-field
+/// reject), and spawns + completes an instance. Executor-free: the synthetic
+/// catalogue_register event stands in for the 12b producer's real LogArtifact.
+#[tokio::test]
+async fn metric_with_kind_sentinel_fires_payload_mapping_trigger() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev up`",
+            engine_url()
+        );
+    }
+    let nats_url = engine_nats_url();
+    let (app, db, triggers) =
+        common::test_app_with_petri_url_and_triggers(&nats_url, &engine_url()).await;
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("nats")
+        .with_consumer_prefix(test_prefix());
+    let _consumers = spawn_consumers(nats.clone(), db.clone(), triggers).await;
+
+    // Per-run sentinel so this test isolates from any concurrent fires.
+    let kind_sentinel = format!("bo_observation_{}", Uuid::new_v4().simple());
+    let template = create_template(
+        &app,
+        "BO Observation Cycle",
+        template_graph_with_metadata(&kind_sentinel),
+    )
+    .await;
+    publish(&app, template).await;
+
+    // Synthetic CatalogueRegisterCommand mirroring what the 12b producer's
+    // log_artifact(category=metric, metadata={kind, observations, z}) becomes
+    // after the engine's catalogue_register effect: category=metric and a
+    // user_metadata map of STRING values (proto map<string,string>).
+    let execution_id = format!("test-exec-{}", Uuid::new_v4());
+    let artifact_id = format!("test-art-{}", Uuid::new_v4());
+    let net_id = format!("mekhan-fake-{}", Uuid::new_v4());
+    let cmd = json!({
+        "execution_id": execution_id,
+        "job_id": "test-job",
+        "artifact_id": artifact_id,
+        "name": "bo_obs",
+        "category": "metric",
+        "filename": "obs.json",
+        "mime_type": "application/json",
+        "size_bytes": 0,
+        "storage_path": "test/path/obs.json",
+        "user_metadata": {
+            "kind": kind_sentinel,
+            "observations": "[{\"a\":0.3,\"d\":0.7,\"z\":1.42}]",
+            "z": "1.42"
+        },
+        "created_at": chrono::Utc::now().to_rfc3339()
+    });
+    let event = catalogue_register_event(1, cmd);
+
+    let js = nats.jetstream().clone();
+    publish_event(&js, &net_id, "effect_completed", &event).await;
+
+    // Trigger filter must match BOTH category=metric and the kind sentinel;
+    // payloadMapping must project user_metadata.observations / user_metadata.z
+    // onto the kind:json Start fields and pass the strict Start gate.
+    let instances = wait_for_instance_count(&db, template, 1, Duration::from_secs(15)).await;
+    let (instance_id, _) = instances[0].clone();
+    wait_for_status(&db, instance_id, "completed", Duration::from_secs(15)).await;
 }
 
 /// Proof-of-loudness: publish a deliberately malformed `catalogue_register`

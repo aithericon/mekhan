@@ -20,6 +20,23 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         unreachable!("lower_subworkflow on non-SubWorkflow node")
     };
 
+    // Map-body-terminal gate (computed before `cx.ctx` is reborrowed below).
+    // A SubWorkflow that terminates a Map body must carry the Map correlation
+    // leaves (`__map_idx`/`__map_id`) across the spawn round-trip. We do NOT
+    // need a parent-side side place: `_`-prefixed leaves on the spawn
+    // `initial_token` thread through the child verbatim (spawn_net_handler
+    // forwards the token as-is, the bridge transfer is verbatim full-JSON, the
+    // child's Start forks + body preserves `_`-leaves + End preserves them on
+    // the reply). So `t_shape` grafts the two leaves onto `initial_token`, they
+    // ride into the child and back on the reply, and `t_join` reads them
+    // straight off `reply` — each of the K concurrent replies natively carries
+    // its OWN correlation, no shared place, no race. We also re-shape the join
+    // output as an executor-style `detail.outputs` envelope so the Map's
+    // `t_collect` can lift `body.detail.outputs.<resultVar>`. Shared gate — see
+    // `super::is_map_body_terminal` (the same one AutomatedStep/Agent use).
+    let is_map_body_terminal =
+        super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
+
     // The child AIR is resolved + made-callable + frozen by the publish/preview
     // handler. Absent ⇒ this graph was compiled through a path that doesn't
     // resolve sub-workflows (back-compat `compile_to_air`); surface it keyed to
@@ -75,6 +92,37 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         )
     };
 
+    // Map-body variant of the join: same unwrap + declared-field projection,
+    // then wrap as `#{ detail: #{ outputs: <fields> } }` and graft the
+    // correlation leaves read straight off the `reply` token — they threaded
+    // through the child (in via `initial_token`, out via End's full-token
+    // forward) so each reply carries its OWN `__map_*`, correct for K concurrent
+    // with no shared side place. The Map's `t_collect` lifts
+    // `body.detail.outputs.<resultVar>` + `body.__map_idx` / `body.__map_id`.
+    // Only used when `is_map_body_terminal`.
+    let join_logic_map = {
+        let inner = if output.fields.is_empty() {
+            r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code { reply.exit_code.value } else { reply }; let __o = __v;"#.to_string()
+        } else {
+            let entries: Vec<String> = output
+                .fields
+                .iter()
+                .map(|f| {
+                    let k = serde_json::to_string(&f.name)
+                        .unwrap_or_else(|_| "\"\"".to_string());
+                    format!("{k}: __v[{k}]")
+                })
+                .collect();
+            format!(
+                r#"let __v = if "exit_code" in reply && type_of(reply.exit_code) == "map" && "value" in reply.exit_code {{ reply.exit_code.value }} else {{ reply }}; let __o = #{{ {} }};"#,
+                entries.join(", ")
+            )
+        };
+        format!(
+            r#"{inner} let __env = #{{ detail: #{{ outputs: __o, exit_code: 0 }}, status: "succeeded", source: "subworkflow" }}; if type_of(reply) == "map" {{ if "__map_idx" in reply {{ __env.__map_idx = reply.__map_idx; }} if "__map_id" in reply {{ __env.__map_id = reply.__map_id; }} }} #{{ output: __env }}"#
+        )
+    };
+
     let ctx = &mut *cx.ctx;
 
     // Node interface places.
@@ -123,16 +171,32 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     );
 
     // Shape: upstream token → spawn request { initial_token, target_place }.
-    ctx.transition(
-        format!("t_{id}_shape"),
-        format!("{label} - Prepare Sub-workflow"),
-    )
-    .auto_input("input", &p_input)
-    .auto_output("spawn_request", &p_request)
-    .logic_rhai(with_pluck_prelude(&format!(
-        r#"{im_lets}let __ci = ({init_expr}); #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
-    )))
-    .done();
+    // A Map body terminal grafts the correlation leaves onto `initial_token`
+    // so they thread INTO the child (and back out on the reply — see the gate
+    // comment); no side place, no second transition.
+    if is_map_body_terminal {
+        ctx.transition(
+            format!("t_{id}_shape"),
+            format!("{label} - Prepare Sub-workflow"),
+        )
+        .auto_input("input", &p_input)
+        .auto_output("spawn_request", &p_request)
+        .logic_rhai(with_pluck_prelude(&format!(
+            r#"{im_lets}let __ci = ({init_expr}); if type_of(__ci) == "map" && type_of(input) == "map" {{ if "__map_idx" in input {{ __ci.__map_idx = input.__map_idx; }} if "__map_id" in input {{ __ci.__map_id = input.__map_id; }} }} #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
+        )))
+        .done();
+    } else {
+        ctx.transition(
+            format!("t_{id}_shape"),
+            format!("{label} - Prepare Sub-workflow"),
+        )
+        .auto_input("input", &p_input)
+        .auto_output("spawn_request", &p_request)
+        .logic_rhai(with_pluck_prelude(&format!(
+            r#"{im_lets}let __ci = ({init_expr}); #{{ spawn_request: #{{ initial_token: __ci, target_place: "inbox" }} }}"#
+        )))
+        .done();
+    }
 
     // Spawn effect: embed the made-callable child AIR; the handler injects
     // `parent_net_id` and merges `reply_place`/`failure_place` into the child's
@@ -151,11 +215,20 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         .auto_output("bridge", &p_outbox)
         .effect_with_config(effects::SPAWN_NET.handler_id, effect_config);
 
-    // Join success: child terminal result → node output (declared mapping).
-    ctx.transition(format!("t_{id}_join"), format!("{label} - Join Result"))
-        .auto_input("reply", &p_reply)
-        .auto_output("output", &p_output)
-        .logic(join_logic);
+    // Join success: child terminal result → node output (declared mapping). A
+    // Map body terminal re-shapes the output as a `detail.outputs` envelope and
+    // reads the correlation leaves straight off the (threaded-back) reply.
+    if is_map_body_terminal {
+        ctx.transition(format!("t_{id}_join"), format!("{label} - Join Result"))
+            .auto_input("reply", &p_reply)
+            .auto_output("output", &p_output)
+            .logic(join_logic_map);
+    } else {
+        ctx.transition(format!("t_{id}_join"), format!("{label} - Join Result"))
+            .auto_input("reply", &p_reply)
+            .auto_output("output", &p_output)
+            .logic(join_logic);
+    }
 
     // Failure: child failure → node error output.
     ctx.transition(
@@ -166,9 +239,16 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     .auto_output("error", &p_error)
     .logic(r#"#{ error: reply }"#);
 
-    // Foundation split: park the child result as write-once data, forward the
-    // slim control token. Identical tail to lower_automated_step.
-    let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
+    // Foundation tail. A Map body terminal forks the FULL envelope via
+    // park_outputs (so detail.outputs + threaded-back __map_* leaves reach the
+    // Map's body_out); otherwise the slim split_outputs control token. Either
+    // way `<slug>.<field>` borrows resolve through the parked data place.
+    // Identical tail to lower_automated_step.
+    let (data_place_id, p_ctrl) = if is_map_body_terminal {
+        park_outputs(ctx, id, label, &p_output)
+    } else {
+        split_outputs(ctx, id, label, &p_output)
+    };
 
     cx.ports.insert(
         id.clone(),

@@ -544,6 +544,31 @@ pub(super) fn park_outputs(
     (format!("p_{id}_data"), p_main)
 }
 
+/// True when `node` is the TERMINAL of a Map body — the child whose edge enters
+/// the parent Map's `body_out` handle. Such a node must fork its FULL completed
+/// envelope (park data AND forward the whole token via `park_outputs`) so the
+/// Map's `t_<map>_collect` can read `body.detail.outputs.<resultVar>` plus the
+/// preserved `__map_idx`/`__map_id` correlation leaves; the slim `split_outputs`
+/// control token carries neither. Single source of truth shared by every body
+/// kind that can sit at a Map terminal (AutomatedStep inline, Agent full-loop,
+/// SubWorkflow). Loop body terminals deliberately do NOT call this — a Loop
+/// reads its body output via the parked `<body>.<field>` borrow once per
+/// iteration, with no K-fan-out correlation.
+///
+/// `outgoing_edges` are the edges whose `source == node_id` (see `graph::outgoing`).
+pub(super) fn is_map_body_terminal(
+    graph: &WorkflowGraph,
+    parent_id: Option<&str>,
+    outgoing_edges: &[&WorkflowEdge],
+) -> bool {
+    parent_id.is_some_and(|pid| {
+        crate::compiler::token_shape::is_map_node(graph, pid)
+            && outgoing_edges
+                .iter()
+                .any(|e| e.target == pid && e.target_handle.as_deref() == Some("body_out"))
+    })
+}
+
 /// Apply every queued [`AgentToolWiring`]: mint the per-tool invoke +
 /// collect (+ optional collect_error / bubble) transitions that bridge
 /// each agent's `p_dispatch_<tn>` and `p_state_in_tool` places to its

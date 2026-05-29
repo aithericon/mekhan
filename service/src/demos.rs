@@ -1838,8 +1838,22 @@ mod tests {
                             .expect("filters.category must be present");
                         assert_eq!(
                             cat_filter.get("eq").map(String::as_str),
-                            Some("bo_observation"),
+                            Some("metric"),
                             "category eq filter"
+                        );
+                        // The semantic `bo_observation` lives in a
+                        // user_metadata sentinel — `category` is a closed enum
+                        // (one of the 8 ArtifactCategory values), so a real
+                        // producer tags `category=metric` plus
+                        // `metadata.kind=bo_observation`.
+                        let kind_filter = cat
+                            .filters
+                            .get("user_metadata.kind")
+                            .expect("filters.user_metadata.kind must be present");
+                        assert_eq!(
+                            kind_filter.get("eq").map(String::as_str),
+                            Some("bo_observation"),
+                            "user_metadata.kind sentinel"
                         );
                     }
                     other => panic!("trigger source must be Catalog, got {other:?}"),
@@ -1869,6 +1883,38 @@ mod tests {
             },
         )
         .expect("12a-bo-catalog-trigger body must compile (Trigger skipped, Start→propose→End)");
+    }
+
+    /// The 12b producer demo (the catalogue-side half of Phase 4) loads with
+    /// the expected identity and its Start→emit→End body compiles through the
+    /// same AIR pipeline `publish` uses — including read-arc synthesis for the
+    /// `start.a/d/z` slug borrows in the `aithericon.log_artifact` producer.
+    /// Guards against a fixture-shape regression (bad graph.json, missing node
+    /// file, templateId collision) being caught only at live-seed time.
+    #[test]
+    fn bo_observation_producer_demo_compiles() {
+        use crate::compiler::{compile_to_air_with_options, node_files_inline, CompileOptions};
+
+        let demo = load_demo(&repo_root().join("demos/12b-bo-observation-producer"))
+            .expect("12b-bo-observation-producer must load");
+        assert_eq!(demo.metadata.name, "12b · BO Observation Producer");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000c2"
+        );
+
+        let files = node_files_inline(&demo.files);
+        compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("12b-bo-observation-producer body must compile (Start→emit→End)");
     }
 
     /// The learning-path demos (`01-` … `06-`) all parse through the same

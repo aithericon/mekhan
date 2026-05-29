@@ -330,7 +330,68 @@ pub(crate) fn validate_map(
             node.id
         )));
     }
+    // Body-terminal kind gate: the node that SOURCES the `body_out` edge must be
+    // a parked-producer kind that emits a `detail.outputs.<resultVar>` envelope
+    // the gather can lift + correlate. Reject engine-effect / scheduled /
+    // pass-through terminals at publish (they silently wedge the gather with
+    // all-null elements otherwise). A Map-typed terminal is SKIPPED here — its
+    // own `validate_map` raises `MapNested` first, which owns the nesting case.
+    // Runs after MapResultVarInvalid + MapNested + body-presence so none of
+    // those field-specific errors are masked.
+    let by_id: HashMap<&str, &WorkflowNode> =
+        graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    for e in graph
+        .edges
+        .iter()
+        .filter(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"))
+    {
+        let Some(term) = by_id.get(e.source.as_str()) else {
+            continue; // dangling source — a reachability error surfaces elsewhere
+        };
+        if matches!(term.data, WorkflowNodeData::Map { .. }) {
+            continue; // nested Map: deferred to that Map's own MapNested check
+        }
+        if !map_body_terminal_supported(&term.data) {
+            return Err(CompileError::MapBodyUnsupported {
+                map_id: node.id.clone(),
+                node_id: term.id.clone(),
+                kind: term.data.type_name().to_string(),
+            });
+        }
+    }
     Ok(())
+}
+
+/// A node kind is a valid Map body terminal iff it parks an executor-style
+/// `detail.outputs.<resultVar>` envelope the gather can lift + correlate:
+/// an `Executor`-deployed AutomatedStep on an `ExecutorJob` backend (our worker
+/// pool — pooled or not; the executor lifecycle preserves `_`-leaves + parks
+/// declared outputs), an Agent (degenerate or full-loop — both emit the
+/// executor-shaped envelope), or a SubWorkflow (the lowering re-shapes its join
+/// into a `detail.outputs` envelope and threads the `__map_*` correlation leaves
+/// through the child via the spawn `initial_token` → reply round-trip —
+/// verbatim, per the engine bridge, no shared side place).
+/// `Scheduled` AutomatedSteps, engine-effect backends (CatalogueQuery), and pure
+/// pass-through / control kinds (PhaseUpdate, Decision, Join, …) cannot. The
+/// verdict mirrors what the lower arms enforce structurally, surfaced at publish
+/// so the editor rings the offending node.
+fn map_body_terminal_supported(data: &WorkflowNodeData) -> bool {
+    match data {
+        WorkflowNodeData::AutomatedStep {
+            execution_spec,
+            deployment_model,
+            ..
+        } => {
+            matches!(
+                deployment_model,
+                crate::models::template::DeploymentModel::Executor { .. }
+            ) && crate::backends::lookup(execution_spec.backend_type)
+                .map(|d| matches!(d.dispatch_mode(), crate::backends::DispatchMode::ExecutorJob))
+                .unwrap_or(false)
+        }
+        WorkflowNodeData::Agent { .. } | WorkflowNodeData::SubWorkflow { .. } => true,
+        _ => false,
+    }
 }
 
 /// Walk `node`'s `parent_id` chain and return the id of the first `Map`

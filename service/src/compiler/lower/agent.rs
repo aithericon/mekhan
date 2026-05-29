@@ -212,6 +212,17 @@ fn lower_agent_loop(
     let max_turns = *max_turns;
     let on_tool_error = *on_tool_error;
 
+    // Map-body-terminal gate: when this agent is the terminal child of a Map
+    // body it must fork its FULL envelope (park data AND forward the whole
+    // token) and preserve the __map_idx/__map_id correlation leaves so the
+    // Map's t_collect can read body.detail.outputs.<resultVar> + correlate.
+    // Computed here, before `cx.ctx` is reborrowed mutably below, and used
+    // to GATE the t_enter/t_route_final correlation edits + park-vs-split so
+    // the non-map agent AIR is byte-identical. Shared gate — see
+    // `super::is_map_body_terminal`.
+    let is_map_body_terminal =
+        super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
+
     // Per-tool derived metadata: tool_name = slugified node label,
     // tool_description = node description (verbatim). Single source of
     // truth — the canvas label IS what the LLM sees (after sanitisation).
@@ -417,10 +428,16 @@ fn lower_agent_loop(
     ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Agent"))
         .auto_input("input", &p_input)
         .auto_output("state", &p_state)
-        .logic_rhai(
+        // When a Map body terminal: capture the Map correlation leaves off the
+        // inbound token into state so t_route_final can re-attach them. The
+        // non-map branch keeps the byte-identical original state literal.
+        .logic_rhai(if is_map_body_terminal {
+            r#"let __mi = if type_of(input) == "map" && "__map_idx" in input { input.__map_idx } else { () }; let __mid = if type_of(input) == "map" && "__map_id" in input { input.__map_id } else { () }; #{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, pending: [], pending_tool_call_id: (), input: input, final_response: (), __map_idx: __mi, __map_id: __mid } }"#
+                .to_string()
+        } else {
             r#"#{ state: #{ turn: 0, message_count: 0, total_tokens_in: 0, total_tokens_out: 0, pending: [], pending_tool_call_id: (), input: input, final_response: () } }"#
-                .to_string(),
-        )
+                .to_string()
+        })
         .done();
 
     // ----- t_prepare_call: state → exec_inbox + p_state_in_flight -----
@@ -578,9 +595,18 @@ fn lower_agent_loop(
     .guard_rhai(format!(
         r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; tc.len() == 0 || s.turn + 1 >= {max_turns} || {stop_when_expr}"#
     ))
-    .logic_rhai(format!(
-        r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history_ref = "instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json"; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
-    ))
+    // When a Map body terminal: copy the captured correlation leaves onto the
+    // emitted envelope so the Map's gather can count/order this element. The
+    // non-map branch keeps the byte-identical original envelope.
+    .logic_rhai(if is_map_body_terminal {
+        format!(
+            r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history_ref = "instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json"; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; if s.__map_idx != () {{ env.__map_idx = s.__map_idx; }} if s.__map_id != () {{ env.__map_id = s.__map_id; }} #{{ final: env }}"#
+        )
+    } else {
+        format!(
+            r#"let s = response.state; {extract_tr} let outputs = outs; outputs.usage = #{{ input_tokens: s.total_tokens_in, output_tokens: s.total_tokens_out }}; outputs.turn = s.turn; outputs.history_ref = "instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json"; outputs.final_response = tr; outputs.input = s.input; let env = #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "succeeded", source: "agent_loop", detail: #{{ outputs: outputs, exit_code: 0 }} }}; #{{ final: env }}"#
+        )
+    })
     .done();
 
     // t_route_dispatch_<tn>: one per declared tool. Guard fires only
@@ -670,10 +696,15 @@ fn lower_agent_loop(
         .logic_rhai("#{ output: final }".to_string())
         .done();
 
-    // Foundation split: park the agent's output envelope so downstream
-    // `<agent_slug>.final_response` / `<agent_slug>.turn` reads resolve
-    // via the read-arc synthesis pass.
-    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, label, &p_output);
+    // Foundation tail. A Map body terminal forks the FULL envelope (park data
+    // AND forward the whole token incl. detail.outputs + __map_* leaves) via
+    // park_outputs; otherwise the slim split_outputs control token. Either way
+    // `<agent_slug>.<field>` borrows resolve through the parked data place.
+    let (data_place_id, p_ctrl) = if is_map_body_terminal {
+        park_outputs(ctx, &id, label, &p_output)
+    } else {
+        split_outputs(ctx, &id, label, &p_output)
+    };
 
     // Queue the agent → tool-child wiring fixup. Tool children's
     // NodePorts aren't populated yet — they'll be lowered later in the

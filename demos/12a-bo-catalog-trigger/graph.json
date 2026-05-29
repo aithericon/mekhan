@@ -10,7 +10,7 @@
         "description": "Fires when a `bo_observation` catalogue entry is published. Projects the entry's payload (the freshly-evaluated point) onto the Start token so the slim re-fit runs against it.",
         "source": {
           "kind": "catalog",
-          "filters": { "category": { "eq": "bo_observation" } },
+          "filters": { "category": { "eq": "metric" }, "user_metadata.kind": { "eq": "bo_observation" } },
           "backfill": false
         },
         "concurrency": "allow",
@@ -35,7 +35,7 @@
           "label": "Observation",
           "fields": [
             { "name": "observations", "label": "Accumulated observations", "kind": "json", "required": true },
-            { "name": "last_z", "label": "Latest evaluated z", "kind": "number", "required": true }
+            { "name": "last_z", "label": "Latest evaluated z", "kind": "json", "required": true }
           ]
         }
       }

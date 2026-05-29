@@ -84,21 +84,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
 
-    // Is this the terminal node of a Map body — the child whose edge enters the
-    // parent Map's `body_out` handle? If so it must forward its FULL completed
-    // envelope (so the Map's `t_<map>_collect` can read
-    // `body.detail.outputs.<resultVar>` + the preserved `__map_idx`/`__map_id`
-    // correlation leaves); a slim control token (the normal `split_outputs`
-    // path) carries neither the parked business output nor the `_`-metadata.
-    // Loop body terminals keep the slim path — a Loop reads its body output via
-    // the parked `<body>.<field>` borrow, once per iteration (no K-fan-out).
-    let is_map_body_terminal = cx.node.parent_id.as_deref().is_some_and(|pid| {
-        crate::compiler::token_shape::is_map_node(cx.graph, pid)
-            && cx
-                .outgoing_edges
-                .iter()
-                .any(|e| e.target == pid && e.target_handle.as_deref() == Some("body_out"))
-    });
+    // Is this the terminal node of a Map body? If so it must forward its FULL
+    // completed envelope (park data AND the whole token) so the Map's
+    // `t_<map>_collect` can read `body.detail.outputs.<resultVar>` + the
+    // preserved `__map_idx`/`__map_id` leaves. Shared gate — see
+    // `super::is_map_body_terminal`.
+    let is_map_body_terminal =
+        super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
 
     // Validate and transform editor config → executor format (before closure)
     let backend_type = &execution_spec.backend_type;
