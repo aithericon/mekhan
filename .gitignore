@@ -55,3 +55,6 @@ deploy/zitadel/pat/*.pat
 deploy/zitadel/pat/*.json
 mekhan.local.toml
 service/mekhan.local.toml
+
+# air_snapshots debug sidecars (written only on drift; never tracked)
+service/tests/snapshots/air/*.json.new

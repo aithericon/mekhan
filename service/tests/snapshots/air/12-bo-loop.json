@@ -1,10 +1,22 @@
 {
   "definitions": {
-    "Ctrl__classify": {
+    "Ctrl__branin": {
       "additionalProperties": true,
       "type": "object"
     },
-    "Ctrl__extract_text": {
+    "Ctrl__gather": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__lp": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__mp": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__propose": {
       "additionalProperties": true,
       "type": "object"
     },
@@ -12,7 +24,7 @@
       "additionalProperties": true,
       "type": "object"
     },
-    "Data__classify": {
+    "Data__branin": {
       "additionalProperties": true,
       "properties": {
         "detail": {
@@ -27,9 +39,77 @@
             "outputs": {
               "additionalProperties": true,
               "properties": {
-                "document_class": {
+                "obs": {}
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__gather": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "merged": {},
+                "new_best_a": {
                   "type": [
-                    "string",
+                    "number",
+                    "null"
+                  ]
+                },
+                "new_best_d": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "new_f_best": {
+                  "type": [
+                    "number",
                     "null"
                   ]
                 }
@@ -72,7 +152,55 @@
       },
       "type": "object"
     },
-    "Data__extract_text": {
+    "Data__lp": {
+      "additionalProperties": true,
+      "properties": {
+        "_instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "_process_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bo": {
+          "additionalProperties": true,
+          "properties": {
+            "best_a": {},
+            "best_d": {},
+            "budget": {},
+            "f_best": {},
+            "iteration": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "observations": {}
+          },
+          "type": "object"
+        },
+        "f_best": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_iterations": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "observations": {}
+      },
+      "type": "object"
+    },
+    "Data__mp": {
       "additionalProperties": true,
       "properties": {
         "detail": {
@@ -87,21 +215,89 @@
             "outputs": {
               "additionalProperties": true,
               "properties": {
-                "content": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "detected_languages": {},
-                "metadata": {},
-                "mime_type": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "tables": {}
+                "candidates": {}
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "evals": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "a": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "d": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "z": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Data__propose": {
+      "additionalProperties": true,
+      "properties": {
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "candidates": {}
               },
               "type": "object"
             }
@@ -156,30 +352,19 @@
             "null"
           ]
         },
-        "document": {
-          "additionalProperties": true,
-          "properties": {
-            "content_type": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "filename": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "type": "object"
-        }
+        "f_best": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_iterations": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "observations": {}
       },
       "type": "object"
     },
@@ -1213,56 +1398,56 @@
   "groups": [
     {
       "id": "group_1",
-      "name": "Start - fmeta 0"
+      "name": "Fit GP + propose K candidates"
     },
     {
       "id": "group_10",
-      "name": "Submission",
-      "parent_id": "group_9"
+      "name": "Status Tracking",
+      "parent_id": "group_8"
     },
     {
       "id": "group_11",
-      "name": "Status Tracking",
-      "parent_id": "group_9"
+      "name": "Failure & Timeout",
+      "parent_id": "group_8"
     },
     {
       "id": "group_12",
-      "name": "Failure & Timeout",
-      "parent_id": "group_9"
+      "name": "Cancellation",
+      "parent_id": "group_8"
     },
     {
       "id": "group_13",
-      "name": "Cancellation",
-      "parent_id": "group_9"
+      "name": "Events",
+      "parent_id": "group_8"
     },
     {
       "id": "group_14",
-      "name": "Events",
-      "parent_id": "group_9"
+      "name": "Effect Error Recovery",
+      "parent_id": "group_8"
     },
     {
       "id": "group_15",
-      "name": "Effect Error Recovery",
-      "parent_id": "group_9"
+      "name": "Branin objective"
     },
     {
       "id": "group_16",
-      "name": "Classify (LLM)"
+      "name": "Submission",
+      "parent_id": "group_15"
     },
     {
       "id": "group_17",
-      "name": "Submission",
-      "parent_id": "group_16"
+      "name": "Status Tracking",
+      "parent_id": "group_15"
     },
     {
       "id": "group_18",
-      "name": "Status Tracking",
-      "parent_id": "group_16"
+      "name": "Failure & Timeout",
+      "parent_id": "group_15"
     },
     {
       "id": "group_19",
-      "name": "Failure & Timeout",
-      "parent_id": "group_16"
+      "name": "Cancellation",
+      "parent_id": "group_15"
     },
     {
       "id": "group_2",
@@ -1271,18 +1456,13 @@
     },
     {
       "id": "group_20",
-      "name": "Cancellation",
-      "parent_id": "group_16"
+      "name": "Events",
+      "parent_id": "group_15"
     },
     {
       "id": "group_21",
-      "name": "Events",
-      "parent_id": "group_16"
-    },
-    {
-      "id": "group_22",
       "name": "Effect Error Recovery",
-      "parent_id": "group_16"
+      "parent_id": "group_15"
     },
     {
       "id": "group_3",
@@ -1296,836 +1476,938 @@
     },
     {
       "id": "group_5",
-      "name": "Result Forwarding",
-      "parent_id": "group_1"
-    },
-    {
-      "id": "group_6",
       "name": "Cancellation",
       "parent_id": "group_1"
     },
     {
-      "id": "group_7",
+      "id": "group_6",
       "name": "Events",
       "parent_id": "group_1"
     },
     {
-      "id": "group_8",
+      "id": "group_7",
       "name": "Effect Error Recovery",
       "parent_id": "group_1"
     },
     {
+      "id": "group_8",
+      "name": "Fold evals into observations"
+    },
+    {
       "id": "group_9",
-      "name": "Extract text (Kreuzberg)"
+      "name": "Submission",
+      "parent_id": "group_8"
+    },
+    {
+      "id": "grp_lp",
+      "name": "BO Iterations"
+    },
+    {
+      "id": "grp_mp",
+      "name": "Evaluate K candidates"
     }
   ],
-  "name": "07 · OCR Classify & Extract",
+  "name": "12 · Bayesian Optimization Loop",
   "places": [
     {
-      "group_id": "group_18",
-      "id": "classify/accepted",
+      "group_id": "group_17",
+      "id": "branin/accepted",
       "name": "Accepted",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_21",
-      "id": "classify/artifact_log",
+      "group_id": "group_20",
+      "id": "branin/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_20",
-      "id": "classify/cancel_request",
+      "group_id": "group_19",
+      "id": "branin/cancel_request",
       "name": "Cancel Request",
       "token_schema": "#/definitions/ExecutorCancelInput",
       "type": "signal"
     },
     {
-      "group_id": "group_20",
-      "id": "classify/cancelled",
+      "group_id": "group_19",
+      "id": "branin/cancelled",
       "name": "Cancelled",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "group_id": "group_20",
-      "id": "classify/cancelling",
+      "group_id": "group_19",
+      "id": "branin/cancelling",
       "name": "Cancelling",
       "token_schema": "#/definitions/ExecutorCancelled",
       "type": "state"
     },
     {
-      "group_id": "group_16",
-      "id": "classify/completed",
+      "group_id": "group_15",
+      "id": "branin/completed",
       "name": "Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "group_id": "group_16",
-      "id": "classify/dead_letter",
+      "group_id": "group_15",
+      "id": "branin/dead_letter",
       "name": "Dead Letter",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "group_id": "group_16",
-      "id": "classify/effect_errors",
+      "group_id": "group_15",
+      "id": "branin/effect_errors",
       "name": "Effect Errors",
       "token_schema": "#/definitions/EffectError",
       "type": "state"
     },
     {
-      "group_id": "group_19",
-      "id": "classify/failed",
+      "group_id": "group_18",
+      "id": "branin/failed",
       "name": "Failed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_16",
-      "id": "classify/failure",
+      "group_id": "group_15",
+      "id": "branin/failure",
       "name": "Failure",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_16",
-      "id": "classify/failure_log",
+      "group_id": "group_15",
+      "id": "branin/failure_log",
       "name": "Failure Log Input",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_16",
-      "id": "classify/failure_logged",
+      "group_id": "group_15",
+      "id": "branin/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_16",
-      "id": "classify/inbox",
+      "group_id": "group_15",
+      "id": "branin/inbox",
       "name": "Inbox",
       "token_schema": "#/definitions/ExecutorSubmitInput",
       "type": "state"
     },
     {
-      "group_id": "group_21",
-      "id": "classify/message_log",
+      "group_id": "group_20",
+      "id": "branin/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_21",
-      "id": "classify/metric_log",
+      "group_id": "group_20",
+      "id": "branin/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_21",
-      "id": "classify/output_log",
+      "group_id": "group_20",
+      "id": "branin/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_21",
-      "id": "classify/phase_log",
+      "group_id": "group_20",
+      "id": "branin/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_21",
-      "id": "classify/progress_log",
+      "group_id": "group_20",
+      "id": "branin/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
-    },
-    {
-      "group_id": "group_18",
-      "id": "classify/running",
-      "name": "Running",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_accepted",
-      "name": "Accepted Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_artifact",
-      "name": "Artifact Events",
-      "token_schema": "#/definitions/ExecutorEventSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_cancelled",
-      "name": "Cancelled Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_completed",
-      "name": "Completed Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_failed",
-      "name": "Failed Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_log",
-      "name": "Log Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_metric",
-      "name": "Metric Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_output",
-      "name": "Output Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_phase",
-      "name": "Phase Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_progress",
-      "name": "Progress Events",
-      "token_schema": "#/definitions/ExecutorEventSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_running",
-      "name": "Running Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_16",
-      "id": "classify/sig_timed_out",
-      "name": "Timed Out Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
     },
     {
       "group_id": "group_17",
-      "id": "classify/submitted",
-      "name": "Submitted",
-      "token_schema": "#/definitions/ExecutorSubmitted",
-      "type": "state"
-    },
-    {
-      "group_id": "group_19",
-      "id": "classify/timed_out",
-      "name": "Timed Out",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_11",
-      "id": "extract_text/accepted",
-      "name": "Accepted",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_14",
-      "id": "extract_text/artifact_log",
-      "name": "Artifact Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_13",
-      "id": "extract_text/cancel_request",
-      "name": "Cancel Request",
-      "token_schema": "#/definitions/ExecutorCancelInput",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_13",
-      "id": "extract_text/cancelled",
-      "name": "Cancelled",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "terminal"
-    },
-    {
-      "group_id": "group_13",
-      "id": "extract_text/cancelling",
-      "name": "Cancelling",
-      "token_schema": "#/definitions/ExecutorCancelled",
-      "type": "state"
-    },
-    {
-      "group_id": "group_9",
-      "id": "extract_text/completed",
-      "name": "Completed",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "terminal"
-    },
-    {
-      "group_id": "group_9",
-      "id": "extract_text/dead_letter",
-      "name": "Dead Letter",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "terminal"
-    },
-    {
-      "group_id": "group_9",
-      "id": "extract_text/effect_errors",
-      "name": "Effect Errors",
-      "token_schema": "#/definitions/EffectError",
-      "type": "state"
-    },
-    {
-      "group_id": "group_12",
-      "id": "extract_text/failed",
-      "name": "Failed",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_9",
-      "id": "extract_text/failure",
-      "name": "Failure",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_9",
-      "id": "extract_text/failure_log",
-      "name": "Failure Log Input",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_9",
-      "id": "extract_text/failure_logged",
-      "name": "Failure Logged",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_9",
-      "id": "extract_text/inbox",
-      "name": "Inbox",
-      "token_schema": "#/definitions/ExecutorSubmitInput",
-      "type": "state"
-    },
-    {
-      "group_id": "group_14",
-      "id": "extract_text/message_log",
-      "name": "Message Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_14",
-      "id": "extract_text/metric_log",
-      "name": "Metric Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_14",
-      "id": "extract_text/output_log",
-      "name": "Output Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_14",
-      "id": "extract_text/phase_log",
-      "name": "Phase Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_14",
-      "id": "extract_text/progress_log",
-      "name": "Progress Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_11",
-      "id": "extract_text/running",
+      "id": "branin/running",
       "name": "Running",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_accepted",
+      "group_id": "group_15",
+      "id": "branin/sig_accepted",
       "name": "Accepted Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_artifact",
+      "group_id": "group_15",
+      "id": "branin/sig_artifact",
       "name": "Artifact Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_cancelled",
+      "group_id": "group_15",
+      "id": "branin/sig_cancelled",
       "name": "Cancelled Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_completed",
+      "group_id": "group_15",
+      "id": "branin/sig_completed",
       "name": "Completed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_failed",
+      "group_id": "group_15",
+      "id": "branin/sig_failed",
       "name": "Failed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_log",
+      "group_id": "group_15",
+      "id": "branin/sig_log",
       "name": "Log Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_metric",
+      "group_id": "group_15",
+      "id": "branin/sig_metric",
       "name": "Metric Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_output",
+      "group_id": "group_15",
+      "id": "branin/sig_output",
       "name": "Output Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_phase",
+      "group_id": "group_15",
+      "id": "branin/sig_phase",
       "name": "Phase Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_progress",
+      "group_id": "group_15",
+      "id": "branin/sig_progress",
       "name": "Progress Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_running",
+      "group_id": "group_15",
+      "id": "branin/sig_running",
       "name": "Running Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/sig_timed_out",
+      "group_id": "group_15",
+      "id": "branin/sig_timed_out",
       "name": "Timed Out Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
-      "group_id": "group_10",
-      "id": "extract_text/submitted",
+      "group_id": "group_16",
+      "id": "branin/submitted",
       "name": "Submitted",
       "token_schema": "#/definitions/ExecutorSubmitted",
       "type": "state"
     },
     {
-      "group_id": "group_12",
-      "id": "extract_text/timed_out",
+      "group_id": "group_18",
+      "id": "branin/timed_out",
       "name": "Timed Out",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_classify_ctrl",
-      "name": "Classify (LLM) - Control Token",
-      "token_schema": "#/definitions/Ctrl__classify",
-      "type": "state"
-    },
-    {
-      "id": "p_classify_data",
-      "name": "Classify (LLM) - Parked Data (write-once)",
-      "token_schema": "#/definitions/Data__classify",
-      "type": "state"
-    },
-    {
-      "id": "p_classify_error",
-      "name": "Classify (LLM) - Error",
+      "group_id": "group_10",
+      "id": "gather/accepted",
+      "name": "Accepted",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_classify_output",
-      "name": "Classify (LLM) - Output",
+      "group_id": "group_13",
+      "id": "gather/artifact_log",
+      "name": "Artifact Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_12",
+      "id": "gather/cancel_request",
+      "name": "Cancel Request",
+      "token_schema": "#/definitions/ExecutorCancelInput",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_12",
+      "id": "gather/cancelled",
+      "name": "Cancelled",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_12",
+      "id": "gather/cancelling",
+      "name": "Cancelling",
+      "token_schema": "#/definitions/ExecutorCancelled",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/completed",
+      "name": "Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/dead_letter",
+      "name": "Dead Letter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/effect_errors",
+      "name": "Effect Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "group_id": "group_11",
+      "id": "gather/failed",
+      "name": "Failed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/failure",
+      "name": "Failure",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/failure_log",
+      "name": "Failure Log Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/failure_logged",
+      "name": "Failure Logged",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "gather/message_log",
+      "name": "Message Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "gather/metric_log",
+      "name": "Metric Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "gather/output_log",
+      "name": "Output Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "gather/phase_log",
+      "name": "Phase Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_13",
+      "id": "gather/progress_log",
+      "name": "Progress Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_10",
+      "id": "gather/running",
+      "name": "Running",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_accepted",
+      "name": "Accepted Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_artifact",
+      "name": "Artifact Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_cancelled",
+      "name": "Cancelled Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_completed",
+      "name": "Completed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_failed",
+      "name": "Failed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_log",
+      "name": "Log Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_metric",
+      "name": "Metric Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_output",
+      "name": "Output Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_phase",
+      "name": "Phase Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_progress",
+      "name": "Progress Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_running",
+      "name": "Running Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_8",
+      "id": "gather/sig_timed_out",
+      "name": "Timed Out Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_9",
+      "id": "gather/submitted",
+      "name": "Submitted",
+      "token_schema": "#/definitions/ExecutorSubmitted",
+      "type": "state"
+    },
+    {
+      "group_id": "group_11",
+      "id": "gather/timed_out",
+      "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_branin_data",
+      "name": "Branin objective - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__branin",
+      "type": "state"
+    },
+    {
+      "id": "p_branin_error",
+      "name": "Branin objective - Error",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_branin_main",
+      "name": "Branin objective - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_branin_output",
+      "name": "Branin objective - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_end_completed",
-      "name": "Done - Completed",
+      "name": "Report best - Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "id": "p_end_result",
-      "name": "Done - Result",
+      "name": "Report best - Result",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_extract_text_ctrl",
-      "name": "Extract text (Kreuzberg) - Control Token",
-      "token_schema": "#/definitions/Ctrl__extract_text",
+      "id": "p_gather_ctrl",
+      "name": "Fold evals into observations - Control Token",
+      "token_schema": "#/definitions/Ctrl__gather",
       "type": "state"
     },
     {
-      "id": "p_extract_text_data",
-      "name": "Extract text (Kreuzberg) - Parked Data (write-once)",
-      "token_schema": "#/definitions/Data__extract_text",
+      "id": "p_gather_data",
+      "name": "Fold evals into observations - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__gather",
       "type": "state"
     },
     {
-      "id": "p_extract_text_error",
-      "name": "Extract text (Kreuzberg) - Error",
+      "id": "p_gather_error",
+      "name": "Fold evals into observations - Error",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_extract_text_output",
-      "name": "Extract text (Kreuzberg) - Output",
+      "id": "p_gather_output",
+      "name": "Fold evals into observations - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_start_cat_art_0",
-      "name": "Start - Artifact 0",
+      "id": "p_lp_body_in",
+      "name": "BO Iterations - Body In",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_start_cat_desc_0",
-      "name": "Start - Artifact 0 Descriptor",
+      "id": "p_lp_body_out",
+      "name": "BO Iterations - Body Out",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_start_cat_done_0",
-      "name": "Start - Artifact 0 Catalogued",
+      "id": "p_lp_data",
+      "name": "BO Iterations - Iteration Counter (parked)",
+      "token_schema": "#/definitions/Data__lp",
+      "type": "state"
+    },
+    {
+      "id": "p_lp_input",
+      "name": "BO Iterations - Input",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_start_cat_out_0",
-      "name": "Start - After Artifact 0",
+      "id": "p_lp_output",
+      "name": "BO Iterations - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_body_in",
+      "name": "Evaluate K candidates - Body In",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_body_out",
+      "name": "Evaluate K candidates - Body Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_count",
+      "name": "Evaluate K candidates - Gather Coordinator",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_ctrl",
+      "name": "Evaluate K candidates - Control Token",
+      "token_schema": "#/definitions/Ctrl__mp",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_data",
+      "name": "Evaluate K candidates - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__mp",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_gathered",
+      "name": "Evaluate K candidates - Gathered Collection",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_input",
+      "name": "Evaluate K candidates - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_items",
+      "name": "Evaluate K candidates - Scattered Items",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_output",
+      "name": "Evaluate K candidates - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_mp_results",
+      "name": "Evaluate K candidates - Results",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_propose_ctrl",
+      "name": "Fit GP + propose K candidates - Control Token",
+      "token_schema": "#/definitions/Ctrl__propose",
+      "type": "state"
+    },
+    {
+      "id": "p_propose_data",
+      "name": "Fit GP + propose K candidates - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__propose",
+      "type": "state"
+    },
+    {
+      "id": "p_propose_error",
+      "name": "Fit GP + propose K candidates - Error",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_propose_output",
+      "name": "Fit GP + propose K candidates - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_data",
-      "name": "Start - Parked Data (write-once)",
+      "name": "Seed BO Campaign - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__start",
       "type": "state"
     },
     {
-      "id": "p_start_fmeta_fail_0",
-      "name": "Start - fmeta 0 Failure",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_start_fmeta_inbox_0",
-      "name": "Start - fmeta 0 Inbox",
-      "token_schema": "#/definitions/ExecutorSubmitInput",
-      "type": "state"
-    },
-    {
-      "id": "p_start_fmeta_park_0",
-      "name": "Start - fmeta 0 Descriptor (parked)",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_start_fmeta_result_0",
-      "name": "Start - fmeta 0 Result",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_start_main",
-      "name": "Start - Output",
+      "name": "Seed BO Campaign - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_named",
-      "name": "Start - Named",
+      "name": "Seed BO Campaign - Named",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_process",
-      "name": "Start - Process",
+      "name": "Seed BO Campaign - Process",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_ready",
-      "name": "Start",
+      "name": "Seed BO Campaign",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "id": "p_start_ready_out",
-      "name": "Start - Output",
+      "name": "Seed BO Campaign - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_3",
-      "id": "start_fmeta_0/accepted",
+      "id": "propose/accepted",
       "name": "Accepted",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/artifact_log",
+      "group_id": "group_6",
+      "id": "propose/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_6",
-      "id": "start_fmeta_0/cancel_request",
+      "group_id": "group_5",
+      "id": "propose/cancel_request",
       "name": "Cancel Request",
       "token_schema": "#/definitions/ExecutorCancelInput",
       "type": "signal"
     },
     {
-      "group_id": "group_6",
-      "id": "start_fmeta_0/cancelled",
+      "group_id": "group_5",
+      "id": "propose/cancelled",
       "name": "Cancelled",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "group_id": "group_6",
-      "id": "start_fmeta_0/cancelling",
+      "group_id": "group_5",
+      "id": "propose/cancelling",
       "name": "Cancelling",
       "token_schema": "#/definitions/ExecutorCancelled",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/completed",
+      "id": "propose/completed",
       "name": "Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/dead_letter",
+      "id": "propose/dead_letter",
       "name": "Dead Letter",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/effect_errors",
+      "id": "propose/effect_errors",
       "name": "Effect Errors",
       "token_schema": "#/definitions/EffectError",
       "type": "state"
     },
     {
       "group_id": "group_4",
-      "id": "start_fmeta_0/failed",
+      "id": "propose/failed",
       "name": "Failed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/message_log",
+      "group_id": "group_1",
+      "id": "propose/failure",
+      "name": "Failure",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "propose/failure_log",
+      "name": "Failure Log Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "propose/failure_logged",
+      "name": "Failure Logged",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "propose/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "propose/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/metric_log",
+      "group_id": "group_6",
+      "id": "propose/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/output_log",
+      "group_id": "group_6",
+      "id": "propose/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/phase_log",
+      "group_id": "group_6",
+      "id": "propose/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/progress_log",
+      "group_id": "group_6",
+      "id": "propose/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_3",
-      "id": "start_fmeta_0/running",
+      "id": "propose/running",
       "name": "Running",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_accepted",
+      "id": "propose/sig_accepted",
       "name": "Accepted Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_artifact",
+      "id": "propose/sig_artifact",
       "name": "Artifact Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_cancelled",
+      "id": "propose/sig_cancelled",
       "name": "Cancelled Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_completed",
+      "id": "propose/sig_completed",
       "name": "Completed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_failed",
+      "id": "propose/sig_failed",
       "name": "Failed Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_log",
+      "id": "propose/sig_log",
       "name": "Log Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_metric",
+      "id": "propose/sig_metric",
       "name": "Metric Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_output",
+      "id": "propose/sig_output",
       "name": "Output Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_phase",
+      "id": "propose/sig_phase",
       "name": "Phase Events",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_progress",
+      "id": "propose/sig_progress",
       "name": "Progress Events",
       "token_schema": "#/definitions/ExecutorEventSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_running",
+      "id": "propose/sig_running",
       "name": "Running Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_1",
-      "id": "start_fmeta_0/sig_timed_out",
+      "id": "propose/sig_timed_out",
       "name": "Timed Out Signals",
       "token_schema": "#/definitions/ExecutorStatusSignal",
       "type": "signal"
     },
     {
       "group_id": "group_2",
-      "id": "start_fmeta_0/submitted",
+      "id": "propose/submitted",
       "name": "Submitted",
       "token_schema": "#/definitions/ExecutorSubmitted",
       "type": "state"
     },
     {
       "group_id": "group_4",
-      "id": "start_fmeta_0/timed_out",
+      "id": "propose/timed_out",
       "name": "Timed Out",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
@@ -2165,14 +2447,14 @@
   "transitions": [
     {
       "caused_signals": [
-        "classify/sig_cancelled"
+        "branin/sig_cancelled"
       ],
-      "group_id": "group_20",
+      "group_id": "group_19",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/cancel",
+      "id": "branin/cancel",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2198,12 +2480,12 @@
       },
       "inputs": [
         {
-          "place": "classify/running",
+          "place": "branin/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/cancel_request",
+          "place": "branin/cancel_request",
           "port": "sig",
           "weight": 1
         }
@@ -2238,24 +2520,24 @@
       },
       "outputs": [
         {
-          "place": "classify/cancelling",
+          "place": "branin/cancelling",
           "port": "cancelled",
           "weight": 1
         },
         {
-          "place": "classify/effect_errors",
+          "place": "branin/effect_errors",
           "port": "_error",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_21",
       "guard": {
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
       },
-      "id": "classify/dlq_effect_err",
+      "id": "branin/dlq_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2273,7 +2555,7 @@
       },
       "inputs": [
         {
-          "place": "classify/effect_errors",
+          "place": "branin/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -2300,19 +2582,19 @@
       },
       "outputs": [
         {
-          "place": "classify/dead_letter",
+          "place": "branin/dead_letter",
           "port": "dead",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_16",
+      "group_id": "group_15",
       "guard": {
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "classify/exhausted",
+      "id": "branin/exhausted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2330,7 +2612,7 @@
       },
       "inputs": [
         {
-          "place": "classify/failure",
+          "place": "branin/failure",
           "port": "f",
           "weight": 1
         }
@@ -2357,15 +2639,15 @@
       },
       "outputs": [
         {
-          "place": "p_classify_error",
+          "place": "p_branin_error",
           "port": "err",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_21",
-      "id": "classify/log_artifact",
+      "group_id": "group_20",
+      "id": "branin/log_artifact",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2383,7 +2665,7 @@
       },
       "inputs": [
         {
-          "place": "classify/sig_artifact",
+          "place": "branin/sig_artifact",
           "port": "artifacts",
           "weight": 1
         }
@@ -2410,15 +2692,15 @@
       },
       "outputs": [
         {
-          "place": "classify/artifact_log",
+          "place": "branin/artifact_log",
           "port": "catalogued",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_16",
-      "id": "classify/log_failure",
+      "group_id": "group_15",
+      "id": "branin/log_failure",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2436,7 +2718,7 @@
       },
       "inputs": [
         {
-          "place": "classify/failure_log",
+          "place": "branin/failure_log",
           "port": "message",
           "weight": 1
         }
@@ -2463,15 +2745,15 @@
       },
       "outputs": [
         {
-          "place": "classify/failure_logged",
+          "place": "branin/failure_logged",
           "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_21",
-      "id": "classify/log_message",
+      "group_id": "group_20",
+      "id": "branin/log_message",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2489,7 +2771,7 @@
       },
       "inputs": [
         {
-          "place": "classify/sig_log",
+          "place": "branin/sig_log",
           "port": "message",
           "weight": 1
         }
@@ -2516,15 +2798,15 @@
       },
       "outputs": [
         {
-          "place": "classify/message_log",
+          "place": "branin/message_log",
           "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_21",
-      "id": "classify/log_metric",
+      "group_id": "group_20",
+      "id": "branin/log_metric",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2542,7 +2824,7 @@
       },
       "inputs": [
         {
-          "place": "classify/sig_metric",
+          "place": "branin/sig_metric",
           "port": "metric",
           "weight": 1
         }
@@ -2569,15 +2851,15 @@
       },
       "outputs": [
         {
-          "place": "classify/metric_log",
+          "place": "branin/metric_log",
           "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_21",
-      "id": "classify/log_output",
+      "group_id": "group_20",
+      "id": "branin/log_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2595,7 +2877,7 @@
       },
       "inputs": [
         {
-          "place": "classify/sig_output",
+          "place": "branin/sig_output",
           "port": "evt",
           "weight": 1
         }
@@ -2622,15 +2904,15 @@
       },
       "outputs": [
         {
-          "place": "classify/output_log",
+          "place": "branin/output_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_21",
-      "id": "classify/log_phase",
+      "group_id": "group_20",
+      "id": "branin/log_phase",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2648,7 +2930,7 @@
       },
       "inputs": [
         {
-          "place": "classify/sig_phase",
+          "place": "branin/sig_phase",
           "port": "phase",
           "weight": 1
         }
@@ -2675,15 +2957,15 @@
       },
       "outputs": [
         {
-          "place": "classify/phase_log",
+          "place": "branin/phase_log",
           "port": "recorded",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_21",
-      "id": "classify/log_progress",
+      "group_id": "group_20",
+      "id": "branin/log_progress",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2701,7 +2983,7 @@
       },
       "inputs": [
         {
-          "place": "classify/sig_progress",
+          "place": "branin/sig_progress",
           "port": "progress",
           "weight": 1
         }
@@ -2728,15 +3010,15 @@
       },
       "outputs": [
         {
-          "place": "classify/progress_log",
+          "place": "branin/progress_log",
           "port": "recorded",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_16",
-      "id": "classify/on_failed",
+      "group_id": "group_15",
+      "id": "branin/on_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2754,7 +3036,7 @@
       },
       "inputs": [
         {
-          "place": "classify/failed",
+          "place": "branin/failed",
           "port": "e",
           "weight": 1
         }
@@ -2786,20 +3068,20 @@
       },
       "outputs": [
         {
-          "place": "classify/failure",
+          "place": "branin/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "classify/failure_log",
+          "place": "branin/failure_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_16",
-      "id": "classify/on_timeout",
+      "group_id": "group_15",
+      "id": "branin/on_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2817,7 +3099,7 @@
       },
       "inputs": [
         {
-          "place": "classify/timed_out",
+          "place": "branin/timed_out",
           "port": "e",
           "weight": 1
         }
@@ -2849,30 +3131,25 @@
       },
       "outputs": [
         {
-          "place": "classify/failure",
+          "place": "branin/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "classify/failure_log",
+          "place": "branin/failure_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_16",
-      "id": "classify/prepare",
+      "group_id": "group_15",
+      "id": "branin/prepare",
       "input_ports": [
         {
           "cardinality": "single",
           "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "d_extract_text",
-          "schema_ref": "#/definitions/Data__extract_text"
         }
       ],
       "input_schema": {
@@ -2885,22 +3162,16 @@
       },
       "inputs": [
         {
-          "place": "p_extract_text_ctrl",
+          "place": "p_mp_body_in",
           "port": "input",
-          "weight": 1
-        },
-        {
-          "place": "p_extract_text_data",
-          "port": "d_extract_text",
-          "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"classify\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_extract_text_content = __pluck(d_extract_text, [\"detail\", \"outputs\", \"content\"]); job_inputs.push(#{ \"name\": \"__borrow_extract_text__content\", \"source\": #{ \"type\": \"inline\", \"value\": __c_extract_text_content } });  d.spec = #{ \"backend\": \"llm\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"document_class\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/classify/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"branin\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Map body — the modified Branin-Hoo objective (minimization).\\n\\n`cand` is the per-element itemVar the Map scatter stamps onto each body token\\n(`cand.a`, `cand.d` ride the token; no read-arc, no SDK init). The gathered\\nelement is the value of the field named by the Map's `resultVar` (`obs`), so we\\nassign `obs` here. Lower z is better; the global minimum is ~0.3979.\\n\\\"\\\"\\\"\\n\\nimport math\\n\\na = cand.a\\nd = cand.d\\n\\n# Map the unit square [0,1]^2 to the Branin domain.\\nx1 = 15.0 * a - 5.0\\nx2 = 15.0 * d\\n\\nz = (\\n    (x2 - 5.1 / (4.0 * math.pi**2) * x1**2 + 5.0 / math.pi * x1 - 6.0) ** 2\\n    + 10.0 * (1.0 - 1.0 / (8.0 * math.pi)) * math.cos(x1)\\n    + 10.0\\n)\\n\\nobs = {\\\"a\\\": a, \\\"d\\\": d, \\\"z\\\": z}\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"json\", \"name\": \"obs\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/branin/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
         "type": "rhai"
       },
-      "name": "Classify (LLM) - Prepare",
+      "name": "Branin objective - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -2918,19 +3189,19 @@
       },
       "outputs": [
         {
-          "place": "classify/inbox",
+          "place": "branin/inbox",
           "port": "job",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_16",
+      "group_id": "group_15",
       "guard": {
         "source": "f.retries < f.max_retries",
         "type": "rhai"
       },
-      "id": "classify/retry",
+      "id": "branin/retry",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2948,7 +3219,7 @@
       },
       "inputs": [
         {
-          "place": "classify/failure",
+          "place": "branin/failure",
           "port": "f",
           "weight": 1
         }
@@ -2975,19 +3246,19 @@
       },
       "outputs": [
         {
-          "place": "classify/inbox",
+          "place": "branin/inbox",
           "port": "job",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_22",
+      "group_id": "group_21",
       "guard": {
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
       },
-      "id": "classify/retry_effect_err",
+      "id": "branin/retry_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3005,7 +3276,7 @@
       },
       "inputs": [
         {
-          "place": "classify/effect_errors",
+          "place": "branin/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -3032,7 +3303,7 @@
       },
       "outputs": [
         {
-          "place": "classify/inbox",
+          "place": "branin/inbox",
           "port": "job",
           "weight": 1
         }
@@ -3040,120 +3311,120 @@
     },
     {
       "caused_signals": [
-        "classify/sig_accepted",
-        "classify/sig_running",
-        "classify/sig_completed",
-        "classify/sig_failed",
-        "classify/sig_timed_out"
+        "branin/sig_accepted",
+        "branin/sig_running",
+        "branin/sig_completed",
+        "branin/sig_failed",
+        "branin/sig_timed_out"
       ],
       "effect_config": {
         "event_routes": {
-          "artifact": "classify/sig_artifact",
-          "log": "classify/sig_log",
-          "metric": "classify/sig_metric",
-          "output": "classify/sig_output",
-          "phase": "classify/sig_phase",
-          "progress": "classify/sig_progress"
+          "artifact": "branin/sig_artifact",
+          "log": "branin/sig_log",
+          "metric": "branin/sig_metric",
+          "output": "branin/sig_output",
+          "phase": "branin/sig_phase",
+          "progress": "branin/sig_progress"
         },
         "signal_routes": {
-          "accepted": "classify/sig_accepted",
-          "cancelled": "classify/sig_cancelled",
-          "completed": "classify/sig_completed",
-          "failed": "classify/sig_failed",
-          "running": "classify/sig_running",
-          "timed_out": "classify/sig_timed_out"
+          "accepted": "branin/sig_accepted",
+          "cancelled": "branin/sig_cancelled",
+          "completed": "branin/sig_completed",
+          "failed": "branin/sig_failed",
+          "running": "branin/sig_running",
+          "timed_out": "branin/sig_timed_out"
         }
       },
+      "group_id": "group_16",
+      "id": "branin/submit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "branin/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "event_routes": {
+            "artifact": "branin/sig_artifact",
+            "log": "branin/sig_log",
+            "metric": "branin/sig_metric",
+            "output": "branin/sig_output",
+            "phase": "branin/sig_phase",
+            "progress": "branin/sig_progress"
+          },
+          "signal_routes": {
+            "accepted": "branin/sig_accepted",
+            "cancelled": "branin/sig_cancelled",
+            "completed": "branin/sig_completed",
+            "failed": "branin/sig_failed",
+            "running": "branin/sig_running",
+            "timed_out": "branin/sig_timed_out"
+          }
+        },
+        "handler_id": "executor_submit",
+        "type": "effect"
+      },
+      "name": "Submit Execution",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "submitted",
+          "schema_ref": "#/definitions/ExecutorSubmitted"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "ExecutorSubmitted": {
+            "$ref": "#/definitions/ExecutorSubmitted"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "branin/submitted",
+          "port": "submitted",
+          "weight": 1
+        },
+        {
+          "place": "branin/effect_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
       "group_id": "group_17",
-      "id": "classify/submit",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "job",
-          "schema_ref": "#/definitions/ExecutorSubmitInput"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "ExecutorSubmitInput": {
-            "$ref": "#/definitions/ExecutorSubmitInput"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "classify/inbox",
-          "port": "job",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "config": {
-          "event_routes": {
-            "artifact": "classify/sig_artifact",
-            "log": "classify/sig_log",
-            "metric": "classify/sig_metric",
-            "output": "classify/sig_output",
-            "phase": "classify/sig_phase",
-            "progress": "classify/sig_progress"
-          },
-          "signal_routes": {
-            "accepted": "classify/sig_accepted",
-            "cancelled": "classify/sig_cancelled",
-            "completed": "classify/sig_completed",
-            "failed": "classify/sig_failed",
-            "running": "classify/sig_running",
-            "timed_out": "classify/sig_timed_out"
-          }
-        },
-        "handler_id": "executor_submit",
-        "type": "effect"
-      },
-      "name": "Submit Execution",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "submitted",
-          "schema_ref": "#/definitions/ExecutorSubmitted"
-        },
-        {
-          "cardinality": "single",
-          "name": "_error",
-          "schema_ref": "#/definitions/EffectError"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "EffectError": {
-            "$ref": "#/definitions/EffectError"
-          },
-          "ExecutorSubmitted": {
-            "$ref": "#/definitions/ExecutorSubmitted"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "classify/submitted",
-          "port": "submitted",
-          "weight": 1
-        },
-        {
-          "place": "classify/effect_errors",
-          "port": "_error",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "group_id": "group_18",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_accepted",
+      "id": "branin/t_accepted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3179,12 +3450,12 @@
       },
       "inputs": [
         {
-          "place": "classify/submitted",
+          "place": "branin/submitted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_accepted",
+          "place": "branin/sig_accepted",
           "port": "sig",
           "weight": 1
         }
@@ -3211,19 +3482,19 @@
       },
       "outputs": [
         {
-          "place": "classify/accepted",
+          "place": "branin/accepted",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_20",
+      "group_id": "group_19",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_cancelled",
+      "id": "branin/t_cancelled",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3249,12 +3520,12 @@
       },
       "inputs": [
         {
-          "place": "classify/cancelling",
+          "place": "branin/cancelling",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_cancelled",
+          "place": "branin/sig_cancelled",
           "port": "sig",
           "weight": 1
         }
@@ -3281,19 +3552,19 @@
       },
       "outputs": [
         {
-          "place": "classify/cancelled",
+          "place": "branin/cancelled",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_19",
+      "group_id": "group_18",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_failed",
+      "id": "branin/t_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3319,12 +3590,12 @@
       },
       "inputs": [
         {
-          "place": "classify/running",
+          "place": "branin/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_failed",
+          "place": "branin/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -3351,19 +3622,19 @@
       },
       "outputs": [
         {
-          "place": "classify/failed",
+          "place": "branin/failed",
           "port": "err",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_19",
+      "group_id": "group_18",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_failed_pre_run",
+      "id": "branin/t_failed_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3389,12 +3660,12 @@
       },
       "inputs": [
         {
-          "place": "classify/accepted",
+          "place": "branin/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_failed",
+          "place": "branin/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -3421,19 +3692,19 @@
       },
       "outputs": [
         {
-          "place": "classify/failed",
+          "place": "branin/failed",
           "port": "err",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_18",
+      "group_id": "group_17",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_running",
+      "id": "branin/t_running",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3459,12 +3730,12 @@
       },
       "inputs": [
         {
-          "place": "classify/accepted",
+          "place": "branin/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_running",
+          "place": "branin/sig_running",
           "port": "sig",
           "weight": 1
         }
@@ -3491,19 +3762,19 @@
       },
       "outputs": [
         {
-          "place": "classify/running",
+          "place": "branin/running",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_18",
+      "group_id": "group_17",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_success",
+      "id": "branin/t_success",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3529,12 +3800,12 @@
       },
       "inputs": [
         {
-          "place": "classify/running",
+          "place": "branin/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_completed",
+          "place": "branin/sig_completed",
           "port": "sig",
           "weight": 1
         }
@@ -3561,19 +3832,19 @@
       },
       "outputs": [
         {
-          "place": "classify/completed",
+          "place": "branin/completed",
           "port": "done",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_19",
+      "group_id": "group_18",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_timeout",
+      "id": "branin/t_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3599,12 +3870,12 @@
       },
       "inputs": [
         {
-          "place": "classify/running",
+          "place": "branin/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_timed_out",
+          "place": "branin/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -3631,19 +3902,19 @@
       },
       "outputs": [
         {
-          "place": "classify/timed_out",
+          "place": "branin/timed_out",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_19",
+      "group_id": "group_18",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "classify/t_timeout_pre_run",
+      "id": "branin/t_timeout_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3669,12 +3940,12 @@
       },
       "inputs": [
         {
-          "place": "classify/accepted",
+          "place": "branin/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "classify/sig_timed_out",
+          "place": "branin/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -3701,7 +3972,7 @@
       },
       "outputs": [
         {
-          "place": "classify/timed_out",
+          "place": "branin/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -3709,14 +3980,14 @@
     },
     {
       "caused_signals": [
-        "extract_text/sig_cancelled"
+        "gather/sig_cancelled"
       ],
-      "group_id": "group_13",
+      "group_id": "group_12",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/cancel",
+      "id": "gather/cancel",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3742,12 +4013,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/running",
+          "place": "gather/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/cancel_request",
+          "place": "gather/cancel_request",
           "port": "sig",
           "weight": 1
         }
@@ -3782,24 +4053,24 @@
       },
       "outputs": [
         {
-          "place": "extract_text/cancelling",
+          "place": "gather/cancelling",
           "port": "cancelled",
           "weight": 1
         },
         {
-          "place": "extract_text/effect_errors",
+          "place": "gather/effect_errors",
           "port": "_error",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_14",
       "guard": {
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
       },
-      "id": "extract_text/dlq_effect_err",
+      "id": "gather/dlq_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3817,7 +4088,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/effect_errors",
+          "place": "gather/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -3844,19 +4115,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/dead_letter",
+          "place": "gather/dead_letter",
           "port": "dead",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_9",
+      "group_id": "group_8",
       "guard": {
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "extract_text/exhausted",
+      "id": "gather/exhausted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3874,7 +4145,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/failure",
+          "place": "gather/failure",
           "port": "f",
           "weight": 1
         }
@@ -3901,15 +4172,15 @@
       },
       "outputs": [
         {
-          "place": "p_extract_text_error",
+          "place": "p_gather_error",
           "port": "err",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_14",
-      "id": "extract_text/log_artifact",
+      "group_id": "group_13",
+      "id": "gather/log_artifact",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3927,7 +4198,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/sig_artifact",
+          "place": "gather/sig_artifact",
           "port": "artifacts",
           "weight": 1
         }
@@ -3954,15 +4225,15 @@
       },
       "outputs": [
         {
-          "place": "extract_text/artifact_log",
+          "place": "gather/artifact_log",
           "port": "catalogued",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/log_failure",
+      "group_id": "group_8",
+      "id": "gather/log_failure",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3980,7 +4251,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/failure_log",
+          "place": "gather/failure_log",
           "port": "message",
           "weight": 1
         }
@@ -4007,15 +4278,15 @@
       },
       "outputs": [
         {
-          "place": "extract_text/failure_logged",
+          "place": "gather/failure_logged",
           "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_14",
-      "id": "extract_text/log_message",
+      "group_id": "group_13",
+      "id": "gather/log_message",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4033,7 +4304,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/sig_log",
+          "place": "gather/sig_log",
           "port": "message",
           "weight": 1
         }
@@ -4060,15 +4331,15 @@
       },
       "outputs": [
         {
-          "place": "extract_text/message_log",
+          "place": "gather/message_log",
           "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_14",
-      "id": "extract_text/log_metric",
+      "group_id": "group_13",
+      "id": "gather/log_metric",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4086,7 +4357,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/sig_metric",
+          "place": "gather/sig_metric",
           "port": "metric",
           "weight": 1
         }
@@ -4113,15 +4384,15 @@
       },
       "outputs": [
         {
-          "place": "extract_text/metric_log",
+          "place": "gather/metric_log",
           "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_14",
-      "id": "extract_text/log_output",
+      "group_id": "group_13",
+      "id": "gather/log_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4139,7 +4410,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/sig_output",
+          "place": "gather/sig_output",
           "port": "evt",
           "weight": 1
         }
@@ -4166,15 +4437,15 @@
       },
       "outputs": [
         {
-          "place": "extract_text/output_log",
+          "place": "gather/output_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_14",
-      "id": "extract_text/log_phase",
+      "group_id": "group_13",
+      "id": "gather/log_phase",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4192,7 +4463,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/sig_phase",
+          "place": "gather/sig_phase",
           "port": "phase",
           "weight": 1
         }
@@ -4219,15 +4490,15 @@
       },
       "outputs": [
         {
-          "place": "extract_text/phase_log",
+          "place": "gather/phase_log",
           "port": "recorded",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_14",
-      "id": "extract_text/log_progress",
+      "group_id": "group_13",
+      "id": "gather/log_progress",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4245,7 +4516,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/sig_progress",
+          "place": "gather/sig_progress",
           "port": "progress",
           "weight": 1
         }
@@ -4272,15 +4543,15 @@
       },
       "outputs": [
         {
-          "place": "extract_text/progress_log",
+          "place": "gather/progress_log",
           "port": "recorded",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/on_failed",
+      "group_id": "group_8",
+      "id": "gather/on_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4298,7 +4569,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/failed",
+          "place": "gather/failed",
           "port": "e",
           "weight": 1
         }
@@ -4330,20 +4601,20 @@
       },
       "outputs": [
         {
-          "place": "extract_text/failure",
+          "place": "gather/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "extract_text/failure_log",
+          "place": "gather/failure_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/on_timeout",
+      "group_id": "group_8",
+      "id": "gather/on_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4361,7 +4632,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/timed_out",
+          "place": "gather/timed_out",
           "port": "e",
           "weight": 1
         }
@@ -4393,20 +4664,20 @@
       },
       "outputs": [
         {
-          "place": "extract_text/failure",
+          "place": "gather/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "extract_text/failure_log",
+          "place": "gather/failure_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_9",
-      "id": "extract_text/prepare",
+      "group_id": "group_8",
+      "id": "gather/prepare",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4415,8 +4686,13 @@
         },
         {
           "cardinality": "single",
-          "name": "d_start",
-          "schema_ref": "#/definitions/Data__start"
+          "name": "d_mp",
+          "schema_ref": "#/definitions/Data__mp"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_lp",
+          "schema_ref": "#/definitions/Data__lp"
         }
       ],
       "input_schema": {
@@ -4429,22 +4705,28 @@
       },
       "inputs": [
         {
-          "place": "p_start_main",
+          "place": "p_mp_output",
           "port": "input",
           "weight": 1
         },
         {
-          "place": "p_start_data",
-          "port": "d_start",
+          "place": "p_mp_data",
+          "port": "d_mp",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_lp_data",
+          "port": "d_lp",
           "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"extract_text\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"__borrow_start__document\", \"source\": #{ \"type\": \"storage_path\", \"path\": __pluck(d_start, [\"document\", \"key\"]) } });  d.spec = #{ \"backend\": \"kreuzberg\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"content\", \"required\": true}, #{\"kind\": \"text\", \"name\": \"mime_type\", \"required\": false}, #{\"kind\": \"json\", \"name\": \"metadata\", \"required\": false}, #{\"kind\": \"json\", \"name\": \"tables\", \"required\": false}, #{\"kind\": \"json\", \"name\": \"detected_languages\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/extract_text/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"gather\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Loop body tail — fold the K evaluations into the observation set.\\n\\nReads the gathered Map collection via `evals.output` — the Map parks its\\nreduced collection as the envelope `{ output: [<element>, ...] }` at\\n`p_<map>_data`, and the compiler stages that whole envelope as `evals.json`\\nbecause this source references `evals.output` (an upstream parked Map\\nproducer). Each element is one branin observation `{a, d, z}` (the Map lifts\\nthe body's `resultVar` value directly). Also reads the prior incumbent\\n(`bo.f_best`, `bo.best_a`, `bo.best_d`). The outputs drive the loop's\\naccumulator mergeExprs (`gather.merged`, `gather.new_f_best`, ...).\\n\\\"\\\"\\\"\\n\\n# The Map collection envelope: `evals.output` is the list of K observations,\\n# each element a plain `{a, d, z}` dict.\\nelems = evals.output\\n\\nmerged = [{\\\"a\\\": e[\\\"a\\\"], \\\"d\\\": e[\\\"d\\\"], \\\"z\\\": e[\\\"z\\\"]} for e in elems]\\n\\ncur_min = min(e[\\\"z\\\"] for e in elems)\\n\\nif cur_min < bo.f_best:\\n    new_f_best = cur_min\\n    arg = min(elems, key=lambda e: e[\\\"z\\\"])\\n    new_best_a = arg[\\\"a\\\"]\\n    new_best_d = arg[\\\"d\\\"]\\nelse:\\n    new_f_best = bo.f_best\\n    new_best_a = bo.best_a\\n    new_best_d = bo.best_d\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"evals.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_mp } }); job_inputs.push(#{ \"name\": \"bo.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_lp } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"json\", \"name\": \"merged\", \"required\": true}, #{\"kind\": \"number\", \"name\": \"new_f_best\", \"required\": true}, #{\"kind\": \"number\", \"name\": \"new_best_a\", \"required\": true}, #{\"kind\": \"number\", \"name\": \"new_best_d\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/gather/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
         "type": "rhai"
       },
-      "name": "Extract text (Kreuzberg) - Prepare",
+      "name": "Fold evals into observations - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -4462,19 +4744,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/inbox",
+          "place": "gather/inbox",
           "port": "job",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_9",
+      "group_id": "group_8",
       "guard": {
         "source": "f.retries < f.max_retries",
         "type": "rhai"
       },
-      "id": "extract_text/retry",
+      "id": "gather/retry",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4492,7 +4774,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/failure",
+          "place": "gather/failure",
           "port": "f",
           "weight": 1
         }
@@ -4519,19 +4801,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/inbox",
+          "place": "gather/inbox",
           "port": "job",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_15",
+      "group_id": "group_14",
       "guard": {
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
       },
-      "id": "extract_text/retry_effect_err",
+      "id": "gather/retry_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4549,7 +4831,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/effect_errors",
+          "place": "gather/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -4576,7 +4858,7 @@
       },
       "outputs": [
         {
-          "place": "extract_text/inbox",
+          "place": "gather/inbox",
           "port": "job",
           "weight": 1
         }
@@ -4584,32 +4866,32 @@
     },
     {
       "caused_signals": [
-        "extract_text/sig_accepted",
-        "extract_text/sig_running",
-        "extract_text/sig_completed",
-        "extract_text/sig_failed",
-        "extract_text/sig_timed_out"
+        "gather/sig_accepted",
+        "gather/sig_running",
+        "gather/sig_completed",
+        "gather/sig_failed",
+        "gather/sig_timed_out"
       ],
       "effect_config": {
         "event_routes": {
-          "artifact": "extract_text/sig_artifact",
-          "log": "extract_text/sig_log",
-          "metric": "extract_text/sig_metric",
-          "output": "extract_text/sig_output",
-          "phase": "extract_text/sig_phase",
-          "progress": "extract_text/sig_progress"
+          "artifact": "gather/sig_artifact",
+          "log": "gather/sig_log",
+          "metric": "gather/sig_metric",
+          "output": "gather/sig_output",
+          "phase": "gather/sig_phase",
+          "progress": "gather/sig_progress"
         },
         "signal_routes": {
-          "accepted": "extract_text/sig_accepted",
-          "cancelled": "extract_text/sig_cancelled",
-          "completed": "extract_text/sig_completed",
-          "failed": "extract_text/sig_failed",
-          "running": "extract_text/sig_running",
-          "timed_out": "extract_text/sig_timed_out"
+          "accepted": "gather/sig_accepted",
+          "cancelled": "gather/sig_cancelled",
+          "completed": "gather/sig_completed",
+          "failed": "gather/sig_failed",
+          "running": "gather/sig_running",
+          "timed_out": "gather/sig_timed_out"
         }
       },
-      "group_id": "group_10",
-      "id": "extract_text/submit",
+      "group_id": "group_9",
+      "id": "gather/submit",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4627,7 +4909,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/inbox",
+          "place": "gather/inbox",
           "port": "job",
           "weight": 1
         }
@@ -4635,20 +4917,20 @@
       "logic": {
         "config": {
           "event_routes": {
-            "artifact": "extract_text/sig_artifact",
-            "log": "extract_text/sig_log",
-            "metric": "extract_text/sig_metric",
-            "output": "extract_text/sig_output",
-            "phase": "extract_text/sig_phase",
-            "progress": "extract_text/sig_progress"
+            "artifact": "gather/sig_artifact",
+            "log": "gather/sig_log",
+            "metric": "gather/sig_metric",
+            "output": "gather/sig_output",
+            "phase": "gather/sig_phase",
+            "progress": "gather/sig_progress"
           },
           "signal_routes": {
-            "accepted": "extract_text/sig_accepted",
-            "cancelled": "extract_text/sig_cancelled",
-            "completed": "extract_text/sig_completed",
-            "failed": "extract_text/sig_failed",
-            "running": "extract_text/sig_running",
-            "timed_out": "extract_text/sig_timed_out"
+            "accepted": "gather/sig_accepted",
+            "cancelled": "gather/sig_cancelled",
+            "completed": "gather/sig_completed",
+            "failed": "gather/sig_failed",
+            "running": "gather/sig_running",
+            "timed_out": "gather/sig_timed_out"
           }
         },
         "handler_id": "executor_submit",
@@ -4680,24 +4962,24 @@
       },
       "outputs": [
         {
-          "place": "extract_text/submitted",
+          "place": "gather/submitted",
           "port": "submitted",
           "weight": 1
         },
         {
-          "place": "extract_text/effect_errors",
+          "place": "gather/effect_errors",
           "port": "_error",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_11",
+      "group_id": "group_10",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_accepted",
+      "id": "gather/t_accepted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4723,12 +5005,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/submitted",
+          "place": "gather/submitted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_accepted",
+          "place": "gather/sig_accepted",
           "port": "sig",
           "weight": 1
         }
@@ -4755,19 +5037,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/accepted",
+          "place": "gather/accepted",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_13",
+      "group_id": "group_12",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_cancelled",
+      "id": "gather/t_cancelled",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4793,12 +5075,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/cancelling",
+          "place": "gather/cancelling",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_cancelled",
+          "place": "gather/sig_cancelled",
           "port": "sig",
           "weight": 1
         }
@@ -4825,19 +5107,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/cancelled",
+          "place": "gather/cancelled",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_12",
+      "group_id": "group_11",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_failed",
+      "id": "gather/t_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4863,12 +5145,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/running",
+          "place": "gather/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_failed",
+          "place": "gather/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -4895,19 +5177,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/failed",
+          "place": "gather/failed",
           "port": "err",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_12",
+      "group_id": "group_11",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_failed_pre_run",
+      "id": "gather/t_failed_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4933,12 +5215,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/accepted",
+          "place": "gather/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_failed",
+          "place": "gather/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -4965,19 +5247,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/failed",
+          "place": "gather/failed",
           "port": "err",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_11",
+      "group_id": "group_10",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_running",
+      "id": "gather/t_running",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5003,12 +5285,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/accepted",
+          "place": "gather/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_running",
+          "place": "gather/sig_running",
           "port": "sig",
           "weight": 1
         }
@@ -5035,19 +5317,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/running",
+          "place": "gather/running",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_11",
+      "group_id": "group_10",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_success",
+      "id": "gather/t_success",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5073,12 +5355,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/running",
+          "place": "gather/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_completed",
+          "place": "gather/sig_completed",
           "port": "sig",
           "weight": 1
         }
@@ -5105,19 +5387,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/completed",
+          "place": "gather/completed",
           "port": "done",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_12",
+      "group_id": "group_11",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_timeout",
+      "id": "gather/t_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5143,12 +5425,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/running",
+          "place": "gather/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_timed_out",
+          "place": "gather/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -5175,19 +5457,19 @@
       },
       "outputs": [
         {
-          "place": "extract_text/timed_out",
+          "place": "gather/timed_out",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_12",
+      "group_id": "group_11",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "extract_text/t_timeout_pre_run",
+      "id": "gather/t_timeout_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5213,12 +5495,12 @@
       },
       "inputs": [
         {
-          "place": "extract_text/accepted",
+          "place": "gather/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "extract_text/sig_timed_out",
+          "place": "gather/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -5245,7 +5527,7 @@
       },
       "outputs": [
         {
-          "place": "extract_text/timed_out",
+          "place": "gather/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -5253,14 +5535,14 @@
     },
     {
       "caused_signals": [
-        "start_fmeta_0/sig_cancelled"
+        "propose/sig_cancelled"
       ],
-      "group_id": "group_6",
+      "group_id": "group_5",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/cancel",
+      "id": "propose/cancel",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5286,12 +5568,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/running",
+          "place": "propose/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/cancel_request",
+          "place": "propose/cancel_request",
           "port": "sig",
           "weight": 1
         }
@@ -5326,24 +5608,24 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/cancelling",
+          "place": "propose/cancelling",
           "port": "cancelled",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/effect_errors",
+          "place": "propose/effect_errors",
           "port": "_error",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_8",
+      "group_id": "group_7",
       "guard": {
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/dlq_effect_err",
+      "id": "propose/dlq_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5361,7 +5643,7 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/effect_errors",
+          "place": "propose/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -5388,23 +5670,54 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/dead_letter",
+          "place": "propose/dead_letter",
           "port": "dead",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_5",
-      "id": "start_fmeta_0/forward_failure",
+      "group_id": "group_1",
+      "guard": {
+        "source": "f.retries >= f.max_retries",
+        "type": "rhai"
+      },
+      "id": "propose/exhausted",
       "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "propose/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ err: f }",
+        "type": "rhai"
+      },
+      "name": "Retries Exhausted",
+      "output_ports": [
         {
           "cardinality": "single",
           "name": "err",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
-      "input_schema": {
+      "output_schema": {
         "properties": {
           "DynamicToken": {
             "$ref": "#/definitions/DynamicToken"
@@ -5412,154 +5725,21 @@
         },
         "type": "object"
       },
-      "inputs": [
+      "outputs": [
         {
-          "place": "start_fmeta_0/failed",
+          "place": "p_propose_error",
           "port": "err",
           "weight": 1
         }
-      ],
-      "logic": {
-        "source": "#{\n                            out: #{\n                                job_id: err.job_id,\n                                run: err.run,\n                                reason: \"execution_failed\",\n                                detail: err.detail\n                            }\n                        }",
-        "type": "rhai"
-      },
-      "name": "Forward Failure",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "out",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_start_fmeta_fail_0",
-          "port": "out",
-          "weight": 1
-        }
       ]
     },
     {
-      "group_id": "group_5",
-      "id": "start_fmeta_0/forward_result",
+      "group_id": "group_6",
+      "id": "propose/log_artifact",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "done",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "start_fmeta_0/completed",
-          "port": "done",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{\n                        out: #{\n                            job_id: done.job_id,\n                            run: done.run,\n                            detail: done.detail\n                        }\n                    }",
-        "type": "rhai"
-      },
-      "name": "Forward Result",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "out",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_start_fmeta_result_0",
-          "port": "out",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "group_id": "group_5",
-      "id": "start_fmeta_0/forward_timeout",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "start_fmeta_0/timed_out",
-          "port": "err",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{\n                            out: #{\n                                job_id: err.job_id,\n                                run: err.run,\n                                reason: \"execution_timed_out\"\n                            }\n                        }",
-        "type": "rhai"
-      },
-      "name": "Forward Timeout",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "out",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_start_fmeta_fail_0",
-          "port": "out",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/log_artifact",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "evt",
+          "name": "artifacts",
           "schema_ref": "#/definitions/ExecutorEventSignal"
         }
       ],
@@ -5573,20 +5753,20 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/sig_artifact",
-          "port": "evt",
+          "place": "propose/sig_artifact",
+          "port": "artifacts",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ log: evt }",
-        "type": "rhai"
+        "handler_id": "catalogue_register",
+        "type": "effect"
       },
       "name": "Log Artifact",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "log",
+          "name": "catalogued",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5600,19 +5780,19 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/artifact_log",
-          "port": "log",
+          "place": "propose/artifact_log",
+          "port": "catalogued",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/log_message",
+      "group_id": "group_1",
+      "id": "propose/log_failure",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "evt",
+          "name": "message",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5626,20 +5806,73 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/sig_log",
-          "port": "evt",
+          "place": "propose/failure_log",
+          "port": "message",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ log: evt }",
-        "type": "rhai"
+        "handler_id": "process_log_message",
+        "type": "effect"
+      },
+      "name": "Log Failure",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "logged",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "propose/failure_logged",
+          "port": "logged",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_6",
+      "id": "propose/log_message",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "message",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "propose/sig_log",
+          "port": "message",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_log_message",
+        "type": "effect"
       },
       "name": "Log Message",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "log",
+          "name": "logged",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5653,19 +5886,19 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/message_log",
-          "port": "log",
+          "place": "propose/message_log",
+          "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/log_metric",
+      "group_id": "group_6",
+      "id": "propose/log_metric",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "evt",
+          "name": "metric",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5679,20 +5912,20 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/sig_metric",
-          "port": "evt",
+          "place": "propose/sig_metric",
+          "port": "metric",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ log: evt }",
-        "type": "rhai"
+        "handler_id": "process_log_metric",
+        "type": "effect"
       },
       "name": "Log Metric",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "log",
+          "name": "logged",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5706,15 +5939,15 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/metric_log",
-          "port": "log",
+          "place": "propose/metric_log",
+          "port": "logged",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/log_output",
+      "group_id": "group_6",
+      "id": "propose/log_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5732,7 +5965,7 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/sig_output",
+          "place": "propose/sig_output",
           "port": "evt",
           "weight": 1
         }
@@ -5759,19 +5992,19 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/output_log",
+          "place": "propose/output_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/log_phase",
+      "group_id": "group_6",
+      "id": "propose/log_phase",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "evt",
+          "name": "phase",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5785,20 +6018,20 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/sig_phase",
-          "port": "evt",
+          "place": "propose/sig_phase",
+          "port": "phase",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ log: evt }",
-        "type": "rhai"
+        "handler_id": "process_phase",
+        "type": "effect"
       },
       "name": "Log Phase",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "log",
+          "name": "recorded",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -5812,19 +6045,19 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/phase_log",
-          "port": "log",
+          "place": "propose/phase_log",
+          "port": "recorded",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_7",
-      "id": "start_fmeta_0/log_progress",
+      "group_id": "group_6",
+      "id": "propose/log_progress",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "evt",
+          "name": "progress",
           "schema_ref": "#/definitions/ExecutorEventSignal"
         }
       ],
@@ -5838,17 +6071,75 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/sig_progress",
-          "port": "evt",
+          "place": "propose/sig_progress",
+          "port": "progress",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ log: evt }",
-        "type": "rhai"
+        "handler_id": "process_progress",
+        "type": "effect"
       },
       "name": "Log Progress",
       "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "recorded",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "propose/progress_log",
+          "port": "recorded",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "propose/on_failed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "propose/failed",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "\n            let d = e.detail;\n            let msg = \"Automated step failed\";\n            if type_of(d) == \"map\" {\n                if type_of(d.outcome) == \"map\" && d.outcome.keys().contains(\"exit_code\") {\n                    msg = msg + \" (exit code \" + d.outcome.exit_code + \")\";\n                }\n                if type_of(d.stderr_tail) == \"string\" && d.stderr_tail != \"\" {\n                    msg = msg + \": \" + d.stderr_tail;\n                }\n            }\n            #{\n                f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"failed\" },\n                log: #{ level: \"error\", source: \"executor\", message: msg, detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries, executor: d } }\n            }",
+        "type": "rhai"
+      },
+      "name": "On Failed",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
         {
           "cardinality": "single",
           "name": "log",
@@ -5865,19 +6156,208 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/progress_log",
+          "place": "propose/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "propose/failure_log",
           "port": "log",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_8",
+      "group_id": "group_1",
+      "id": "propose/on_timeout",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "e",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "propose/timed_out",
+          "port": "e",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ f: #{ job_id: e.job_id, run: e.run, retries: e.retries, max_retries: e.max_retries, spec: e.spec, reason: \"timed_out\" }, log: #{ level: \"error\", source: \"executor\", message: \"Automated step timed out\", detail: #{ execution_id: e.execution_id, run: e.run, retries: e.retries } } }",
+        "type": "rhai"
+      },
+      "name": "On Timeout",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "log",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "propose/failure",
+          "port": "f",
+          "weight": 1
+        },
+        {
+          "place": "propose/failure_log",
+          "port": "log",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "id": "propose/prepare",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_lp",
+          "schema_ref": "#/definitions/Data__lp"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_lp_body_in",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_lp_data",
+          "port": "d_lp",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = input; d.job_id = \"propose\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Loop body head — fit a GP surrogate and propose K candidate points.\\n\\nReal Bayesian-optimization proposer for the BO loop. Each iteration it reads\\nthe accumulated campaign state off the loop accumulators:\\n\\n  - `bo.observations` : list of {a, d, z} evaluated so far (z = objective, min)\\n  - `bo.f_best`       : incumbent (best/lowest z seen)\\n  - `bo.iteration`    : loop counter (control-token leaf)\\n\\nand emits `candidates` — a JSON array of K=4 {a, d} dicts on the unit square\\nfor the downstream Map to scatter through the `branin` objective.\\n\\nIMPORTANT (compiler contract): this Python is SCANNED at compile time for slug\\nreferences, not executed. The literal source reads `bo.observations`,\\n`bo.f_best`, and `bo.iteration` below MUST remain verbatim so the compiler\\nsynthesizes the read-arcs into the loop's parked accumulator place. Removing or\\nrenaming any of them breaks read-arc synthesis.\\n\\nAccumulator-init note: the campaign seed is merged at the loop accumulator init\\n(`observations` ← `input.observations`, `f_best` ← `input.f_best`), NOT in this\\nbody — so this proposer only consumes `bo.*`; it does not re-merge the seed.\\n\\nFALLBACK: the BO phase needs scikit-learn + scipy (declared in this node's\\nexecutionSpec.config.requirements; the first run pays a one-time `uv pip\\ninstall`, cached thereafter). If importing sklearn/scipy fails at runtime\\n(install hiccup, offline sandbox, etc.) we DO NOT crash the demo — we fall back\\nto a numpy/stdlib EI-lite proposer (and ultimately a deterministic grid walk)\\nso the Loop + Map + accumulator topology still runs end-to-end. The fallback is\\ngated on the import inside the BO phase below.\\n\\\"\\\"\\\"\\n\\nimport math\\nimport random\\n\\n# --- Read the borrowed campaign state (literal slug reads — DO NOT remove) ---\\n# These three reads are what the compiler scans to synthesize the read-arcs\\n# into the loop's parked accumulator place. Keep them verbatim.\\nobservations = bo.observations\\nf_best = bo.f_best\\niteration = bo.iteration\\n\\nn_seen = len(observations)\\n\\nlog_info(\\n    f\\\"propose: iteration={iteration} observations={n_seen} f_best={f_best}\\\"\\n)\\n\\nK = 4\\n\\n# A fixed seed grid on the unit square, used for the bootstrap phase and as the\\n# ultimate deterministic fallback if both the GP and EI-lite paths are unavailable.\\nCANDIDATE_GRID = [\\n    [0.5, 0.5],\\n    [0.25, 0.75],\\n    [0.75, 0.25],\\n    [0.1, 0.9],\\n    [0.9, 0.1],\\n    [0.4, 0.6],\\n    [0.6, 0.4],\\n    [0.15, 0.5],\\n]\\n\\n\\ndef _grid_batch(it):\\n    \\\"\\\"\\\"Deterministic K-point batch: cycle CANDIDATE_GRID by iteration.\\\"\\\"\\\"\\n    n = len(CANDIDATE_GRID)\\n    out = []\\n    for j in range(K):\\n        p = CANDIDATE_GRID[(it * K + j) % n]\\n        out.append({\\\"a\\\": float(p[0]), \\\"d\\\": float(p[1])})\\n    return out\\n\\n\\n# --- Bootstrap phase --------------------------------------------------------\\n# Not enough data to fit a meaningful surrogate yet: walk the seed grid.\\nif n_seen < 4 or iteration < 1:\\n    candidates = _grid_batch(iteration)\\n    log_info(f\\\"propose: bootstrap -> {candidates}\\\")\\n\\nelse:\\n    # --- BO phase: GP fit + Expected Improvement over a dense grid ----------\\n    candidates = None\\n\\n    try:\\n        import numpy as np\\n        from sklearn.gaussian_process import GaussianProcessRegressor\\n        from sklearn.gaussian_process.kernels import Matern, WhiteKernel\\n        from scipy.stats import norm\\n\\n        X = np.array([[float(o[\\\"a\\\"]), float(o[\\\"d\\\"])] for o in observations])\\n        y = np.array([float(o[\\\"z\\\"]) for o in observations])\\n\\n        kernel = Matern(\\n            nu=2.5,\\n            length_scale=[0.2, 0.2],\\n            length_scale_bounds=(0.01, 1.0),\\n        ) + WhiteKernel(\\n            noise_level=1e-3,\\n            noise_level_bounds=(1e-10, 1.0),\\n        )\\n\\n        gp = GaussianProcessRegressor(\\n            kernel=kernel,\\n            n_restarts_optimizer=5,\\n            normalize_y=True,\\n            random_state=42,\\n        )\\n        gp.fit(X, y)\\n\\n        # Dense 80x80 grid over the unit square.\\n        side = np.linspace(0.0, 1.0, 80)\\n        gx, gy = np.meshgrid(side, side)\\n        grid = np.column_stack([gx.ravel(), gy.ravel()])\\n\\n        mu, sigma = gp.predict(grid, return_std=True)\\n\\n        # Expected Improvement for MINIMIZATION.\\n        xi = 0.01\\n        imp = f_best - mu - xi\\n        sigma = np.maximum(sigma, 1e-9)\\n        Z = imp / sigma\\n        ei = imp * norm.cdf(Z) + sigma * norm.pdf(Z)\\n\\n        # Top-K DISTINCT grid points by EI.\\n        order = np.argsort(ei)[::-1]\\n        picked = []\\n        seen_pts = set()\\n        for idx in order:\\n            a = round(float(grid[idx, 0]), 6)\\n            d = round(float(grid[idx, 1]), 6)\\n            key = (a, d)\\n            if key in seen_pts:\\n                continue\\n            seen_pts.add(key)\\n            picked.append({\\\"a\\\": a, \\\"d\\\": d})\\n            if len(picked) >= K:\\n                break\\n\\n        candidates = picked\\n        log_info(f\\\"propose: GP+EI -> {candidates}\\\")\\n\\n    except Exception as exc:  # noqa: BLE001 — fallback must never crash the demo\\n        # FALLBACK PATH: sklearn/scipy unavailable or GP fit failed. Use a\\n        # numpy/stdlib EI-lite proposer so the Loop+Map+accumulator topology\\n        # still runs. We sample many random points in the unit square and score\\n        # each by a cheap surrogate biased toward the incumbent, mixing in an\\n        # exploration term so we don't collapse onto a single point.\\n        log_warn(f\\\"propose: GP/scipy unavailable ({exc!r}); using EI-lite fallback\\\")\\n        try:\\n            import numpy as np\\n\\n            rng = np.random.default_rng(42 + int(iteration))\\n\\n            # Incumbent location (best observed point).\\n            best = min(observations, key=lambda o: float(o[\\\"z\\\"]))\\n            ba, bd = float(best[\\\"a\\\"]), float(best[\\\"d\\\"])\\n\\n            n_samples = 512\\n            cand = rng.random((n_samples, 2))\\n\\n            # Cheap acquisition: exploit near incumbent, explore away from it.\\n            dist = np.sqrt((cand[:, 0] - ba) ** 2 + (cand[:, 1] - bd) ** 2)\\n            explore = rng.random(n_samples)\\n            score = -dist + 0.5 * explore\\n\\n            order = np.argsort(score)[::-1]\\n            picked = []\\n            seen_pts = set()\\n            for idx in order:\\n                a = round(float(cand[idx, 0]), 6)\\n                d = round(float(cand[idx, 1]), 6)\\n                key = (a, d)\\n                if key in seen_pts:\\n                    continue\\n                seen_pts.add(key)\\n                picked.append({\\\"a\\\": a, \\\"d\\\": d})\\n                if len(picked) >= K:\\n                    break\\n            candidates = picked\\n            log_info(f\\\"propose: EI-lite fallback -> {candidates}\\\")\\n\\n        except Exception as exc2:  # noqa: BLE001\\n            # Last-resort fallback: random points in the unit square (pure\\n            # stdlib). Guarantees the demo still produces K candidates.\\n            log_warn(f\\\"propose: numpy unavailable ({exc2!r}); random-in-grid fallback\\\")\\n            rnd = random.Random(42 + int(iteration))\\n            candidates = [\\n                {\\\"a\\\": round(rnd.random(), 6), \\\"d\\\": round(rnd.random(), 6)}\\n                for _ in range(K)\\n            ]\\n\\n    if not candidates:\\n        # Defensive: never emit an empty batch (the Map would have nothing to\\n        # scatter). Fall back to the deterministic grid walk.\\n        candidates = _grid_batch(iteration)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); job_inputs.push(#{ \"name\": \"bo.json\", \"source\": #{ \"type\": \"inline\", \"value\": d_lp } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"json\", \"name\": \"candidates\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/propose/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "type": "rhai"
+      },
+      "name": "Fit GP + propose K candidates - Prepare",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "propose/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_1",
+      "guard": {
+        "source": "f.retries < f.max_retries",
+        "type": "rhai"
+      },
+      "id": "propose/retry",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "f",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "propose/failure",
+          "port": "f",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ job: #{ job_id: f.job_id, run: f.run + 1, retries: f.retries + 1, max_retries: f.max_retries, spec: f.spec } }",
+        "type": "rhai"
+      },
+      "name": "Retry",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "job",
+          "schema_ref": "#/definitions/ExecutorSubmitInput"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "ExecutorSubmitInput": {
+            "$ref": "#/definitions/ExecutorSubmitInput"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "propose/inbox",
+          "port": "job",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "group_id": "group_7",
       "guard": {
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/retry_effect_err",
+      "id": "propose/retry_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5895,7 +6375,7 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/effect_errors",
+          "place": "propose/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -5922,7 +6402,7 @@
       },
       "outputs": [
         {
-          "place": "p_start_fmeta_inbox_0",
+          "place": "propose/inbox",
           "port": "job",
           "weight": 1
         }
@@ -5930,32 +6410,32 @@
     },
     {
       "caused_signals": [
-        "start_fmeta_0/sig_accepted",
-        "start_fmeta_0/sig_running",
-        "start_fmeta_0/sig_completed",
-        "start_fmeta_0/sig_failed",
-        "start_fmeta_0/sig_timed_out"
+        "propose/sig_accepted",
+        "propose/sig_running",
+        "propose/sig_completed",
+        "propose/sig_failed",
+        "propose/sig_timed_out"
       ],
       "effect_config": {
         "event_routes": {
-          "artifact": "start_fmeta_0/sig_artifact",
-          "log": "start_fmeta_0/sig_log",
-          "metric": "start_fmeta_0/sig_metric",
-          "output": "start_fmeta_0/sig_output",
-          "phase": "start_fmeta_0/sig_phase",
-          "progress": "start_fmeta_0/sig_progress"
+          "artifact": "propose/sig_artifact",
+          "log": "propose/sig_log",
+          "metric": "propose/sig_metric",
+          "output": "propose/sig_output",
+          "phase": "propose/sig_phase",
+          "progress": "propose/sig_progress"
         },
         "signal_routes": {
-          "accepted": "start_fmeta_0/sig_accepted",
-          "cancelled": "start_fmeta_0/sig_cancelled",
-          "completed": "start_fmeta_0/sig_completed",
-          "failed": "start_fmeta_0/sig_failed",
-          "running": "start_fmeta_0/sig_running",
-          "timed_out": "start_fmeta_0/sig_timed_out"
+          "accepted": "propose/sig_accepted",
+          "cancelled": "propose/sig_cancelled",
+          "completed": "propose/sig_completed",
+          "failed": "propose/sig_failed",
+          "running": "propose/sig_running",
+          "timed_out": "propose/sig_timed_out"
         }
       },
       "group_id": "group_2",
-      "id": "start_fmeta_0/submit",
+      "id": "propose/submit",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5973,7 +6453,7 @@
       },
       "inputs": [
         {
-          "place": "p_start_fmeta_inbox_0",
+          "place": "propose/inbox",
           "port": "job",
           "weight": 1
         }
@@ -5981,20 +6461,20 @@
       "logic": {
         "config": {
           "event_routes": {
-            "artifact": "start_fmeta_0/sig_artifact",
-            "log": "start_fmeta_0/sig_log",
-            "metric": "start_fmeta_0/sig_metric",
-            "output": "start_fmeta_0/sig_output",
-            "phase": "start_fmeta_0/sig_phase",
-            "progress": "start_fmeta_0/sig_progress"
+            "artifact": "propose/sig_artifact",
+            "log": "propose/sig_log",
+            "metric": "propose/sig_metric",
+            "output": "propose/sig_output",
+            "phase": "propose/sig_phase",
+            "progress": "propose/sig_progress"
           },
           "signal_routes": {
-            "accepted": "start_fmeta_0/sig_accepted",
-            "cancelled": "start_fmeta_0/sig_cancelled",
-            "completed": "start_fmeta_0/sig_completed",
-            "failed": "start_fmeta_0/sig_failed",
-            "running": "start_fmeta_0/sig_running",
-            "timed_out": "start_fmeta_0/sig_timed_out"
+            "accepted": "propose/sig_accepted",
+            "cancelled": "propose/sig_cancelled",
+            "completed": "propose/sig_completed",
+            "failed": "propose/sig_failed",
+            "running": "propose/sig_running",
+            "timed_out": "propose/sig_timed_out"
           }
         },
         "handler_id": "executor_submit",
@@ -6026,12 +6506,12 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/submitted",
+          "place": "propose/submitted",
           "port": "submitted",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/effect_errors",
+          "place": "propose/effect_errors",
           "port": "_error",
           "weight": 1
         }
@@ -6043,7 +6523,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_accepted",
+      "id": "propose/t_accepted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6069,12 +6549,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/submitted",
+          "place": "propose/submitted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_accepted",
+          "place": "propose/sig_accepted",
           "port": "sig",
           "weight": 1
         }
@@ -6101,19 +6581,19 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/accepted",
+          "place": "propose/accepted",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "group_id": "group_6",
+      "group_id": "group_5",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_cancelled",
+      "id": "propose/t_cancelled",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6139,12 +6619,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/cancelling",
+          "place": "propose/cancelling",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_cancelled",
+          "place": "propose/sig_cancelled",
           "port": "sig",
           "weight": 1
         }
@@ -6171,7 +6651,7 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/cancelled",
+          "place": "propose/cancelled",
           "port": "out",
           "weight": 1
         }
@@ -6183,7 +6663,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_failed",
+      "id": "propose/t_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6209,12 +6689,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/running",
+          "place": "propose/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_failed",
+          "place": "propose/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -6241,7 +6721,7 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/failed",
+          "place": "propose/failed",
           "port": "err",
           "weight": 1
         }
@@ -6253,7 +6733,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_failed_pre_run",
+      "id": "propose/t_failed_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6279,12 +6759,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/accepted",
+          "place": "propose/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_failed",
+          "place": "propose/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -6311,7 +6791,7 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/failed",
+          "place": "propose/failed",
           "port": "err",
           "weight": 1
         }
@@ -6323,7 +6803,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_running",
+      "id": "propose/t_running",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6349,12 +6829,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/accepted",
+          "place": "propose/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_running",
+          "place": "propose/sig_running",
           "port": "sig",
           "weight": 1
         }
@@ -6381,7 +6861,7 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/running",
+          "place": "propose/running",
           "port": "out",
           "weight": 1
         }
@@ -6393,7 +6873,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_success",
+      "id": "propose/t_success",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6419,12 +6899,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/running",
+          "place": "propose/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_completed",
+          "place": "propose/sig_completed",
           "port": "sig",
           "weight": 1
         }
@@ -6451,7 +6931,7 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/completed",
+          "place": "propose/completed",
           "port": "done",
           "weight": 1
         }
@@ -6463,7 +6943,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_timeout",
+      "id": "propose/t_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6489,12 +6969,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/running",
+          "place": "propose/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_timed_out",
+          "place": "propose/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -6521,7 +7001,7 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/timed_out",
+          "place": "propose/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -6533,7 +7013,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "start_fmeta_0/t_timeout_pre_run",
+      "id": "propose/t_timeout_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6559,12 +7039,12 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/accepted",
+          "place": "propose/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "start_fmeta_0/sig_timed_out",
+          "place": "propose/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -6591,118 +7071,14 @@
       },
       "outputs": [
         {
-          "place": "start_fmeta_0/timed_out",
+          "place": "propose/timed_out",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_classify_to_error",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "dead",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "classify/dead_letter",
-          "port": "dead",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ error: dead }",
-        "type": "rhai"
-      },
-      "name": "Classify (LLM) - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_classify_to_output",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "done",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "classify/completed",
-          "port": "done",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ output: done }",
-        "type": "rhai"
-      },
-      "name": "Classify (LLM) - To Output",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "output",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_output",
-          "port": "output",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_classify_yield",
+      "id": "t_branin_park",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6720,26 +7096,26 @@
       },
       "inputs": [
         {
-          "place": "p_classify_output",
+          "place": "p_branin_output",
           "port": "tok",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "source": "let d = tok; #{ data: d, main: d }",
         "type": "rhai"
       },
-      "name": "Classify (LLM) - Yield (park data, forward control)",
+      "name": "Branin objective - Park Inputs (fork: park data, forward token)",
       "output_ports": [
         {
           "cardinality": "single",
           "name": "data",
-          "schema_ref": "#/definitions/Data__classify"
+          "schema_ref": "#/definitions/DynamicToken"
         },
         {
           "cardinality": "single",
-          "name": "ctrl",
-          "schema_ref": "#/definitions/Ctrl__classify"
+          "name": "main",
+          "schema_ref": "#/definitions/DynamicToken"
         }
       ],
       "output_schema": {
@@ -6752,13 +7128,325 @@
       },
       "outputs": [
         {
-          "place": "p_classify_data",
+          "place": "p_branin_data",
           "port": "data",
           "weight": 1
         },
         {
-          "place": "p_classify_ctrl",
-          "port": "ctrl",
+          "place": "p_branin_main",
+          "port": "main",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_branin_to_error",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "branin/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ error: dead }",
+        "type": "rhai"
+      },
+      "name": "Branin objective - To Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "error",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_branin_error",
+          "port": "error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_branin_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "branin/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "Branin objective - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_branin_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e_branin_mp",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_branin_main",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: input }",
+        "type": "rhai"
+      },
+      "name": "Branin objective -> Evaluate K candidates",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_mp_body_out",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e_gather_lp",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_gather_ctrl",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: input }",
+        "type": "rhai"
+      },
+      "name": "Fold evals into observations -> BO Iterations",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_lp_body_out",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e_propose_mp",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_propose_ctrl",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: input }",
+        "type": "rhai"
+      },
+      "name": "Fit GP + propose K candidates -> Evaluate K candidates",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_mp_input",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e_start_lp",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_main",
+          "port": "input",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: input }",
+        "type": "rhai"
+      },
+      "name": "Seed BO Campaign -> BO Iterations",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_lp_input",
+          "port": "output",
           "weight": 1
         }
       ]
@@ -6802,7 +7490,7 @@
         "handler_id": "process_complete",
         "type": "effect"
       },
-      "name": "Done - Complete Process",
+      "name": "Report best - Complete Process",
       "output_ports": [
         {
           "cardinality": "single",
@@ -6836,13 +7524,8 @@
         },
         {
           "cardinality": "single",
-          "name": "d_classify",
-          "schema_ref": "#/definitions/Data__classify"
-        },
-        {
-          "cardinality": "single",
-          "name": "d_extract_text",
-          "schema_ref": "#/definitions/Data__extract_text"
+          "name": "d_lp",
+          "schema_ref": "#/definitions/Data__lp"
         }
       ],
       "input_schema": {
@@ -6855,28 +7538,22 @@
       },
       "inputs": [
         {
-          "place": "p_classify_ctrl",
+          "place": "p_lp_output",
           "port": "input",
           "weight": 1
         },
         {
-          "place": "p_classify_data",
-          "port": "d_classify",
-          "read": true,
-          "weight": 1
-        },
-        {
-          "place": "p_extract_text_data",
-          "port": "d_extract_text",
+          "place": "p_lp_data",
+          "port": "d_lp",
           "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_classify.detail.outputs.document_class); let __rv1 = (d_extract_text.detail.outputs.content); let __rv = #{ \"document_class\": __rv0, \"content\": __rv1 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_lp.best_a); let __rv1 = (d_lp.best_d); let __rv2 = (d_lp.f_best); let __rv3 = (d_lp.iteration); let __rv = #{ \"best_a\": __rv0, \"best_d\": __rv1, \"best_z\": __rv2, \"iterations\": __rv3 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
-      "name": "Done - Result",
+      "name": "Report best - Result",
       "output_ports": [
         {
           "cardinality": "single",
@@ -6901,7 +7578,7 @@
       ]
     },
     {
-      "id": "t_extract_text_to_error",
+      "id": "t_gather_to_error",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6919,7 +7596,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/dead_letter",
+          "place": "gather/dead_letter",
           "port": "dead",
           "weight": 1
         }
@@ -6928,7 +7605,7 @@
         "source": "#{ error: dead }",
         "type": "rhai"
       },
-      "name": "Extract text (Kreuzberg) - To Error",
+      "name": "Fold evals into observations - To Error",
       "output_ports": [
         {
           "cardinality": "single",
@@ -6946,14 +7623,14 @@
       },
       "outputs": [
         {
-          "place": "p_extract_text_error",
+          "place": "p_gather_error",
           "port": "error",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_extract_text_to_output",
+      "id": "t_gather_to_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6971,7 +7648,7 @@
       },
       "inputs": [
         {
-          "place": "extract_text/completed",
+          "place": "gather/completed",
           "port": "done",
           "weight": 1
         }
@@ -6980,7 +7657,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "Extract text (Kreuzberg) - To Output",
+      "name": "Fold evals into observations - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -6998,14 +7675,14 @@
       },
       "outputs": [
         {
-          "place": "p_extract_text_output",
+          "place": "p_gather_output",
           "port": "output",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_extract_text_yield",
+      "id": "t_gather_yield",
       "input_ports": [
         {
           "cardinality": "single",
@@ -7023,7 +7700,7 @@
       },
       "inputs": [
         {
-          "place": "p_extract_text_output",
+          "place": "p_gather_output",
           "port": "tok",
           "weight": 1
         }
@@ -7032,17 +7709,17 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Extract text (Kreuzberg) - Yield (park data, forward control)",
+      "name": "Fold evals into observations - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
           "name": "data",
-          "schema_ref": "#/definitions/Data__extract_text"
+          "schema_ref": "#/definitions/Data__gather"
         },
         {
           "cardinality": "single",
           "name": "ctrl",
-          "schema_ref": "#/definitions/Ctrl__extract_text"
+          "schema_ref": "#/definitions/Ctrl__gather"
         }
       ],
       "output_schema": {
@@ -7055,24 +7732,38 @@
       },
       "outputs": [
         {
-          "place": "p_extract_text_data",
+          "place": "p_gather_data",
           "port": "data",
           "weight": 1
         },
         {
-          "place": "p_extract_text_ctrl",
+          "place": "p_gather_ctrl",
           "port": "ctrl",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_start_cat_reg_0",
+      "guard": {
+        "source": "d_lp.iteration < 30 && (d_lp.iteration < d_lp.budget)",
+        "type": "rhai"
+      },
+      "id": "t_lp_continue",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "artifacts",
+          "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_lp",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_gather",
+          "schema_ref": "#/definitions/Data__gather"
         }
       ],
       "input_schema": {
@@ -7085,20 +7776,36 @@
       },
       "inputs": [
         {
-          "place": "p_start_cat_art_0",
-          "port": "artifacts",
+          "place": "p_lp_body_out",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_lp_data",
+          "port": "d_lp",
+          "weight": 1
+        },
+        {
+          "place": "p_gather_data",
+          "port": "d_gather",
+          "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "handler_id": "catalogue_register",
-        "type": "effect"
+        "source": "#{ body: input, data: #{ iteration: d_lp.iteration + 1, observations: (d_lp.observations + d_gather.detail.outputs.merged), f_best: (d_gather.detail.outputs.new_f_best), best_a: (d_gather.detail.outputs.new_best_a), best_d: (d_gather.detail.outputs.new_best_d), budget: (d_lp.budget) } }",
+        "type": "rhai"
       },
-      "name": "Start - Register Artifact 0",
+      "name": "BO Iterations - Continue",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "catalogued",
+          "name": "body",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "data",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7112,18 +7819,23 @@
       },
       "outputs": [
         {
-          "place": "p_start_cat_done_0",
-          "port": "catalogued",
+          "place": "p_lp_body_in",
+          "port": "body",
+          "weight": 1
+        },
+        {
+          "place": "p_lp_data",
+          "port": "data",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_start_cat_shape_0",
+      "id": "t_lp_enter",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "tok",
+          "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7137,25 +7849,25 @@
       },
       "inputs": [
         {
-          "place": "p_start_ready_out",
-          "port": "tok",
+          "place": "p_lp_input",
+          "port": "input",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = tok;\nlet fv = d[\"document\"];\nif type_of(fv) == \"map\" && fv.key != () {\n  #{\n    pass: d,\n    artifact: #{\n      execution_id: d._instance_id,\n      artifact_id: \"start-\" + d._instance_id + \"-document\",\n      name: fv.filename,\n      mime_type: fv.content_type,\n      size_bytes: fv.size,\n      storage_path: fv.key\n    }\n  }\n} else {\n  #{ pass: d }\n}",
+        "source": "#{ body: input, data: #{ iteration: 0, observations: (input.observations), f_best: (input.f_best), best_a: (0.0), best_d: (0.0), budget: (input.max_iterations) } }",
         "type": "rhai"
       },
-      "name": "Start - Shape Artifact 0",
+      "name": "BO Iterations - Enter Loop",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "pass",
+          "name": "body",
           "schema_ref": "#/definitions/DynamicToken"
         },
         {
           "cardinality": "single",
-          "name": "artifact",
+          "name": "data",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7169,32 +7881,32 @@
       },
       "outputs": [
         {
-          "place": "p_start_cat_out_0",
-          "port": "pass",
+          "place": "p_lp_body_in",
+          "port": "body",
           "weight": 1
         },
         {
-          "place": "p_start_cat_desc_0",
-          "port": "artifact",
+          "place": "p_lp_data",
+          "port": "data",
           "weight": 1
         }
       ]
     },
     {
       "guard": {
-        "source": "fail.job_id == kept.job_id",
+        "source": "d_lp.iteration >= 30 || !(d_lp.iteration < d_lp.budget)",
         "type": "rhai"
       },
-      "id": "t_start_fmeta_degrade_0",
+      "id": "t_lp_exit",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "fail",
+          "name": "input",
           "schema_ref": "#/definitions/DynamicToken"
         },
         {
           "cardinality": "single",
-          "name": "kept",
+          "name": "d_lp",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7208,25 +7920,26 @@
       },
       "inputs": [
         {
-          "place": "p_start_fmeta_fail_0",
-          "port": "fail",
+          "place": "p_lp_body_out",
+          "port": "input",
           "weight": 1
         },
         {
-          "place": "p_start_fmeta_park_0",
-          "port": "kept",
+          "place": "p_lp_data",
+          "port": "d_lp",
+          "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{\n  artifact: #{\n    execution_id: kept.execution_id,\n    detail: #{\n      artifact_id: kept.artifact_id,\n      name: kept.name,\n      category: \"input\",\n      mime_type: kept.mime_type,\n      size_bytes: kept.size_bytes,\n      storage_path: kept.storage_path\n    }\n  }\n}",
+        "source": "#{ output: input }",
         "type": "rhai"
       },
-      "name": "Start - fmeta 0 Degrade",
+      "name": "BO Iterations - Exit",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "artifact",
+          "name": "output",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7240,18 +7953,18 @@
       },
       "outputs": [
         {
-          "place": "p_start_cat_art_0",
-          "port": "artifact",
+          "place": "p_lp_output",
+          "port": "output",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_start_fmeta_dl_0",
+      "id": "t_mp_body_noop",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "dead",
+          "name": "body",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7265,16 +7978,16 @@
       },
       "inputs": [
         {
-          "place": "start_fmeta_0/dead_letter",
-          "port": "dead",
+          "place": "p_mp_body_in",
+          "port": "body",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{ out: #{ job_id: dead.job_id, reason: if dead.reason != () { dead.reason } else { \"dead_letter\" } } }",
+        "source": "#{ out: body }",
         "type": "rhai"
       },
-      "name": "Start - fmeta 0 Dead Letter",
+      "name": "Evaluate K candidates - Body Noop",
       "output_ports": [
         {
           "cardinality": "single",
@@ -7292,27 +8005,18 @@
       },
       "outputs": [
         {
-          "place": "p_start_fmeta_fail_0",
+          "place": "p_mp_body_out",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "guard": {
-        "source": "res.job_id == kept.job_id",
-        "type": "rhai"
-      },
-      "id": "t_start_fmeta_fold_0",
+      "id": "t_mp_collect",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "res",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "kept",
+          "name": "body",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7326,25 +8030,20 @@
       },
       "inputs": [
         {
-          "place": "p_start_fmeta_result_0",
-          "port": "res",
-          "weight": 1
-        },
-        {
-          "place": "p_start_fmeta_park_0",
-          "port": "kept",
+          "place": "p_mp_body_out",
+          "port": "body",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "#{\n  artifact: #{\n    execution_id: kept.execution_id,\n    detail: #{\n      artifact_id: kept.artifact_id,\n      name: kept.name,\n      category: \"input\",\n      mime_type: kept.mime_type,\n      size_bytes: kept.size_bytes,\n      storage_path: kept.storage_path,\n      file_metadata: res.detail.outputs.metadata\n    }\n  }\n}",
+        "source": "#{ result: #{ value: body.detail.outputs.obs, \"__map_idx\": body.__map_idx, \"__map_id\": body.__map_id } }",
         "type": "rhai"
       },
-      "name": "Start - fmeta 0 Fold",
+      "name": "Evaluate K candidates - Collect",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "artifact",
+          "name": "result",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7358,18 +8057,18 @@
       },
       "outputs": [
         {
-          "place": "p_start_cat_art_0",
-          "port": "artifact",
+          "place": "p_mp_results",
+          "port": "result",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_start_fmeta_submit_0",
+      "id": "t_mp_dispatch",
       "input_ports": [
         {
           "cardinality": "single",
-          "name": "desc",
+          "name": "item",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7383,25 +8082,20 @@
       },
       "inputs": [
         {
-          "place": "p_start_cat_desc_0",
-          "port": "desc",
+          "place": "p_mp_items",
+          "port": "item",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let dd = desc;\nlet eid = dd.artifact_id;\n#{\n  job: #{\n    job_id: eid,\n    run: 0,\n    retries: 0,\n    max_retries: 0,\n    execution_id: eid,\n    spec: #{\n      backend: \"file_ops\",\n      inputs: [],\n      outputs: [],\n      config: #{ operation: \"probe\", path: dd.storage_path }\n    }\n  },\n  keep: #{\n    job_id: eid,\n    execution_id: dd.execution_id,\n    artifact_id: dd.artifact_id,\n    name: dd.name,\n    mime_type: dd.mime_type,\n    size_bytes: dd.size_bytes,\n    storage_path: dd.storage_path\n  }\n}",
+        "source": "#{ body: item }",
         "type": "rhai"
       },
-      "name": "Start - fmeta 0 Submit",
+      "name": "Evaluate K candidates - Dispatch Item",
       "output_ports": [
         {
           "cardinality": "single",
-          "name": "job",
-          "schema_ref": "#/definitions/ExecutorSubmitInput"
-        },
-        {
-          "cardinality": "single",
-          "name": "keep",
+          "name": "body",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -7409,22 +8103,432 @@
         "properties": {
           "DynamicToken": {
             "$ref": "#/definitions/DynamicToken"
-          },
-          "ExecutorSubmitInput": {
-            "$ref": "#/definitions/ExecutorSubmitInput"
           }
         },
         "type": "object"
       },
       "outputs": [
         {
-          "place": "p_start_fmeta_inbox_0",
-          "port": "job",
+          "place": "p_mp_body_in",
+          "port": "body",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_mp_emit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_mp_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: ctrl }",
+        "type": "rhai"
+      },
+      "name": "Evaluate K candidates - Emit Control",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_mp_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_mp_gather",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "count",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "batch",
+          "name": "results",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_mp_count",
+          "port": "count",
+          "read": true,
           "weight": 1
         },
         {
-          "place": "p_start_fmeta_park_0",
-          "port": "keep",
+          "correlate_on": "__map_id",
+          "count_from": "count.expected",
+          "place": "p_mp_results",
+          "port": "results",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __r = results; __r.sort(|a, b| if a.__map_idx < b.__map_idx { -1 } else if a.__map_idx > b.__map_idx { 1 } else { 0 }); let __out = []; for __e in __r { __out.push(__e.value); } #{ gathered: #{ output: __out } }",
+        "type": "rhai"
+      },
+      "name": "Evaluate K candidates - Gather",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "gathered",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_mp_gathered",
+          "port": "gathered",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_mp_scatter",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_propose",
+          "schema_ref": "#/definitions/Data__propose"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_mp_input",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_propose_data",
+          "port": "d_propose",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __src = d_propose.detail.outputs.candidates; let __arr = if type_of(__src) == \"array\" { __src } else { [] }; let __items = []; let __i = 0; while __i < __arr.len() { __items.push(#{ \"cand\": __arr[__i], \"__map_idx\": __i, \"__map_id\": \"mp\" }); __i += 1; } #{ count: #{ expected: __arr.len(), \"__map_id\": \"mp\" }, items: __items }",
+        "type": "rhai"
+      },
+      "name": "Evaluate K candidates - Scatter",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "count",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "batch",
+          "name": "items",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_mp_count",
+          "port": "count",
+          "weight": 1
+        },
+        {
+          "place": "p_mp_items",
+          "port": "items",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_mp_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_mp_gathered",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Evaluate K candidates - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__mp"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__mp"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_mp_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_mp_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_propose_to_error",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "dead",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "propose/dead_letter",
+          "port": "dead",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ error: dead }",
+        "type": "rhai"
+      },
+      "name": "Fit GP + propose K candidates - To Error",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "error",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_propose_error",
+          "port": "error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_propose_to_output",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "propose/completed",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ output: done }",
+        "type": "rhai"
+      },
+      "name": "Fit GP + propose K candidates - To Output",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_propose_output",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_propose_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_propose_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Fit GP + propose K candidates - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__propose"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__propose"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_propose_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_propose_ctrl",
+          "port": "ctrl",
           "weight": 1
         }
       ]
@@ -7448,7 +8552,7 @@
       },
       "inputs": [
         {
-          "place": "p_start_cat_out_0",
+          "place": "p_start_ready_out",
           "port": "tok",
           "weight": 1
         }
@@ -7457,7 +8561,7 @@
         "source": "let d = tok; #{ data: d, main: d }",
         "type": "rhai"
       },
-      "name": "Start - Park Inputs (fork: park data, forward token)",
+      "name": "Seed BO Campaign - Park Inputs (fork: park data, forward token)",
       "output_ports": [
         {
           "cardinality": "single",
@@ -7516,10 +8620,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d._process_name = \"OCR + classify\"; #{ output: d }",
+        "source": "let d = input; d._process_name = \"Bayesian Optimization\"; #{ output: d }",
         "type": "rhai"
       },
-      "name": "Start - Derive Process Name",
+      "name": "Seed BO Campaign - Derive Process Name",
       "output_ports": [
         {
           "cardinality": "single",
@@ -7548,7 +8652,7 @@
         "forward_ports": [
           "main"
         ],
-        "name": "Start",
+        "name": "Seed BO Campaign",
         "name_field": "_process_name"
       },
       "id": "t_start_proc_start",
@@ -7579,13 +8683,13 @@
           "forward_ports": [
             "main"
           ],
-          "name": "Start",
+          "name": "Seed BO Campaign",
           "name_field": "_process_name"
         },
         "handler_id": "process_start",
         "type": "effect"
       },
-      "name": "Start - Register Process",
+      "name": "Seed BO Campaign - Register Process",
       "output_ports": [
         {
           "cardinality": "single",

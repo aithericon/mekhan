@@ -1,6 +1,10 @@
 {
   "definitions": {
-    "Ctrl__risky_step": {
+    "Ctrl__design": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "Ctrl__review": {
       "additionalProperties": true,
       "type": "object"
     },
@@ -8,7 +12,7 @@
       "additionalProperties": true,
       "type": "object"
     },
-    "Data__risky_step": {
+    "Data__design": {
       "additionalProperties": true,
       "properties": {
         "detail": {
@@ -23,12 +27,7 @@
             "outputs": {
               "additionalProperties": true,
               "properties": {
-                "summary": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
+                "form": {}
               },
               "type": "object"
             }
@@ -68,6 +67,74 @@
       },
       "type": "object"
     },
+    "Data__review": {
+      "additionalProperties": true,
+      "properties": {
+        "data": {},
+        "detail": {
+          "additionalProperties": true,
+          "properties": {
+            "exit_code": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "outputs": {
+              "additionalProperties": true,
+              "properties": {
+                "form": {}
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "execution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions_mdsvex": {},
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "items": {},
+          "type": "array"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {}
+      },
+      "type": "object"
+    },
     "Data__start": {
       "additionalProperties": true,
       "properties": {
@@ -78,18 +145,6 @@
           ]
         },
         "_process_name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "fail_mode": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "payload": {
           "type": [
             "string",
             "null"
@@ -1122,13 +1177,698 @@
       ],
       "title": "ExecutorSubmitted",
       "type": "object"
+    },
+    "HumanTaskAssigned": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Minimal output from the `human_task` effect handler.\n\nThe handler merges all input fields into the output, so you can define a custom output type with extra fields (e.g., `invoice_number`). Use this type when you only need the `task_id` for downstream correlation.",
+      "properties": {
+        "task_id": {
+          "description": "Engine-assigned task ID for correlation with the response signal.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "HumanTaskAssigned",
+      "type": "object"
+    },
+    "HumanTaskRequest": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "CalloutSeverity": {
+          "description": "Severity level for callout blocks.",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "success"
+          ],
+          "type": "string"
+        },
+        "ChartSeries": {
+          "description": "A series definition for chart rendering.",
+          "properties": {
+            "color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "type": "string"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object"
+        },
+        "ChartType": {
+          "description": "Chart type for data visualization blocks.",
+          "enum": [
+            "area",
+            "bar",
+            "line",
+            "pie"
+          ],
+          "type": "string"
+        },
+        "DownloadItem": {
+          "description": "A downloadable file item.",
+          "properties": {
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "size": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "thumbnail_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "filename",
+            "url"
+          ],
+          "type": "object"
+        },
+        "SelectOption": {
+          "description": "One choice in a `kind = \"select\"` (or `radio`) field. `value` is what the form submits / what downstream guards compare against; `label` is what the UI renders. Authors typically write `{value, label}`; the deserializer on `TaskField::options` also accepts a bare string and stretches it to `{value: s, label: s}`. Mirror of the same type in `service/src/models/template.rs` — the engine's HumanTask effect handler validates the wire payload against `TaskField`, so the shape must match what the service compiles into AIR.",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "label",
+            "value"
+          ],
+          "type": "object"
+        },
+        "TableAlignment": {
+          "description": "Column alignment for table blocks.",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
+          "type": "string"
+        },
+        "TaskBlock": {
+          "description": "A render block inside a task step.",
+          "oneOf": [
+            {
+              "properties": {
+                "field": {
+                  "$ref": "#/definitions/TaskField"
+                },
+                "type": {
+                  "enum": [
+                    "input"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "mdsvex"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "downloads": {
+                  "items": {
+                    "$ref": "#/definitions/DownloadItem"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "download"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "downloads",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "alignments": {
+                  "items": {
+                    "$ref": "#/definitions/TableAlignment"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "headers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "rows": {
+                  "items": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "enum": [
+                    "table"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "headers",
+                "rows",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "alt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "image"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "severity": {
+                  "$ref": "#/definitions/CalloutSeverity"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "callout"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "severity",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "filename": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "height": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "pdf"
+                  ],
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "url"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "chart_type": {
+                  "$ref": "#/definitions/ChartType"
+                },
+                "data": {
+                  "items": true,
+                  "type": "array"
+                },
+                "height": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "series": {
+                  "items": {
+                    "$ref": "#/definitions/ChartSeries"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "chart"
+                  ],
+                  "type": "string"
+                },
+                "x": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "x_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "y_label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "chart_type",
+                "data",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Feature B — array-iteration sub-task body. Renders one copy of `blocks` per element of the upstream array referenced by `items_ref` (which carries exactly one `[*]` boundary, e.g. `extract.tasks[*]`). Inner `blocks` are any TaskBlock variant except a nested Repeater — Input children declare the per-row form schema, display children render with placeholders resolved per row. The engine treats this as a pass-through — the structural shape is statically declared at compile time, the *count* of rows comes from runtime data the compiler stages into `HumanTaskRequest.payload`. Renderer-only; no engine-side semantics beyond accepting and forwarding it.",
+              "properties": {
+                "blocks": {
+                  "items": {
+                    "$ref": "#/definitions/TaskBlock"
+                  },
+                  "type": "array"
+                },
+                "item_label_ref": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "items_ref": {
+                  "type": "string"
+                },
+                "output_slug": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "repeater"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "blocks",
+                "items_ref",
+                "output_slug",
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "divider"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "TaskField": {
+          "description": "Definition of a single field in a human task form.",
+          "properties": {
+            "accept": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description_mdsvex": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "include_time": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "kind": {
+              "$ref": "#/definitions/TaskFieldKind"
+            },
+            "label": {
+              "type": "string"
+            },
+            "max": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "max_file_size": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_files": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_rating": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "min": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "options": {
+              "description": "Choice list for `kind = \"select\"` / `\"radio\"`. Authored as `[{\"value\": \"approve\", \"label\": \"Approve\"}, …]`; the deserializer also accepts bare string shorthand (`[\"approve\", \"reject\"]`) and normalizes each entry to `{value, label}` where `label = value`. Keeps a uniform runtime representation regardless of which shape the author chose.",
+              "items": {
+                "$ref": "#/definitions/SelectOption"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "pen_color": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "placeholder": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "signature_mode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "step": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "label",
+            "name"
+          ],
+          "type": "object"
+        },
+        "TaskFieldKind": {
+          "description": "Types of form fields for human tasks.",
+          "enum": [
+            "text",
+            "textarea",
+            "number",
+            "select",
+            "checkbox",
+            "file",
+            "signature",
+            "radio",
+            "date",
+            "range",
+            "rating"
+          ],
+          "type": "string"
+        },
+        "TaskStep": {
+          "description": "One step in a multi-step human task.",
+          "properties": {
+            "blocks": {
+              "items": {
+                "$ref": "#/definitions/TaskBlock"
+              },
+              "type": "array"
+            },
+            "description_mdsvex": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "blocks",
+            "id",
+            "title"
+          ],
+          "type": "object"
+        }
+      },
+      "description": "Request to create a new human task. Published to `petri.human.request.{net_id}.{place}`.",
+      "properties": {
+        "corr_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instructions_mdsvex": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "net_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "org_id": {
+          "description": "Organization ID for routing this task to the correct HPI org. Set from token data (dynamic) or engine config fallback (HUMAN_ORG_ID).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": true,
+        "place": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "process_id": {
+          "description": "Links this task to a process (set automatically from read-arc process token).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "process_step": {
+          "description": "Identifies which step in the process this task represents.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response_subject": {
+          "description": "NATS subject where the UI should publish outcome signals (ExternalSignal envelope). Set by the engine before publishing to `human.request.*`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/definitions/TaskStep"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "steps",
+        "title"
+      ],
+      "title": "HumanTaskRequest",
+      "type": "object"
     }
   },
   "description": "",
   "groups": [
     {
       "id": "group_1",
-      "name": "Risky Step"
+      "name": "Design Form"
     },
     {
       "id": "group_2",
@@ -1159,75 +1899,322 @@
       "id": "group_7",
       "name": "Effect Error Recovery",
       "parent_id": "group_1"
+    },
+    {
+      "id": "grp_review",
+      "name": "Review"
     }
   ],
-  "name": "08 · Failure Handling",
+  "name": "13 · Dynamic Form",
   "places": [
     {
-      "id": "p_end_fail_completed",
-      "name": "Done (Failure Path) - Completed",
+      "group_id": "group_3",
+      "id": "design/accepted",
+      "name": "Accepted",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "design/artifact_log",
+      "name": "Artifact Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_5",
+      "id": "design/cancel_request",
+      "name": "Cancel Request",
+      "token_schema": "#/definitions/ExecutorCancelInput",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_5",
+      "id": "design/cancelled",
+      "name": "Cancelled",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "id": "p_end_fail_result",
-      "name": "Done (Failure Path) - Result",
-      "token_schema": "#/definitions/DynamicToken",
+      "group_id": "group_5",
+      "id": "design/cancelling",
+      "name": "Cancelling",
+      "token_schema": "#/definitions/ExecutorCancelled",
       "type": "state"
     },
     {
-      "id": "p_end_ok_completed",
-      "name": "Done (Happy Path) - Completed",
+      "group_id": "group_1",
+      "id": "design/completed",
+      "name": "Completed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "terminal"
     },
     {
-      "id": "p_end_ok_result",
-      "name": "Done (Happy Path) - Result",
+      "group_id": "group_1",
+      "id": "design/dead_letter",
+      "name": "Dead Letter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/effect_errors",
+      "name": "Effect Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "group_id": "group_4",
+      "id": "design/failed",
+      "name": "Failed",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_handle_fail_fail_done",
-      "name": "Handle Failure - Failed",
+      "group_id": "group_1",
+      "id": "design/failure",
+      "name": "Failure",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_handle_fail_fail_out",
-      "name": "Handle Failure - Output",
+      "group_id": "group_1",
+      "id": "design/failure_log",
+      "name": "Failure Log Input",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_handle_fail_fail_sig",
-      "name": "Handle Failure - Failure Breadcrumb",
+      "group_id": "group_1",
+      "id": "design/failure_logged",
+      "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_risky_step_ctrl",
-      "name": "Risky Step - Control Token",
-      "token_schema": "#/definitions/Ctrl__risky_step",
+      "group_id": "group_1",
+      "id": "design/inbox",
+      "name": "Inbox",
+      "token_schema": "#/definitions/ExecutorSubmitInput",
       "type": "state"
     },
     {
-      "id": "p_risky_step_data",
-      "name": "Risky Step - Parked Data (write-once)",
-      "token_schema": "#/definitions/Data__risky_step",
-      "type": "state"
-    },
-    {
-      "id": "p_risky_step_error",
-      "name": "Risky Step - Error",
+      "group_id": "group_6",
+      "id": "design/message_log",
+      "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
-      "id": "p_risky_step_output",
-      "name": "Risky Step - Output",
+      "group_id": "group_6",
+      "id": "design/metric_log",
+      "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "design/output_log",
+      "name": "Output Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "design/phase_log",
+      "name": "Phase Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_6",
+      "id": "design/progress_log",
+      "name": "Progress Log",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_3",
+      "id": "design/running",
+      "name": "Running",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_accepted",
+      "name": "Accepted Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_artifact",
+      "name": "Artifact Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_cancelled",
+      "name": "Cancelled Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_completed",
+      "name": "Completed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_failed",
+      "name": "Failed Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_log",
+      "name": "Log Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_metric",
+      "name": "Metric Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_output",
+      "name": "Output Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_phase",
+      "name": "Phase Events",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_progress",
+      "name": "Progress Events",
+      "token_schema": "#/definitions/ExecutorEventSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_running",
+      "name": "Running Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_1",
+      "id": "design/sig_timed_out",
+      "name": "Timed Out Signals",
+      "token_schema": "#/definitions/ExecutorStatusSignal",
+      "type": "signal"
+    },
+    {
+      "group_id": "group_2",
+      "id": "design/submitted",
+      "name": "Submitted",
+      "token_schema": "#/definitions/ExecutorSubmitted",
+      "type": "state"
+    },
+    {
+      "group_id": "group_4",
+      "id": "design/timed_out",
+      "name": "Timed Out",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_design_ctrl",
+      "name": "Design Form - Control Token",
+      "token_schema": "#/definitions/Ctrl__design",
+      "type": "state"
+    },
+    {
+      "id": "p_design_data",
+      "name": "Design Form - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__design",
+      "type": "state"
+    },
+    {
+      "id": "p_design_error",
+      "name": "Design Form - Error",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_design_output",
+      "name": "Design Form - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_end_completed",
+      "name": "Recorded - Completed",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "terminal"
+    },
+    {
+      "id": "p_end_result",
+      "name": "Recorded - Result",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_active",
+      "name": "Review - Active",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_ctrl",
+      "name": "Review - Control Token",
+      "token_schema": "#/definitions/Ctrl__review",
+      "type": "state"
+    },
+    {
+      "id": "p_review_data",
+      "name": "Review - Parked Data (write-once)",
+      "token_schema": "#/definitions/Data__review",
+      "type": "state"
+    },
+    {
+      "id": "p_review_errors",
+      "name": "Review - Errors",
+      "token_schema": "#/definitions/EffectError",
+      "type": "state"
+    },
+    {
+      "id": "p_review_input",
+      "name": "Review - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_output",
+      "name": "Review - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_review_signal",
+      "name": "Review - Signal",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
     },
     {
       "id": "p_start_data",
@@ -1264,237 +2251,6 @@
       "name": "Start - Output",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
-    },
-    {
-      "group_id": "group_3",
-      "id": "risky_step/accepted",
-      "name": "Accepted",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_6",
-      "id": "risky_step/artifact_log",
-      "name": "Artifact Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_5",
-      "id": "risky_step/cancel_request",
-      "name": "Cancel Request",
-      "token_schema": "#/definitions/ExecutorCancelInput",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_5",
-      "id": "risky_step/cancelled",
-      "name": "Cancelled",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "terminal"
-    },
-    {
-      "group_id": "group_5",
-      "id": "risky_step/cancelling",
-      "name": "Cancelling",
-      "token_schema": "#/definitions/ExecutorCancelled",
-      "type": "state"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/completed",
-      "name": "Completed",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "terminal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/dead_letter",
-      "name": "Dead Letter",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "terminal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/effect_errors",
-      "name": "Effect Errors",
-      "token_schema": "#/definitions/EffectError",
-      "type": "state"
-    },
-    {
-      "group_id": "group_4",
-      "id": "risky_step/failed",
-      "name": "Failed",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/failure",
-      "name": "Failure",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/failure_log",
-      "name": "Failure Log Input",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/failure_logged",
-      "name": "Failure Logged",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/inbox",
-      "name": "Inbox",
-      "token_schema": "#/definitions/ExecutorSubmitInput",
-      "type": "state"
-    },
-    {
-      "group_id": "group_6",
-      "id": "risky_step/message_log",
-      "name": "Message Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_6",
-      "id": "risky_step/metric_log",
-      "name": "Metric Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_6",
-      "id": "risky_step/output_log",
-      "name": "Output Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_6",
-      "id": "risky_step/phase_log",
-      "name": "Phase Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_6",
-      "id": "risky_step/progress_log",
-      "name": "Progress Log",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_3",
-      "id": "risky_step/running",
-      "name": "Running",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_accepted",
-      "name": "Accepted Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_artifact",
-      "name": "Artifact Events",
-      "token_schema": "#/definitions/ExecutorEventSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_cancelled",
-      "name": "Cancelled Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_completed",
-      "name": "Completed Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_failed",
-      "name": "Failed Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_log",
-      "name": "Log Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_metric",
-      "name": "Metric Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_output",
-      "name": "Output Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_phase",
-      "name": "Phase Events",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_progress",
-      "name": "Progress Events",
-      "token_schema": "#/definitions/ExecutorEventSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_running",
-      "name": "Running Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_1",
-      "id": "risky_step/sig_timed_out",
-      "name": "Timed Out Signals",
-      "token_schema": "#/definitions/ExecutorStatusSignal",
-      "type": "signal"
-    },
-    {
-      "group_id": "group_2",
-      "id": "risky_step/submitted",
-      "name": "Submitted",
-      "token_schema": "#/definitions/ExecutorSubmitted",
-      "type": "state"
-    },
-    {
-      "group_id": "group_4",
-      "id": "risky_step/timed_out",
-      "name": "Timed Out",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
     }
   ],
   "requirements": [
@@ -1514,6 +2270,7 @@
     {
       "category": "human",
       "handler_ids": [
+        "human_task",
         "process_log_message",
         "process_log_metric"
       ]
@@ -1522,7 +2279,6 @@
       "category": "orchestration",
       "handler_ids": [
         "process_complete",
-        "process_fail",
         "process_phase",
         "process_progress",
         "process_start"
@@ -1532,14 +2288,14 @@
   "transitions": [
     {
       "caused_signals": [
-        "risky_step/sig_cancelled"
+        "design/sig_cancelled"
       ],
       "group_id": "group_5",
       "guard": {
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/cancel",
+      "id": "design/cancel",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1565,12 +2321,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/running",
+          "place": "design/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/cancel_request",
+          "place": "design/cancel_request",
           "port": "sig",
           "weight": 1
         }
@@ -1605,12 +2361,12 @@
       },
       "outputs": [
         {
-          "place": "risky_step/cancelling",
+          "place": "design/cancelling",
           "port": "cancelled",
           "weight": 1
         },
         {
-          "place": "risky_step/effect_errors",
+          "place": "design/effect_errors",
           "port": "_error",
           "weight": 1
         }
@@ -1622,7 +2378,7 @@
         "source": "err.retryable != true || {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries >= max_retries\n                }",
         "type": "rhai"
       },
-      "id": "risky_step/dlq_effect_err",
+      "id": "design/dlq_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1640,7 +2396,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/effect_errors",
+          "place": "design/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -1667,7 +2423,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/dead_letter",
+          "place": "design/dead_letter",
           "port": "dead",
           "weight": 1
         }
@@ -1679,7 +2435,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "risky_step/exhausted",
+      "id": "design/exhausted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1697,7 +2453,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/failure",
+          "place": "design/failure",
           "port": "f",
           "weight": 1
         }
@@ -1724,7 +2480,7 @@
       },
       "outputs": [
         {
-          "place": "p_risky_step_error",
+          "place": "p_design_error",
           "port": "err",
           "weight": 1
         }
@@ -1732,7 +2488,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "risky_step/log_artifact",
+      "id": "design/log_artifact",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1750,7 +2506,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/sig_artifact",
+          "place": "design/sig_artifact",
           "port": "artifacts",
           "weight": 1
         }
@@ -1777,7 +2533,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/artifact_log",
+          "place": "design/artifact_log",
           "port": "catalogued",
           "weight": 1
         }
@@ -1785,7 +2541,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "risky_step/log_failure",
+      "id": "design/log_failure",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1803,7 +2559,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/failure_log",
+          "place": "design/failure_log",
           "port": "message",
           "weight": 1
         }
@@ -1830,7 +2586,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/failure_logged",
+          "place": "design/failure_logged",
           "port": "logged",
           "weight": 1
         }
@@ -1838,7 +2594,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "risky_step/log_message",
+      "id": "design/log_message",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1856,7 +2612,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/sig_log",
+          "place": "design/sig_log",
           "port": "message",
           "weight": 1
         }
@@ -1883,7 +2639,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/message_log",
+          "place": "design/message_log",
           "port": "logged",
           "weight": 1
         }
@@ -1891,7 +2647,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "risky_step/log_metric",
+      "id": "design/log_metric",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1909,7 +2665,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/sig_metric",
+          "place": "design/sig_metric",
           "port": "metric",
           "weight": 1
         }
@@ -1936,7 +2692,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/metric_log",
+          "place": "design/metric_log",
           "port": "logged",
           "weight": 1
         }
@@ -1944,7 +2700,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "risky_step/log_output",
+      "id": "design/log_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1962,7 +2718,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/sig_output",
+          "place": "design/sig_output",
           "port": "evt",
           "weight": 1
         }
@@ -1989,7 +2745,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/output_log",
+          "place": "design/output_log",
           "port": "log",
           "weight": 1
         }
@@ -1997,7 +2753,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "risky_step/log_phase",
+      "id": "design/log_phase",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2015,7 +2771,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/sig_phase",
+          "place": "design/sig_phase",
           "port": "phase",
           "weight": 1
         }
@@ -2042,7 +2798,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/phase_log",
+          "place": "design/phase_log",
           "port": "recorded",
           "weight": 1
         }
@@ -2050,7 +2806,7 @@
     },
     {
       "group_id": "group_6",
-      "id": "risky_step/log_progress",
+      "id": "design/log_progress",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2068,7 +2824,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/sig_progress",
+          "place": "design/sig_progress",
           "port": "progress",
           "weight": 1
         }
@@ -2095,7 +2851,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/progress_log",
+          "place": "design/progress_log",
           "port": "recorded",
           "weight": 1
         }
@@ -2103,7 +2859,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "risky_step/on_failed",
+      "id": "design/on_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2121,7 +2877,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/failed",
+          "place": "design/failed",
           "port": "e",
           "weight": 1
         }
@@ -2153,12 +2909,12 @@
       },
       "outputs": [
         {
-          "place": "risky_step/failure",
+          "place": "design/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "risky_step/failure_log",
+          "place": "design/failure_log",
           "port": "log",
           "weight": 1
         }
@@ -2166,7 +2922,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "risky_step/on_timeout",
+      "id": "design/on_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2184,7 +2940,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/timed_out",
+          "place": "design/timed_out",
           "port": "e",
           "weight": 1
         }
@@ -2216,12 +2972,12 @@
       },
       "outputs": [
         {
-          "place": "risky_step/failure",
+          "place": "design/failure",
           "port": "f",
           "weight": 1
         },
         {
-          "place": "risky_step/failure_log",
+          "place": "design/failure_log",
           "port": "log",
           "weight": 1
         }
@@ -2229,7 +2985,7 @@
     },
     {
       "group_id": "group_1",
-      "id": "risky_step/prepare",
+      "id": "design/prepare",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2253,10 +3009,10 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"risky_step\"; d.run = 0; d.retries = 0; d.max_retries = 0; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Risky Step — succeeds, raises, or exits depending on input.fail_mode.\\n#\\n# Two ways to \\\"fail\\\" an AutomatedStep from user code:\\n#   - raise an unhandled exception (Python tears down with a traceback +\\n#     non-zero exit code), or\\n#   - call sys.exit(<nonzero>) directly.\\n#\\n# Either way the executor reports a job-level failure. With\\n# retryPolicy.maxRetries == 0 (see graph.json) the token routes straight\\n# out the AutomatedStep's `error` handle — no retry attempts. Bump\\n# maxRetries to watch retries fire before exhaustion.\\n#\\n# `summary` is an implicit output: the runner sweeps any global matching a\\n# declared output field at the end of a successful run. On a raise/exit we\\n# never reach the assignment, so no output is produced and downstream\\n# success-path consumers never see this step.\\n\\nimport sys\\n\\nmode = input.fail_mode\\n\\nif mode == \\\"raise\\\":\\n    raise RuntimeError(f\\\"Synthetic failure: rejecting payload {input.payload!r}\\\")\\n\\nif mode == \\\"exit\\\":\\n    log_warn(\\\"exiting non-zero on purpose\\\", payload=input.payload)\\n    sys.exit(7)\\n\\nsummary = f\\\"Processed payload of length {len(input.payload or '')}\\\"\\nlog_info(\\\"processed\\\", chars=len(input.payload or \\\"\\\"))\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"summary\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/risky_step/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"design\"; d.run = 0; d.retries = 0; d.max_retries = 0; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"\\\"\\\"\\\"Form designer — emits a dynamic HumanTask form at RUNTIME.\\n\\nThis is the load-bearing half of the dynamic-form feature: instead of the\\nHumanTask baking its `steps` as a compile-time literal, an upstream producer\\nemits the block list as data, and the downstream HumanTask sources it via\\n`stepsRef = \\\"design.form\\\"`.\\n\\nThe node declares a single output field `form: json` (see graph.json). The SDK\\nsurfaces any top-level global matching a declared output name, so assigning\\n`form = [...]` here parks it as `design.form` for the read-arc the compiler\\nsynthesized from the HumanTask's `stepsRef`.\\n\\n`form` is a `TaskStepConfig[]` — exactly the schema the platform now advertises\\nto an Agent on the HumanTask input port (`task_step_list_json_schema`) and\\nenforces at runtime via the colored-token SchemaRegistry. A real agentic\\nworkflow would have an Agent node emit this same array as a tool output; here a\\ndeterministic script stands in so the demo runs fully offline.\\n\\\"\\\"\\\"\\n\\n# In a real workflow these could be tailored per-instance (e.g. an LLM deciding\\n# which questions to ask based on upstream context). Here we emit a fixed but\\n# multi-block form to exercise text + select + checkbox inputs and a markdown\\n# display block — proving the renderer handles an arbitrary runtime block list.\\nform = [\\n    {\\n        \\\"id\\\": \\\"step-triage\\\",\\n        \\\"title\\\": \\\"Triage\\\",\\n        \\\"descriptionMdsvex\\\": \\\"This form was **designed at runtime** by an upstream step.\\\",\\n        \\\"blocks\\\": [\\n            {\\n                \\\"type\\\": \\\"mdsvex\\\",\\n                \\\"content\\\": \\\"Please classify the incoming item and add any notes.\\\",\\n            },\\n            {\\n                \\\"type\\\": \\\"input\\\",\\n                \\\"field\\\": {\\n                    \\\"name\\\": \\\"category\\\",\\n                    \\\"label\\\": \\\"Category\\\",\\n                    \\\"kind\\\": \\\"select\\\",\\n                    \\\"required\\\": True,\\n                    \\\"options\\\": [\\n                        {\\\"value\\\": \\\"bug\\\", \\\"label\\\": \\\"Bug\\\"},\\n                        {\\\"value\\\": \\\"feature\\\", \\\"label\\\": \\\"Feature request\\\"},\\n                        {\\\"value\\\": \\\"question\\\", \\\"label\\\": \\\"Question\\\"},\\n                    ],\\n                },\\n            },\\n            {\\n                \\\"type\\\": \\\"input\\\",\\n                \\\"field\\\": {\\n                    \\\"name\\\": \\\"urgent\\\",\\n                    \\\"label\\\": \\\"Mark as urgent?\\\",\\n                    \\\"kind\\\": \\\"checkbox\\\",\\n                    \\\"required\\\": False,\\n                },\\n            },\\n        ],\\n    },\\n    {\\n        \\\"id\\\": \\\"step-notes\\\",\\n        \\\"title\\\": \\\"Notes\\\",\\n        \\\"blocks\\\": [\\n            {\\n                \\\"type\\\": \\\"input\\\",\\n                \\\"field\\\": {\\n                    \\\"name\\\": \\\"notes\\\",\\n                    \\\"label\\\": \\\"Reviewer notes\\\",\\n                    \\\"kind\\\": \\\"textarea\\\",\\n                    \\\"required\\\": False,\\n                    \\\"placeholder\\\": \\\"Anything the next step should know…\\\",\\n                },\\n            }\\n        ],\\n    },\\n]\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"json\", \"name\": \"form\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/design/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
         "type": "rhai"
       },
-      "name": "Risky Step - Prepare",
+      "name": "Design Form - Prepare",
       "output_ports": [
         {
           "cardinality": "single",
@@ -2274,7 +3030,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/inbox",
+          "place": "design/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2286,7 +3042,7 @@
         "source": "f.retries < f.max_retries",
         "type": "rhai"
       },
-      "id": "risky_step/retry",
+      "id": "design/retry",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2304,7 +3060,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/failure",
+          "place": "design/failure",
           "port": "f",
           "weight": 1
         }
@@ -2331,7 +3087,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/inbox",
+          "place": "design/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2343,7 +3099,7 @@
         "source": "err.retryable == true && {\n                    let job = err.inputs.job;\n                    let retries = if job.contains(\"retries\") { job.retries } else { 0 };\n                    let max_retries = if job.contains(\"max_retries\") { job.max_retries } else { 3 };\n                    retries < max_retries\n                }",
         "type": "rhai"
       },
-      "id": "risky_step/retry_effect_err",
+      "id": "design/retry_effect_err",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2361,7 +3117,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/effect_errors",
+          "place": "design/effect_errors",
           "port": "err",
           "weight": 1
         }
@@ -2388,7 +3144,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/inbox",
+          "place": "design/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2396,32 +3152,32 @@
     },
     {
       "caused_signals": [
-        "risky_step/sig_accepted",
-        "risky_step/sig_running",
-        "risky_step/sig_completed",
-        "risky_step/sig_failed",
-        "risky_step/sig_timed_out"
+        "design/sig_accepted",
+        "design/sig_running",
+        "design/sig_completed",
+        "design/sig_failed",
+        "design/sig_timed_out"
       ],
       "effect_config": {
         "event_routes": {
-          "artifact": "risky_step/sig_artifact",
-          "log": "risky_step/sig_log",
-          "metric": "risky_step/sig_metric",
-          "output": "risky_step/sig_output",
-          "phase": "risky_step/sig_phase",
-          "progress": "risky_step/sig_progress"
+          "artifact": "design/sig_artifact",
+          "log": "design/sig_log",
+          "metric": "design/sig_metric",
+          "output": "design/sig_output",
+          "phase": "design/sig_phase",
+          "progress": "design/sig_progress"
         },
         "signal_routes": {
-          "accepted": "risky_step/sig_accepted",
-          "cancelled": "risky_step/sig_cancelled",
-          "completed": "risky_step/sig_completed",
-          "failed": "risky_step/sig_failed",
-          "running": "risky_step/sig_running",
-          "timed_out": "risky_step/sig_timed_out"
+          "accepted": "design/sig_accepted",
+          "cancelled": "design/sig_cancelled",
+          "completed": "design/sig_completed",
+          "failed": "design/sig_failed",
+          "running": "design/sig_running",
+          "timed_out": "design/sig_timed_out"
         }
       },
       "group_id": "group_2",
-      "id": "risky_step/submit",
+      "id": "design/submit",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2439,7 +3195,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/inbox",
+          "place": "design/inbox",
           "port": "job",
           "weight": 1
         }
@@ -2447,20 +3203,20 @@
       "logic": {
         "config": {
           "event_routes": {
-            "artifact": "risky_step/sig_artifact",
-            "log": "risky_step/sig_log",
-            "metric": "risky_step/sig_metric",
-            "output": "risky_step/sig_output",
-            "phase": "risky_step/sig_phase",
-            "progress": "risky_step/sig_progress"
+            "artifact": "design/sig_artifact",
+            "log": "design/sig_log",
+            "metric": "design/sig_metric",
+            "output": "design/sig_output",
+            "phase": "design/sig_phase",
+            "progress": "design/sig_progress"
           },
           "signal_routes": {
-            "accepted": "risky_step/sig_accepted",
-            "cancelled": "risky_step/sig_cancelled",
-            "completed": "risky_step/sig_completed",
-            "failed": "risky_step/sig_failed",
-            "running": "risky_step/sig_running",
-            "timed_out": "risky_step/sig_timed_out"
+            "accepted": "design/sig_accepted",
+            "cancelled": "design/sig_cancelled",
+            "completed": "design/sig_completed",
+            "failed": "design/sig_failed",
+            "running": "design/sig_running",
+            "timed_out": "design/sig_timed_out"
           }
         },
         "handler_id": "executor_submit",
@@ -2492,12 +3248,12 @@
       },
       "outputs": [
         {
-          "place": "risky_step/submitted",
+          "place": "design/submitted",
           "port": "submitted",
           "weight": 1
         },
         {
-          "place": "risky_step/effect_errors",
+          "place": "design/effect_errors",
           "port": "_error",
           "weight": 1
         }
@@ -2509,7 +3265,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_accepted",
+      "id": "design/t_accepted",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2535,12 +3291,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/submitted",
+          "place": "design/submitted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_accepted",
+          "place": "design/sig_accepted",
           "port": "sig",
           "weight": 1
         }
@@ -2567,7 +3323,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/accepted",
+          "place": "design/accepted",
           "port": "out",
           "weight": 1
         }
@@ -2579,7 +3335,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_cancelled",
+      "id": "design/t_cancelled",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2605,12 +3361,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/cancelling",
+          "place": "design/cancelling",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_cancelled",
+          "place": "design/sig_cancelled",
           "port": "sig",
           "weight": 1
         }
@@ -2637,7 +3393,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/cancelled",
+          "place": "design/cancelled",
           "port": "out",
           "weight": 1
         }
@@ -2649,7 +3405,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_failed",
+      "id": "design/t_failed",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2675,12 +3431,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/running",
+          "place": "design/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_failed",
+          "place": "design/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -2707,7 +3463,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/failed",
+          "place": "design/failed",
           "port": "err",
           "weight": 1
         }
@@ -2719,7 +3475,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_failed_pre_run",
+      "id": "design/t_failed_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2745,12 +3501,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/accepted",
+          "place": "design/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_failed",
+          "place": "design/sig_failed",
           "port": "sig",
           "weight": 1
         }
@@ -2777,7 +3533,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/failed",
+          "place": "design/failed",
           "port": "err",
           "weight": 1
         }
@@ -2789,7 +3545,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_running",
+      "id": "design/t_running",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2815,12 +3571,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/accepted",
+          "place": "design/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_running",
+          "place": "design/sig_running",
           "port": "sig",
           "weight": 1
         }
@@ -2847,7 +3603,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/running",
+          "place": "design/running",
           "port": "out",
           "weight": 1
         }
@@ -2859,7 +3615,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_success",
+      "id": "design/t_success",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2885,12 +3641,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/running",
+          "place": "design/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_completed",
+          "place": "design/sig_completed",
           "port": "sig",
           "weight": 1
         }
@@ -2917,7 +3673,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/completed",
+          "place": "design/completed",
           "port": "done",
           "weight": 1
         }
@@ -2929,7 +3685,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_timeout",
+      "id": "design/t_timeout",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2955,12 +3711,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/running",
+          "place": "design/running",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_timed_out",
+          "place": "design/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -2987,7 +3743,7 @@
       },
       "outputs": [
         {
-          "place": "risky_step/timed_out",
+          "place": "design/timed_out",
           "port": "out",
           "weight": 1
         }
@@ -2999,7 +3755,7 @@
         "source": "sig.execution_id == job.execution_id",
         "type": "rhai"
       },
-      "id": "risky_step/t_timeout_pre_run",
+      "id": "design/t_timeout_pre_run",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3025,12 +3781,12 @@
       },
       "inputs": [
         {
-          "place": "risky_step/accepted",
+          "place": "design/accepted",
           "port": "job",
           "weight": 1
         },
         {
-          "place": "risky_step/sig_timed_out",
+          "place": "design/sig_timed_out",
           "port": "sig",
           "weight": 1
         }
@@ -3057,380 +3813,14 @@
       },
       "outputs": [
         {
-          "place": "risky_step/timed_out",
+          "place": "design/timed_out",
           "port": "out",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_end_fail_proc_complete",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "process",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "done",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_start_process",
-          "port": "process",
-          "read": true,
-          "weight": 1
-        },
-        {
-          "place": "p_end_fail_result",
-          "port": "done",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "handler_id": "process_complete",
-        "type": "effect"
-      },
-      "name": "Done (Failure Path) - Complete Process",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "completed",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_end_fail_completed",
-          "port": "completed",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_end_fail_result_shape",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "input",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_handle_fail_fail_out",
-          "port": "input",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let __rv0 = (\"failed\"); let __rv = #{ \"outcome\": __rv0 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
-        "type": "rhai"
-      },
-      "name": "Done (Failure Path) - Result",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "result",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_end_fail_result",
-          "port": "result",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_end_ok_proc_complete",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "process",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "done",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_start_process",
-          "port": "process",
-          "read": true,
-          "weight": 1
-        },
-        {
-          "place": "p_end_ok_result",
-          "port": "done",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "handler_id": "process_complete",
-        "type": "effect"
-      },
-      "name": "Done (Happy Path) - Complete Process",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "completed",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_end_ok_completed",
-          "port": "completed",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_end_ok_result_shape",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "input",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "d_risky_step",
-          "schema_ref": "#/definitions/Data__risky_step"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_risky_step_ctrl",
-          "port": "input",
-          "weight": 1
-        },
-        {
-          "place": "p_risky_step_data",
-          "port": "d_risky_step",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let __rv0 = (\"ok\"); let __rv1 = (d_risky_step.detail.outputs.summary); let __rv = #{ \"outcome\": __rv0, \"summary\": __rv1 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
-        "type": "rhai"
-      },
-      "name": "Done (Happy Path) - Result",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "result",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_end_ok_result",
-          "port": "result",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_handle_fail_fail_emit",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "failure",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_handle_fail_fail_sig",
-          "port": "failure",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "handler_id": "process_fail",
-        "type": "effect"
-      },
-      "name": "Handle Failure - Fail Process",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "failed",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_handle_fail_fail_done",
-          "port": "failed",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_handle_fail_fail_shape",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "input",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "d_start",
-          "schema_ref": "#/definitions/Data__start"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_risky_step_error",
-          "port": "input",
-          "weight": 1
-        },
-        {
-          "place": "p_start_data",
-          "port": "d_start",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let __fm = \"Risky Step failed (see error.value for details)\"; let __rv0 = (d_start.fail_mode); let __rv1 = (d_start.payload); let __er = #{ \"fail_mode\": __rv0, \"payload\": __rv1 }; let __ec = #{ reason: __fm, value: __er }; let __out = input; __out.exit_code = #{ ok: false, error: __ec }; #{ out: __out, fail: #{ reason: __fm } }",
-        "type": "rhai"
-      },
-      "name": "Handle Failure - Failure",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "out",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "fail",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_handle_fail_fail_out",
-          "port": "out",
-          "weight": 1
-        },
-        {
-          "place": "p_handle_fail_fail_sig",
-          "port": "fail",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_risky_step_to_error",
+      "id": "t_design_to_error",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3448,7 +3838,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/dead_letter",
+          "place": "design/dead_letter",
           "port": "dead",
           "weight": 1
         }
@@ -3457,7 +3847,7 @@
         "source": "#{ error: dead }",
         "type": "rhai"
       },
-      "name": "Risky Step - To Error",
+      "name": "Design Form - To Error",
       "output_ports": [
         {
           "cardinality": "single",
@@ -3475,14 +3865,14 @@
       },
       "outputs": [
         {
-          "place": "p_risky_step_error",
+          "place": "p_design_error",
           "port": "error",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_risky_step_to_output",
+      "id": "t_design_to_output",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3500,7 +3890,7 @@
       },
       "inputs": [
         {
-          "place": "risky_step/completed",
+          "place": "design/completed",
           "port": "done",
           "weight": 1
         }
@@ -3509,7 +3899,7 @@
         "source": "#{ output: done }",
         "type": "rhai"
       },
-      "name": "Risky Step - To Output",
+      "name": "Design Form - To Output",
       "output_ports": [
         {
           "cardinality": "single",
@@ -3527,14 +3917,14 @@
       },
       "outputs": [
         {
-          "place": "p_risky_step_output",
+          "place": "p_design_output",
           "port": "output",
           "weight": 1
         }
       ]
     },
     {
-      "id": "t_risky_step_yield",
+      "id": "t_design_yield",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3552,7 +3942,7 @@
       },
       "inputs": [
         {
-          "place": "p_risky_step_output",
+          "place": "p_design_output",
           "port": "tok",
           "weight": 1
         }
@@ -3561,17 +3951,17 @@
         "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Risky Step - Yield (park data, forward control)",
+      "name": "Design Form - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
           "name": "data",
-          "schema_ref": "#/definitions/Data__risky_step"
+          "schema_ref": "#/definitions/Data__design"
         },
         {
           "cardinality": "single",
           "name": "ctrl",
-          "schema_ref": "#/definitions/Ctrl__risky_step"
+          "schema_ref": "#/definitions/Ctrl__design"
         }
       ],
       "output_schema": {
@@ -3584,12 +3974,403 @@
       },
       "outputs": [
         {
-          "place": "p_risky_step_data",
+          "place": "p_design_data",
           "port": "data",
           "weight": 1
         },
         {
-          "place": "p_risky_step_ctrl",
+          "place": "p_design_ctrl",
+          "port": "ctrl",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_edge_e_design_review",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_design",
+          "schema_ref": "#/definitions/Data__design"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_design_ctrl",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_design_data",
+          "port": "d_design",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "fn __pluck(__r, __segs) { for __s in __segs { let __t = type_of(__r); if __t == \"map\" && type_of(__s) == \"string\" { __r = __r[__s]; continue; } if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; } return (); } __r } let d = input; d.title = \"Runtime-designed Review\"; d.instructions_mdsvex = \"The steps below were produced by the upstream **Design Form** step at runtime via `stepsRef`.\"; d.steps = __pluck(d_design, [\"detail\", \"outputs\", \"form\"]); #{ output: d }",
+        "type": "rhai"
+      },
+      "name": "Design Form -> Review",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "output",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_input",
+          "port": "output",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_proc_complete",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "process",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_start_process",
+          "port": "process",
+          "read": true,
+          "weight": 1
+        },
+        {
+          "place": "p_end_result",
+          "port": "done",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "process_complete",
+        "type": "effect"
+      },
+      "name": "Recorded - Complete Process",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "completed",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_completed",
+          "port": "completed",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_end_result_shape",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "input",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "d_review",
+          "schema_ref": "#/definitions/Data__review"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_ctrl",
+          "port": "input",
+          "weight": 1
+        },
+        {
+          "place": "p_review_data",
+          "port": "d_review",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __rv0 = (d_review.data); let __rv = #{ \"answers\": __rv0 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "type": "rhai"
+      },
+      "name": "Recorded - Result",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "result",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_end_result",
+          "port": "result",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "guard": {
+        "source": "signal.task_id == state.task_id",
+        "type": "rhai"
+      },
+      "id": "t_review_finalize",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "state",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "signal",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_active",
+          "port": "state",
+          "weight": 1
+        },
+        {
+          "place": "p_review_signal",
+          "port": "signal",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let result = state; let keys = signal.keys(); for key in keys { result[key] = signal[key]; } #{ done: result }",
+        "type": "rhai"
+      },
+      "name": "Review - Finalize",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "done",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_output",
+          "port": "done",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "caused_signals": [
+        "p_review_signal"
+      ],
+      "effect_config": {
+        "place": "p_review_signal"
+      },
+      "id": "t_review_request",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "task",
+          "schema_ref": "#/definitions/HumanTaskRequest"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "HumanTaskRequest": {
+            "$ref": "#/definitions/HumanTaskRequest"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_input",
+          "port": "task",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "place": "p_review_signal"
+        },
+        "handler_id": "human_task",
+        "type": "effect"
+      },
+      "name": "Review - Request Human Task",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "assigned",
+          "schema_ref": "#/definitions/HumanTaskAssigned"
+        },
+        {
+          "cardinality": "single",
+          "name": "_error",
+          "schema_ref": "#/definitions/EffectError"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "EffectError": {
+            "$ref": "#/definitions/EffectError"
+          },
+          "HumanTaskAssigned": {
+            "$ref": "#/definitions/HumanTaskAssigned"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_active",
+          "port": "assigned",
+          "weight": 1
+        },
+        {
+          "place": "p_review_errors",
+          "port": "_error",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_review_yield",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "tok",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_review_output",
+          "port": "tok",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
+        "type": "rhai"
+      },
+      "name": "Review - Yield (park data, forward control)",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "data",
+          "schema_ref": "#/definitions/Data__review"
+        },
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/Ctrl__review"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_review_data",
+          "port": "data",
+          "weight": 1
+        },
+        {
+          "place": "p_review_ctrl",
           "port": "ctrl",
           "weight": 1
         }
@@ -3682,7 +4463,7 @@
         }
       ],
       "logic": {
-        "source": "fn __pluck(__r, __segs) { for __s in __segs { let __t = type_of(__r); if __t == \"map\" && type_of(__s) == \"string\" { __r = __r[__s]; continue; } if __t == \"array\" && type_of(__s) == \"i64\" && __s >= 0 && __s < __r.len() { __r = __r[__s]; continue; } return (); } __r } let d = input; d._process_name = (\"\" + \"Failure Demo (\" + (__pluck(input, [\"fail_mode\"])) + \")\"); #{ output: d }",
+        "source": "let d = input; d._process_name = \"Dynamic Form\"; #{ output: d }",
         "type": "rhai"
       },
       "name": "Start - Derive Process Name",
