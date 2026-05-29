@@ -12,14 +12,26 @@
 	const fields = $derived(data.output?.fields ?? []);
 	const hasFields = $derived(fields.length > 0);
 	const outputId = $derived(data.output?.id ?? 'out');
-	// Executor-pool token admission (deploymentModel.Executor.pool) — show a
-	// "Pool" chip on the card.
-	const requiresPool = $derived(
-		data.deploymentModel?.mode === 'executor' && data.deploymentModel.pool != null
-	);
-	const poolAlias = $derived(
-		data.deploymentModel?.mode === 'executor' ? (data.deploymentModel.pool?.alias ?? '') : ''
-	);
+	// Deployment chip — surfaces the resource binding at a glance:
+	//   Executor + pool   → "Pool: <alias>"
+	//   Scheduled + submit → "Scheduled"
+	//   Scheduled + lease  → "Lease: <scheduler>"
+	// Executor without a pool shows no chip (the default, unbounded path).
+	const deployChip = $derived.by(() => {
+		const dm = data.deploymentModel;
+		if (!dm) return null;
+		if (dm.mode === 'executor') {
+			if (dm.pool == null) return null;
+			return { text: `Pool: ${dm.pool.alias || '—'}`, title: `Holds a unit from the "${dm.pool.alias}" token pool while running` };
+		}
+		// scheduled
+		const op = dm.operation ?? 'submit';
+		if (op === 'lease') {
+			const sched = dm.scheduler ?? '';
+			return { text: `Lease: ${sched || '—'}`, title: `Leases an allocation from the "${sched}" datacenter for the step's duration` };
+		}
+		return { text: 'Scheduled', title: 'Dispatched as a job through the scheduler-net' };
+	});
 
 	const kindBadge: Record<string, string> = {
 		text: 'Txt',
@@ -51,14 +63,14 @@
 			<span class="truncate capitalize text-foreground/80">
 				{data.executionSpec?.backendType ?? 'python'}
 			</span>
-			{#if requiresPool}
+			{#if deployChip}
 				<span
 					class="inline-flex shrink-0 items-center gap-1 rounded bg-node-automated/15 px-1.5 py-0.5 text-sm font-medium text-node-automated"
-					title={`Holds a unit from the "${poolAlias}" token pool while running`}
-					data-testid="badge-gpu-pool"
+					title={deployChip.title}
+					data-testid="badge-deployment"
 				>
 					<Cpu class="size-3" />
-					Pool
+					{deployChip.text}
 				</span>
 			{/if}
 		</div>

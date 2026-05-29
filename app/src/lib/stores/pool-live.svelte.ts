@@ -24,7 +24,18 @@ import type { PersistedEvent, PetriNet, Token } from '$lib/types/petri';
 
 export const POOL_NET_ID = 'resource-pool-net';
 
-// Well-known place names from engine/sdk/examples/resource_pool_net.rs
+// Well-known place IDs shared by every pool/adapter backend. Resolve by ID,
+// NOT display name: the token-pool builder labels them "Capacity Pool" /
+// "Freed Units" and the datacenter adapter labels `done` "Released Leases", but
+// the place *ids* (`pool` / `in_use` / `done`) are identical across backends
+// (service/src/petri/pool_net.rs; engine/sdk/examples/resource_pool_net.rs). The
+// `pool` place is absent on the datacenter adapter (no in-net capacity — the
+// external allocator owns it), so `poolCount` falls to 0 there and the view
+// degrades to an active-leases list. Name fallbacks kept for the legacy
+// prototype net whose ids may differ.
+const PLACE_ID_POOL = 'pool';
+const PLACE_ID_IN_USE = 'in_use';
+const PLACE_ID_DONE = 'done';
 const PLACE_NAME_POOL = 'GPU Pool';
 const PLACE_NAME_IN_USE = 'In Use';
 const PLACE_NAME_DONE = 'Freed Units';
@@ -36,13 +47,21 @@ const PETRI_BASE = '/petri';
 // Public types
 // ---------------------------------------------------------------------------
 
-/** A single active hold: one token in `in_use`. */
+/** A single active hold: one token in `in_use`.
+ *
+ * The hold is backend-agnostic: the `in_use` token carries a typed lease whose
+ * shape depends on the pool's resource kind (`token_pool` → `{ unit_id }`;
+ * `datacenter` → `{ node, gpu_uuid, alloc_id, expiry }`). We surface `grantId`
+ * (the correlation key, present on every backend) plus a generic `fields` map
+ * of the remaining scalar lease fields so the view never hard-codes `gpu_id`. */
 export interface HoldRecord {
 	tokenId: string;
-	/** GPU id carried on the token color data, or null when not a Data token. */
-	gpuId: string | null;
 	/** Grant id carried on the token color data, or null. */
 	grantId: string | null;
+	/** All other scalar lease fields (kind-specific), stringified for display.
+	 *  e.g. `{ unit_id }` for a token pool, `{ node, gpu_uuid, alloc_id, expiry }`
+	 *  for a datacenter lease. Empty for Unit tokens. */
+	fields: Record<string, string>;
 }
 
 export type PoolLiveStatus = 'idle' | 'loading' | 'live' | 'error' | 'net-not-found';
@@ -64,20 +83,18 @@ export function createPoolLiveStore(netId: string = POOL_NET_ID) {
 	let destroyed = false;
 
 	// ── Place id resolution (from topology) ──────────────────────────────
-	const poolPlaceId = $derived.by(() => {
+	// Match by the shared place ID first; fall back to the legacy prototype's
+	// display name so the standalone example net still resolves.
+	function resolvePlaceId(id: string, legacyName: string): string | null {
 		if (!topology) return null;
-		return topology.places.find((p) => p.name === PLACE_NAME_POOL)?.id ?? null;
-	});
+		const byId = topology.places.find((p) => p.id === id);
+		if (byId) return byId.id;
+		return topology.places.find((p) => p.name === legacyName)?.id ?? null;
+	}
 
-	const inUsePlaceId = $derived.by(() => {
-		if (!topology) return null;
-		return topology.places.find((p) => p.name === PLACE_NAME_IN_USE)?.id ?? null;
-	});
-
-	const donePlaceId = $derived.by(() => {
-		if (!topology) return null;
-		return topology.places.find((p) => p.name === PLACE_NAME_DONE)?.id ?? null;
-	});
+	const poolPlaceId = $derived(resolvePlaceId(PLACE_ID_POOL, PLACE_NAME_POOL));
+	const inUsePlaceId = $derived(resolvePlaceId(PLACE_ID_IN_USE, PLACE_NAME_IN_USE));
+	const donePlaceId = $derived(resolvePlaceId(PLACE_ID_DONE, PLACE_NAME_DONE));
 
 	// ── Projected marking from events ─────────────────────────────────────
 	const marking = $derived.by(() => projectMarking(events, events.length - 1));
@@ -123,17 +140,32 @@ export function createPoolLiveStore(netId: string = POOL_NET_ID) {
 	 */
 	const conservationOk = $derived(capacity > 0);
 
-	/** Per-hold details from in_use tokens. */
+	/** Per-hold details from in_use tokens. Backend-agnostic: pulls `grant_id`
+	 *  as the correlation key and stringifies every other scalar lease field
+	 *  into `fields` so the view renders whatever the resource kind put on the
+	 *  lease (unit_id / node / gpu_uuid / alloc_id / expiry / …). */
 	const holds = $derived.by((): HoldRecord[] => {
 		return inUseTokens.map((tok) => {
-			let gpuId: string | null = null;
 			let grantId: string | null = null;
-			if (tok.color.type === 'Data' && tok.color.value !== null && typeof tok.color.value === 'object') {
+			const fields: Record<string, string> = {};
+			if (
+				tok.color.type === 'Data' &&
+				tok.color.value !== null &&
+				typeof tok.color.value === 'object'
+			) {
 				const data = tok.color.value as Record<string, unknown>;
-				gpuId = typeof data.gpu_id === 'string' ? data.gpu_id : null;
-				grantId = typeof data.grant_id === 'string' ? data.grant_id : null;
+				for (const [k, v] of Object.entries(data)) {
+					if (k === 'grant_id') {
+						grantId = typeof v === 'string' ? v : String(v);
+						continue;
+					}
+					// Skip nested objects/arrays — leases are flat scalar records;
+					// anything non-scalar is internal bookkeeping, not lease detail.
+					if (v === null || typeof v === 'object') continue;
+					fields[k] = String(v);
+				}
 			}
-			return { tokenId: tok.id, gpuId, grantId };
+			return { tokenId: tok.id, grantId, fields };
 		});
 	});
 

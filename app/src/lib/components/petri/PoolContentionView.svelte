@@ -151,7 +151,7 @@
 				<div class="flex items-center gap-1.5 text-sm text-muted-foreground">
 					{#if store.conservationOk}
 						<CheckCircle2 class="size-3.5 shrink-0 text-green-600" />
-						<span>{store.capacity}/{store.capacity} GPUs accounted · {store.poolCount} free, {store.inUseCount} held</span>
+						<span>{store.capacity}/{store.capacity} units accounted · {store.poolCount} free, {store.inUseCount} held</span>
 					{:else if store.status === 'loading'}
 						<Loader2 class="size-3.5 shrink-0 animate-spin" />
 						<span>Loading…</span>
@@ -205,25 +205,22 @@
 		</div>
 
 		<!-- Active holds list ── ── ── ── ── ── ── ── ── ── ── ── ── ── -->
+		<!-- Backend-agnostic: each hold's typed lease fields (unit_id for token
+		     pools; node/gpu_uuid/alloc_id/expiry for datacenter adapters) are
+		     surfaced generically from the in_use token — no field is hard-coded. -->
 		{#if !compact && store.inUseCount > 0}
 			<div class="flex flex-col gap-1.5">
 				<span class="text-sm font-medium text-foreground">Active holds</span>
 				<div class="flex flex-col divide-y divide-border rounded-md border border-border">
 					{#each store.holds as hold (hold.tokenId)}
-						<div
-							class="flex items-center justify-between px-3 py-2 text-sm"
-							data-testid="hold-row"
-						>
-							<div class="flex items-center gap-2">
-								<Cpu class="size-3.5 shrink-0 text-amber-600" />
-								<span class="font-mono text-sm font-medium text-foreground">
-									{hold.gpuId ?? '—'}
-								</span>
-							</div>
-							<div class="flex items-center gap-2 text-sm text-muted-foreground">
-								<span title="grant id: {hold.grantId ?? '—'}">
-									grant {shortId(hold.grantId)}
-								</span>
+						<div class="flex flex-col gap-1 px-3 py-2 text-sm" data-testid="hold-row">
+							<div class="flex items-center justify-between gap-2">
+								<div class="flex min-w-0 items-center gap-2">
+									<Cpu class="size-3.5 shrink-0 text-amber-600" />
+									<span class="truncate font-mono text-sm text-muted-foreground" title="grant id: {hold.grantId ?? '—'}">
+										grant {shortId(hold.grantId)}
+									</span>
+								</div>
 								<Badge
 									class="bg-amber-100 text-sm font-normal text-amber-700"
 									variant="secondary"
@@ -231,6 +228,16 @@
 									held
 								</Badge>
 							</div>
+							{#if Object.keys(hold.fields).length > 0}
+								<div class="flex flex-wrap gap-x-3 gap-y-0.5 pl-5">
+									{#each Object.entries(hold.fields) as [key, value] (key)}
+										<span class="text-sm text-muted-foreground" title={`${key}: ${value}`}>
+											<span class="text-muted-foreground/70">{key}</span>
+											<span class="font-mono font-medium text-foreground">{value}</span>
+										</span>
+									{/each}
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
