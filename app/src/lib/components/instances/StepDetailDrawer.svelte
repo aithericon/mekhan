@@ -5,8 +5,10 @@
 	import { Dialog } from 'bits-ui';
 	import X from '@lucide/svelte/icons/x';
 	import Settings2 from '@lucide/svelte/icons/settings-2';
+	import Workflow from '@lucide/svelte/icons/workflow';
+	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
-	import type { StepExecution, WorkflowNode } from '$lib/api/client';
+	import type { InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
 	import type { NodeInterface } from '$lib/types/node-interface';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
@@ -29,6 +31,11 @@
 		 *  envelope renderers can resolve instance-scoped backend resources
 		 *  (e.g. AutomatedStepEnvelope's log lookup). */
 		instanceId?: string;
+		/** Sub-workflow child instances this node spawned (already filtered to
+		 *  this node, ordered by spawn/iteration order). Drives the "Enter
+		 *  sub-workflow" drill-in. Empty / absent for non-SubWorkflow nodes or
+		 *  before the child has been registered. */
+		childInstances?: InstanceChild[];
 		open: boolean;
 		onClose: () => void;
 		/** When the user picks a different iteration in the drawer, the parent
@@ -42,6 +49,7 @@
 		nodeInterface = null,
 		iterations = [],
 		instanceId,
+		childInstances = [],
 		open,
 		onClose,
 		onSelectIteration
@@ -66,6 +74,18 @@
 	const kind = $derived(step?.node_kind ?? node?.type ?? 'unknown');
 	const meta = $derived(nodeKindMeta(kind));
 	const Icon = $derived(meta.icon);
+
+	// Drill-in is offered only for SubWorkflow nodes that have spawned at least
+	// one child run. A SubWorkflow inside a Loop/Map yields one child per
+	// iteration (multiple rows), so the section lists every run.
+	const showChildren = $derived(kind === 'sub_workflow' && childInstances.length > 0);
+	const childStatusColor: Record<string, string> = {
+		created: 'bg-gray-100 text-gray-700',
+		running: 'bg-blue-100 text-blue-700',
+		completed: 'bg-green-100 text-green-700',
+		failed: 'bg-red-100 text-red-700',
+		cancelled: 'bg-slate-100 text-slate-500'
+	};
 
 	const nodeLabel = $derived<string>(
 		(node?.data?.label ?? '') || step?.node_id || 'Step'
@@ -164,6 +184,39 @@
 			</header>
 
 			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+				{#if showChildren}
+					<!-- Sub-workflow drill-in: each child ran as its own instance
+					     (a separate engine net). Navigating to it is a fresh
+					     /instances/[id] mount — a plain <a> is correct (no
+					     data-sveltekit-reload; that's only for the Yjs editor). -->
+					<section>
+						<h3 class="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+							<Workflow class="size-4 text-muted-foreground" />
+							Sub-workflow {childInstances.length > 1 ? `runs (${childInstances.length})` : 'run'}
+						</h3>
+						<div class="space-y-1.5">
+							{#each childInstances as child, i (child.id)}
+								<a
+									href={`/instances/${child.id}/workflow`}
+									data-testid="enter-subworkflow"
+									class="group flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm transition-colors hover:border-primary hover:bg-accent"
+								>
+									<span class="min-w-0 flex-1 truncate">
+										<span class="font-medium text-foreground">{child.template_name}</span>
+										{#if childInstances.length > 1}
+											<span class="ml-1 font-mono text-muted-foreground">· run {i + 1}</span>
+										{/if}
+									</span>
+									<Badge class={childStatusColor[child.status] ?? ''} variant="secondary">
+										{child.status}
+									</Badge>
+									<ArrowRight class="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+								</a>
+							{/each}
+						</div>
+					</section>
+				{/if}
+
 				{#if iterations.length > 1 && onSelectIteration}
 					<section>
 						<h3 class="text-sm font-semibold text-foreground mb-2">Iterations</h3>

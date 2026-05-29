@@ -97,6 +97,7 @@ export type InstanceListItem = components['schemas']['InstanceListItem'];
 export type CreateInstanceRequest = components['schemas']['CreateInstanceRequest'];
 export type InstanceStateResponse = components['schemas']['InstanceStateResponse'];
 export type StepExecution = components['schemas']['StepExecutionResponse'];
+export type InstanceChild = components['schemas']['InstanceChild'];
 
 // ─── Processes / HPI ────────────────────────────────────────────────────────
 export type HpiProcess = components['schemas']['HpiProcess'];
@@ -574,6 +575,22 @@ export async function listStepExecutions(id: string): Promise<StepExecution[]> {
 			params: { path: { id } }
 		})
 	) as StepExecution[];
+}
+
+/**
+ * Sub-workflow child instances this instance spawned. Each SubWorkflow node
+ * runs its child as a separate engine net; the backend registers each spawn
+ * as a first-class child instance (parent_instance_id = this instance). A
+ * SubWorkflow inside a Loop/Map spawns one child per iteration, so multiple
+ * children can share `parent_node_id` — ordered by `spawn_seq`. The instance
+ * graph view groups these by node to offer an "Enter sub-workflow" drill-in.
+ */
+export async function listInstanceChildren(id: string): Promise<InstanceChild[]> {
+	return unwrap(
+		await client.GET('/api/v1/instances/{id}/children', {
+			params: { path: { id } }
+		})
+	) as InstanceChild[];
 }
 
 export async function cancelInstance(id: string): Promise<void> {
