@@ -485,33 +485,21 @@ impl ExecutionBackend for HttpBackend {
         tokio::select! { biased;
             _ = cancel.cancelled() => {
                 info!("http request cancelled");
-                Ok(ExecutionResult {
-                    outcome: ExecutionOutcome::Cancelled,
-                    duration: start.elapsed(),
-                    stdout_tail: None,
-                    stderr_tail: None,
-                    artifact_manifest: None,
-                    outputs: HashMap::new(),
-                    progress: None,
-                    run_dir: Some(run_context.run_dir.clone()),
-                    metrics: None,
-                    logs: None,
-                })
+                Ok(ExecutionResult::cancelled(
+                    start.elapsed(),
+                    Some(run_context.run_dir.clone()),
+                    None,
+                    None,
+                ))
             },
             _ = tokio::time::sleep(timeout) => {
                 info!(timeout_secs = timeout.as_secs(), "http request timed out");
-                Ok(ExecutionResult {
-                    outcome: ExecutionOutcome::TimedOut,
-                    duration: start.elapsed(),
-                    stdout_tail: None,
-                    stderr_tail: None,
-                    artifact_manifest: None,
-                    outputs: HashMap::new(),
-                    progress: None,
-                    run_dir: Some(run_context.run_dir.clone()),
-                    metrics: None,
-                    logs: None,
-                })
+                Ok(ExecutionResult::timed_out(
+                    start.elapsed(),
+                    Some(run_context.run_dir.clone()),
+                    None,
+                    None,
+                ))
             },
             result = req.send() => {
                 let duration = start.elapsed();

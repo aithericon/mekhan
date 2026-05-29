@@ -5192,15 +5192,17 @@ fn map_end_to_end_air_shape_is_stable() {
         t_scatter["inputs"]
     );
 
-    // (4) Collect lifts the body's `<resultVar>` into the per-element result,
-    //     carrying the correlation keys.
+    // (4) Collect lifts the body's `<resultVar>` from the forwarded completed
+    //     envelope (an AutomatedStep body parks its output, so the value lives
+    //     under `detail.outputs.<resultVar>`), carrying the correlation keys
+    //     (preserved through the executor lifecycle's `t_success`).
     let t_collect = get_transition(&air, "t_mp_collect").expect("collect");
     let collect_logic = t_collect["logic"]["source"].as_str().unwrap();
     assert!(
-        collect_logic.contains("body.score")
+        collect_logic.contains("body.detail.outputs.score")
             && collect_logic.contains("body.__map_idx")
             && collect_logic.contains("body.__map_id"),
-        "collect must lift body.<resultVar> + carry correlation keys; got: {collect_logic}"
+        "collect must lift body.detail.outputs.<resultVar> + carry correlation keys; got: {collect_logic}"
     );
 
     // (5) Gather: counted barrier — `results` arc carries count_from +
@@ -5261,5 +5263,49 @@ fn map_end_to_end_air_shape_is_stable() {
             .any(|a| a["place"] == "p_mp_data" && a["read"] == true),
         "End must read-arc the Map's parked collection; inputs: {:?}",
         t_end["inputs"]
+    );
+}
+
+/// The executor lifecycle's `t_success` must preserve the job token's
+/// `_`-prefixed control-metadata leaves onto the completed token
+/// (consume-mutate-produce), so tagged metadata survives an executor
+/// round-trip rather than being dropped by the fixed-field-set rebuild. This is
+/// the general fix behind the Map gather: a Map body (an AutomatedStep) would
+/// otherwise lose the scatter's `__map_idx`/`__map_id` correlation stamps, and
+/// the counted/correlated gather barrier would never fill. Asserts the baked
+/// AIR carries the preservation loop on some lifecycle transition.
+#[test]
+fn automated_step_success_preserves_control_metadata_leaves() {
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), auto_node("a", "Work"), end_node("e")],
+        edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let air = compile_to_air(
+        &graph,
+        "meta_preserve",
+        "control-metadata survives the executor round-trip",
+        &std::collections::HashMap::new(),
+    )
+    .expect("a basic Start→AutomatedStep→End graph should compile");
+
+    let preserves = air["transitions"]
+        .as_array()
+        .expect("transitions array")
+        .iter()
+        .any(|t| {
+            t["logic"]["source"]
+                .as_str()
+                .map(|s| {
+                    s.contains("for __k in job.keys()") && s.contains("__k.starts_with(\"_\")")
+                })
+                .unwrap_or(false)
+        });
+    assert!(
+        preserves,
+        "executor lifecycle `t_success` must preserve `_`-prefixed control-metadata \
+         leaves (no transition logic carried the preservation loop)"
     );
 }

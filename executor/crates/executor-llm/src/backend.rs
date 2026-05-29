@@ -180,32 +180,20 @@ impl ExecutionBackend for LlmBackend {
         // Three-way select: cancellation, timeout, or LLM execution
         tokio::select! { biased;
             _ = cancel.cancelled() => {
-                Ok(ExecutionResult {
-                    outcome: ExecutionOutcome::Cancelled,
-                    duration: start.elapsed(),
-                    stdout_tail: None,
-                    stderr_tail: Some("execution cancelled".into()),
-                    artifact_manifest: None,
-                    outputs: HashMap::new(),
-                    progress: None,
-                    run_dir: Some(run_context.run_dir.clone()),
-                    metrics: None,
-                    logs: None,
-                })
+                Ok(ExecutionResult::cancelled(
+                    start.elapsed(),
+                    Some(run_context.run_dir.clone()),
+                    Some("execution cancelled".into()),
+                    None,
+                ))
             },
             _ = tokio::time::sleep(run_context.timeout) => {
-                Ok(ExecutionResult {
-                    outcome: ExecutionOutcome::TimedOut,
-                    duration: start.elapsed(),
-                    stdout_tail: None,
-                    stderr_tail: Some(format!("timed out after {:?}", run_context.timeout)),
-                    artifact_manifest: None,
-                    outputs: HashMap::new(),
-                    progress: None,
-                    run_dir: Some(run_context.run_dir.clone()),
-                    metrics: None,
-                    logs: None,
-                })
+                Ok(ExecutionResult::timed_out(
+                    start.elapsed(),
+                    Some(run_context.run_dir.clone()),
+                    Some(format!("timed out after {:?}", run_context.timeout)),
+                    None,
+                ))
             },
             result = adapter.complete(&request, &env) => {
                 let duration = start.elapsed();

@@ -40,6 +40,7 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "08-failure-handling",
     "10-delay-timeout",
     "11-http-call",
+    "12-bo-loop",
     // 13-resource-pool: exercises the M3 resource-pool claim lowering
     // (claim/grant/register/release wrapping an inline Python body). The
     // golden AIR pins the leak-prevention wiring — every body exit arcs to
@@ -212,6 +213,11 @@ fn snapshot_10_delay_timeout() {
 #[test]
 fn snapshot_11_http_call() {
     run("11-http-call");
+}
+
+#[test]
+fn snapshot_12_bo_loop() {
+    run("12-bo-loop");
 }
 
 #[test]

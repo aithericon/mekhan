@@ -75,10 +75,7 @@ impl NatsCancelListener {
         prefix: Option<&str>,
         shutdown: CancellationToken,
     ) -> Result<JoinHandle<()>, async_nats::SubscribeError> {
-        let subject = match prefix {
-            Some(pfx) => format!("{pfx}.executor.cancel.*"),
-            None => "executor.cancel.*".into(),
-        };
+        let subject = aithericon_executor_domain::cancel_subject_filter(prefix);
 
         let mut subscription = client.subscribe(subject.clone()).await?;
         info!(%subject, "NATS cancel listener started");

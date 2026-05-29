@@ -96,7 +96,7 @@ pub async fn create_template(
 ) -> Result<(StatusCode, Json<WorkflowTemplate>), ApiError> {
     let id = Uuid::new_v4();
     let graph = req.graph.unwrap_or_else(WorkflowGraph::default_graph);
-    let graph_json = serde_json::to_value(&graph).unwrap();
+    let graph_json = serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
     let description = req.description.unwrap_or_default();
 
     // Anchor the new template in the caller's workspace. Falls back to the
@@ -446,20 +446,10 @@ pub async fn get_template_bundle(
 
     gate_template_read(&state, &user, &existing)?;
 
-    let (graph, files) = match reconstruct_graph_from_ydoc(&state, id).await {
-        Ok(Some((g, f))) => (g, f),
-        Ok(None) => {
-            let g = serde_json::from_value(existing.graph.clone())
-                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
-            (g, HashMap::new())
-        }
-        Err(e) => {
-            tracing::error!("failed to load Y.Doc for template {id}: {e}");
-            let g = serde_json::from_value(existing.graph.clone())
-                .map_err(|e| ApiError::internal(format!("invalid graph: {e}")))?;
-            (g, HashMap::new())
-        }
-    };
+    let (graph, files) = graph_with_ydoc_fallback(&state, id, existing.graph.clone(), |g| {
+        serde_json::from_value(g).map_err(|e| ApiError::internal(format!("invalid graph: {e}")))
+    })
+    .await?;
 
     Ok(Json(TemplateBundle { graph, files }))
 }
@@ -495,10 +485,10 @@ pub async fn update_template(
 
     let name = req.name.unwrap_or(existing.name);
     let description = req.description.unwrap_or(existing.description);
-    let graph = req
-        .graph
-        .map(|g| serde_json::to_value(&g).unwrap())
-        .unwrap_or(existing.graph);
+    let graph = match req.graph {
+        Some(g) => serde_json::to_value(&g).map_err(|e| ApiError::internal(e.to_string()))?,
+        None => existing.graph,
+    };
 
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"
@@ -545,7 +535,7 @@ pub async fn delete_template(
 
     gate_template_write(&state, &user, &existing).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
 
     if existing.published {
         // Check for running instances across all versions in this chain
@@ -652,22 +642,11 @@ pub async fn publish_template(
     // Try to reconstruct graph + files from Y.Doc first (collaborative editing source of truth),
     // falling back to the DB graph column for legacy templates.
     let (graph, mut ydoc_files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
-        match reconstruct_graph_from_ydoc(&state, id).await {
-            Ok(Some((g, f))) => (g, f),
-            Ok(None) => {
-                // No Y.Doc exists — fall back to DB graph
-                let g = serde_json::from_value(existing.graph.clone())
-                    .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
-                (g, HashMap::new())
-            }
-            Err(e) => {
-                tracing::error!("failed to load Y.Doc for template {id}: {e}");
-                // Fall back to DB graph
-                let g = serde_json::from_value(existing.graph.clone())
-                    .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
-                (g, HashMap::new())
-            }
-        };
+        graph_with_ydoc_fallback(&state, id, existing.graph.clone(), |g| {
+            serde_json::from_value(g)
+                .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))
+        })
+        .await?;
 
     let publisher = PublishService::new(&state);
 
@@ -686,7 +665,7 @@ pub async fn publish_template(
             &existing.description,
             id,
             existing.version,
-            Some(existing.base_template_id.unwrap_or(existing.id)),
+            Some(existing.chain_root_id()),
             &mut ydoc_files,
             principal_id,
             existing.workspace_id,
@@ -808,6 +787,36 @@ async fn reconstruct_graph_from_ydoc(
     Ok(Some(result))
 }
 
+/// Resolve the authored `(graph, files)` for a template, preferring the live
+/// Y.Doc (collaborative source of truth) and falling back to the persisted
+/// `graph` column ONLY when no Y.Doc exists (legacy templates).
+///
+/// A Y.Doc that exists but fails to reconstruct is surfaced as an error rather
+/// than silently serving the stale DB column — the previous per-call-site
+/// behavior (log + serve `existing.graph`) could publish / fork the wrong graph
+/// when collaborative edits hadn't been flushed to the column (they never are).
+///
+/// `parse_db_graph` decodes the `Ok(None)` legacy column, letting each caller
+/// keep its own invalid-graph contract (hard `internal`/`bad_request` error vs.
+/// the new-version path's silent `default_graph()` tolerance).
+async fn graph_with_ydoc_fallback<F>(
+    state: &AppState,
+    id: Uuid,
+    db_graph: serde_json::Value,
+    parse_db_graph: F,
+) -> Result<(WorkflowGraph, HashMap<String, HashMap<String, String>>), ApiError>
+where
+    F: FnOnce(serde_json::Value) -> Result<WorkflowGraph, ApiError>,
+{
+    match reconstruct_graph_from_ydoc(state, id).await {
+        Ok(Some((g, f))) => Ok((g, f)),
+        Ok(None) => Ok((parse_db_graph(db_graph)?, HashMap::new())),
+        Err(e) => Err(ApiError::internal(format!(
+            "failed to load Y.Doc for template {id}: {e}"
+        ))),
+    }
+}
+
 /// Mark a template row as no longer the latest in its version chain. Generic
 /// over the executor so it works on the pool or inside a transaction.
 async fn mark_not_latest<'e, E>(exec: E, id: Uuid) -> Result<(), ApiError>
@@ -878,7 +887,7 @@ async fn insert_published_version<'e, E>(
 where
     E: sqlx::PgExecutor<'e>,
 {
-    let base_id = src.base_template_id.unwrap_or(src.id);
+    let base_id = src.chain_root_id();
     sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         INSERT INTO workflow_templates
@@ -953,7 +962,7 @@ pub async fn new_version(
 
     let new_id = Uuid::new_v4();
     let new_version = existing.version + 1;
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
 
     // The authored workflow lives in the *source's Y.Doc*, not the `graph`
     // column — publish/edit never write the column back, so copying
@@ -961,24 +970,12 @@ pub async fn new_version(
     // + per-node files from the Y.Doc (same source of truth publish uses),
     // falling back to the column only for legacy templates with no Y.Doc.
     let (graph, files): (WorkflowGraph, HashMap<String, HashMap<String, String>>) =
-        match reconstruct_graph_from_ydoc(&state, id).await {
-            Ok(Some((g, f))) => (g, f),
-            Ok(None) => (
-                serde_json::from_value(existing.graph.clone())
-                    .unwrap_or_else(|_| WorkflowGraph::default_graph()),
-                HashMap::new(),
-            ),
-            Err(e) => {
-                tracing::error!(
-                    "failed to load source Y.Doc for new version of {id}: {e}"
-                );
-                (
-                    serde_json::from_value(existing.graph.clone())
-                        .unwrap_or_else(|_| WorkflowGraph::default_graph()),
-                    HashMap::new(),
-                )
-            }
-        };
+        graph_with_ydoc_fallback(&state, id, existing.graph.clone(), |g| {
+            // Legacy no-Y.Doc fork: an unparseable column degrades to a blank
+            // canvas rather than failing the new-version create.
+            Ok(serde_json::from_value(g).unwrap_or_else(|_| WorkflowGraph::default_graph()))
+        })
+        .await?;
     let graph_json =
         serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1102,7 +1099,7 @@ pub async fn apply_template(
     //    nothing is written until the compile has passed.
     let existing = require_template(&state.db, id).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
     let latest = latest_in_chain(&state.db, base_id).await?;
 
     let mode = apply_mode(&latest).map_err(ApiError::conflict)?;
@@ -1135,7 +1132,7 @@ pub async fn apply_template(
             &latest.description,
             target_id,
             target_version,
-            Some(latest.base_template_id.unwrap_or(latest.id)),
+            Some(latest.chain_root_id()),
             &mut files_map,
             user.subject_as_uuid(),
             // Apply (no-version-bump) hits the same workspace as the latest
@@ -1271,7 +1268,7 @@ pub async fn list_versions(
     // First find the base_template_id for this template
     let existing = require_template(&state.db, id).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
 
     let versions = sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE base_template_id = $1 ORDER BY version DESC",
@@ -1313,7 +1310,7 @@ pub async fn get_latest(
 ) -> Result<Json<WorkflowTemplate>, ApiError> {
     let existing = require_template(&state.db, id).await?;
 
-    let base_id = existing.base_template_id.unwrap_or(existing.id);
+    let base_id = existing.chain_root_id();
     let latest = latest_in_chain(&state.db, base_id).await?;
     Ok(Json(latest))
 }
@@ -1366,6 +1363,7 @@ pub async fn compile_preview(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let existing = require_template(&state.db, id).await?;
+    let publishing_family = Some(existing.chain_root_id());
 
     let graph: WorkflowGraph = serde_json::from_value(existing.graph)
         .map_err(|e| ApiError::bad_request(format!("invalid graph: {e}")))?;
@@ -1382,7 +1380,6 @@ pub async fn compile_preview(
     // planner so the preview AIR matches what publish would emit.
     let files = node_files_storage_path(id, existing.version, &ydoc_files);
 
-    let publishing_family = Some(existing.base_template_id.unwrap_or(existing.id));
     let sub_air = resolve_subworkflow_air(&state, publishing_family, &graph).await?;
 
     let air = compile_to_air_with_subworkflows_inline(
@@ -1643,7 +1640,7 @@ async fn run_publish_gate(
     graph: &WorkflowGraph,
     created_by: Uuid,
 ) -> Result<Vec<FailingTestInfo>, ApiError> {
-    let family = existing.base_template_id.unwrap_or(existing.id);
+    let family = existing.chain_root_id();
 
     let tests: Vec<TemplateTest> = sqlx::query_as::<_, TemplateTest>(
         "SELECT * FROM template_tests \

@@ -4,8 +4,10 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Connection string for local dev — overridable via env
-db_url := env_var_or_default("MEKHAN__DATABASE_URL", "postgres://mekhan:mekhan@localhost:15439/mekhan")
+# Connection string for local dev. Prefers the per-worktree slot URL exported
+# by just/scripts/dev-ports.sh (MEKHAN_DATABASE_URL), then the mekhan-style
+# MEKHAN__DATABASE_URL override, then the legacy fixed port.
+db_url := env_var_or_default("MEKHAN_DATABASE_URL", env_var_or_default("MEKHAN__DATABASE_URL", "postgres://mekhan:mekhan@localhost:15439/mekhan"))
 
 # Drop into a psql shell against the local DB
 psql:
@@ -31,7 +33,7 @@ reset:
     cd ..
     docker compose stop postgres
     docker compose rm -f postgres
-    docker volume rm aithericon-platform_mekhan-pgdata 2>/dev/null || true
+    docker volume rm "${COMPOSE_PROJECT_NAME:-aithericon-platform}_mekhan-pgdata" 2>/dev/null || true
     docker compose up -d postgres
     echo "▶ waiting for postgres..."
     until docker compose exec -T postgres pg_isready -U mekhan >/dev/null 2>&1; do sleep 1; done

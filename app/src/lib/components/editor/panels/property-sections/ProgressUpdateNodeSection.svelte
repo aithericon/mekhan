@@ -9,6 +9,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import InsertRefButton from './InsertRefButton.svelte';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type Props = {
 		data: ProgressUpdateNodeData;
@@ -20,8 +21,7 @@
 	let { data, readonly = false, onchange, scope = [] }: Props = $props();
 
 	function appendToMessage(snippet: string) {
-		const curr = data.message ?? '';
-		onchange({ ...data, message: curr ? `${curr} ${snippet}` : snippet });
+		onchange({ ...data, message: appendSnippet(data.message, snippet) });
 	}
 
 	const pct = $derived(Math.round((data.fraction ?? 0) * 100));

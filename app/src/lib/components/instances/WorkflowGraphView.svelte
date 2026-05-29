@@ -2,6 +2,8 @@
 	import {
 		getTemplate,
 		listStepExecutions,
+		listInstanceChildren,
+		type InstanceChild,
 		type StepExecution,
 		type Template,
 		type WorkflowInstance,
@@ -17,6 +19,7 @@
 		isAwaitingResource
 	} from '$lib/stores/instance-marking.svelte';
 	import { PoolContentionView } from '$lib/components/petri';
+	import { groupChildrenByNode } from './subworkflow-children';
 
 	type Props = {
 		instance: WorkflowInstance;
@@ -26,6 +29,7 @@
 
 	let template = $state<Template | null>(null);
 	let executions = $state<StepExecution[]>([]);
+	let children = $state<InstanceChild[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let drawerStep = $state<StepExecution | null>(null);
@@ -94,6 +98,16 @@
 		return s;
 	});
 
+	// `parent_node_id → child instances[]` (ordered by spawn/iteration order)
+	// so the drawer can offer an "Enter sub-workflow" drill-in per SubWorkflow
+	// node. A SubWorkflow inside a Loop/Map spawns one child per iteration.
+	const childrenByNode = $derived(groupChildrenByNode(children));
+
+	// Children for the node the drawer is currently showing.
+	const drawerChildren = $derived(
+		drawerNode ? (childrenByNode.get(drawerNode.id) ?? []) : []
+	);
+
 	const graph = $derived<WorkflowGraph | null>(
 		template?.graph ? (template.graph as WorkflowGraph) : null
 	);
@@ -141,14 +155,36 @@
 		markingTick++;
 	}
 
+	async function refreshChildren() {
+		try {
+			children = await listInstanceChildren(instance.id);
+		} catch {
+			// Non-fatal: drill-in just won't appear this tick.
+		}
+	}
+
 	$effect(() => {
 		void instance.id;
 		loading = true;
 		error = null;
+		// Drilling parent→child is a param-only navigation within the same
+		// /instances/[id] route, so this component is reused (not remounted)
+		// and the drawer state survives. Reset it here so a leftover drawer
+		// from the parent run (pointing at its SubWorkflow step) doesn't linger
+		// over the child's graph.
+		drawerOpen = false;
+		drawerStep = null;
+		drawerNode = null;
+		drawerIterations = [];
 		(async () => {
 			// `marking.refresh()` does the one-time topology+log load on first
 			// call (when topology is still null), then incremental pulls.
-			await Promise.all([loadTemplate(), refreshExecutions(), refreshMarking()]);
+			await Promise.all([
+				loadTemplate(),
+				refreshExecutions(),
+				refreshMarking(),
+				refreshChildren()
+			]);
 			loading = false;
 		})();
 		return () => marking.destroy();
@@ -159,6 +195,7 @@
 		const t = setInterval(() => {
 			void refreshExecutions();
 			void refreshMarking();
+			void refreshChildren();
 		}, 2000);
 		return () => clearInterval(t);
 	});
@@ -241,6 +278,7 @@
 	nodeInterface={drawerNodeInterface}
 	iterations={drawerIterations}
 	instanceId={instance.id}
+	childInstances={drawerChildren}
 	open={drawerOpen}
 	onClose={closeDrawer}
 	onSelectIteration={selectIteration}

@@ -97,6 +97,7 @@ export type InstanceListItem = components['schemas']['InstanceListItem'];
 export type CreateInstanceRequest = components['schemas']['CreateInstanceRequest'];
 export type InstanceStateResponse = components['schemas']['InstanceStateResponse'];
 export type StepExecution = components['schemas']['StepExecutionResponse'];
+export type InstanceChild = components['schemas']['InstanceChild'];
 
 // ─── Processes / HPI ────────────────────────────────────────────────────────
 export type HpiProcess = components['schemas']['HpiProcess'];
@@ -574,6 +575,22 @@ export async function listStepExecutions(id: string): Promise<StepExecution[]> {
 			params: { path: { id } }
 		})
 	) as StepExecution[];
+}
+
+/**
+ * Sub-workflow child instances this instance spawned. Each SubWorkflow node
+ * runs its child as a separate engine net; the backend registers each spawn
+ * as a first-class child instance (parent_instance_id = this instance). A
+ * SubWorkflow inside a Loop/Map spawns one child per iteration, so multiple
+ * children can share `parent_node_id` — ordered by `spawn_seq`. The instance
+ * graph view groups these by node to offer an "Enter sub-workflow" drill-in.
+ */
+export async function listInstanceChildren(id: string): Promise<InstanceChild[]> {
+	return unwrap(
+		await client.GET('/api/v1/instances/{id}/children', {
+			params: { path: { id } }
+		})
+	) as InstanceChild[];
 }
 
 export async function cancelInstance(id: string): Promise<void> {
@@ -1258,4 +1275,55 @@ async function parseErrorBody(res: Response): Promise<Record<string, unknown> | 
 	} catch {
 		return text;
 	}
+}
+
+// ── Triggers ─────────────────────────────────────────────────────────────────
+
+export type TriggerView = components['schemas']['TriggerView'];
+export type TriggerListResponse = components['schemas']['TriggerListResponse'];
+export type TriggerHistoryResponse = components['schemas']['TriggerHistoryResponse'];
+export type SourceScopeResponse = components['schemas']['SourceScopeResponse'];
+export type ScopeVar = components['schemas']['ScopeVar'];
+export type CronPreviewRequest = components['schemas']['CronPreviewRequest'];
+export type CronPreviewResponse = components['schemas']['CronPreviewResponse'];
+export type SetTriggerEnabledRequest = components['schemas']['SetTriggerEnabledRequest'];
+
+/** GET /api/v1/triggers — returns all registered trigger views. */
+export async function listTriggers(): Promise<TriggerListResponse> {
+	return unwrap(await client.GET('/api/v1/triggers', {}));
+}
+
+/** GET /api/v1/triggers/{node_id}/history */
+export async function getTriggerHistory(nodeId: string): Promise<TriggerHistoryResponse> {
+	return unwrap(
+		await client.GET('/api/v1/triggers/{node_id}/history', {
+			params: { path: { node_id: nodeId } }
+		})
+	);
+}
+
+/** GET /api/v1/triggers/source-scope?kind=... */
+export async function getTriggerSourceScope(kind: string): Promise<SourceScopeResponse> {
+	return unwrap(
+		await client.GET('/api/v1/triggers/source-scope', {
+			params: { query: { kind } }
+		})
+	);
+}
+
+/** POST /api/v1/triggers/preview/cron */
+export async function previewCron(body: CronPreviewRequest): Promise<CronPreviewResponse> {
+	return unwrap(
+		await client.POST('/api/v1/triggers/preview/cron', { body })
+	);
+}
+
+/** PATCH /api/v1/triggers/{node_id}/enabled */
+export async function setTriggerEnabled(nodeId: string, enabled: boolean): Promise<TriggerView> {
+	return unwrap(
+		await client.PATCH('/api/v1/triggers/{node_id}/enabled', {
+			params: { path: { node_id: nodeId } },
+			body: { enabled }
+		})
+	);
 }

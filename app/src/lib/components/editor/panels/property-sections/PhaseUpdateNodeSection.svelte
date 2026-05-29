@@ -10,6 +10,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
 	import InsertRefButton from './InsertRefButton.svelte';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type Status = NonNullable<PhaseUpdateNodeData['status']>;
 
@@ -32,13 +33,11 @@
 	const status = $derived((data.status ?? 'running') as Status);
 
 	function appendToPhaseName(snippet: string) {
-		const curr = data.phaseName ?? '';
-		onchange({ ...data, phaseName: curr ? `${curr} ${snippet}` : snippet });
+		onchange({ ...data, phaseName: appendSnippet(data.phaseName, snippet) });
 	}
 
 	function appendToMessage(snippet: string) {
-		const curr = data.message ?? '';
-		onchange({ ...data, message: curr ? `${curr} ${snippet}` : snippet });
+		onchange({ ...data, message: appendSnippet(data.message, snippet) });
 	}
 </script>
 

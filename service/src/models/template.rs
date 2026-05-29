@@ -59,6 +59,15 @@ pub struct WorkflowTemplate {
     pub owner_template_id: Option<Uuid>,
 }
 
+impl WorkflowTemplate {
+    /// Resolve this row's version-chain root: the family `base_template_id`
+    /// when set, else `id` for a chain-root row (`COALESCE(base_template_id,
+    /// id)`). The canonical way to derive a template's family id.
+    pub fn chain_root_id(&self) -> Uuid {
+        self.base_template_id.unwrap_or(self.id)
+    }
+}
+
 // --- Visual editor data model (Section 2) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

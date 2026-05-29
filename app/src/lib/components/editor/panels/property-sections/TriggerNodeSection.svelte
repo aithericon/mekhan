@@ -15,6 +15,7 @@
 	import { browser } from '$app/environment';
 	import { onMount } from 'svelte';
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import { listTriggers, getTriggerSourceScope, setTriggerEnabled } from '$lib/api/client';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 	type PortField = components['schemas']['PortField'];
@@ -56,12 +57,8 @@
 	async function refreshLiveEnabled() {
 		if (!readonly || !nodeId) return;
 		try {
-			const res = await fetch('/api/v1/triggers');
-			if (!res.ok) return;
-			const body = await res.json();
-			const t = (body.triggers ?? []).find(
-				(x: { node_id: string }) => x.node_id === nodeId
-			);
+			const body = await listTriggers();
+			const t = body.triggers.find((x) => x.node_id === nodeId);
 			if (t) liveEnabled = t.enabled;
 		} catch {
 			// Leave liveEnabled null → fall back to the graph value.
@@ -76,21 +73,11 @@
 		const prev = liveEnabled ?? enabled;
 		liveEnabled = next; // optimistic
 		try {
-			const res = await fetch(`/api/v1/triggers/${encodeURIComponent(nodeId)}/enabled`, {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ enabled: next })
-			});
-			if (!res.ok) {
-				liveEnabled = prev;
-				toggleError = `Failed to ${next ? 'enable' : 'disable'} (${res.status})`;
-				return;
-			}
-			const body = await res.json();
-			if (typeof body.enabled === 'boolean') liveEnabled = body.enabled;
+			const view = await setTriggerEnabled(nodeId, next);
+			liveEnabled = view.enabled;
 		} catch (e) {
 			liveEnabled = prev;
-			toggleError = String(e);
+			toggleError = `Failed to ${next ? 'enable' : 'disable'}: ${e instanceof Error ? e.message : String(e)}`;
 		} finally {
 			toggling = false;
 		}
@@ -270,8 +257,7 @@
 			return;
 		}
 		let cancelled = false;
-		fetch(`/api/v1/triggers/source-scope?kind=${encodeURIComponent(kind)}`)
-			.then((r) => (r.ok ? r.json() : { scope: [] }))
+		getTriggerSourceScope(kind)
 			.then((body) => {
 				if (!cancelled) scopeVars = body.scope ?? [];
 			})

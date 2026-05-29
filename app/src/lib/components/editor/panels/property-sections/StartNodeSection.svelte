@@ -10,6 +10,7 @@
 	import InsertRefButton from './InsertRefButton.svelte';
 	import Zap from '@lucide/svelte/icons/zap';
 	import Plus from '@lucide/svelte/icons/plus';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type Port = components['schemas']['Port'];
 
@@ -34,8 +35,7 @@
 	}: Props = $props();
 
 	function appendToProcessName(snippet: string) {
-		const curr = data.processName ?? '';
-		handleProcessNameChange(curr ? `${curr} ${snippet}` : snippet);
+		handleProcessNameChange(appendSnippet(data.processName, snippet));
 	}
 
 	// Pre-typed-ports templates have no `initial` field — synthesize an empty

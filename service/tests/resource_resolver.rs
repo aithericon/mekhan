@@ -18,6 +18,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use aithericon_resources::ResourcePin;
+use mekhan_service::handlers::resources::vault_path_for;
 use mekhan_service::petri::resource_resolver::{
     AuditAction, AuditContext, ResolverError, ResourceResolver,
 };
@@ -36,10 +37,7 @@ async fn seed_resource(
     public_config: serde_json::Value,
 ) -> Uuid {
     let resource_id = Uuid::new_v4();
-    let vault_path = format!(
-        "aithericon/resources/{}/{}/v1",
-        workspace_id, resource_id
-    );
+    let vault_path = vault_path_for(workspace_id, resource_id, 1);
 
     // The resources_workspace_fk (migration 20240126) requires the workspace
     // row to exist before a resource can reference it. Seed it idempotently so
@@ -223,8 +221,8 @@ async fn resolve_returns_envelope_with_inline_public_and_secret_refs() {
     assert_eq!(db_subtree["sslmode"], "require");
 
     let expected_template = format!(
-        "{{{{secret:aithericon/resources/{}/{}/v1#password}}}}",
-        workspace_id, resource_id
+        "{{{{secret:{}#password}}}}",
+        vault_path_for(workspace_id, resource_id, 1)
     );
     assert_eq!(db_subtree["password"].as_str().unwrap(), expected_template);
 }

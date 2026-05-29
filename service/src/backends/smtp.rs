@@ -10,8 +10,8 @@ use serde_json::{json, Value};
 use aithericon_executor_backend_configs::smtp::SmtpConfig;
 use aithericon_executor_domain::InputDeclaration;
 
+use crate::compiler::backend_configs::validate_placeholders;
 use crate::compiler::placeholder_refs::scan_placeholders;
-use crate::compiler::rhai_gen::parse_placeholder_segments;
 use crate::compiler::CompileError;
 use crate::models::template::{ExecutionBackendType, FieldKind};
 
@@ -200,34 +200,3 @@ fn ref_scanner(ctx: &ScanCtx<'_>) -> Vec<RefSite> {
     out
 }
 
-/// Local placeholder-syntax validator. Duplicates the logic of
-/// `backend_configs::validate_placeholders` to avoid making that
-/// crate-private helper public for one caller. Same behaviour, same error
-/// shape.
-fn validate_placeholders(
-    s: &str,
-    node_id: &str,
-    backend: &str,
-    site: &str,
-) -> Result<bool, CompileError> {
-    let mut rest = s;
-    let mut had_placeholder = false;
-    while let Some(open) = rest.find("{{") {
-        let after = &rest[open + 2..];
-        let Some(close_rel) = after.find("}}") else {
-            return Ok(had_placeholder);
-        };
-        let inner = &after[..close_rel];
-        if parse_placeholder_segments(inner).is_none() {
-            return Err(CompileError::BackendPlaceholderSyntax {
-                node_id: node_id.to_string(),
-                backend: backend.to_string(),
-                site: site.to_string(),
-                body: inner.trim().to_string(),
-            });
-        }
-        had_placeholder = true;
-        rest = &after[close_rel + 2..];
-    }
-    Ok(had_placeholder)
-}

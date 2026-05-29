@@ -700,27 +700,4 @@ mod tests {
         assert_eq!(parsed.last_state, "RUNNING");
         assert!(parsed.terminal_at.is_none());
     }
-
-    #[test]
-    fn test_external_signal_roundtrip() {
-        let signal = ExternalSignal {
-            source: "slurm".to_string(),
-            signal_key: "train-alpha:0".to_string(),
-            dedup_id: None,
-            payload: serde_json::json!({
-                "scheduler_job_id": "12345",
-                "job_status": "completed",
-                "exit_code": "0:0",
-                "node_list": "node01",
-            }),
-            timestamp: Utc::now(),
-        };
-
-        let json = serde_json::to_string(&signal).unwrap();
-        let parsed: ExternalSignal = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.source, "slurm");
-        assert_eq!(parsed.signal_key, "train-alpha:0");
-        assert_eq!(parsed.payload["job_status"], "completed");
-    }
 }

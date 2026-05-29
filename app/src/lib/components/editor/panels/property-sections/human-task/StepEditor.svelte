@@ -7,6 +7,7 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import BlockListEditor from './BlockListEditor.svelte';
 	import InsertRefButton from '../InsertRefButton.svelte';
+	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type Props = {
 		step: TaskStepConfig;
@@ -37,8 +38,7 @@
 	}
 
 	function appendToDescription(snippet: string) {
-		const curr = step.descriptionMdsvex ?? '';
-		updateDescription(curr ? `${curr} ${snippet}` : snippet);
+		updateDescription(appendSnippet(step.descriptionMdsvex, snippet));
 	}
 
 	function updateBlocks(blocks: TaskBlockConfig[]) {

@@ -88,6 +88,22 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
 
+    // Is this the terminal node of a Map body — the child whose edge enters the
+    // parent Map's `body_out` handle? If so it must forward its FULL completed
+    // envelope (so the Map's `t_<map>_collect` can read
+    // `body.detail.outputs.<resultVar>` + the preserved `__map_idx`/`__map_id`
+    // correlation leaves); a slim control token (the normal `split_outputs`
+    // path) carries neither the parked business output nor the `_`-metadata.
+    // Loop body terminals keep the slim path — a Loop reads its body output via
+    // the parked `<body>.<field>` borrow, once per iteration (no K-fan-out).
+    let is_map_body_terminal = cx.node.parent_id.as_deref().is_some_and(|pid| {
+        crate::compiler::token_shape::is_map_node(cx.graph, pid)
+            && cx
+                .outgoing_edges
+                .iter()
+                .any(|e| e.target == pid && e.target_handle.as_deref() == Some("body_out"))
+    });
+
     // Validate and transform editor config → executor format (before closure)
     let backend_type = &execution_spec.backend_type;
     let (mut validated_config, staged_inputs) =
@@ -222,7 +238,18 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // Foundation split: park the executor result envelope as write-once data,
     // forward only the slim control token on the success path. The error
     // path is not a data token (it routes to error handlers) — left as-is.
-    let (data_place_id, p_ctrl) = split_outputs(ctx, id, label, &p_output);
+    //
+    // EXCEPTION — a Map body terminal forks instead (park data AND forward the
+    // FULL completed envelope), so the Map's collect can lift the parked
+    // business output (`detail.outputs.<resultVar>`) and the preserved
+    // `__map_*` correlation leaves off the forwarded token. The parked data
+    // place is still produced, so any downstream `<slug>.<field>` borrow is
+    // unaffected; only the token handed to the container's `body_out` changes.
+    let (data_place_id, p_ctrl) = if is_map_body_terminal {
+        park_outputs(ctx, id, label, &p_output)
+    } else {
+        split_outputs(ctx, id, label, &p_output)
+    };
 
     cx.ports.insert(
         id.clone(),

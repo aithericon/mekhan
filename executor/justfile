@@ -1,30 +1,11 @@
+# Shared cargo recipes (build/check/fmt/lint/test/test-crate/clean).
+# executor's `build` historically targets the whole workspace.
+cargo_scope := "--workspace"
+import '../just/cargo.just'
+
 # List all available recipes
 default:
     @just --list
-
-# Build all crates
-build:
-    cargo build --workspace
-
-# Check all crates
-check:
-    cargo check --workspace
-
-# Format all code
-fmt:
-    cargo fmt --all
-
-# Lint all code
-lint:
-    cargo clippy --workspace -- -D warnings
-
-# Run unit tests
-test:
-    cargo test --workspace
-
-# Run a specific crate's tests
-test-crate name:
-    cargo test -p {{name}}
 
 # Run the executor service
 run:
@@ -34,9 +15,14 @@ run:
 run-debug:
     RUST_LOG=debug cargo run -p aithericon-executor-service
 
-# Start NATS JetStream via Docker
+# Start NATS JetStream via Docker.
+# Standalone container (own port 4222, default in executor config) — the
+# executor workspace ships no docker-compose, so unlike engine/root (which
+# delegate to `docker compose`) it runs NATS directly. Image tag pinned to
+# nats:2.12-alpine to match the engine/root compose; only the run mechanism
+# (standalone vs compose) differs.
 nats-up:
-    docker run -d --name executor-nats -p 4222:4222 nats:latest -js
+    docker run -d --name executor-nats -p 4222:4222 nats:2.12-alpine -js
 
 # Stop NATS
 nats-down:
@@ -67,7 +53,3 @@ gen-python-proto:
         packages/aithericon-sdk/src/aithericon/_proto/executor_sidecar_pb2_grpc.py
     rm -rf "$VENV"
     echo "Python proto stubs generated"
-
-# Clean build artifacts
-clean:
-    cargo clean

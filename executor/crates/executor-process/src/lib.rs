@@ -7,12 +7,10 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_backend::DEFAULT_MAX_OUTPUT_BYTES;
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext,
 };
-
-/// Default max output capture: 64 KB per stream.
-const DEFAULT_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 // Re-export config type from the shared configs crate.
 pub use aithericon_executor_backend_configs::process::ProcessConfig;

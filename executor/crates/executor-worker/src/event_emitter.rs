@@ -10,6 +10,70 @@ use aithericon_executor_domain::{EventCategory, ExecutionEvent, LogLevel, Status
 
 use aithericon_executor_backend::traits::EventStream;
 
+/// Resolve a JetStream subject, applying the optional isolation prefix.
+///
+/// `None` → `base`; `Some(pfx)` → `{pfx}.{base}`. Shared by `StatusReporter`
+/// and `NatsEventEmitter` so the prefix convention lives in one place.
+pub(crate) fn subject_for(prefix: &Option<String>, base: String) -> String {
+    match prefix {
+        Some(pfx) => format!("{pfx}.{base}"),
+        None => base,
+    }
+}
+
+/// Resolve a JetStream stream name, applying the optional isolation prefix.
+///
+/// `None` → `default`; `Some(pfx)` → `{prefixed_root}_{pfx}` (e.g.
+/// `STATUS_{pfx}` / `EVENTS_{pfx}`).
+pub(crate) fn stream_name_for(prefix: &Option<String>, prefixed_root: &str, default: &str) -> String {
+    match prefix {
+        Some(pfx) => format!("{prefixed_root}_{pfx}"),
+        None => default.to_string(),
+    }
+}
+
+/// Serialize, header-stamp, publish, and ack a single JetStream message.
+///
+/// Centralises the serialize → `Nats-Msg-Id` (+ optional `traceparent`) →
+/// `publish_with_headers` → await-ack → log dance shared by every executor
+/// publish site (`StatusReporter::report`, `StatusReporter::emit_event`,
+/// `NatsEventEmitter::emit`). `what` is the noun used in log lines (e.g.
+/// `"status update"`, `"execution event"`).
+pub(crate) async fn publish_event<T: serde::Serialize>(
+    jetstream: &jetstream::Context,
+    subject: String,
+    msg_id: &str,
+    traceparent: Option<&str>,
+    execution_id: &str,
+    what: &str,
+    payload: &T,
+) {
+    let bytes = match serde_json::to_vec(payload) {
+        Ok(p) => p,
+        Err(e) => {
+            error!(%execution_id, error = %e, "failed to serialize {what}");
+            return;
+        }
+    };
+
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert("Nats-Msg-Id", msg_id);
+    if let Some(tp) = traceparent {
+        headers.insert("traceparent", tp);
+    }
+
+    match jetstream
+        .publish_with_headers(subject.clone(), headers, bytes.into())
+        .await
+    {
+        Ok(ack_future) => match ack_future.await {
+            Ok(_) => debug!(%execution_id, %subject, "{what} published"),
+            Err(e) => error!(%execution_id, error = %e, "{what} ack failed"),
+        },
+        Err(e) => error!(%execution_id, error = %e, "failed to publish {what}"),
+    }
+}
+
 /// Lightweight trait for emitting ExecutionEvents to NATS JetStream.
 ///
 /// Abstracts the publish logic so the IPC sidecar does not depend on
@@ -38,56 +102,16 @@ impl NatsEventEmitter {
 #[async_trait::async_trait]
 impl EventEmitter for NatsEventEmitter {
     async fn emit(&self, event: &ExecutionEvent) {
-        let subject = match &self.subject_prefix {
-            Some(pfx) => format!("{pfx}.{}", event.subject()),
-            None => event.subject(),
-        };
-        let msg_id = event.msg_id();
-
-        let payload = match serde_json::to_vec(event) {
-            Ok(p) => p,
-            Err(e) => {
-                error!(
-                    execution_id = %event.execution_id,
-                    error = %e,
-                    "failed to serialize streamed event"
-                );
-                return;
-            }
-        };
-
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert("Nats-Msg-Id", msg_id.as_str());
-
-        match self
-            .jetstream
-            .publish_with_headers(subject.clone(), headers, payload.into())
-            .await
-        {
-            Ok(ack_future) => {
-                if let Err(e) = ack_future.await {
-                    error!(
-                        execution_id = %event.execution_id,
-                        error = %e,
-                        "streamed event ack failed"
-                    );
-                } else {
-                    debug!(
-                        execution_id = %event.execution_id,
-                        category = %event.category,
-                        sequence = event.sequence,
-                        "streamed event published"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(
-                    execution_id = %event.execution_id,
-                    error = %e,
-                    "failed to publish streamed event"
-                );
-            }
-        }
+        publish_event(
+            &self.jetstream,
+            subject_for(&self.subject_prefix, event.subject()),
+            event.msg_id().as_str(),
+            None,
+            &event.execution_id,
+            "streamed event",
+            event,
+        )
+        .await;
     }
 }
 

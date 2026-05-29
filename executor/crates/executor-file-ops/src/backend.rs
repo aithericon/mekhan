@@ -128,32 +128,20 @@ impl ExecutionBackend for FileOpsBackend {
         // Three-way select: cancellation, timeout, or operation
         tokio::select! { biased;
             _ = cancel.cancelled() => {
-                Ok(ExecutionResult {
-                    outcome: ExecutionOutcome::Cancelled,
-                    duration: start.elapsed(),
-                    stdout_tail: None,
-                    stderr_tail: None,
-                    artifact_manifest: None,
-                    outputs: HashMap::new(),
-                    progress: None,
-                    run_dir: Some(run_context.run_dir.clone()),
-                    metrics: None,
-                    logs: None,
-                })
+                Ok(ExecutionResult::cancelled(
+                    start.elapsed(),
+                    Some(run_context.run_dir.clone()),
+                    None,
+                    None,
+                ))
             },
             _ = tokio::time::sleep(run_context.timeout) => {
-                Ok(ExecutionResult {
-                    outcome: ExecutionOutcome::TimedOut,
-                    duration: start.elapsed(),
-                    stdout_tail: None,
-                    stderr_tail: None,
-                    artifact_manifest: None,
-                    outputs: HashMap::new(),
-                    progress: None,
-                    run_dir: Some(run_context.run_dir.clone()),
-                    metrics: None,
-                    logs: None,
-                })
+                Ok(ExecutionResult::timed_out(
+                    start.elapsed(),
+                    Some(run_context.run_dir.clone()),
+                    None,
+                    None,
+                ))
             },
             result = ops::dispatch(&config, &run_context.run_dir.artifacts_dir, self.default_storage.as_ref()) => {
                 let duration = start.elapsed();
