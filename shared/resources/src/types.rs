@@ -220,6 +220,53 @@ pub struct GoogleOauth {
     pub scopes: String,
 }
 
+// ─── Resource-pool kinds ─────────────────────────────────────────────────────
+//
+// Two kinds that describe *contended capacity* rather than a single credential.
+// A workflow step claims against one of these by alias (`resourcePool: { alias
+// }`) and holds a typed lease for its duration. The claim/lease *schemas* are
+// pool semantics — they live in a focused side-registry (`crate::pool`), not on
+// `ResourceTypeDescriptor` (see that module's doc comment for the rationale).
+// Here we declare only the resource's own config surface, exactly like any
+// other kind.
+
+/// Platform-owned in-net capacity pool. A `TokenPool` of capacity N is modelled
+/// (in R3) as a deployed pool net holding N identical capacity tokens; the
+/// engine's firing rule then provides admission control + mutual exclusion for
+/// free. No secret — the pool is owned by the platform, not an external system,
+/// so there is no credential to store. See `docs/14`.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "token_pool", display_name = "Token Pool", icon = "lucide-layers")]
+pub struct TokenPool {
+    /// Number of concurrent holders the pool admits. Surfaces N capacity tokens
+    /// in the backing net.
+    pub capacity: u32,
+    /// Optional human label for one unit (e.g. `"GPU"`, `"license seat"`).
+    /// Cosmetic — drives dashboard / picker copy, never the firing rule.
+    #[serde(default)]
+    pub unit_label: Option<String>,
+}
+
+/// External-allocator connection: a datacenter / scheduler that owns placement.
+/// The net holds a *lease* against it (not a mirror of its state) — the external
+/// allocator stays the source of truth. `token` authenticates to the allocator's
+/// HTTP API. See `docs/13` (datacenter-as-resource) and `docs/14` (the lease
+/// lifecycle). The scheduler backend (R4) builds its client from the resolved
+/// secret per the docs/13 "engine is the consumer" design.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "datacenter", display_name = "Datacenter", icon = "lucide-server")]
+pub struct Datacenter {
+    /// Base URL of the allocator's lease API (claim → POST, release → DELETE).
+    pub allocator_url: String,
+    /// Allocator dialect, e.g. `"slurm"`, `"nomad"`, `"http"`. Selects the
+    /// concrete adapter the engine effect uses (R4); `"http"` is the generic
+    /// lease API the mock-allocator slice proves against.
+    pub scheduler_flavor: String,
+    /// Bearer/API token presented to the allocator. The only Vault-stored field.
+    #[resource(secret)]
+    pub token: String,
+}
+
 // ─── Kv — the dynamic-fields escape hatch ────────────────────────────────────
 //
 // The 5 typed resources above cover the common credential surfaces. `kv`

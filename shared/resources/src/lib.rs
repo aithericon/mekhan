@@ -34,6 +34,7 @@
 // own name, making the absolute path resolvable from inside.
 extern crate self as aithericon_resources;
 
+pub mod pool;
 pub mod refs;
 pub mod registry;
 pub mod store;

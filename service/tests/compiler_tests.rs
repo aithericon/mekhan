@@ -5309,3 +5309,126 @@ fn automated_step_success_preserves_control_metadata_leaves() {
          leaves (no transition logic carried the preservation loop)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// R1 — registry-resolved pools: schema foundation
+// ---------------------------------------------------------------------------
+
+/// `ResourcePoolClaim`'s new `{ alias?, request? }` shape stays NON-BREAKING:
+/// the empty `resourcePool: {}` the editor toggle + demo 13 emit still
+/// deserializes (both `None`), and the richer `{ alias }` / `{ alias, request }`
+/// shapes R2 introduces parse too.
+#[test]
+fn resource_pool_claim_deserializes_empty_and_aliased() {
+    use mekhan_service::models::template::ResourcePoolClaim;
+
+    // Today's editor toggle + demo 13 graph.json: `"resourcePool": {}`.
+    let empty: ResourcePoolClaim = serde_json::from_value(json!({})).expect("`{}` must parse");
+    assert_eq!(empty.alias, None);
+    assert_eq!(empty.request, None);
+
+    // R2's alias-only selection.
+    let aliased: ResourcePoolClaim =
+        serde_json::from_value(json!({ "alias": "prod-gpu" })).expect("`{alias}` must parse");
+    assert_eq!(aliased.alias.as_deref(), Some("prod-gpu"));
+    assert_eq!(aliased.request, None);
+
+    // R2's alias + claim-schema-shaped request params.
+    let full: ResourcePoolClaim =
+        serde_json::from_value(json!({ "alias": "prod-gpu", "request": { "gpu_count": 2 } }))
+            .expect("`{alias,request}` must parse");
+    assert_eq!(full.alias.as_deref(), Some("prod-gpu"));
+    assert_eq!(full.request, Some(json!({ "gpu_count": 2 })));
+
+    // Round-trips: an empty claim serializes back to `{}` (both fields skipped),
+    // so the demo-13 graph.json / AIR golden stays byte-identical.
+    assert_eq!(serde_json::to_value(&empty).unwrap(), json!({}));
+}
+
+/// An AutomatedStep with the empty `resourcePool: {}` (alias=None) still takes
+/// the pooled lowering path and bridges to the well-known global pool — the
+/// R1 fallback that keeps demo 13 working before R2 resolves real aliases.
+#[test]
+fn empty_resource_pool_claim_compiles_pooled_path() {
+    use mekhan_service::models::template::ResourcePoolClaim;
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "auto".to_string(),
+                node_type: "automated_step".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::AutomatedStep {
+                    label: "GPU Render".to_string(),
+                    description: None,
+                    execution_spec: ExecutionSpecConfig {
+                        backend_type: ExecutionBackendType::Docker,
+                        entrypoint: None,
+                        config: json!({"image": "alpine:latest"}),
+                    },
+                    input: mekhan_service::models::template::Port::empty_input(),
+                    output: mekhan_service::models::template::default_output_port(
+                        ExecutionBackendType::Docker,
+                    ),
+                    retry_policy: Default::default(),
+                    deployment_model: Default::default(),
+                    // The new shape, empty == today's `resourcePool: {}`.
+                    resource_pool: Some(ResourcePoolClaim {
+                        alias: None,
+                        request: None,
+                    }),
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "pool_test", "", &std::collections::HashMap::new())
+        .expect("a pooled AutomatedStep should compile");
+
+    // The pooled path synthesizes the claim/release handshake transitions.
+    assert!(
+        has_transition(&air, "t_auto_claim"),
+        "pooled path must emit the claim transition"
+    );
+}
+
+/// The two pool resource KINDS register through the same machinery as every
+/// other kind (so `/api/v1/resources` CRUD + `split_config` work for them), and
+/// the SEPARATE pool-kind registry exposes their backend + claim/lease schemas.
+#[test]
+fn pool_resource_kinds_and_pool_registry() {
+    use aithericon_resources::lookup;
+    use aithericon_resources::pool::{pool_kind, PoolBackend};
+
+    // token_pool: no secret, capacity public — CRUD's split_config puts
+    // everything in public_config.
+    let tp = lookup("token_pool").expect("token_pool kind registered");
+    assert!(tp.secret_fields.is_empty());
+    assert!(tp.public_fields.contains(&"capacity"));
+
+    // datacenter: token is the only secret; allocator_url/scheduler_flavor
+    // public.
+    let dc = lookup("datacenter").expect("datacenter kind registered");
+    assert_eq!(dc.secret_fields, &["token"]);
+    assert!(dc.public_fields.contains(&"allocator_url"));
+    assert!(dc.public_fields.contains(&"scheduler_flavor"));
+
+    // The pool-kind side-registry keys off the same wire name.
+    assert_eq!(pool_kind("token_pool").unwrap().backend, PoolBackend::Tokens);
+    assert_eq!(
+        pool_kind("datacenter").unwrap().backend,
+        PoolBackend::Scheduler
+    );
+    // A non-pool kind is not in the pool registry.
+    assert!(pool_kind("postgres").is_none());
+}

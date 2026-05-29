@@ -4015,34 +4015,37 @@ export interface components {
             memory_bytes?: number | null;
         };
         /**
-         * @description A shared-capacity claim against a resource-pool net (`docs/14`). Authored
-         *     on an [`WorkflowNodeData::AutomatedStep`] (sibling to `deployment_model`);
-         *     its presence makes the compiler wrap the inline body with a
-         *     claim/register/release handshake against the well-known pool net so the
-         *     engine's firing rule provides admission control + mutual exclusion for free.
+         * @description A shared-capacity claim against a resource pool (`docs/14`). Authored on an
+         *     [`WorkflowNodeData::AutomatedStep`] (sibling to `deployment_model`); its
+         *     presence makes the compiler wrap the inline body with a
+         *     claim/register/release handshake so the engine's firing rule provides
+         *     admission control + mutual exclusion for free.
          *
-         *     All fields are forward-looking and optional so the v1 shape stays minimal
-         *     — and so an absent claim is byte-identical to today's lowering. v1 ignores
-         *     both fields (it always bridges to the single well-known global pool and
-         *     treats every claim as 1 unit); they exist so the wire contract is stable
-         *     when per-workspace pool resolution + weighted claims land (the
-         *     "Productionization gate" in `docs/14`).
+         *     Both fields are optional, so the empty `resourcePool: {}` the editor toggle
+         *     and demo 13 emit deserializes to `{ alias: None, request: None }` — which
+         *     still triggers the pooled lowering and bridges to the well-known global pool
+         *     (R1 fallback, byte-identical to the prototype). R2 makes `alias` meaningful:
+         *     it resolves a pool *resource* through the resource machinery to a backing
+         *     net id + kind + claim/lease schemas, and validates `request` against the
+         *     kind's `claim_schema`.
          */
         ResourcePoolClaim: {
             /**
-             * @description Which pool net to claim against. v1 **ignores** this and always uses
-             *     the well-known global (`well_known::RESOURCE_POOL_NET_ID`); a future
-             *     pass resolves a per-workspace `resource_alias` → pool net id here.
+             * @description Which pool *resource* (by workspace alias) to claim against. Resolved at
+             *     publish (R2) through the resource machinery to a backing net id, kind,
+             *     and claim/lease schemas. `None` falls back to today's behavior — the
+             *     well-known global pool (`well_known::RESOURCE_POOL_NET_ID`) — so an
+             *     `resourcePool: {}` claim stays byte-identical to the prototype's
+             *     lowering until R2 resolves a real alias.
              */
-            pool?: string | null;
+            alias?: string | null;
             /**
-             * Format: int32
-             * @description Capacity weight of this claim. v1 treats absent (and any value) as a
-             *     single unit — the deployed pool net grants one capacity token per
-             *     claim. Reserved for weighted/heterogeneous claims (capability sharding,
-             *     `docs/14`).
+             * @description Claim-schema-shaped request params (the selected kind's `claim_schema`
+             *     in `crate::pool` / `aithericon_resources::pool`). Carried verbatim into
+             *     the `ClaimRequest` and validated against the kind's `claim_schema` in
+             *     R2. `None` ⇒ the kind's default placement (e.g. one token).
              */
-            units?: number | null;
+            request?: unknown;
         };
         /**
          * @description Compact list-row shape. Returned by `GET /api/v1/resources` — never carries
