@@ -1473,7 +1473,7 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
         });
 
         if let Some(other) = resolved {
-            match other {
+            match &other {
                 TokenShape::Array(_)
                 | TokenShape::Any
                 | TokenShape::Opaque(_)
@@ -1482,6 +1482,22 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
                     // declared arbitrary JSON it'll deliver as the block list at
                     // runtime). Accept; defer the strict shape to the runtime
                     // SchemaRegistry.
+                }
+                // A rich-schema field (`PortField.schema`, e.g. a Start that
+                // declares `steps` as the inline `TaskStepConfig[]` schema for an
+                // agent-tool SubWorkflow). The leaf carries an explicit JSON
+                // Schema — accept when it describes an array; the runtime
+                // SchemaRegistry enforces the full shape.
+                TokenShape::Schema(v) => {
+                    let is_array = v.get("type").and_then(|t| t.as_str()) == Some("array");
+                    if !is_array {
+                        return Err(CompileError::HumanTaskStepsRefNotArray {
+                            node_id: node.id.clone(),
+                            ref_value: raw.clone(),
+                            actual_kind: format!("Schema(type={})",
+                                v.get("type").and_then(|t| t.as_str()).unwrap_or("?")),
+                        });
+                    }
                 }
                 concrete => {
                     return Err(CompileError::HumanTaskStepsRefNotArray {
