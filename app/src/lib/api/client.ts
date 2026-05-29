@@ -56,7 +56,7 @@ export type CreateTemplateRequest = components['schemas']['CreateTemplateRequest
 export type UpdateTemplateRequest = components['schemas']['UpdateTemplateRequest'];
 export type CompileRequest = components['schemas']['CompileRequest'];
 export type PaginatedTemplateResponse =
-	components['schemas']['PaginatedResponse_WorkflowTemplate'];
+	components['schemas']['Paginated_WorkflowTemplate'];
 
 // ─── Template tests ─────────────────────────────────────────────────────────
 export type TemplateTest = components['schemas']['TemplateTest'];
@@ -207,30 +207,41 @@ function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T
 
 // ── Templates ───────────────────────────────────────────────────────────────
 
+/**
+ * List templates via the generic list DSL (page/page_size/sort/search/
+ * filter[...]) plus the template-specific relational extras. Pagination is
+ * 0-based (`page: 0` is the first page). `sort` is the DSL form, e.g.
+ * `-updated_at` (desc) or `name` (asc). `published` rides the generic filter.
+ *
+ * Built by hand into a query string (not openapi-fetch's typed `query`) because
+ * the bracket-notation filters aren't modelled in the OpenAPI params — same
+ * pattern as `listProcesses` / `listCatalogue`.
+ */
 export async function listTemplates(
-	page = 1,
-	perPage = 20,
-	search?: string,
-	published?: boolean,
-	projectId?: string,
-	tag?: string,
-	ownerTemplateId?: string
+	opts: {
+		page?: number;
+		pageSize?: number;
+		search?: string;
+		sort?: string;
+		published?: boolean;
+		projectId?: string;
+		tag?: string;
+		ownerTemplateId?: string;
+		baseTemplateId?: string;
+	} = {}
 ): Promise<PaginatedTemplateResponse> {
-	return unwrap(
-		await client.GET('/api/v1/templates', {
-			params: {
-				query: {
-					page,
-					per_page: perPage,
-					search,
-					published,
-					project_id: projectId,
-					tag,
-					owner_template_id: ownerTemplateId
-				}
-			}
-		})
-	);
+	const qs = new URLSearchParams();
+	if (opts.page !== undefined) qs.set('page', String(opts.page));
+	if (opts.pageSize !== undefined) qs.set('page_size', String(opts.pageSize));
+	if (opts.search) qs.set('search', opts.search);
+	if (opts.sort) qs.set('sort', opts.sort);
+	if (opts.published !== undefined) qs.set('filter[published][eq]', String(opts.published));
+	if (opts.projectId) qs.set('project_id', opts.projectId);
+	if (opts.tag) qs.set('tag', opts.tag);
+	if (opts.ownerTemplateId) qs.set('owner_template_id', opts.ownerTemplateId);
+	if (opts.baseTemplateId) qs.set('base_template_id', opts.baseTemplateId);
+	const query = qs.toString();
+	return rawJson(`/templates${query ? `?${query}` : ''}`);
 }
 
 export async function getTemplate(id: string): Promise<Template> {
@@ -881,6 +892,18 @@ export function processArtifactsStreamUrl(
 		qs.set('render_hints', params.render_hints.join(','));
 	const query = qs.toString();
 	return `${API_BASE}/processes/${processId}/artifacts/stream${query ? `?${query}` : ''}`;
+}
+
+// ── Instance (live) ─────────────────────────────────────────────────────────
+
+/**
+ * SSE stream of an instance's domain events — replayed from the start then
+ * live, terminated by a final `result` event. Consumed by the instance layout
+ * purely as a "something changed → refetch" trigger (the endpoint has no
+ * `from_sequence` cursor). See `GET /api/v1/instances/{id}/stream`.
+ */
+export function instanceStreamUrl(instanceId: string): string {
+	return `${API_BASE}/instances/${instanceId}/stream`;
 }
 
 function toIso(d: Date | string): string {

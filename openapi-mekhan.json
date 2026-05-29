@@ -3563,51 +3563,13 @@
           "templates"
         ],
         "summary": "GET /api/v1/templates",
+        "description": "Latest-version catalogue listing driven by the generic list DSL:\n  - `page`, `page_size` — pagination (0-based)\n  - `sort` — e.g. `-updated_at`, `name`, `version`\n  - `search` — free-text across name + description\n  - `filter[field][op]=value` — typed filters over direct columns\n    (published, version, visibility, created_at, …)\n\nplus the template-specific relational/security params in\n[`TemplateListExtras`] (`project_id`, `tag`, `base_template_id`,\n`owner_template_id`).",
         "operationId": "list_templates",
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "per_page",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "published",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "search",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
             "name": "base_template_id",
             "in": "query",
+            "description": "Version-chain mode: list every version of this base family (ignoring\n`is_latest`) instead of the default latest-only catalogue listing.",
             "required": false,
             "schema": {
               "type": [
@@ -3662,7 +3624,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse_WorkflowTemplate"
+                  "$ref": "#/components/schemas/Paginated_WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query DSL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -9901,130 +9873,6 @@
           }
         }
       },
-      "PaginatedResponse_WorkflowTemplate": {
-        "type": "object",
-        "required": [
-          "items",
-          "total",
-          "page",
-          "per_page"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "id",
-                "name",
-                "description",
-                "version",
-                "is_latest",
-                "published",
-                "graph",
-                "author_id",
-                "created_at",
-                "updated_at",
-                "workspace_id",
-                "visibility"
-              ],
-              "properties": {
-                "air_json": {},
-                "author_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "base_template_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid"
-                },
-                "created_at": {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                "description": {
-                  "type": "string"
-                },
-                "graph": {},
-                "id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "interface_json": {},
-                "is_latest": {
-                  "type": "boolean"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "owner_template_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid",
-                  "description": "Owning parent family base id (`COALESCE(base_template_id, id)`), set\nonly when `visibility == \"private\"`. A private sub-workflow may be\nembedded only by this family and never runs standalone."
-                },
-                "parent_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid"
-                },
-                "published": {
-                  "type": "boolean"
-                },
-                "published_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "published_by": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "uuid"
-                },
-                "source_ref": {},
-                "updated_at": {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                "version": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "visibility": {
-                  "type": "string"
-                },
-                "workspace_id": {
-                  "type": "string",
-                  "format": "uuid"
-                }
-              }
-            }
-          },
-          "page": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "per_page": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "total": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
       "Paginated_CatalogueEntry": {
         "type": "object",
         "description": "Paginated response wrapper.",
@@ -10324,6 +10172,144 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Paginated_WorkflowTemplate": {
+        "type": "object",
+        "description": "Paginated response wrapper.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "has_next",
+          "has_previous"
+        ],
+        "properties": {
+          "has_next": {
+            "type": "boolean"
+          },
+          "has_previous": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "description",
+                "version",
+                "is_latest",
+                "published",
+                "graph",
+                "author_id",
+                "created_at",
+                "updated_at",
+                "workspace_id",
+                "visibility"
+              ],
+              "properties": {
+                "air_json": {},
+                "author_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "base_template_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "graph": {},
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "interface_json": {},
+                "is_latest": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "owner_template_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "Owning parent family base id (`COALESCE(base_template_id, id)`), set\nonly when `visibility == \"private\"`. A private sub-workflow may be\nembedded only by this family and never runs standalone."
+                },
+                "parent_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "published": {
+                  "type": "boolean"
+                },
+                "published_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "published_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "source_ref": {},
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "visibility": {
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string",
+                  "format": "uuid"
                 }
               }
             }

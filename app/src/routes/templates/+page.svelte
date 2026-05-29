@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 	import {
 		listTemplates,
 		createTemplate,
@@ -30,6 +31,7 @@
 	import Activity from '@lucide/svelte/icons/activity';
 	import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 	import Search from '@lucide/svelte/icons/search';
+	import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
 	import Settings from '@lucide/svelte/icons/settings';
 	import FolderInput from '@lucide/svelte/icons/folder-input';
 	import CreateInstanceDialog from '$lib/components/instances/CreateInstanceDialog.svelte';
@@ -40,6 +42,7 @@
 
 	let templates = $state<TemplateSummary[]>([]);
 	let loading = $state(true);
+	let loadingMore = $state(false);
 	let error = $state<string | null>(null);
 	let dialogOpen = $state(false);
 	let dialogTemplateId = $state<string | null>(null);
@@ -47,6 +50,24 @@
 	let searchQuery = $state('');
 	let projectFilter = $state<string | null>(null);
 	let tagFilter = $state<string | null>(null);
+
+	// Server-driven pagination (0-based) + sort. Search/sort/filter all run on
+	// the backend now; results accumulate via "Load more".
+	let sort = $state('-updated_at');
+	let page = $state(0);
+	let total = $state(0);
+	let hasNext = $state(false);
+	const PAGE_SIZE = 20;
+
+	const SORT_OPTIONS = [
+		{ value: '-updated_at', label: 'Recently updated' },
+		{ value: '-created_at', label: 'Newly created' },
+		{ value: 'name', label: 'Name (A–Z)' },
+		{ value: '-name', label: 'Name (Z–A)' },
+		{ value: '-version', label: 'Version' }
+	];
+	const sortLabel = $derived(SORT_OPTIONS.find((o) => o.value === sort)?.label ?? 'Sort');
+	const hasQuery = $derived(!!searchQuery.trim() || !!projectFilter || !!tagFilter);
 
 	// Per-card Settings sheet + Assign-to-project dialog. Each holds the
 	// target template so a single instance serves every card.
@@ -67,24 +88,29 @@
 		setTimeout(() => (assignOpen = true), 0);
 	}
 
+	// Sidebar project/tag selection reloads from page 0.
 	function applyFilters(next: { projectId: string | null; tag: string | null }) {
 		projectFilter = next.projectId;
 		tagFilter = next.tag;
-		load();
+		loadFirst();
 	}
 
-	const filteredTemplates = $derived.by(() => {
-		const q = searchQuery.trim().toLowerCase();
-		if (!q) return templates;
-		return templates.filter(
-			(t) =>
-				t.name.toLowerCase().includes(q) ||
-				(t.description ?? '').toLowerCase().includes(q)
-		);
-	});
+	// Debounce search keystrokes so we don't refetch on every character.
+	let searchTimer: ReturnType<typeof setTimeout> | undefined;
+	function onSearchInput() {
+		clearTimeout(searchTimer);
+		searchTimer = setTimeout(loadFirst, 250);
+	}
+
+	function setSort(value: string) {
+		if (value === sort) return;
+		sort = value;
+		loadFirst();
+	}
 
 	// Per-template run tallies. Uses the paginated `total` from a perPage:1
-	// query so we never pull the full instance list just to count.
+	// query so we never pull the full instance list just to count. Results are
+	// merged so already-loaded pages keep their counts when more are appended.
 	async function loadRunCounts(items: TemplateSummary[]) {
 		const entries = await Promise.all(
 			items.map(async (t) => {
@@ -99,31 +125,61 @@
 				}
 			})
 		);
-		runCounts = Object.fromEntries(entries);
+		runCounts = { ...runCounts, ...Object.fromEntries(entries) };
 	}
 
-	async function load() {
+	function fetchPage(p: number) {
+		return listTemplates({
+			page: p,
+			pageSize: PAGE_SIZE,
+			search: searchQuery.trim() || undefined,
+			sort,
+			projectId: projectFilter ?? undefined,
+			tag: tagFilter ?? undefined
+		});
+	}
+
+	// (Re)load from page 0, replacing the list. Driven by search/sort/filter.
+	async function loadFirst() {
 		loading = true;
 		error = null;
 		try {
-			const result = await listTemplates(
-				1,
-				20,
-				undefined,
-				undefined,
-				projectFilter ?? undefined,
-				tagFilter ?? undefined
-			);
-			templates = result.items;
-			loadRunCounts(result.items);
+			const result = await fetchPage(0);
+			templates = result.items ?? [];
+			total = result.total ?? templates.length;
+			page = result.page ?? 0;
+			hasNext = result.has_next ?? false;
+			loadRunCounts(templates);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load templates';
-			// For now, show empty state when API is not available
 			templates = [];
+			total = 0;
+			hasNext = false;
 		} finally {
 			loading = false;
 		}
 	}
+
+	// Append the next page to the current list.
+	async function loadMore() {
+		if (loadingMore || !hasNext) return;
+		loadingMore = true;
+		error = null;
+		try {
+			const next = page + 1;
+			const result = await fetchPage(next);
+			templates = [...templates, ...(result.items ?? [])];
+			page = result.page ?? next;
+			hasNext = result.has_next ?? false;
+			loadRunCounts(result.items ?? []);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load more';
+		} finally {
+			loadingMore = false;
+		}
+	}
+
+	const remaining = $derived(Math.max(0, total - templates.length));
 
 	async function handleCreate() {
 		try {
@@ -257,10 +313,7 @@
 		new Map(templates.map((t) => [t.id, summarize(t.graph)]))
 	);
 
-	// Load on mount
-	$effect(() => {
-		load();
-	});
+	onMount(loadFirst);
 </script>
 
 <div class="flex h-full" data-testid="templates-page">
@@ -290,20 +343,48 @@
 			</div>
 		{/if}
 
-		<div class="relative mb-4">
-			<Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-			<Input
-				type="search"
-				placeholder="Search templates"
-				bind:value={searchQuery}
-				data-testid="input-search-templates"
-				class="pl-9"
-			/>
+		<div class="mb-4 flex items-center gap-2">
+			<div class="relative flex-1">
+				<Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+				<Input
+					type="search"
+					placeholder="Search templates"
+					bind:value={searchQuery}
+					oninput={onSearchInput}
+					data-testid="input-search-templates"
+					class="pl-9"
+				/>
+			</div>
+			<DropdownMenu>
+				<DropdownMenuTrigger
+					data-testid="btn-sort-templates"
+					aria-label="Sort templates"
+					class="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm text-foreground transition-colors hover:bg-accent"
+				>
+					<ArrowUpDown class="size-4 text-muted-foreground" />
+					{sortLabel}
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					{#each SORT_OPTIONS as opt (opt.value)}
+						<DropdownMenuItem
+							data-testid="sort-option-{opt.value}"
+							onSelect={() => setSort(opt.value)}
+						>
+							{opt.label}
+						</DropdownMenuItem>
+					{/each}
+				</DropdownMenuContent>
+			</DropdownMenu>
 		</div>
 
 		{#if loading}
 			<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
 				Loading...
+			</div>
+		{:else if templates.length === 0 && hasQuery}
+			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
+				<Search class="size-10 text-muted-foreground/40" />
+				<p class="mt-3 text-sm text-muted-foreground">No templates match your filters</p>
 			</div>
 		{:else if templates.length === 0}
 			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
@@ -314,16 +395,9 @@
 					Create your first template
 				</Button>
 			</div>
-		{:else if filteredTemplates.length === 0}
-			<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
-				<Search class="size-10 text-muted-foreground/40" />
-				<p class="mt-3 text-sm text-muted-foreground">
-					No templates match “{searchQuery}”
-				</p>
-			</div>
 		{:else}
 			<div class="space-y-2" data-testid="template-list">
-				{#each filteredTemplates as template (template.id)}
+				{#each templates as template (template.id)}
 					<a
 						href="/templates/{template.id}"
 						class="group flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
@@ -496,6 +570,21 @@
 					</a>
 				{/each}
 			</div>
+			{#if hasNext}
+				<div class="mt-4 flex flex-col items-center gap-2">
+					<Button
+						variant="outline"
+						onclick={loadMore}
+						disabled={loadingMore}
+						data-testid="btn-load-more-templates"
+					>
+						{loadingMore ? 'Loading…' : `Load ${Math.min(PAGE_SIZE, remaining)} more`}
+					</Button>
+					<p class="text-sm text-muted-foreground">Showing {templates.length} of {total}</p>
+				</div>
+			{:else if total > 0}
+				<p class="mt-4 text-center text-sm text-muted-foreground">Showing all {total}</p>
+			{/if}
 		{/if}
 		</div>
 	</div>

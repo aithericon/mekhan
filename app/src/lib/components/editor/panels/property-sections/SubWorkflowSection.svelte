@@ -63,9 +63,9 @@
 		let cancelled = false;
 		const owner = templateId;
 		Promise.all([
-			listTemplates(1, 100, undefined, true),
+			listTemplates({ pageSize: 100, published: true }),
 			owner
-				? listTemplates(1, 100, undefined, undefined, undefined, undefined, owner)
+				? listTemplates({ pageSize: 100, ownerTemplateId: owner })
 				: Promise.resolve({ items: [] as Template[] })
 		])
 			.then(([shared, mine]) => {

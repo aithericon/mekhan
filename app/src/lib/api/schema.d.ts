@@ -1269,7 +1269,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/v1/templates */
+        /**
+         * GET /api/v1/templates
+         * @description Latest-version catalogue listing driven by the generic list DSL:
+         *       - `page`, `page_size` — pagination (0-based)
+         *       - `sort` — e.g. `-updated_at`, `name`, `version`
+         *       - `search` — free-text across name + description
+         *       - `filter[field][op]=value` — typed filters over direct columns
+         *         (published, version, visibility, created_at, …)
+         *
+         *     plus the template-specific relational/security params in
+         *     [`TemplateListExtras`] (`project_id`, `tag`, `base_template_id`,
+         *     `owner_template_id`).
+         */
         get: operations["list_templates"];
         put?: never;
         /** POST /api/v1/templates */
@@ -3559,52 +3571,6 @@ export interface components {
             /** Format: int64 */
             total: number;
         };
-        PaginatedResponse_WorkflowTemplate: {
-            items: {
-                air_json?: unknown;
-                /** Format: uuid */
-                author_id: string;
-                /** Format: uuid */
-                base_template_id?: string | null;
-                /** Format: date-time */
-                created_at: string;
-                description: string;
-                graph: unknown;
-                /** Format: uuid */
-                id: string;
-                interface_json?: unknown;
-                is_latest: boolean;
-                name: string;
-                /**
-                 * Format: uuid
-                 * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
-                 *     only when `visibility == "private"`. A private sub-workflow may be
-                 *     embedded only by this family and never runs standalone.
-                 */
-                owner_template_id?: string | null;
-                /** Format: uuid */
-                parent_id?: string | null;
-                published: boolean;
-                /** Format: date-time */
-                published_at?: string | null;
-                /** Format: uuid */
-                published_by?: string | null;
-                source_ref?: unknown;
-                /** Format: date-time */
-                updated_at: string;
-                /** Format: int32 */
-                version: number;
-                visibility: string;
-                /** Format: uuid */
-                workspace_id: string;
-            }[];
-            /** Format: int64 */
-            page: number;
-            /** Format: int64 */
-            per_page: number;
-            /** Format: int64 */
-            total: number;
-        };
         /** @description Paginated response wrapper. */
         Paginated_CatalogueEntry: {
             has_next: boolean;
@@ -3690,6 +3656,57 @@ export interface components {
                 status: string;
                 /** Format: date-time */
                 updated_at: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            total_pages: number;
+        };
+        /** @description Paginated response wrapper. */
+        Paginated_WorkflowTemplate: {
+            has_next: boolean;
+            has_previous: boolean;
+            items: {
+                air_json?: unknown;
+                /** Format: uuid */
+                author_id: string;
+                /** Format: uuid */
+                base_template_id?: string | null;
+                /** Format: date-time */
+                created_at: string;
+                description: string;
+                graph: unknown;
+                /** Format: uuid */
+                id: string;
+                interface_json?: unknown;
+                is_latest: boolean;
+                name: string;
+                /**
+                 * Format: uuid
+                 * @description Owning parent family base id (`COALESCE(base_template_id, id)`), set
+                 *     only when `visibility == "private"`. A private sub-workflow may be
+                 *     embedded only by this family and never runs standalone.
+                 */
+                owner_template_id?: string | null;
+                /** Format: uuid */
+                parent_id?: string | null;
+                published: boolean;
+                /** Format: date-time */
+                published_at?: string | null;
+                /** Format: uuid */
+                published_by?: string | null;
+                source_ref?: unknown;
+                /** Format: date-time */
+                updated_at: string;
+                /** Format: int32 */
+                version: number;
+                visibility: string;
+                /** Format: uuid */
+                workspace_id: string;
             }[];
             /** Format: int64 */
             page: number;
@@ -8220,10 +8237,10 @@ export interface operations {
     list_templates: {
         parameters: {
             query?: {
-                page?: number;
-                per_page?: number;
-                published?: boolean | null;
-                search?: string | null;
+                /**
+                 * @description Version-chain mode: list every version of this base family (ignoring
+                 *     `is_latest`) instead of the default latest-only catalogue listing.
+                 */
                 base_template_id?: string | null;
                 /**
                  * @description Restrict to templates attached to a project (M:N via
@@ -8253,7 +8270,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PaginatedResponse_WorkflowTemplate"];
+                    "application/json": components["schemas"]["Paginated_WorkflowTemplate"];
+                };
+            };
+            /** @description Invalid query DSL */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

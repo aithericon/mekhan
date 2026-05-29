@@ -2149,14 +2149,16 @@ pub struct UpdateTemplateRequest {
     pub graph: Option<WorkflowGraph>,
 }
 
-#[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
-pub struct ListTemplatesQuery {
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub per_page: i64,
-    pub published: Option<bool>,
-    pub search: Option<String>,
+/// Template-specific list parameters layered on top of the generic
+/// `crate::query::QueryParams` extractor (which owns `page`/`page_size`/`sort`/
+/// `search`/`filter[field][op]`). These are the relational & security filters
+/// that don't reduce to a plain column predicate: `project_id`/`tag` are M:N
+/// joins, `base_template_id` switches the listing into version-chain mode, and
+/// `owner_template_id` toggles private sub-workflow visibility.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct TemplateListExtras {
+    /// Version-chain mode: list every version of this base family (ignoring
+    /// `is_latest`) instead of the default latest-only catalogue listing.
     pub base_template_id: Option<Uuid>,
     /// Restrict to templates attached to a project (M:N via
     /// `project_templates.base_template_id`). The join is non-restrictive
@@ -2169,13 +2171,6 @@ pub struct ListTemplatesQuery {
     /// returns *only* those private children (they're otherwise hidden from
     /// the catalogue). When absent, private templates are excluded entirely.
     pub owner_template_id: Option<Uuid>,
-}
-
-fn default_page() -> i64 {
-    1
-}
-fn default_per_page() -> i64 {
-    20
 }
 
 #[derive(Debug, Serialize, ToSchema)]

@@ -68,8 +68,13 @@
 		error = null;
 		const req =
 			m === 'private' && cur
-				? listTemplates(1, 100, undefined, undefined, undefined, undefined, cur)
-				: listTemplates(1, 100, undefined, pub || undefined, pid || undefined, tg || undefined);
+				? listTemplates({ pageSize: 100, ownerTemplateId: cur })
+				: listTemplates({
+						pageSize: 100,
+						published: pub || undefined,
+						projectId: pid || undefined,
+						tag: tg || undefined
+					});
 		req
 			.then((res) => {
 				if (cancelled) return;

@@ -19,13 +19,51 @@ use crate::handlers::template_tests::{run_test, RunContext};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
-    ApplyTemplateRequest, CompileRequest, CreateTemplateRequest, ExecutionBackendType,
-    ListTemplatesQuery, PaginatedResponse, Port, UpdateTemplateRequest, WorkflowGraph,
-    WorkflowNodeData, WorkflowTemplate,
+    ApplyTemplateRequest, CompileRequest, CreateTemplateRequest, ExecutionBackendType, Port,
+    TemplateListExtras, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
+use crate::query::builder::{self, QueryError};
+use crate::query::extractor::QueryParams;
+use crate::query::pagination::Paginated;
 use crate::AppState;
+
+/// Direct columns on `workflow_templates` exposed to the generic
+/// `filter[field][op]=value` DSL. Anything not in this whitelist is rejected.
+const TEMPLATE_FILTER_FIELDS: &[&str] = &[
+    "id",
+    "name",
+    "description",
+    "version",
+    "published",
+    "visibility",
+    "author_id",
+    "created_at",
+    "updated_at",
+    "published_at",
+];
+
+/// Columns the list may be sorted by (`sort=-updated_at`, `sort=name`, …).
+const TEMPLATE_SORT_FIELDS: &[&str] = &[
+    "name",
+    "version",
+    "created_at",
+    "updated_at",
+    "published_at",
+];
+
+/// Map a query-builder error to the right HTTP shape: bad DSL → 400,
+/// underlying DB failure → 500 (don't leak it as a client error).
+fn query_err_to_api(e: QueryError) -> ApiError {
+    match e {
+        QueryError::Database(db) => {
+            tracing::error!("templates list db error: {db}");
+            ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+        other => ApiError::bad_request(other.to_string()),
+    }
+}
 
 /// Visibility-aware read gate: passes when the template is `public` OR the
 /// caller is at least a `viewer` member of the template's workspace. Maps
@@ -152,77 +190,21 @@ pub async fn create_template(
     Ok((StatusCode::CREATED, Json(template)))
 }
 
-/// GET /api/v1/templates
-#[utoipa::path(
-    get,
-    path = "/api/v1/templates",
-    params(ListTemplatesQuery),
-    responses(
-        (status = 200, description = "Paginated list of templates", body = PaginatedResponse<WorkflowTemplate>),
-    ),
-    tag = "templates",
-)]
-pub async fn list_templates(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Query(params): Query<ListTemplatesQuery>,
-) -> Result<Json<PaginatedResponse<WorkflowTemplate>>, ApiError> {
-    let offset = (params.page - 1) * params.per_page;
-    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
-
-    // The version-chain listing (base_template_id != None) is a separate
-    // mode: it shows every version of a template chain regardless of
-    // is_latest. Workspace gate still applies — but on the chain root's
-    // workspace (versions inherit it, since `new_version` keeps the same
-    // workspace_id by default per the DB column DEFAULT).
-    if let Some(base_id) = params.base_template_id {
-        let items = sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates \
-              WHERE base_template_id = $1 \
-                AND (workspace_id = $2 OR visibility = 'public') \
-              ORDER BY version DESC LIMIT $3 OFFSET $4",
-        )
-        .bind(base_id)
-        .bind(workspace_id)
-        .bind(params.per_page)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await?;
-
-        let total: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM workflow_templates \
-              WHERE base_template_id = $1 \
-                AND (workspace_id = $2 OR visibility = 'public')",
-        )
-        .bind(base_id)
-        .bind(workspace_id)
-        .fetch_one(&state.db)
-        .await?;
-
-        return Ok(Json(PaginatedResponse {
-            items,
-            total: total.0,
-            page: params.page,
-            per_page: params.per_page,
-        }));
-    }
-
-    // Latest-version listing with composable filters. Use QueryBuilder so
-    // every optional filter (workspace, project_id, tag, published, search)
-    // composes through one code path. The workspace clause is mandatory:
-    // `(workspace_id = $ws OR visibility = 'public')`.
-    use sqlx::QueryBuilder;
-
-    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT t.* FROM workflow_templates t",
-    );
-
-    if let Some(project_id) = params.project_id {
+/// Append the shared FROM-tail for the latest-version template listing:
+/// optional project/tag JOINs, the mandatory workspace+visibility gate, the
+/// private-children rule, the generic typed filters, and free-text search.
+/// Used identically by the COUNT and the SELECT query so the two can't drift.
+fn append_template_where(
+    qb: &mut sqlx::QueryBuilder<'_, sqlx::Postgres>,
+    workspace_id: Uuid,
+    extras: &TemplateListExtras,
+    params: &QueryParams,
+) -> Result<(), QueryError> {
+    if let Some(project_id) = extras.project_id {
         qb.push(" JOIN project_templates pt ON pt.base_template_id = COALESCE(t.base_template_id, t.id) AND pt.project_id = ");
         qb.push_bind(project_id);
     }
-
-    if let Some(ref tag) = params.tag {
+    if let Some(ref tag) = extras.tag {
         qb.push(" JOIN template_tags tt ON tt.base_template_id = COALESCE(t.base_template_id, t.id) AND tt.workspace_id = ");
         qb.push_bind(workspace_id);
         qb.push(" AND tt.tag = ");
@@ -233,9 +215,9 @@ pub async fn list_templates(
     qb.push_bind(workspace_id);
     qb.push(" OR t.visibility = 'public')");
 
-    // Private sub-workflows are hidden from the catalogue unless explicitly
-    // enumerated by their owning parent family.
-    match params.owner_template_id {
+    // Private sub-workflows are hidden unless explicitly enumerated by their
+    // owning parent family.
+    match extras.owner_template_id {
         Some(owner) => {
             qb.push(" AND t.owner_template_id = ");
             qb.push_bind(owner);
@@ -243,83 +225,142 @@ pub async fn list_templates(
         None => {
             qb.push(" AND t.visibility <> 'private'");
         }
-    };
-
-    if let Some(published) = params.published {
-        qb.push(" AND t.published = ");
-        qb.push_bind(published);
     }
 
-    let pattern: Option<String> = params.search.as_ref().map(|s| format!("%{s}%"));
-    if let Some(ref p) = pattern {
+    // Generic typed filters (e.g. filter[published][eq]=true), prefixed to the
+    // joined `t` alias and validated against the column whitelist.
+    if let Some(ref filter) = params.filter {
+        if !filter.is_empty() {
+            qb.push(" AND ");
+            builder::build_where_conditions_with_prefix(
+                qb,
+                filter,
+                TEMPLATE_FILTER_FIELDS,
+                Some("t."),
+            )?;
+        }
+    }
+
+    // Free-text search across name + description (OR — can't be expressed via
+    // the AND-only typed filter DSL, so it stays a dedicated param).
+    if let Some(ref search) = params.search {
+        let pattern = format!("%{search}%");
         qb.push(" AND (t.name ILIKE ");
-        qb.push_bind(p.clone());
+        qb.push_bind(pattern.clone());
         qb.push(" OR t.description ILIKE ");
-        qb.push_bind(p.clone());
+        qb.push_bind(pattern);
         qb.push(")");
     }
 
-    // Count uses the same WHERE skeleton; build it once into a separate
-    // QueryBuilder so we don't double-bind. SQLx's `QueryBuilder::sql()`
-    // doesn't let us reuse params, so we replicate the predicate.
-    let mut cqb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT COUNT(*) FROM workflow_templates t",
-    );
-    if let Some(project_id) = params.project_id {
-        cqb.push(" JOIN project_templates pt ON pt.base_template_id = COALESCE(t.base_template_id, t.id) AND pt.project_id = ");
-        cqb.push_bind(project_id);
-    }
-    if let Some(ref tag) = params.tag {
-        cqb.push(" JOIN template_tags tt ON tt.base_template_id = COALESCE(t.base_template_id, t.id) AND tt.workspace_id = ");
-        cqb.push_bind(workspace_id);
-        cqb.push(" AND tt.tag = ");
-        cqb.push_bind(tag.clone());
-    }
-    cqb.push(" WHERE t.is_latest = TRUE AND (t.workspace_id = ");
-    cqb.push_bind(workspace_id);
-    cqb.push(" OR t.visibility = 'public')");
-    match params.owner_template_id {
-        Some(owner) => {
-            cqb.push(" AND t.owner_template_id = ");
-            cqb.push_bind(owner);
-        }
-        None => {
-            cqb.push(" AND t.visibility <> 'private'");
-        }
-    };
-    if let Some(published) = params.published {
-        cqb.push(" AND t.published = ");
-        cqb.push_bind(published);
-    }
-    if let Some(ref p) = pattern {
-        cqb.push(" AND (t.name ILIKE ");
-        cqb.push_bind(p.clone());
-        cqb.push(" OR t.description ILIKE ");
-        cqb.push_bind(p.clone());
-        cqb.push(")");
-    }
+    Ok(())
+}
 
-    qb.push(" ORDER BY t.updated_at DESC LIMIT ");
-    qb.push_bind(params.per_page);
-    qb.push(" OFFSET ");
-    qb.push_bind(offset);
+/// GET /api/v1/templates
+///
+/// Latest-version catalogue listing driven by the generic list DSL:
+///   - `page`, `page_size` — pagination (0-based)
+///   - `sort` — e.g. `-updated_at`, `name`, `version`
+///   - `search` — free-text across name + description
+///   - `filter[field][op]=value` — typed filters over direct columns
+///     (published, version, visibility, created_at, …)
+///
+/// plus the template-specific relational/security params in
+/// [`TemplateListExtras`] (`project_id`, `tag`, `base_template_id`,
+/// `owner_template_id`).
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates",
+    params(TemplateListExtras),
+    responses(
+        (status = 200, description = "Paginated list of templates", body = Paginated<WorkflowTemplate>),
+        (status = 400, description = "Invalid query DSL", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn list_templates(
+    State(state): State<AppState>,
+    user: AuthUser,
+    params: QueryParams,
+    Query(extras): Query<TemplateListExtras>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use sqlx::{Postgres, QueryBuilder};
 
-    let items: Vec<WorkflowTemplate> = qb
-        .build_query_as()
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+
+    // The version-chain listing (base_template_id != None) is a separate
+    // mode: it shows every version of a template chain regardless of
+    // is_latest. Workspace gate still applies — but on the chain root's
+    // workspace (versions inherit it, since `new_version` keeps the same
+    // workspace_id by default per the DB column DEFAULT).
+    if let Some(base_id) = extras.base_template_id {
+        let items = sqlx::query_as::<_, WorkflowTemplate>(
+            "SELECT * FROM workflow_templates \
+              WHERE base_template_id = $1 \
+                AND (workspace_id = $2 OR visibility = 'public') \
+              ORDER BY version DESC LIMIT $3 OFFSET $4",
+        )
+        .bind(base_id)
+        .bind(workspace_id)
+        .bind(params.page.limit())
+        .bind(params.page.offset())
         .fetch_all(&state.db)
-        .await?;
+        .await
+        .map_err(|e| query_err_to_api(QueryError::Database(e)))?;
 
-    let total: (i64,) = cqb
-        .build_query_as()
+        let total: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*)::bigint FROM workflow_templates \
+              WHERE base_template_id = $1 \
+                AND (workspace_id = $2 OR visibility = 'public')",
+        )
+        .bind(base_id)
+        .bind(workspace_id)
         .fetch_one(&state.db)
-        .await?;
+        .await
+        .map_err(|e| query_err_to_api(QueryError::Database(e)))?;
 
-    Ok(Json(PaginatedResponse {
-        items,
-        total: total.0,
-        page: params.page,
-        per_page: params.per_page,
-    }))
+        let resp = Paginated::new(items, total.0, &params.page);
+        return Ok(Json(
+            serde_json::to_value(resp).unwrap_or_else(|_| serde_json::json!({})),
+        ));
+    }
+
+    // Latest-version listing with composable filter / sort / pagination. The
+    // COUNT and SELECT share `append_template_where` so their predicates can't
+    // drift; the workspace clause is mandatory.
+    let count: i64 = {
+        let mut qb =
+            QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM workflow_templates t");
+        append_template_where(&mut qb, workspace_id, &extras, &params).map_err(query_err_to_api)?;
+        qb.build_query_as::<(i64,)>()
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| query_err_to_api(QueryError::Database(e)))?
+            .0
+    };
+
+    let items: Vec<WorkflowTemplate> = {
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT t.* FROM workflow_templates t");
+        append_template_where(&mut qb, workspace_id, &extras, &params).map_err(query_err_to_api)?;
+        match params.sort {
+            Some(ref sort) => {
+                builder::build_order_by_with_prefix(&mut qb, sort, TEMPLATE_SORT_FIELDS, Some("t."))
+                    .map_err(query_err_to_api)?;
+            }
+            None => {
+                qb.push(" ORDER BY t.updated_at DESC");
+            }
+        }
+        builder::build_pagination(&mut qb, &params.page);
+        qb.build_query_as::<WorkflowTemplate>()
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| query_err_to_api(QueryError::Database(e)))?
+    };
+
+    let resp = Paginated::new(items, count, &params.page);
+    Ok(Json(
+        serde_json::to_value(resp).unwrap_or_else(|_| serde_json::json!({})),
+    ))
 }
 
 /// GET /api/v1/templates/{id}

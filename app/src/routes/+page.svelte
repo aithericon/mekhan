@@ -98,7 +98,7 @@
 				listInstances({ status: 'running', perPage: 6 }),
 				listInstances({ status: 'completed', perPage: 20 }),
 				listInstances({ status: 'failed', perPage: 20 }),
-				listTemplates(1, 50),
+				listTemplates({ pageSize: 50 }),
 				listTasks({ status: 'pending', limit: 1 })
 			]);
 

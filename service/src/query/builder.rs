@@ -210,6 +210,17 @@ pub fn build_order_by(
     sort: &Sort,
     allowed_fields: &[&str],
 ) -> Result<(), QueryError> {
+    build_order_by_with_prefix(qb, sort, allowed_fields, None)
+}
+
+/// Same as `build_order_by` but supports a table prefix (e.g., "t." for JOINs),
+/// so the sorted column is unambiguous when the SELECT joins other tables.
+pub fn build_order_by_with_prefix(
+    qb: &mut QueryBuilder<'_, Postgres>,
+    sort: &Sort,
+    allowed_fields: &[&str],
+    table_prefix: Option<&str>,
+) -> Result<(), QueryError> {
     let field = camel_to_snake_case(&sort.field);
     if !allowed_fields.contains(&field.as_str()) {
         return Err(QueryError::InvalidSortField(
@@ -217,7 +228,8 @@ pub fn build_order_by(
             allowed_fields.join(", "),
         ));
     }
-    qb.push(format!(" ORDER BY {field} {}", sort.sql_direction()));
+    let prefix = table_prefix.unwrap_or("");
+    qb.push(format!(" ORDER BY {prefix}{field} {}", sort.sql_direction()));
     Ok(())
 }
 
