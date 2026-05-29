@@ -583,32 +583,62 @@ pub async fn seed_all(
         tracing::info!(root = %root.display(), "no demos found");
         return Ok(results);
     }
-    for dir in dirs {
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| dir.display().to_string());
-        match seed_one(state, &dir).await {
-            Ok(outcome) => {
-                match outcome {
-                    SeedOutcome::AlreadyPresent => tracing::info!(
-                        demo = %name,
-                        "demo already present — leaving as-is"
-                    ),
-                    SeedOutcome::Seeded => tracing::info!(
-                        demo = %name,
-                        "demo seeded"
-                    ),
+    // A SubWorkflow demo can reference a CHILD demo whose directory sorts
+    // AFTER it (e.g. `09-agent-tool-loop` -> `09b-collect-feedback`: `-` <
+    // `b`, so the parent is attempted first and its child isn't published
+    // yet -> `subworkflow_unresolved`). A single in-order pass would skip
+    // such a parent forever. Instead, re-attempt the demos that failed as
+    // long as each pass resolves at least one more — child/parent directory
+    // ordering then stops mattering, no topological sort needed. The loop
+    // terminates when nothing is pending or a full pass makes no progress
+    // (the remaining failures are genuine, e.g. a missing workspace
+    // resource), at which point those are logged best-effort.
+    let mut pending: Vec<std::path::PathBuf> = dirs;
+    loop {
+        let mut still_failed: Vec<std::path::PathBuf> = Vec::new();
+        let mut last_errs: Vec<(String, String)> = Vec::new();
+        let mut progressed = false;
+        for dir in pending {
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| dir.display().to_string());
+            match seed_one(state, &dir).await {
+                Ok(outcome) => {
+                    match outcome {
+                        SeedOutcome::AlreadyPresent => tracing::info!(
+                            demo = %name,
+                            "demo already present — leaving as-is"
+                        ),
+                        SeedOutcome::Seeded => tracing::info!(
+                            demo = %name,
+                            "demo seeded"
+                        ),
+                    }
+                    results.push((name, outcome));
+                    progressed = true;
                 }
-                results.push((name, outcome));
-            }
-            Err(e) => {
-                // Best-effort: log and continue with the next demo. The
-                // failure mode is "demo button on the frontend won't
-                // work for this one" — not "service can't start".
-                tracing::warn!(demo = %name, error = %e, "demo seed failed");
+                Err(e) => {
+                    // Hold the failure for a possible retry next pass — a
+                    // child demo published later in THIS pass may unblock it.
+                    last_errs.push((name, e.to_string()));
+                    still_failed.push(dir);
+                }
             }
         }
+        if still_failed.is_empty() {
+            break;
+        }
+        if !progressed {
+            // No demo resolved this pass — the remaining failures won't be
+            // helped by another retry. Log them best-effort and stop: a
+            // demo not seeding must not prevent the service from serving.
+            for (name, err) in last_errs {
+                tracing::warn!(demo = %name, error = %err, "demo seed failed");
+            }
+            break;
+        }
+        pending = still_failed;
     }
     Ok(results)
 }
