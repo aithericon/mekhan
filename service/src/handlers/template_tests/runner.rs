@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use futures::StreamExt;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -92,6 +93,22 @@ pub async fn run_test(
         .map_err(|e| {
             ApiError::internal(format!("test {} has invalid start_tokens: {e}", test.id))
         })?;
+
+    // Subscribe to the engine's authoritative human-request stream for THIS
+    // net BEFORE launching, so a request published between launch and our
+    // first poll isn't missed. We drive human tasks straight off the engine
+    // protocol (`human.request.{net_id}.{place}`, payload = the
+    // HumanTaskRequest carrying task_id + place + form) instead of polling the
+    // `hpi_tasks` causality projection: that projection only lands a row once
+    // a process tag resolves, which `test_run` instances never carry, so it
+    // never surfaces a test's human tasks. net_id is the always-present handle.
+    let request_subject = format!("human.request.{net_id}.>");
+    let mut human_requests = state
+        .nats
+        .client()
+        .subscribe(request_subject.clone())
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to subscribe {request_subject}: {e}")))?;
 
     // Spawn the test_run instance.
     let launcher = InstanceLauncher::new(&state.db, &state.petri);
@@ -173,28 +190,88 @@ pub async fn run_test(
             .await;
         }
 
-        // Pull every still-pending task for our net that we haven't already
-        // answered. The hpi_tasks projection lands these rows from the
-        // engine's `human.request` effect via the causality consumer.
-        let pending_tasks: Vec<(String, Value)> = sqlx::query_as(
-            "SELECT id, detail FROM hpi_tasks \
-             WHERE detail->>'net_id' = $1 AND status = 'pending'",
-        )
-        .bind(&net_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("hpi_tasks poll failed: {e}")))?;
+        // Drain any human-task requests the engine published for our net and
+        // auto-complete them from the fixture. The `timeout` also paces the
+        // loop (replacing the old fixed sleep), so we interleave draining with
+        // the terminal-status check below.
+        match tokio::time::timeout(POLL_INTERVAL, human_requests.next()).await {
+            Ok(Some(msg)) => {
+                // Payload is the engine's HumanTaskRequest JSON.
+                let detail: Value = match serde_json::from_slice(&msg.payload) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(test_id = %test.id, "skipping unparseable human.request: {e}");
+                        continue;
+                    }
+                };
 
-        for (task_id, detail) in pending_tasks {
-            if !completed_task_ids.insert(task_id.clone()) {
-                // Already answered — engine just hasn't projected the
-                // completion yet.
-                continue;
-            }
+                let task_id = match detail.get("task_id").and_then(Value::as_str) {
+                    Some(t) => t.to_string(),
+                    None => {
+                        return persist_run(
+                            state,
+                            test,
+                            ctx.template_version,
+                            instance.id,
+                            "error",
+                            Some(json!({
+                                "reason": "request_missing_task_id",
+                                "subject": msg.subject.to_string(),
+                            })),
+                            None,
+                            started_at,
+                            started_instant.elapsed(),
+                        )
+                        .await;
+                    }
+                };
 
-            let place = match detail.get("place").and_then(Value::as_str) {
-                Some(p) => p.to_string(),
-                None => {
+                // JetStream may redeliver a request; answer each task once.
+                if !completed_task_ids.insert(task_id.clone()) {
+                    continue;
+                }
+
+                // Place is the subject tail (`human.request.{net_id}.{place}`),
+                // with the payload's `place` as a fallback.
+                let place = msg
+                    .subject
+                    .strip_prefix(&format!("human.request.{net_id}."))
+                    .map(str::to_string)
+                    .or_else(|| {
+                        detail
+                            .get("place")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    });
+                let Some(place) = place else {
+                    return persist_run(
+                        state,
+                        test,
+                        ctx.template_version,
+                        instance.id,
+                        "error",
+                        Some(json!({ "reason": "task_missing_place", "task_id": task_id })),
+                        None,
+                        started_at,
+                        started_instant.elapsed(),
+                    )
+                    .await;
+                };
+
+                let slug = resolve_task_slug(&ctx.graph, &detail, &place);
+                let answer = answers
+                    .get(&slug)
+                    .or_else(|| {
+                        // Fall back to node_id (the WorkflowNode.id) so authors
+                        // can hand-author by either identifier.
+                        detail
+                            .get("node_id")
+                            .and_then(Value::as_str)
+                            .and_then(|nid| answers.get(nid))
+                    })
+                    .cloned();
+
+                let Some(answer) = answer else {
                     return persist_run(
                         state,
                         test,
@@ -202,71 +279,42 @@ pub async fn run_test(
                         instance.id,
                         "error",
                         Some(json!({
-                            "reason": "task_missing_place",
+                            "reason": "missing_human_answer",
+                            "node_slug": slug,
+                            "place": place,
                             "task_id": task_id,
+                            "hint": "add an entry to human_answers keyed by this slug",
                         })),
                         None,
                         started_at,
                         started_instant.elapsed(),
                     )
                     .await;
+                };
+
+                // Publish the synthetic completion on the same subject the UI
+                // path uses (`process::handlers`): the engine's
+                // GlobalHumanResultListener injects the result token at `place`.
+                let subject = format!("human.completed.{net_id}.{place}");
+                let payload = json!({
+                    "task_id": task_id,
+                    "data": answer,
+                    "completed_at": Utc::now().to_rfc3339(),
+                });
+                if let Err(e) = state
+                    .nats
+                    .client()
+                    .publish(subject, serde_json::to_vec(&payload).unwrap().into())
+                    .await
+                {
+                    return Err(ApiError::internal(format!(
+                        "failed to publish human completion: {e}"
+                    )));
                 }
-            };
-
-            let slug = resolve_task_slug(&ctx.graph, &detail, &place);
-            let answer = answers
-                .get(&slug)
-                .or_else(|| {
-                    // Fall back to node_id (the WorkflowNode.id) so authors
-                    // can hand-author by either identifier.
-                    detail
-                        .get("node_id")
-                        .and_then(Value::as_str)
-                        .and_then(|nid| answers.get(nid))
-                })
-                .cloned();
-
-            let Some(answer) = answer else {
-                return persist_run(
-                    state,
-                    test,
-                    ctx.template_version,
-                    instance.id,
-                    "error",
-                    Some(json!({
-                        "reason": "missing_human_answer",
-                        "node_slug": slug,
-                        "place": place,
-                        "task_id": task_id,
-                        "hint": "add an entry to human_answers keyed by this slug",
-                    })),
-                    None,
-                    started_at,
-                    started_instant.elapsed(),
-                )
-                .await;
-            };
-
-            // Publish the synthetic completion. Subject + payload shape match
-            // what `service::tests::causality_e2e` does for live human task
-            // completion (kept identical so we ride the same engine path the
-            // UI uses).
-            let subject = format!("human.completed.{net_id}.{place}");
-            let payload = json!({
-                "task_id": task_id,
-                "data": answer,
-                "completed_at": Utc::now().to_rfc3339(),
-            });
-            if let Err(e) = state
-                .nats
-                .client()
-                .publish(subject, serde_json::to_vec(&payload).unwrap().into())
-                .await
-            {
-                return Err(ApiError::internal(format!(
-                    "failed to publish human completion: {e}"
-                )));
             }
+            // Subscription closed (shouldn't happen mid-run) or the poll
+            // elapsed with no request — fall through to the terminal check.
+            Ok(None) | Err(_) => {}
         }
 
         // Check whether the instance has terminated.
@@ -280,8 +328,6 @@ pub async fn run_test(
                 break status;
             }
         }
-
-        tokio::time::sleep(POLL_INTERVAL).await;
     };
 
     // Build the synthetic scope: { result, steps.<slug>.output, start }.

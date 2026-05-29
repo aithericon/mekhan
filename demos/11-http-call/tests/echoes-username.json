@@ -1,6 +1,6 @@
 {
   "name": "http-echoes-username",
-  "enabled": false,
+  "enabled": true,
   "start_tokens": [
     {
       "start_block_id": "start",
