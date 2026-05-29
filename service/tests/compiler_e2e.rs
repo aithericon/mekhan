@@ -1387,3 +1387,172 @@ fn loop_without_lease_emits_no_lease_topology() {
         "no-lease loop must emit no Lease__ definition"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L4 — Scheduled `Submit` body inside a leased Loop runs ON the held alloc.
+// The body opts in with `runOnLease: true`; the compiler borrows the
+// enclosing loop's `<loop>.lease.alloc_id` (the L3 parked grant) and routes it
+// into the `SchedulerSubmitInput` `spec.alloc_id` (riding the opaque `spec`
+// Value — no typed engine field). The engine's `SlurmClient::submit` reads
+// that key and `srun`s onto the held allocation (L2) instead of `sbatch`-ing.
+// ---------------------------------------------------------------------------
+
+/// Stage the Scheduled body's `main.py` (`body` slug) so the Python backend
+/// validator is satisfied — same staging story as `leased_loop_files`.
+fn leased_loop_scheduled_body_files() -> HashMap<String, HashMap<String, InputSource>> {
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut stub = HashMap::new();
+    stub.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "score = 1.0\n".to_string(),
+        },
+    );
+    files.insert("body".to_string(), stub);
+    files
+}
+
+fn compile_leased_loop_scheduled_body(
+    graph: &WorkflowGraph,
+    known: &KnownResources,
+) -> Result<Value, CompileError> {
+    let files = leased_loop_scheduled_body_files();
+    compile_to_air_with_options(
+        graph,
+        "t",
+        "",
+        &files,
+        CompileOptions {
+            known_resources: known,
+            ..Default::default()
+        },
+    )
+    .map(|a| a.air)
+}
+
+/// L4 keystone: a `Scheduled { operation: submit, runOnLease: true }` body
+/// inside a `Loop { lease }` emits `spec.alloc_id` sourced FROM the enclosing
+/// loop's parked lease — via a read-arc into the loop's `p_aloop_data` and the
+/// word-boundary rewrite `aloop.lease.alloc_id` → `d_aloop.lease.alloc_id`. The
+/// body still bridges to the scheduler-net (it did not collapse to an inline
+/// executor body), and the loop kept its full L3 lease topology.
+#[test]
+fn leased_loop_scheduled_body_runs_on_held_alloc() {
+    let graph = load_graph("leased-loop-scheduled-body.json");
+    let air = compile_leased_loop_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
+        .expect("leased-loop Scheduled runOnLease body should compile");
+
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    // (1) The loop kept its L3 lease topology — acquire-once / hold / release.
+    for pid in [
+        "p_aloop_claim_out",
+        "p_aloop_grant_inbox",
+        "p_aloop_register_out",
+        "p_aloop_release_out",
+        "p_aloop_held",
+        "p_aloop_data",
+    ] {
+        assert!(has_place(&air, pid), "loop lease topology must keep {pid}");
+    }
+
+    // (2) The body stayed a Scheduled job: it bridges to the scheduler-net via
+    //     `p_body_sched_out`, NOT an inline executor `body/inbox`.
+    assert!(
+        has_place(&air, "p_body_sched_out"),
+        "Scheduled body must keep its scheduler bridge_out"
+    );
+    assert!(
+        !has_place(&air, "p_body/inbox"),
+        "Scheduled body must NOT collapse to an inline executor body"
+    );
+
+    // (3) The prepare transition carries `spec.alloc_id`, sourced from the
+    //     enclosing loop's lease. After the read-arc rewrite the raw dotted
+    //     `aloop.lease.alloc_id` becomes the bound scope var
+    //     `d_aloop.lease.alloc_id`.
+    let prepare_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_body_prepare")
+        .expect("body prepare transition")["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        prepare_logic.contains("d.spec.alloc_id = d_aloop.lease.alloc_id"),
+        "prepare must set spec.alloc_id from the loop lease (rewritten ref): {prepare_logic}"
+    );
+    // The raw, pre-rewrite dotted form must NOT survive (proves the read-arc
+    // pipeline actually bound it rather than leaving a dangling ref).
+    assert!(
+        !prepare_logic.contains(" aloop.lease.alloc_id"),
+        "the raw `aloop.lease.alloc_id` must have been rewritten to the bound var: {prepare_logic}"
+    );
+
+    // (4) The read-arc that binds `d_aloop` is wired onto the prepare transition
+    //     as a non-consuming read into the loop's parked `p_aloop_data`.
+    let prepare = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_body_prepare")
+        .unwrap();
+    let has_loop_read_arc = prepare["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["place"] == "p_aloop_data" && a["read"] == serde_json::Value::Bool(true));
+    assert!(
+        has_loop_read_arc,
+        "prepare must read-arc the loop's parked lease place p_aloop_data: {:?}",
+        prepare["inputs"]
+    );
+}
+
+/// Negative control: the SAME graph with `runOnLease: false` injects NO
+/// `spec.alloc_id` and synthesizes NO read-arc from the body into the loop's
+/// parked data place — the body submits as an ordinary scheduler job. Proves
+/// the seam is strictly opt-in and leaves the default `Submit` wire untouched.
+#[test]
+fn scheduled_body_without_run_on_lease_does_not_borrow_alloc() {
+    use mekhan_service::models::template::{DeploymentModel, WorkflowNodeData};
+
+    let mut graph = load_graph("leased-loop-scheduled-body.json");
+    for node in &mut graph.nodes {
+        if let WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Scheduled { run_on_lease, .. },
+            ..
+        } = &mut node.data
+        {
+            *run_on_lease = false;
+        }
+    }
+    let air = compile_leased_loop_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
+        .expect("leased-loop Scheduled (no runOnLease) body should compile");
+
+    // The body still bridges to the scheduler-net (it is still a Submit).
+    assert!(
+        has_place(&air, "p_body_sched_out"),
+        "Submit body still bridges to the scheduler-net"
+    );
+
+    // ...but with NO alloc_id injection and NO read-arc into the loop data.
+    let prepare = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_body_prepare")
+        .expect("body prepare transition");
+    let prepare_logic = prepare["logic"]["source"].as_str().unwrap();
+    assert!(
+        !prepare_logic.contains("alloc_id"),
+        "no-runOnLease body must not inject spec.alloc_id: {prepare_logic}"
+    );
+    let borrows_loop = prepare["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["place"] == "p_aloop_data");
+    assert!(
+        !borrows_loop,
+        "no-runOnLease body must not read-arc the loop's parked lease place: {:?}",
+        prepare["inputs"]
+    );
+}

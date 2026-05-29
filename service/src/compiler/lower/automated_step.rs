@@ -288,11 +288,13 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         job_template,
         resources,
         operation,
+        run_on_lease,
         ..
     } = deployment_model
     else {
         unreachable!("lower_automated_step_scheduled on non-Scheduled step")
     };
+    let run_on_lease = *run_on_lease;
     // This entry handles `operation: Submit` only — the dispatcher routes
     // `operation: Lease` to `lower_automated_step_scheduled_lease` (R4).
     debug_assert!(
@@ -338,6 +340,32 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let job_template_lit = rhai_str_escape(&job_template);
     let id_lit = rhai_str_escape(&id);
 
+    // L4 seam: when this `Submit` body opts into `runOnLease` AND it sits
+    // inside a leased Loop, inject one extra key into the SchedulerSubmitInput
+    // `spec` literal — `"alloc_id": <loop_slug>.lease.alloc_id`. The dotted
+    // `<loop_slug>.lease.alloc_id` is a RAW ref (NOT pre-resolved): the matching
+    // arm in `guard_readarc_plan` registers the same-shaped Guard borrow, so the
+    // standard read-arc pipeline (`apply_guard_borrows`) wires a read-arc into
+    // the loop's parked `p_<loop>_data` and word-boundary-rewrites the dotted
+    // text to `d_<loop>.lease.alloc_id` — binding it to the held grant in the
+    // prepare scope. The engine's `SlurmClient::submit` reads this opaque
+    // `spec.alloc_id` key and `srun`s onto the held allocation (L2). The
+    // alloc_id rides the opaque `spec` Value — no typed engine field.
+    //
+    // Guard: the parent MUST be a Loop carrying a `lease` (the only producer of
+    // `<loop>.lease`). A `runOnLease` body without an enclosing leased loop is
+    // an authoring error — `enclosing_leased_loop_slug` returns `None`, no key
+    // is injected, and the borrow planner likewise emits nothing, so the body
+    // simply submits normally rather than failing the compile (the editor / a
+    // future lint surfaces the misuse).
+    let alloc_id_frag = if run_on_lease {
+        enclosing_leased_loop_slug(cx.node, cx.graph)
+            .map(|loop_slug| format!(r#" d.spec.alloc_id = {loop_slug}.lease.alloc_id;"#))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     let ctx = &mut *cx.ctx;
 
     let p_input: PlaceHandle<DynamicToken> =
@@ -376,12 +404,27 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     // job_template_id, spec{ backend, inputs, outputs, config, resources } }.
     // See `lower_automated_step` for the `/*__BORROWED_INPUTS__*/` marker —
     // same Python-slug staging story for the scheduled lifecycle.
-    ctx.transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
+    let prepare_logic = format!(
+        r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }};{alloc_id_frag} #{{ job: d }}"#
+    );
+    let prepare = ctx
+        .transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
         .auto_input("input", &p_input)
-        .auto_output("job", &sched_out)
-        .logic(format!(
-            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
-        ));
+        .auto_output("job", &sched_out);
+    if alloc_id_frag.is_empty() {
+        // Common path: fail-fast build-time script validation (no borrowed
+        // refs in the literal, so `logic()` can validate variable bindings).
+        prepare.logic(prepare_logic);
+    } else {
+        // runOnLease: the literal carries the RAW `<loop>.lease.alloc_id`
+        // borrow, which the post-build read-arc pipeline (`apply_guard_borrows`)
+        // rewrites to `d_<loop>.lease.alloc_id` and binds via a synthesized
+        // read-arc into `p_<loop>_data`. `logic()`'s build-time validation
+        // would reject the not-yet-bound `<loop>` root var, so use `logic_rhai`
+        // (the same deferral every Loop/Decision guard relies on — the engine
+        // still validates the final rewritten Rhai at scenario load).
+        prepare.logic_rhai(prepare_logic).done();
+    }
 
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
         .auto_input("res", &sched_result)
@@ -1036,4 +1079,29 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
     );
     cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
+}
+
+/// L4: resolve the slug of the Loop that ENCLOSES `node` (`node.parent_id ==
+/// loop.id`) **iff** that loop carries a `lease`. Returns the loop's
+/// `slug()` — the exact key the borrow pipeline + `out_shape_loop` use for
+/// `<loop>.lease.<field>` — so the injected `<loop_slug>.lease.alloc_id` ref
+/// lines up with the read-arc the matching `guard_readarc_plan` arm registers.
+///
+/// `None` when the body has no parent, the parent isn't a Loop, or the loop
+/// holds no lease. A `runOnLease` body in any of those cases simply submits
+/// normally (no `alloc_id` injected) — the misuse is an authoring concern, not
+/// a hard compile error here.
+fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
+    let parent_id = node.parent_id.as_deref()?;
+    graph.nodes.iter().find_map(|n| {
+        if n.id != parent_id {
+            return None;
+        }
+        match &n.data {
+            WorkflowNodeData::Loop {
+                lease: Some(_), ..
+            } => Some(n.slug()),
+            _ => None,
+        }
+    })
 }

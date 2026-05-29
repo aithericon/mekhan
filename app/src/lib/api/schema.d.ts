@@ -2601,6 +2601,20 @@ export interface components {
             request?: unknown;
             resources?: null | components["schemas"]["ResourceConfig"];
             /**
+             * @description L4 opt-in: run this body ON the enclosing leased loop's held
+             *     allocation instead of submitting a fresh job. The body Scheduled
+             *     step ALWAYS sits inside the leasing loop (`parent_id == loop.id`)
+             *     and there is exactly one loop lease in scope — no ambiguity. When
+             *     set (and the enclosing Loop carries a `lease`), the compiler injects
+             *     `"alloc_id": <loop_slug>.lease.alloc_id` into the prepare-transition
+             *     `spec` literal via the standard read-arc borrow pipeline; the engine
+             *     (L2 `SlurmClient::submit`) then `srun`s the job into the held
+             *     allocation rather than `sbatch`-ing a new one. `false` (default) =
+             *     today's independent submit. `alloc_id` rides the opaque `spec`
+             *     `Value` — no typed engine field.
+             */
+            runOnLease?: boolean;
+            /**
              * @description `datacenter` resource alias. `None` = env-global scheduler-net (only
              *     valid for `operation: Submit`; `Lease` requires a concrete alias).
              */

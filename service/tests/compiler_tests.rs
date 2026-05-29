@@ -3995,6 +3995,7 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
                     resources: None,
                     operation: Default::default(),
                     request: None,
+                    run_on_lease: false,
                 },
             ),
             end_node("e"),
@@ -5444,6 +5445,7 @@ fn deployment_model_surface_round_trips() {
             resources: None,
             operation: ScheduledOperation::Submit,
             request: None,
+            run_on_lease: false,
         }
     );
     assert_eq!(

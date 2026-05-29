@@ -7348,6 +7348,10 @@
                   }
                 ]
               },
+              "runOnLease": {
+                "type": "boolean",
+                "description": "L4 opt-in: run this body ON the enclosing leased loop's held\nallocation instead of submitting a fresh job. The body Scheduled\nstep ALWAYS sits inside the leasing loop (`parent_id == loop.id`)\nand there is exactly one loop lease in scope — no ambiguity. When\nset (and the enclosing Loop carries a `lease`), the compiler injects\n`\"alloc_id\": <loop_slug>.lease.alloc_id` into the prepare-transition\n`spec` literal via the standard read-arc borrow pipeline; the engine\n(L2 `SlurmClient::submit`) then `srun`s the job into the held\nallocation rather than `sbatch`-ing a new one. `false` (default) =\ntoday's independent submit. `alloc_id` rides the opaque `spec`\n`Value` — no typed engine field."
+              },
               "scheduler": {
                 "type": [
                   "string",

@@ -1183,6 +1183,23 @@ pub enum DeploymentModel {
         /// `Submit` wire shape round-trips byte-identically.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request: Option<serde_json::Value>,
+        /// L4 opt-in: run this body ON the enclosing leased loop's held
+        /// allocation instead of submitting a fresh job. The body Scheduled
+        /// step ALWAYS sits inside the leasing loop (`parent_id == loop.id`)
+        /// and there is exactly one loop lease in scope — no ambiguity. When
+        /// set (and the enclosing Loop carries a `lease`), the compiler injects
+        /// `"alloc_id": <loop_slug>.lease.alloc_id` into the prepare-transition
+        /// `spec` literal via the standard read-arc borrow pipeline; the engine
+        /// (L2 `SlurmClient::submit`) then `srun`s the job into the held
+        /// allocation rather than `sbatch`-ing a new one. `false` (default) =
+        /// today's independent submit. `alloc_id` rides the opaque `spec`
+        /// `Value` — no typed engine field.
+        #[serde(
+            default,
+            rename = "runOnLease",
+            skip_serializing_if = "std::ops::Not::not"
+        )]
+        run_on_lease: bool,
     },
 }
 
