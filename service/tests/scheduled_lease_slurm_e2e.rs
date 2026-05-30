@@ -976,3 +976,165 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cancel → no orphan: cancelling an instance that is HOLDING a lease must
+// actively release (scancel) the held alloc — `cancel_instance` →
+// `petri.terminate_net` → the engine's `release_held_leases_for_instance` scans
+// the in-use holds and scancels each before tearing the net down. Unlike
+// fail-fast this does NOT depend on the watcher / `sacct`: the engine drives the
+// scancel directly, so it is provable on the dev image.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "live Slurm-lease cancel-no-orphan e2e: needs `just dev slurm-up` + VAULT_* + TEST_S3_*"]
+async fn cancelling_a_leased_instance_releases_the_held_alloc() {
+    if !engine_available().await {
+        panic!("engine not available at {} — start the stack", engine_url());
+    }
+
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let kv = listener_nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("kv");
+    let sub_mgr =
+        std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let listener_db = db.clone();
+    tokio::spawn(async move {
+        start_lifecycle_listener(
+            listener_nats,
+            listener_db,
+            sub_mgr,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+        .await;
+    });
+
+    let resource_id = create_slurm_dc(&app, "Slurm DC (cancel e2e)").await;
+    let pool_net_id = format!("pool-{resource_id}");
+    let pool_deadline = Instant::now() + Duration::from_secs(60);
+    while !net_running(&pool_net_id).await {
+        if Instant::now() > pool_deadline {
+            panic!("lease-adapter net `{pool_net_id}` did not reach running within 60s");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Leased-Loop Cancel E2E",
+                        "graph": leased_loop_graph("lp", "body"),
+                        "files": { "body": { "main.py": SLEEP_PY } },
+                        "author_id": Uuid::new_v4(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
+    let template_id: Uuid =
+        body_json(resp.into_body()).await["id"].as_str().unwrap().parse().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let pub_body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "template_id": template_id, "created_by": Uuid::new_v4(),
+                            "metadata": { "e2e": "lease_cancel" } })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let inst_status = resp.status();
+    let instance = body_json(resp.into_body()).await;
+    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
+
+    // Wait for the held alloc to appear.
+    let alloc_deadline = Instant::now() + Duration::from_secs(120);
+    let held_id = loop {
+        let ids = squeue_lease_ids(instance_id, "lp");
+        if let Some(first) = ids.first() {
+            break first.clone();
+        }
+        let st = instance_status(&db, instance_id).await;
+        assert!(
+            st != "failed" && st != "completed",
+            "instance reached {st} before the held alloc was ever observed"
+        );
+        if Instant::now() > alloc_deadline {
+            panic!("held Slurm alloc never appeared within 120s");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    // CANCEL the instance while it holds the lease.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/instances/{instance_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "cancel instance");
+    let cancelled = body_json(resp.into_body()).await;
+    assert_eq!(cancelled["status"], "cancelled", "instance marked cancelled");
+
+    // No-orphan: the held alloc `held_id` must be scancel'd by the engine's
+    // `release_held_leases_for_instance` — squeue for the grant goes empty
+    // within a deadline. (The drain executor srun'd onto it dies with the alloc.)
+    let release_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let ids = squeue_lease_ids(instance_id, "lp");
+        if ids.is_empty() {
+            break;
+        }
+        if Instant::now() > release_deadline {
+            panic!(
+                "Slurm alloc {ids:?} (held {held_id}) still live 60s after cancel — \
+                 release_held_leases_for_instance did NOT scancel the held lease \
+                 (ORPHAN allocation leaked)"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}

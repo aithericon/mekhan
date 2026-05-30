@@ -1157,9 +1157,13 @@ where
             crate::cluster_registry::ClusterRegistryAllocatorClient::new(registry),
         );
 
-        // grant_id is `<instance_id>:<loop_id>` — held leases for THIS instance
-        // are exactly the holds whose grant_id begins with this prefix.
-        let grant_prefix = format!("{net_id}:");
+        // grant_id is `<instance_id>:<loop_id>` where `<instance_id>` is the BARE
+        // workflow-instance UUID (`loop_.rs`: `input._instance_id + ":<loop_id>"`),
+        // NOT the engine net_id. The instance net_id is `mekhan-<uuid>`, so strip
+        // the `mekhan-` prefix before matching — otherwise the prefix never
+        // matches any held grant and the cancel leaks an orphan allocation.
+        let instance_id = net_id.strip_prefix("mekhan-").unwrap_or(net_id);
+        let grant_prefix = format!("{instance_id}:");
 
         // Scan every live lease-adapter pool-net for in_use holds owned by this
         // instance. The held alloc_id + the net's effect_config are all we need.
