@@ -1,0 +1,81 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Crashing-tool agent",
+        "initial": {
+          "id": "in",
+          "label": "Request",
+          "fields": [
+            { "name": "request", "label": "Request", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "agent",
+      "type": "agent",
+      "position": { "x": 320, "y": 80 },
+      "width": 440,
+      "height": 360,
+      "data": {
+        "type": "agent",
+        "label": "Worker Agent",
+        "description": "Calls the do_work tool; the tool always crashes. With onToolError=feedback the failure comes back as a tool error the agent must read and report — it must NOT crash the agent.",
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0
+        },
+        "systemPrompt": "You are a worker. You MUST call the `do_work` tool exactly once, passing the user's request as `payload`. The tool may fail. If the tool returns an error, do NOT call it again — reply in one sentence stating that the tool failed and quote the failure reason. Otherwise reply with the tool's summary.",
+        "userPrompt": "{{ start.request }}",
+        "maxTurns": 3,
+        "onToolError": "feedback"
+      }
+    },
+    {
+      "id": "do_work",
+      "type": "sub_workflow",
+      "position": { "x": 820, "y": 320 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "do_work",
+        "description": "The tool, realized as the always-crashing 08c-unwired-failure sub-workflow. Its Start declares `payload`, which becomes the tool's LLM-facing input schema. It always raises => child NetFailed, which must propagate back to the agent as a tool error (feedback).",
+        "templateId": "00000000-0000-0000-0000-0000000008c0",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [],
+        "output": {
+          "id": "out",
+          "label": "Result",
+          "fields": [
+            { "name": "summary", "label": "Summary", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1300, "y": 200 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "reply", "expression": "agent.response" },
+          { "targetField": "turns_used", "expression": "agent.turn" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_agent", "source": "start", "target": "agent", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_agent_end",   "source": "agent", "sourceHandle": "out", "target": "end", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_agent_tool",  "source": "agent", "sourceHandle": "tools", "target": "do_work", "targetHandle": "in", "type": "tools" }
+  ]
+}

@@ -657,6 +657,168 @@ fn bubble_policy_routes_unknown_to_error_and_mints_bubble_collectors() {
     );
 }
 
+/// Set an agent node's `on_tool_error` policy in place.
+fn with_tool_error_policy(mut node: WorkflowNode, policy: ToolErrorPolicy) -> WorkflowNode {
+    if let WorkflowNodeData::Agent { on_tool_error, .. } = &mut node.data {
+        *on_tool_error = policy;
+    } else {
+        unreachable!("with_tool_error_policy: not an Agent node")
+    }
+    node
+}
+
+/// FAILURE-PROPAGATION regression (the whole point of this feature): an
+/// AutomatedStep used as an agent tool has NO authored `error` edge, yet its
+/// failure MUST surface to the agent's on_tool_error machinery — not crash the
+/// agent. Before the `is_agent_tool` gate, `error_path_wired` was false so the
+/// tool child minted no `p_error` port, so `t_a_collect_lookup_error` was never
+/// minted and a tool-net failure dead-end-threw and crashed the agent.
+///
+/// Here NO `error` edge is wired on the tool child (contrast the older
+/// `multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape`, which had to
+/// hand-wire `e_tool_err`). The Feedback collect-error transition must STILL
+/// mint, and it must re-enter the loop (produce onto `p_a_state`).
+#[test]
+fn automatedstep_tool_without_error_edge_still_mints_feedback_collector() {
+    let air = compile(
+        vec![
+            start_node("s"),
+            agent_node("a"), // Feedback (default)
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("e"),
+        ],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            // NOTE: no `error` edge on lookup_node.
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
+    );
+
+    // The tool child must now expose its own error output place (forced via
+    // is_agent_tool) so the engine-bridged failure has somewhere to land.
+    assert!(
+        place_ids(&air).iter().any(|p| p == "p_lookup_node_error"),
+        "tool child must mint p_<child>_error even with no authored error edge; \
+         have: {:?}",
+        place_ids(&air)
+    );
+
+    let transitions = air["transitions"].as_array().expect("transitions");
+    let collect_err = transitions
+        .iter()
+        .find(|t| t["id"].as_str() == Some("t_a_collect_lookup_error"))
+        .expect(
+            "Feedback collect-error transition must mint for a tool child with no \
+             authored error edge (is_agent_tool gate)",
+        );
+    let src = collect_err["logic"]["source"].as_str().unwrap_or("");
+    assert!(
+        src.contains(r#"role: "tool""#) && src.contains("failed"),
+        "Feedback collector must stage a tool-result-error message back into the \
+         loop; got: {src}"
+    );
+}
+
+/// Same regression for a SubWorkflow used as an agent tool (no authored error
+/// edge). The forced `error_handled` must mint the SubWorkflow's `Some(\"error\")`
+/// output port (`p_<sub>_error`) plus its `t_<sub>_fail` (NOT `t_<sub>_fail_deadend`),
+/// and the agent's Feedback collect-error transition must consume it.
+#[test]
+fn subworkflow_tool_without_error_edge_mints_error_port_and_feedback_collector() {
+    let child_id = uuid::Uuid::new_v4();
+    let sub = subworkflow_tool("sub_lookup", "lookup_order", child_id);
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), agent_node("a"), sub, end_node("e")],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            // NOTE: no `error` edge on sub_lookup.
+            tools_edge("et_sub", "a", "sub_lookup"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let sub_air = sub_air_with_contract("sub_lookup", child_id, Port::empty_input());
+    let (air, _iface, _configs) = compile_with_sub_air(&graph, &sub_air);
+
+    let transitions = transition_ids(&air);
+    let places = place_ids(&air);
+
+    // The SubWorkflow's error output port exists (forced via is_agent_tool).
+    assert!(
+        places.iter().any(|p| p == "p_sub_lookup_error"),
+        "SubWorkflow tool child must mint p_<sub>_error; have: {places:?}"
+    );
+    // The WIRED failure transition (routes p_failure → p_error), NOT the
+    // dead-end-throw variant that would crash the agent.
+    assert!(
+        transitions.iter().any(|t| t == "t_sub_lookup_fail"),
+        "SubWorkflow tool child must use t_<sub>_fail (route to p_error), not a \
+         dead-end throw; have: {transitions:?}"
+    );
+    assert!(
+        !transitions.iter().any(|t| t == "t_sub_lookup_fail_deadend"),
+        "SubWorkflow tool child must NOT dead-end-throw (would crash the agent); \
+         have: {transitions:?}"
+    );
+    // The agent's Feedback collect-error consumes it (tool name = slugified label).
+    assert!(
+        transitions
+            .iter()
+            .any(|t| t == "t_a_collect_lookup_order_error"),
+        "agent must mint the Feedback collect-error transition for the SubWorkflow \
+         tool; have: {transitions:?}"
+    );
+}
+
+/// Bubble policy on a SubWorkflow tool (no authored error edge, agent error
+/// handle wired): the bubble collector must mint (propagate the tool failure to
+/// the agent's `p_error`), and the Feedback variant must NOT.
+#[test]
+fn subworkflow_tool_bubble_policy_mints_bubble_collector() {
+    let child_id = uuid::Uuid::new_v4();
+    let sub = subworkflow_tool("sub_lookup", "lookup_order", child_id);
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            with_tool_error_policy(agent_node("a"), ToolErrorPolicy::Bubble),
+            sub,
+            end_node("handler"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            // Agent error handle wired so Bubble routes to p_a_error (not a throw).
+            edge_with_handle("e_err", "a", "handler", "error"),
+            tools_edge("et_sub", "a", "sub_lookup"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+    let sub_air = sub_air_with_contract("sub_lookup", child_id, Port::empty_input());
+    let (air, _iface, _configs) = compile_with_sub_air(&graph, &sub_air);
+    let transitions = transition_ids(&air);
+
+    assert!(
+        transitions
+            .iter()
+            .any(|t| t == "t_a_collect_lookup_order_bubble"),
+        "Bubble policy must mint the bubble collector for the SubWorkflow tool; \
+         have: {transitions:?}"
+    );
+    assert!(
+        !transitions
+            .iter()
+            .any(|t| t == "t_a_collect_lookup_order_error"),
+        "Bubble policy must NOT mint the Feedback collect-error variant; \
+         have: {transitions:?}"
+    );
+}
+
 /// A non-tools-handle `WorkflowEdge` whose target is a tool-meta'd node
 /// must be rejected at validate-time. The agent dispatches tools via the
 /// `tools` source handle (the validated kind of incoming edge); any

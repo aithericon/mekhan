@@ -180,6 +180,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         incoming_edges: cx.incoming_edges,
         children: cx.children,
         agent_tools: cx.agent_tools,
+        is_agent_tool: cx.is_agent_tool,
         ctx: &mut *cx.ctx,
         ports: &mut *cx.ports,
         fixups: &mut *cx.fixups,

@@ -709,6 +709,16 @@ fn lower_nodes_topologically<'a>(
     let node_by_id: HashMap<&str, &WorkflowNode> =
         graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut agent_tools_by_id: HashMap<&str, Vec<&WorkflowNode>> = HashMap::new();
+    // Reverse of the above: the set of node ids that are SOMEONE's agent tool
+    // (the target of a `tools`-handled edge). A tool-child node has no normal
+    // outgoing sequence edges (its `error` handle is never authored), so its
+    // failure path would dead-end-throw and crash the agent. The lowering reads
+    // this set via `LoweringCtx::is_agent_tool` to force `error_handled = true`
+    // so the child mints a `p_error` output port the agent's collect-error
+    // wiring consumes — turning a tool-net failure into a tool-result-error fed
+    // back into the agent loop (Feedback) instead of a hard crash.
+    let mut agent_tool_child_ids: std::collections::HashSet<&str> =
+        std::collections::HashSet::new();
     for edge in &graph.edges {
         if edge.source_handle.as_deref() == Some("tools") {
             if let Some(&target) = node_by_id.get(edge.target.as_str()) {
@@ -716,6 +726,7 @@ fn lower_nodes_topologically<'a>(
                     .entry(edge.source.as_str())
                     .or_default()
                     .push(target);
+                agent_tool_child_ids.insert(edge.target.as_str());
             }
         }
     }
@@ -733,6 +744,7 @@ fn lower_nodes_topologically<'a>(
         let agent_tools = agent_tools_by_id
             .get(node.id.as_str())
             .unwrap_or(&empty_children);
+        let is_agent_tool = agent_tool_child_ids.contains(node.id.as_str());
         expand_node(
             node,
             graph,
@@ -740,6 +752,7 @@ fn lower_nodes_topologically<'a>(
             &incoming,
             children,
             agent_tools,
+            is_agent_tool,
             ctx,
             node_ports,
             fixups,

@@ -41,7 +41,16 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // routes child failure to a handler; an UNWIRED handle crashes the net
     // (panic → NetFailed) rather than stranding the failure token in a dead-end
     // `p_error`. Read outgoing edges before the `&mut *cx.ctx` reborrow.
-    let error_handled = super::error_path_wired(cx.outgoing_edges);
+    // A SubWorkflow used as an agent tool has no authored `error` edge, so
+    // `error_path_wired` is false — but its failure MUST surface to the agent's
+    // on_tool_error machinery rather than dead-end-throw and crash the agent.
+    // Forcing `error_handled = true` mints the `p_error` output port + a
+    // t_{id}_fail (NOT t_{id}_fail_deadend) that routes the engine-bridged
+    // failure token into it; the agent's existing collect-error wiring
+    // (apply_agent_tool_wirings) then consumes it (Feedback → tool-result-error
+    // into the loop; Bubble → agent error output). Non-tool SubWorkflows are
+    // unaffected (is_agent_tool == false).
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
 
     // The child AIR is resolved + made-callable + frozen by the publish/preview
     // handler. Absent ⇒ this graph was compiled through a path that doesn't
