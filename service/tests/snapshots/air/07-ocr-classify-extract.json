@@ -1809,12 +1809,6 @@
       "type": "state"
     },
     {
-      "id": "p_classify_error",
-      "name": "Classify (LLM) - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_classify_output",
       "name": "Classify (LLM) - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -1842,12 +1836,6 @@
       "id": "p_extract_text_data",
       "name": "Extract text (Kreuzberg) - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__extract_text",
-      "type": "state"
-    },
-    {
-      "id": "p_extract_text_error",
-      "name": "Extract text (Kreuzberg) - Error",
-      "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
@@ -2325,7 +2313,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "classify/exhausted",
+      "id": "classify/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2349,32 +2337,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Classify (LLM)' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_21",
@@ -3869,7 +3835,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "extract_text/exhausted",
+      "id": "extract_text/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3893,32 +3859,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Extract text (Kreuzberg)' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_extract_text_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_14",
@@ -6611,7 +6555,7 @@
       ]
     },
     {
-      "id": "t_classify_to_error",
+      "id": "t_classify_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6635,32 +6579,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Classify (LLM)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Classify (LLM) - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Classify (LLM) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_classify_to_output",
@@ -6914,7 +6836,7 @@
       ]
     },
     {
-      "id": "t_extract_text_to_error",
+      "id": "t_extract_text_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6938,32 +6860,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Extract text (Kreuzberg)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Extract text (Kreuzberg) - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_extract_text_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Extract text (Kreuzberg) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_extract_text_to_output",

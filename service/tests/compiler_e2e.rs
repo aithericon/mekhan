@@ -48,16 +48,17 @@ fn has_group(air: &Value, id: &str) -> bool {
 
 /// Every transition must have at least one input and one output arc.
 ///
-/// Exception: a Decision's synthesized `t_<id>_deadend` is an intentional
-/// error sink — it consumes the unroutable token and raises (permanent
-/// ScriptError -> ErrorOccurred), so it deliberately has no output arc. The
+/// Exception: a Decision's synthesized `t_<id>_deadend`, an AutomatedStep's
+/// unwired-error `*_deadend` / `t_<id>_panic` crash transitions are intentional
+/// error sinks — they consume a token and raise (permanent ScriptError ->
+/// ErrorOccurred -> NetFailed), so they deliberately have no output arc. The
 /// AIR omits an empty `outputs` field entirely (serde skip_if empty).
 fn assert_all_transitions_wired(air: &Value) {
     for t in transitions(air) {
         let id = t["id"].as_str().unwrap();
         let inputs = t["inputs"].as_array().unwrap();
         assert!(!inputs.is_empty(), "transition {id} has no inputs");
-        if id.ends_with("_deadend") {
+        if id.ends_with("_deadend") || id.ends_with("_panic") {
             continue;
         }
         let outputs = t["outputs"].as_array().unwrap();
@@ -517,10 +518,39 @@ fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() 
         success_out.contains(&"p_render_output") && success_out.contains(&"p_render_release_out"),
         "success exit must arc to BOTH output and release_out, got {success_out:?}"
     );
+    // The render step is UNWIRED (no `error`-handle edge), so under the Rust
+    // panic/Result model its failure crashes the net. The error EXIT must still
+    // release capacity (docs/14 every-exit-releases is non-negotiable) — so
+    // `t_render_to_error` STILL arcs to `release_out` — but instead of parking
+    // into a dead-end `p_render_error` it parks into `p_render_panic_in`, which
+    // a downstream `t_render_panic` throw transition consumes (permanent
+    // ScriptError → NetFailed). There is NO `p_render_error` place.
     let error_out = transition_output_places(&air, "t_render_to_error");
     assert!(
-        error_out.contains(&"p_render_error") && error_out.contains(&"p_render_release_out"),
-        "error exit must arc to BOTH error and release_out, got {error_out:?}"
+        error_out.contains(&"p_render_release_out") && error_out.contains(&"p_render_panic_in"),
+        "error exit must release capacity AND park the panic token, got {error_out:?}"
+    );
+    assert!(
+        !error_out.contains(&"p_render_error"),
+        "unwired error exit must NOT park into a dead-end p_render_error, got {error_out:?}"
+    );
+    assert!(
+        !has_place(&air, "p_render_error"),
+        "unwired pooled step must not create a dead-end p_render_error place"
+    );
+    // The panic transition consumes the released token and throws.
+    assert!(
+        has_transition(&air, "t_render_panic"),
+        "expected a t_render_panic crash transition for the unwired pooled step"
+    );
+    let panic_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_render_panic")
+        .expect("panic transition")["logic"]
+        .to_string();
+    assert!(
+        panic_logic.contains("throw"),
+        "t_render_panic must throw (permanent ScriptError → NetFailed): {panic_logic}"
     );
 
     // The acquire transition registers the hold (plain bridge) AND parks the
