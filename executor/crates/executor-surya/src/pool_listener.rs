@@ -11,6 +11,10 @@
 //! - `POST /v1/ocr/extract` — the OCR primary surface; routes through
 //!   [`crate::adapters::surya::SuryaAdapter`] to the managed Python
 //!   subprocess. See [`crate::ocr_handler`] for request/response shape.
+//! - `POST /v1/execute` — the generic OCR-as-a-step surface (Stage 2).
+//!   Same `SuryaAdapter` routing, but speaks the shared `ExecuteRequest` /
+//!   `ExecuteResponse` envelope every executor pool serves and validates a
+//!   bearer token (unlike `/v1/ocr/extract`). See [`crate::execute_handler`].
 //!
 //! ## Why /v1/ocr/extract is unconditional (not feature-gated)
 //!
@@ -49,6 +53,10 @@ pub async fn spawn_pool_listener(
             }),
         )
         .route("/v1/ocr/extract", post(crate::ocr_handler::ocr_extract))
+        // Generic OCR-as-a-step surface (Stage 2). Same adapter state; the
+        // handler validates the bearer (unlike /v1/ocr/extract) and returns
+        // the canonical outputs map under the shared ExecuteResponse envelope.
+        .route("/v1/execute", post(crate::execute_handler::execute))
         .with_state(adapter);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;

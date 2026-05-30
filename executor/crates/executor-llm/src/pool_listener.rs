@@ -17,6 +17,14 @@
 //!   executor wire shape. See [`crate::inference_handler`] for request/response
 //!   shape and the lease-validation note.
 //!
+//! - `POST /v1/execute` — the generic inference-as-a-step surface (Stage 2).
+//!   Speaks the shared `ExecuteRequest` / `ExecuteResponse` envelope every
+//!   executor pool serves. The body-shaping that used to live engine-side
+//!   (`build_vision_body` / `build_chat_body`) is ported here: the handler
+//!   dispatches on `task_kind` to translate the opaque `input` + `config`
+//!   into a `CompletionRequest`, then calls the same `run_completion` path
+//!   as `/v1/inference`. See [`crate::execute_handler`].
+//!
 //! ## OCR-framing Wave 2 (`kreuzberg` feature)
 //!
 //! When this crate is built with `--features kreuzberg`, the listener
@@ -296,6 +304,12 @@ pub async fn spawn_pool_listener(
             }),
         )
         .route("/v1/inference", axum::routing::post(inference))
+        // Generic inference-as-a-step surface (Stage 2). Shares the
+        // InferenceState with /v1/inference; the handler validates the
+        // bearer, ports the engine's task_kind body-shaping pool-side, and
+        // returns the canonical outputs map under the shared ExecuteResponse
+        // envelope. See [`crate::execute_handler`].
+        .route("/v1/execute", post(crate::execute_handler::execute))
         .with_state(inference_state);
 
     // Workstream #30 model-lifecycle endpoints — additive; same listener,

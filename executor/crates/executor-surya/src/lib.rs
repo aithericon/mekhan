@@ -56,6 +56,7 @@
 pub mod adapters;
 pub mod backend;
 pub mod config;
+pub mod execute_handler;
 pub mod hardware_probe;
 pub mod heartbeat;
 pub mod ocr_handler;
