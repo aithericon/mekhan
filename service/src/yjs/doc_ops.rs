@@ -614,6 +614,99 @@ mod tests {
         }
     }
 
+    /// L3/L4 regression: the loop-scoped `lease` (and the body's
+    /// `Scheduled { run_on_lease }`) MUST survive the Y.Doc round-trip publish
+    /// runs (`reconstruct_graph_from_ydoc` → `doc_to_graph`). The loop's
+    /// `yjs_encode` previously `..`-dropped `lease`, so the live published
+    /// instance lowered as a PLAIN loop (no salloc; body sbatch'd) even though
+    /// offline `compile_to_air` kept it. Same silent-default-drop class as
+    /// `automated_step_input_output_survive_ydoc_roundtrip`.
+    #[test]
+    fn loop_lease_and_run_on_lease_survive_ydoc_roundtrip() {
+        use crate::models::template::{
+            DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding, Port,
+            RetryPolicy, ScheduledOperation, WorkflowEdge, WorkflowNode,
+        };
+
+        let graph = WorkflowGraph {
+            nodes: vec![
+                WorkflowNode {
+                    id: "lp".to_string(),
+                    node_type: "loop".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Loop {
+                        label: "Leased Loop".to_string(),
+                        description: None,
+                        max_iterations: 3,
+                        loop_condition: "true".to_string(),
+                        accumulators: vec![],
+                        lease: Some(LeaseBinding {
+                            scheduler: "slurm_dc".to_string(),
+                            request: None,
+                        }),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                WorkflowNode {
+                    id: "body".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Body".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Python,
+                            entrypoint: Some("main.py".to_string()),
+                            config: serde_json::json!({"python": "python3"}),
+                        },
+                        input: Port::empty_input(),
+                        output: Port::empty_input(),
+                        retry_policy: RetryPolicy::default(),
+                        deployment_model: DeploymentModel::Scheduled {
+                            scheduler: None,
+                            job_template: "mekhan-executor-worker".to_string(),
+                            resources: None,
+                            operation: ScheduledOperation::Submit,
+                            request: None,
+                            run_on_lease: true,
+                        },
+                    },
+                    parent_id: Some("lp".to_string()),
+                    width: None,
+                    height: None,
+                },
+            ],
+            edges: Vec::<WorkflowEdge>::new(),
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        // Y.Doc nodes round-trip via a Y.Map, so order is not preserved — look up by id.
+        let find = |id: &str| &rt.nodes.iter().find(|n| n.id == id).expect("node present").data;
+        match find("lp") {
+            WorkflowNodeData::Loop { lease, .. } => {
+                let lease = lease
+                    .as_ref()
+                    .expect("loop lease must survive Y.Doc round-trip");
+                assert_eq!(lease.scheduler, "slurm_dc");
+            }
+            other => panic!("expected Loop, got {other:?}"),
+        }
+        match find("body") {
+            WorkflowNodeData::AutomatedStep {
+                deployment_model: DeploymentModel::Scheduled { run_on_lease, .. },
+                ..
+            } => assert!(*run_on_lease, "run_on_lease must survive Y.Doc round-trip"),
+            other => panic!("expected Scheduled AutomatedStep, got {other:?}"),
+        }
+    }
+
     /// Pre-fix the slug write side was missing, so `new_version` (and any
     /// other graph→Y.Doc seed) silently dropped the user-set slug. The
     /// reconstructed draft then opened with every node falling back to the

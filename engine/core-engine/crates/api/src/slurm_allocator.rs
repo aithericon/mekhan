@@ -174,14 +174,15 @@ impl SlurmAllocatorClient {
         // handler tolerates a null node.
         let allocation = alloc::scontrol_node(session, &alloc_id).await?;
 
-        let node = allocation
-            .node
-            .map(JsonValue::String)
-            .unwrap_or(JsonValue::Null);
-        let expiry = allocation
-            .expiry
-            .map(JsonValue::String)
-            .unwrap_or(JsonValue::Null);
+        // `Lease__datacenter` (DatacenterLease) types every field as a required
+        // `String`, and the engine validates the grant token against it on
+        // injection into the instance's grant-inbox. So absent node/expiry MUST
+        // be the empty string, NOT null — `salloc --no-shell` with no time limit
+        // has no EndTime, and a still-pending alloc has no NodeList; emitting
+        // null there fails schema validation ("null is not of type string") and
+        // the grant is silently dropped, wedging the claim.
+        let node = JsonValue::String(allocation.node.unwrap_or_default());
+        let expiry = JsonValue::String(allocation.expiry.unwrap_or_default());
 
         Ok(json!({
             "node": node,

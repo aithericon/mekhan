@@ -298,6 +298,26 @@ async fn discover_known_resources(
     let mut heads: BTreeSet<String> = BTreeSet::new();
     let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
     for node in &graph.nodes {
+        // A loop-scoped datacenter lease (`Loop.lease.scheduler`, L3) is a
+        // declared resource binding on the node *data* — and a Loop node hits
+        // the `_ => continue` arm of the backend-config match below, so it MUST
+        // be collected up front (before the continue skips it). `lower_loop`'s
+        // `resolve_binding(.., "datacenter")` needs it in `known_resources`; a
+        // missing alias hard-fails at publish instead of silently lowering a
+        // plain loop. (`Executor.pool` / `Scheduled.scheduler` live on
+        // AutomatedStep nodes, which don't `continue` — collected after the scan.)
+        if let WorkflowNodeData::Loop {
+            lease: Some(binding),
+            ..
+        } = &node.data
+        {
+            let alias = binding.scheduler.trim();
+            if !alias.is_empty() {
+                heads.insert(alias.to_string());
+                declared.push((node.id.clone(), alias.to_string()));
+            }
+        }
+
         // Single projection path: both AutomatedStep and Agent feed the
         // same scanner with the same shape. Agent uses the central
         // `agent_to_llm_config` so any future LLM-backend scan rules
@@ -365,6 +385,23 @@ async fn discover_known_resources(
             if !binding.alias.is_empty() {
                 heads.insert(binding.alias.clone());
                 declared.push((node.id.clone(), binding.alias.clone()));
+            }
+        }
+
+        // A `Scheduled { scheduler: Some(alias) }` step binds a datacenter
+        // directly (submit-to or lease-on a specific cluster).
+        if let WorkflowNodeData::AutomatedStep {
+            deployment_model:
+                crate::models::template::DeploymentModel::Scheduled {
+                    scheduler: Some(alias),
+                    ..
+                },
+            ..
+        } = &node.data
+        {
+            if !alias.is_empty() {
+                heads.insert(alias.clone());
+                declared.push((node.id.clone(), alias.clone()));
             }
         }
     }

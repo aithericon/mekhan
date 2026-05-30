@@ -82,7 +82,8 @@ pub fn test_config() -> AppConfig {
         host: "127.0.0.1".to_string(),
         port: 0,
         database_url: String::new(),
-        petri_lab_url: "http://localhost:13030".to_string(),
+        petri_lab_url: std::env::var("TEST_PETRI_URL")
+            .unwrap_or_else(|_| "http://localhost:13030".to_string()),
         nats_url: nats_url(),
         nats_creds: None,
         cleanup: CleanupConfig::default(),

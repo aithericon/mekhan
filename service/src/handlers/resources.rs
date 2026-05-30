@@ -655,6 +655,15 @@ async fn ensure_pool_net_for_kind(
                 );
                 return;
             };
+            // `scheduler_flavor` (public field) routes the engine's
+            // FlavorDispatchAllocatorClient: `"slurm"` → salloc/scancel over SSH
+            // (the allocator_url/token are unused), else `"http"`. Without this in
+            // the adapter net's effect_config the dispatcher defaults to HTTP and
+            // POSTs the placeholder allocator_url, failing for a Slurm datacenter.
+            let scheduler_flavor = public
+                .get("scheduler_flavor")
+                .and_then(|v| v.as_str())
+                .unwrap_or("http");
             // The token is the only secret field — reference it as a
             // `{{secret:<vault_path>#token}}` template (the same template shape
             // `resource_resolver.rs` emits), resolved by the engine at fire time.
@@ -665,6 +674,7 @@ async fn ensure_pool_net_for_kind(
                 resource_id,
                 allocator_url,
                 &token_secret_ref,
+                scheduler_flavor,
             )
             .await;
         }

@@ -262,19 +262,25 @@ pub fn build_datacenter_lease_adapter_net(
     resource_id: Uuid,
     allocator_url: &str,
     token_secret_ref: &str,
+    scheduler_flavor: &str,
 ) -> ScenarioDefinition {
     let net_id = well_known::pool_net_id(resource_id);
     let mut ctx = Context::new(net_id).description(format!(
-        "Datacenter lease adapter for resource {resource_id} (allocator {allocator_url}). \
-         Holds a lease against an external allocator via the resource_lease engine effects; \
-         grant reply is the typed Lease__datacenter the R2 compiled steps consume."
+        "Datacenter lease adapter for resource {resource_id} (allocator {allocator_url}, \
+         flavor {scheduler_flavor}). Holds a lease against an external allocator via the \
+         resource_lease engine effects; grant reply is the typed Lease__datacenter the R2 \
+         compiled steps consume."
     ));
 
     // The connection passed to BOTH effect transitions. `token` is a
-    // `{{secret:…}}` template resolved at fire time by the engine.
+    // `{{secret:…}}` template resolved at fire time by the engine. `scheduler_flavor`
+    // routes the `FlavorDispatchAllocatorClient` (engine net_registry) to the right
+    // backend per fire — `"slurm"` → salloc/scancel over SSH (allocator_url/token
+    // unused), `"http"` (default) → POST/DELETE against `allocator_url`.
     let effect_config = json!({
         "allocator_url": allocator_url,
         "token": token_secret_ref,
+        "scheduler_flavor": scheduler_flavor,
     });
 
     // Observable hold + terminal records (all DynamicToken — the adapter net
@@ -387,6 +393,7 @@ pub async fn ensure_datacenter_adapter_deployed(
     resource_id: Uuid,
     allocator_url: &str,
     token_secret_ref: &str,
+    scheduler_flavor: &str,
 ) {
     let net_id = well_known::pool_net_id(resource_id);
 
@@ -402,6 +409,7 @@ pub async fn ensure_datacenter_adapter_deployed(
         resource_id,
         allocator_url,
         token_secret_ref,
+        scheduler_flavor,
     )) {
         Ok(v) => v,
         Err(e) => {
@@ -523,6 +531,7 @@ mod tests {
             resource_id,
             "http://allocator.test/leases",
             "{{secret:resources/ws/dc/v1#token}}",
+            "http",
         ))
         .expect("datacenter adapter net serializes to AIR")
     }
