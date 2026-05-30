@@ -16,16 +16,18 @@
 	 *   - Code field: RefPicker for Rhai snippets.
 	 */
 
-	import type { ConfigFieldSpec, NumberField } from '$lib/editor/config-spec/types';
+	import type { ConfigFieldSpec, NumberField, SelectField, Port } from '$lib/editor/config-spec/types';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import type { FieldSpec } from '$lib/fields/spec';
 
 	import { FormField } from '$lib/components/ui/form-field';
+	import { Input } from '$lib/components/ui/input';
 	import FieldWidget from '$lib/fields/FieldWidget.svelte';
 	import CodeEditor from '../shared/CodeEditor.svelte';
 	import RefPicker from '../property-sections/RefPicker.svelte';
 	import ResourcePicker from '../property-sections/shared/ResourcePicker.svelte';
 	import InsertRefButton from '../property-sections/InsertRefButton.svelte';
+	import PortsSection from '../property-sections/PortsSection.svelte';
 	import { appendSnippet } from '$lib/editor/append-snippet';
 
 	type Props = {
@@ -161,6 +163,9 @@
 			allowArrayBoundary={spec.allowArrayBoundary ?? false}
 			onpick={(entry) => onchange(entry.qualified)}
 		/>
+		{#if value}
+			<p class="mt-1 font-mono text-sm text-muted-foreground">{value as string}</p>
+		{/if}
 	</FormField>
 
 {:else if spec.kind === 'resource'}
@@ -203,14 +208,26 @@
 		{/if}
 	</FormField>
 
+{:else if spec.kind === 'port'}
+	<!-- Authoring-slot: PortsSection — full port/field editor. -->
+	{@const portValue = (value as Port | undefined) ?? spec.default ?? { id: 'out', label: 'Element', fields: [] }}
+	<PortsSection
+		port={portValue}
+		{readonly}
+		title={spec.title}
+		emptyHint={spec.emptyHint}
+		onchange={(next) => onchange(next)}
+	/>
+
 {:else if spec.kind === 'textarea'}
-	<!-- Value-input: textarea needs the InsertRefButton; wrap then delegate. -->
+	<!-- Value-input: textarea needs the InsertRefButton + optional clearToUndefined. -->
+	{@const clearToUndefined = spec.clearToUndefined ?? false}
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
 		<FieldWidget
 			spec={fieldWidgetSpec}
 			{value}
 			{readonly}
-			onchange={(next) => onchange(next)}
+			onchange={(next) => onchange(clearToUndefined && next === '' ? undefined : next)}
 		/>
 		{#if scope.length > 0}
 			<div class="mt-1.5">
@@ -252,8 +269,57 @@
 		{/if}
 	</div>
 
+{:else if spec.kind === 'select'}
+	<!-- Value-input: select with optional displayDefault (shown when value is undefined). -->
+	{@const selectSpec = spec as SelectField}
+	{@const displayVal = (value as string | undefined) ?? selectSpec.displayDefault ?? ''}
+	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
+		<FieldWidget
+			spec={fieldWidgetSpec}
+			value={displayVal}
+			{readonly}
+			onchange={(next) => {
+				if (next && next !== '') onchange(next);
+			}}
+		/>
+	</FormField>
+
+{:else if spec.kind === 'text'}
+	<!-- Value-input: text with optional mono styling and InsertRef affordance. -->
+	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
+		{#if spec.mono}
+			<!-- mono text: render Input directly to apply font-mono class -->
+			<Input
+				id={fieldId}
+				type="text"
+				class="font-mono text-sm"
+				value={(value as string | undefined) ?? spec.valueDefault ?? ''}
+				placeholder={spec.placeholder}
+				disabled={readonly}
+				oninput={(e) => onchange((e.currentTarget as HTMLInputElement).value)}
+			/>
+		{:else}
+			<FieldWidget
+				spec={fieldWidgetSpec}
+				value={(value as string | undefined) ?? spec.valueDefault ?? value}
+				{readonly}
+				onchange={(next) => onchange(next)}
+			/>
+		{/if}
+		{#if scope.length > 0}
+			<div class="mt-1.5">
+				<InsertRefButton
+					{scope}
+					{resourceScope}
+					disabled={readonly}
+					oninsert={(snippet) => onchange(appendSnippet(value as string | undefined, snippet))}
+				/>
+			</div>
+		{/if}
+	</FormField>
+
 {:else}
-	<!-- All remaining value-input kinds (text / select / radio / range / rating /
+	<!-- All remaining value-input kinds (radio / range / rating /
 	     date / file / signature / json) delegate directly to FieldWidget. -->
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
 		<FieldWidget

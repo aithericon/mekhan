@@ -29,20 +29,20 @@ import DecisionNodeSection from '$lib/components/editor/panels/property-sections
 import ParallelSplitSection from '$lib/components/editor/panels/property-sections/ParallelSplitSection.svelte';
 import JoinSection from '$lib/components/editor/panels/property-sections/JoinSection.svelte';
 import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
-import MapNodeSection from '$lib/components/editor/panels/property-sections/MapNodeSection.svelte';
 import ScopeSection from '$lib/components/editor/panels/property-sections/ScopeSection.svelte';
-import PhaseUpdateNodeSection from '$lib/components/editor/panels/property-sections/PhaseUpdateNodeSection.svelte';
-// SPIKE: progress_update and delay are now driven by the config-spec layer.
-// The bespoke section files still exist; these wrappers replace the registry
-// entries so the satisfies-check continues to pass over all NodeKind values.
-import ProgressUpdateSpecSection from '$lib/components/editor/panels/config-spec/ProgressUpdateSpecSection.svelte';
 import FailureNodeSection from '$lib/components/editor/panels/property-sections/FailureNodeSection.svelte';
-import DelaySpecSection from '$lib/components/editor/panels/config-spec/DelaySpecSection.svelte';
-import TimeoutNodeSection from '$lib/components/editor/panels/property-sections/TimeoutNodeSection.svelte';
 import TriggerNodeSection from '$lib/components/editor/panels/property-sections/TriggerNodeSection.svelte';
 import SubWorkflowSection from '$lib/components/editor/panels/property-sections/SubWorkflowSection.svelte';
 import AgentNodeSection from '$lib/components/editor/panels/property-sections/AgentNodeSection.svelte';
 import EndNodeSection from '$lib/components/editor/panels/property-sections/EndNodeSection.svelte';
+// Tier-1 spec-layer migrations: delay, progress_update, timeout, phase_update, map.
+// Bespoke section files still exist; these wrappers replace their registry entries
+// so the satisfies-check continues to pass over all NodeKind values.
+import ProgressUpdateSpecSection from '$lib/components/editor/panels/config-spec/ProgressUpdateSpecSection.svelte';
+import DelaySpecSection from '$lib/components/editor/panels/config-spec/DelaySpecSection.svelte';
+import TimeoutSpecSection from '$lib/components/editor/panels/config-spec/TimeoutSpecSection.svelte';
+import PhaseUpdateSpecSection from '$lib/components/editor/panels/config-spec/PhaseUpdateSpecSection.svelte';
+import MapSpecSection from '$lib/components/editor/panels/config-spec/MapSpecSection.svelte';
 
 /**
  * The uniform prop contract NodePropertyPanel dispatches every section with.
@@ -80,13 +80,13 @@ const SECTIONS = {
 	parallel_split: ParallelSplitSection,
 	join: JoinSection,
 	loop: LoopNodeSection,
-	map: MapNodeSection,
+	map: MapSpecSection,
 	scope: ScopeSection,
-	phase_update: PhaseUpdateNodeSection,
+	phase_update: PhaseUpdateSpecSection,
 	progress_update: ProgressUpdateSpecSection,
 	failure: FailureNodeSection,
 	delay: DelaySpecSection,
-	timeout: TimeoutNodeSection,
+	timeout: TimeoutSpecSection,
 	trigger: TriggerNodeSection,
 	sub_workflow: SubWorkflowSection,
 	agent: AgentNodeSection

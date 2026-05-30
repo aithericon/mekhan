@@ -94,3 +94,152 @@ export const PROGRESS_UPDATE_SPEC: NodeConfigSpec = {
 		}
 	]
 };
+
+// ---------------------------------------------------------------------------
+// timeout
+//
+// Original: TimeoutNodeSection.svelte — single Rhai-expression field
+// `durationMsExpr` rendered via GuardEditor (CodeEditor language="rhai" +
+// embedded RefPicker).  We represent this as kind:'code' lang:'rhai',
+// identical to DELAY_SPEC.durationMsExpr — only label and description differ.
+//
+// The bespoke section had two prose blocks:
+//   (1) intro paragraph above the field → folded into field.description
+//   (2) "v1 limitation" paragraph below → appended to field.description
+//
+// Both are preserved as a single description string; the layout delta
+// (note appears above the field rather than below) matches the accepted
+// precedent from progress_update.
+// ---------------------------------------------------------------------------
+export const TIMEOUT_SPEC: NodeConfigSpec = {
+	fields: [
+		{
+			kind: 'code',
+			bind: 'durationMsExpr',
+			label: 'Deadline (ms)',
+			description:
+				'Rhai expression returning the race deadline in milliseconds. The body must complete within this window or the timeout output fires and cancellable in-flight body work is drained (HumanTask, SubWorkflow, nested Delay).\n\nv1 limitation: body cancellation reaches direct body children (one level deep) of cancellable kinds. AutomatedStep body children keep running until completion; nested Timeout/Loop body children are not auto-drained.',
+			lang: 'rhai',
+			minHeight: '40px',
+			maxHeight: '100px'
+		}
+	]
+};
+
+// ---------------------------------------------------------------------------
+// phase_update
+//
+// Original: PhaseUpdateNodeSection.svelte.  Fields:
+//   phaseName   string required — InsertRefButton when scope.length>0
+//   status      optional enum ('running'|'completed'|'failed'|'skipped'),
+//               display-default 'running' (derived, NOT stored until user picks)
+//   message     string optional, clear-to-undefined, InsertRefButton
+//
+// Quirks preserved:
+//   - status: displayDefault:'running' for render-only fallback (not written
+//     on mount; data key stays undefined until user explicitly picks)
+//   - message: clearToUndefined:true (empty string → undefined)
+//   - Both phaseName + message get InsertRefButton via the text/textarea branches
+//     in FieldRenderer (text branch and textarea branch both wire InsertRefButton
+//     when scope.length > 0)
+//
+// The trailing italic advisory ("Effective only within a named process…") is
+// folded into the message field.description tail.
+// ---------------------------------------------------------------------------
+export const PHASE_UPDATE_SPEC: NodeConfigSpec = {
+	fields: [
+		{
+			kind: 'text',
+			bind: 'phaseName',
+			label: 'Phase name',
+			placeholder: 'e.g. Validation',
+			description: 'Required. The named phase to mark on the owning process.'
+		},
+		{
+			kind: 'select',
+			bind: 'status',
+			label: 'Status',
+			displayDefault: 'running',
+			options: [
+				{ value: 'running', label: 'Running' },
+				{ value: 'completed', label: 'Completed' },
+				{ value: 'failed', label: 'Failed' },
+				{ value: 'skipped', label: 'Skipped' }
+			]
+		},
+		{
+			kind: 'textarea',
+			bind: 'message',
+			label: 'Message (optional)',
+			rows: 2,
+			placeholder: 'e.g. Validating invoice {{ invoice_id }}',
+			clearToUndefined: true,
+			description:
+				'{{ ref }} placeholders interpolate fields from this node\'s input scope — use the picker above for the in-scope set.\n\nEffective only within a named process (a Start with a Process Name upstream). Outside one this node passes the token through with no effect.'
+		}
+	]
+};
+
+// ---------------------------------------------------------------------------
+// map
+//
+// Original: MapNodeSection.svelte.  Fields:
+//   itemsRef    optional string ref — allowArrayBoundary:true (Map-specific)
+//   itemVar     optional string — display-default 'item', font-mono
+//   resultVar   optional string — font-mono
+//   output      Port — the new 'port' authoring slot (PortsSection)
+//
+// Quirks preserved:
+//   - itemsRef: allowArrayBoundary:true so array-typed fields are selectable.
+//     FieldRenderer ref branch writes e.qualified and renders the selected-ref
+//     echo line (the {#if value} <p font-mono> block added to FieldRenderer).
+//   - itemVar: valueDefault:'item' — shown as live input value (not placeholder)
+//     when data.itemVar is unset; mono:true for font-mono class.
+//   - resultVar: mono:true. value fallback is '' (no valueDefault).
+//   - output: port slot with synthesized default { id:'out', label:'Element',
+//     fields:[] } and the exact emptyHint string from MapNodeSection.
+//
+// The three italic helper <p> blocks from the bespoke section fold into each
+// field.description; the itemVar derived-echo ({itemVar}.<field>) is folded
+// similarly (minor layout delta accepted — same as progress_update precedent).
+// ---------------------------------------------------------------------------
+export const MAP_SPEC: NodeConfigSpec = {
+	fields: [
+		{
+			kind: 'ref',
+			bind: 'itemsRef',
+			label: 'Items to map over',
+			placeholder: 'Pick an array field…',
+			allowArrayBoundary: true,
+			description:
+				'The body runs once per element, in array order. A non-array value fails the run.'
+		},
+		{
+			kind: 'text',
+			bind: 'itemVar',
+			label: 'Element variable',
+			placeholder: 'item',
+			valueDefault: 'item',
+			mono: true,
+			description:
+				'Each body iteration reads the current element as <itemVar>.<field>. Defaults to "item".'
+		},
+		{
+			kind: 'text',
+			bind: 'resultVar',
+			label: 'Collect field',
+			placeholder: 'e.g. score',
+			mono: true,
+			description: 'One value per element, gathered in order into the collection.'
+		},
+		{
+			kind: 'port',
+			bind: 'output',
+			label: 'Element shape',
+			title: 'Element shape',
+			emptyHint:
+				'No element fields declared. The gathered collection borrows as an untyped array — declare fields to expose typed <map>[*].<field> refs downstream.',
+			default: { id: 'out', label: 'Element', fields: [] }
+		}
+	]
+};
