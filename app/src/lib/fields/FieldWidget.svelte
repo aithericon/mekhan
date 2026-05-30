@@ -19,6 +19,7 @@
 	import type { FieldSpec, SelectOption } from './spec';
 	import type { FIELD_KINDS } from './kind';
 
+	import { cn } from '$lib/utils';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -96,6 +97,13 @@
 		 * Matches SchemaForm's `coerceNumbers` prop.
 		 */
 		coerceNumbers?: boolean;
+		/**
+		 * Optional CSS class string threaded onto the rendered text Input and
+		 * textarea Textarea elements. Allows hosts (e.g. TaskForm) to apply
+		 * their own chrome (rounded-xl, bg-white/80, min-h-[120px]) without
+		 * baking TaskForm-specific styles into this shared renderer.
+		 */
+		class?: string;
 	};
 
 	let {
@@ -106,7 +114,8 @@
 		booleanWidget = 'checkbox',
 		secret = false,
 		secretPlaceholder,
-		coerceNumbers = false
+		coerceNumbers = false,
+		class: klass = ''
 	}: Props = $props();
 
 	// ── derived helpers ───────────────────────────────────────────────────────
@@ -131,7 +140,7 @@
 	<Input
 		id={`field-${spec.name}`}
 		type={secret ? 'password' : 'text'}
-		class={spec.mono ? 'font-mono text-sm' : 'text-sm'}
+		class={cn(spec.mono ? 'font-mono text-sm' : 'text-sm', klass)}
 		data-testid={spec.testid}
 		value={strVal}
 		placeholder={secret ? (secretPlaceholder ?? spec.placeholder) : spec.placeholder}
@@ -147,6 +156,7 @@
 		rows={spec.rows ?? 2}
 		placeholder={spec.placeholder}
 		disabled={readonly}
+		class={cn(klass) || undefined}
 		oninput={(e) => {
 			const v = (e.currentTarget as HTMLTextAreaElement).value;
 			onchange(v);
@@ -361,6 +371,7 @@
 {:else if spec.kind === 'signature'}
 	<SignaturePad
 		id={`field-${spec.name}`}
+		data-testid={spec.testid}
 		value={strVal}
 		penColor={spec.penColor}
 		disabled={readonly}

@@ -38,8 +38,12 @@
 		data,
 		readonly,
 		onchange,
+		binding,
+		nodeId,
+		templateId,
 		scope = [],
-		resourceScope = []
+		resourceScope = [],
+		onselectnode
 	}: Props = $props();
 
 	function handleFieldChange(bind: string, next: unknown) {
@@ -50,15 +54,22 @@
 </script>
 
 <div class="space-y-3">
-	{#each spec.fields as fieldSpec (fieldSpec.bind)}
+	{#each spec.fields as fieldSpec (fieldSpec.kind === 'custom' ? `custom:${(fieldSpec as { component: string }).component}` : (fieldSpec as { bind: string }).bind)}
 		<FieldRenderer
 			spec={fieldSpec}
-			value={getByBind(data as unknown as Record<string, unknown>, fieldSpec.bind)}
+			value={fieldSpec.kind === 'custom' ? undefined : getByBind(data as unknown as Record<string, unknown>, (fieldSpec as { bind: string }).bind)}
 			data={data as unknown as Record<string, unknown>}
 			{scope}
 			{resourceScope}
 			{readonly}
-			onchange={(next) => handleFieldChange(fieldSpec.bind, next)}
+			{binding}
+			{nodeId}
+			{templateId}
+			{onselectnode}
+			onchange={(next) => {
+				if (fieldSpec.kind === 'custom') return;
+				handleFieldChange((fieldSpec as { bind: string }).bind, next);
+			}}
 		/>
 	{/each}
 </div>

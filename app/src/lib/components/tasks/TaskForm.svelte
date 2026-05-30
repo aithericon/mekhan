@@ -2,13 +2,13 @@
 	import type { TaskStep, TaskField } from '$lib/hpi/types';
 	import { BlockRenderer } from '$lib/hpi';
 	import RepeaterBlock from './RepeaterBlock.svelte';
+	import FieldWidget from '$lib/fields/FieldWidget.svelte';
+	import { fromTaskFieldKind } from '$lib/fields/adapters';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as FileDropZone from '$lib/components/ui/file-drop-zone';
 	import { Button } from '$lib/components/ui/button';
-	import { SignaturePad } from '$lib/components/ui/signature-pad';
 	import { Label } from '$lib/components/ui/label';
 	import * as RadioGroup from '$lib/components/ui/radio-group';
 	import * as RatingGroup from '$lib/components/ui/rating-group';
@@ -38,6 +38,37 @@
 		getAtPath,
 		asItemsArray
 	} from './task-form-values.svelte.ts';
+	import type { FieldSpec } from '$lib/fields/spec';
+
+	/**
+	 * Build a FieldSpec from a TaskField for delegation to FieldWidget.
+	 * Only the kinds delegated (text, textarea, signature) need full spec
+	 * coverage; the rest are documented for completeness.
+	 *
+	 * Critically: spec.testid is set to `field-${field.name}` — the EXACT
+	 * selector that focusField() and e2e tests depend on.
+	 */
+	function toFieldSpec(field: TaskField): FieldSpec {
+		return {
+			kind: fromTaskFieldKind(field.kind),
+			name: field.name,
+			label: field.label,
+			testid: `field-${field.name}`,
+			placeholder: field.placeholder,
+			required: field.required,
+			options: field.options,
+			rows: field.kind === 'textarea' ? 4 : undefined,
+			penColor: field.pen_color,
+			min: field.min,
+			max: field.max,
+			step: field.step,
+			maxRating: field.max_rating,
+			includeTime: field.include_time,
+			maxFiles: field.max_files,
+			maxFileSize: field.max_file_size,
+			accept: field.accept
+		};
+	}
 
 	interface Props {
 		steps: TaskStep[];
@@ -430,15 +461,14 @@
 
 					<!-- Field input (ported from HPI FieldRenderer) -->
 					{#if field.kind === 'textarea'}
-						<Textarea
-							id={fieldId}
-							data-testid={`field-${field.name}`}
-							rows={4}
-							placeholder={field.placeholder}
-							class="min-h-[120px] rounded-xl bg-white/80"
+						<!-- Delegated to FieldWidget: spec.testid=`field-${name}` preserves focusField + e2e;
+						     rows=4 + class preserve visual chrome. FieldWidget threads spec.testid onto
+						     the Textarea element and the class prop onto its class attribute. -->
+						<FieldWidget
+							spec={toFieldSpec(field)}
 							value={getTextValue(field.name)}
-							oninput={(event) =>
-								setTextValue(field.name, (event.currentTarget as HTMLTextAreaElement).value)}
+							class="min-h-[120px] rounded-xl bg-white/80"
+							onchange={(v) => setTextValue(field.name, typeof v === 'string' ? v : String(v ?? ''))}
 						/>
 					{:else if field.kind === 'select'}
 						<Select.Root
@@ -508,12 +538,13 @@
 							</ul>
 						{/if}
 					{:else if field.kind === 'signature'}
-						<SignaturePad
-							id={fieldId}
-							data-testid={`field-${field.name}`}
+						<!-- Delegated to FieldWidget: same SignaturePad, same JSON-string value,
+						     same penColor. spec.testid=`field-${name}` threaded onto SignaturePad
+						     (FieldWidget signature branch now renders data-testid={spec.testid}). -->
+						<FieldWidget
+							spec={toFieldSpec(field)}
 							value={getTextValue(field.name)}
-							penColor={field.pen_color}
-							onchange={(val) => setTextValue(field.name, val)}
+							onchange={(v) => setTextValue(field.name, typeof v === 'string' ? v : String(v ?? ''))}
 						/>
 					{:else if field.kind === 'radio'}
 						<RadioGroup.Root
@@ -623,17 +654,29 @@
 								<span class="ml-2 text-sm text-muted-foreground">{currentRating}/{maxRating}</span>
 							{/if}
 						</div>
-					{:else}
-						<!-- text / number -->
+					{:else if field.kind === 'number'}
+						<!-- number: kept bespoke — FieldWidget.number uses secretPlaceholder (not
+						     field.placeholder), so delegating would silently drop the placeholder.
+						     Value stays raw string (setTextValue) for coerceFormData at submit. -->
 						<Input
 							id={fieldId}
 							data-testid={`field-${field.name}`}
-							type={field.kind === 'number' ? 'number' : 'text'}
+							type="number"
 							placeholder={field.placeholder}
 							class="rounded-xl bg-white/80"
 							value={getTextValue(field.name)}
 							oninput={(event) =>
 								setTextValue(field.name, (event.currentTarget as HTMLInputElement).value)}
+						/>
+					{:else}
+						<!-- text: delegated to FieldWidget. spec.testid=`field-${name}` preserves
+						     focusField + e2e. class prop threads rounded-xl bg-white/80 chrome.
+						     Value stays raw string via setTextValue (coerceFormData unchanged). -->
+						<FieldWidget
+							spec={toFieldSpec(field)}
+							value={getTextValue(field.name)}
+							class="rounded-xl bg-white/80"
+							onchange={(v) => setTextValue(field.name, typeof v === 'string' ? v : String(v ?? ''))}
 						/>
 					{/if}
 

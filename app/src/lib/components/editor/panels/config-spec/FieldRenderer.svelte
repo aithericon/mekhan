@@ -16,9 +16,12 @@
 	 *   - Code field: RefPicker for Rhai snippets.
 	 */
 
-	import type { ConfigFieldSpec, NumberField, SelectField, Port, MappingField, FieldMapping } from '$lib/editor/config-spec/types';
+	import type { ConfigFieldSpec, NumberField, SelectField, Port, MappingField, FieldMapping, CustomField } from '$lib/editor/config-spec/types';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import type { FieldSpec } from '$lib/fields/spec';
+	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import type { WorkflowNodeData } from '$lib/types/editor';
+	import { resolveCustom } from '$lib/editor/config-spec/custom-registry';
 
 	import { FormField } from '$lib/components/ui/form-field';
 	import { Input } from '$lib/components/ui/input';
@@ -45,6 +48,15 @@
 		readonly?: boolean;
 		/** Called with the next value for `spec.bind` whenever the field changes. */
 		onchange: (next: unknown) => void;
+		// ── Section context forwarded to 'custom' slot components ──────────────
+		/** Yjs graph binding — forwarded verbatim to custom components. */
+		binding?: YjsGraphBinding;
+		/** The node id of the node being configured. */
+		nodeId?: string;
+		/** The template id of the template being configured. */
+		templateId?: string;
+		/** Callback to select a node in the graph (used by Entrypoints). */
+		onselectnode?: (id: string) => void;
 	};
 
 	let {
@@ -54,7 +66,11 @@
 		scope = [],
 		resourceScope = [],
 		readonly = false,
-		onchange
+		onchange,
+		binding,
+		nodeId,
+		templateId,
+		onselectnode
 	}: Props = $props();
 
 	// ---------------------------------------------------------------------------
@@ -124,14 +140,21 @@
 	// ---------------------------------------------------------------------------
 	// Derived label — number fields with transform:'clamp01' show a live pct%
 	// suffix mirroring the original ProgressUpdateNodeSection behaviour.
+	//
+	// CustomField has label/bind as optional (it doesn't extend FieldBase); all
+	// other kinds always have label and bind. The custom branch never uses these
+	// derived values, but we must handle the optional safely for TypeScript.
 	// ---------------------------------------------------------------------------
+	const specLabel = $derived((spec as { label?: string }).label ?? '');
+	const specBind = $derived((spec as { bind?: string }).bind ?? spec.kind);
+
 	const fieldLabel = $derived(
 		spec.kind === 'number' && (spec as NumberField).transform === 'clamp01'
-			? `${spec.label} — ${Math.round(((value as number) ?? 0) * 100)}%`
-			: spec.label
+			? `${specLabel} — ${Math.round(((value as number) ?? 0) * 100)}%`
+			: specLabel
 	);
 
-	const fieldId = $derived(`field-${spec.bind}`);
+	const fieldId = $derived(`field-${specBind}`);
 
 	// ---------------------------------------------------------------------------
 	// Build a FieldSpec for the canonical FieldWidget from the ConfigFieldSpec.
@@ -140,13 +163,18 @@
 	// ---------------------------------------------------------------------------
 	const fieldWidgetSpec = $derived.by((): FieldSpec => {
 		// All ConfigFieldSpec value-input variants share FieldBase; authoring slots
-		// are handled before this is used. We build a FieldSpec from the common fields
-		// plus per-kind extras.
+		// (ref / resource / code / port / mapping / custom) are handled before this
+		// is used. We build a FieldSpec from the common fields plus per-kind extras.
+		// Custom fields never reach the FieldWidget, but we must produce a valid
+		// FieldSpec to satisfy the type (the value is never consumed).
+		if (spec.kind === 'custom') {
+			return { name: 'custom', kind: 'text', label: '' };
+		}
 		const base: FieldSpec = {
-			name: spec.bind,
+			name: specBind,
 			kind: spec.kind as FieldSpec['kind'],
 			label: fieldLabel,
-			description: spec.description,
+			description: (spec as { description?: string }).description,
 			readonly
 		};
 		// Per-kind extras
@@ -353,6 +381,9 @@
 				</div>
 			{/each}
 		{/if}
+		{#if mappingSpec.footer}
+			<p class="text-sm text-muted-foreground">{mappingSpec.footer}</p>
+		{/if}
 	</div>
 
 {:else if spec.kind === 'textarea'}
@@ -430,14 +461,23 @@
 	<!-- Value-input: text — delegates to FieldWidget (which now applies font-mono
 	     when fieldWidgetSpec.mono is true). Config-spec concerns preserved:
 	     - valueDefault read-through: value = (data[bind] ?? spec.valueDefault) passed in.
+	     - clearToNull: empty string → null (for processName opt-out).
 	     - InsertRefButton: rendered below when scope.length > 0.
 	     - mono class: carried via fieldWidgetSpec.mono → FieldWidget applies it. -->
+	{@const textSpec = spec as { valueDefault?: string; clearToNull?: boolean }}
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
 		<FieldWidget
 			spec={fieldWidgetSpec}
-			value={(value as string | undefined) ?? (spec as { valueDefault?: string }).valueDefault ?? ''}
+			value={(value as string | undefined) ?? textSpec.valueDefault ?? ''}
 			{readonly}
-			onchange={(next) => onchange(next)}
+			onchange={(next) => {
+				const v = next as string;
+				if (textSpec.clearToNull && v === '') {
+					onchange(null);
+				} else {
+					onchange(v);
+				}
+			}}
 		/>
 		{#if scope.length > 0}
 			<div class="mt-1.5">
@@ -450,6 +490,33 @@
 			</div>
 		{/if}
 	</FormField>
+
+{:else if spec.kind === 'custom'}
+	<!-- Escape-hatch: resolve by registry KEY and mount the bespoke component,
+	     spreading the full section context so it is indistinguishable from a
+	     standalone bespoke section. field.props (static scalar config) is spread
+	     LAST; its keys MUST NOT collide with the section-context keys above. -->
+	{@const customSpec = spec as CustomField}
+	{@const Comp = resolveCustom(customSpec.component)}
+	{#if Comp}
+		<Comp
+			data={data as unknown as WorkflowNodeData}
+			{onchange}
+			{scope}
+			{resourceScope}
+			{readonly}
+			{binding}
+			{nodeId}
+			{templateId}
+			{onselectnode}
+			{...(customSpec.props ?? {})}
+		/>
+	{:else}
+		<!-- Dev guard: unknown registry key. Visible, non-fatal placeholder so a
+		     stale/missing key surfaces in the editor instead of silently dropping
+		     the whole region. -->
+		<p class="text-sm text-destructive">Unknown custom field: {customSpec.component}</p>
+	{/if}
 
 {:else}
 	<!-- All remaining value-input kinds (radio / range / rating /

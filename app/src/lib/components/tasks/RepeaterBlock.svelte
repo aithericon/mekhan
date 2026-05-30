@@ -9,6 +9,7 @@
 	// row's element.
 	import type { TaskBlock, TaskField } from '$lib/hpi/types';
 	import { BlockRenderer } from '$lib/hpi';
+	import { fromTaskFieldKind } from '$lib/fields/adapters';
 
 	type NonInputBlock = Exclude<TaskBlock, { type: 'input' } | { type: 'repeater' }>;
 	import * as Select from '$lib/components/ui/select';
@@ -122,6 +123,7 @@
 {#snippet inputField(field: TaskField, rowIndex: number)}
 	{@const errKey = `${output_slug}.${rowIndex}.${field.name}`}
 	{@const fieldId = `field-${output_slug}-${rowIndex}-${field.name}`}
+	{@const canonicalKind = fromTaskFieldKind(field.kind)}
 	<div class="space-y-2" data-testid={`repeater-${output_slug}-${rowIndex}-${field.name}`}>
 		<Label for={fieldId} class="text-sm font-medium text-foreground">
 			{field.label}
@@ -130,7 +132,7 @@
 			{/if}
 		</Label>
 
-		{#if field.kind === 'textarea'}
+		{#if canonicalKind === 'textarea'}
 			<Textarea
 				id={fieldId}
 				data-testid={`field-${errKey}`}
@@ -146,7 +148,8 @@
 						(event.currentTarget as HTMLTextAreaElement).value
 					)}
 			/>
-		{:else if field.kind === 'checkbox'}
+		{:else if canonicalKind === 'bool'}
+			<!-- wire value 'checkbox' → canonical 'bool'; render internals unchanged -->
 			<div class="flex items-center gap-3 py-1">
 				<Checkbox
 					id={fieldId}
@@ -159,7 +162,7 @@
 					Yes
 				</Label>
 			</div>
-		{:else if field.kind === 'select'}
+		{:else if canonicalKind === 'select'}
 			<Select.Root
 				type="single"
 				value={getText(output_slug, rowIndex, field.name)}
@@ -184,11 +187,13 @@
 				</Select.Content>
 			</Select.Root>
 		{:else}
-			<!-- text / number / fallback -->
+			<!-- text / number / fallback: all other canonical kinds (radio/range/rating/date/
+			     file/signature/json) degrade intentionally to a plain text/number Input here.
+			     Per-row dotted testids are load-bearing and delegation would break them. -->
 			<Input
 				id={fieldId}
 				data-testid={`field-${errKey}`}
-				type={field.kind === 'number' ? 'number' : 'text'}
+				type={canonicalKind === 'number' ? 'number' : 'text'}
 				placeholder={field.placeholder}
 				class="rounded-lg bg-white/80"
 				value={getText(output_slug, rowIndex, field.name)}

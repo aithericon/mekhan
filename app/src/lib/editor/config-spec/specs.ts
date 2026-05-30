@@ -1,9 +1,12 @@
 /**
  * SPIKE — config-spec/specs.ts
  *
- * One NodeConfigSpec per migrated Tier-1 node.  Fields faithfully reproduce
+ * One NodeConfigSpec per migrated node.  Fields faithfully reproduce
  * what the bespoke section components offered (same data keys, same labels,
  * same widget semantics).
+ *
+ * This file is PURE DATA — it never imports .svelte files. Custom component
+ * references are string keys resolved via custom-registry.ts at runtime.
  */
 
 import type { NodeConfigSpec } from './types';
@@ -301,6 +304,108 @@ export const FAILURE_SPEC: NodeConfigSpec = {
 			newRow: { targetField: '', expression: 'input' },
 			emptyHint:
 				'The error envelope still carries the failure message as error.reason; adding fields attaches a structured error.value.'
+		}
+	]
+};
+
+// ---------------------------------------------------------------------------
+// end
+//
+// Original: EndNodeSection.svelte — single FieldMapping[] list editor with a
+// RefPicker as the primary widget, auto-fill-targetField on pick when blank,
+// and a trailing explanatory <p> footer.
+//
+// Mapped to:
+//   (1) MappingField { bind:'resultMapping', source.widget:'refpicker',
+//       autoFillTargetWhenBlank:true } — reproduces the list editor 1:1,
+//       including testids (btn-add-result-mapping, input-result-target),
+//       the rename-preserve auto-fill policy, and per-row RefPicker/Input/Trash.
+//   (2) footer on the MappingField — the trailing explanatory prose rendered
+//       after the list (plain text; the <code>{ ok: true, value }</code> in
+//       the original empty-state hint is preserved as plain text, minor
+//       cosmetic regression accepted per design).
+//
+// The label 'Result mapping' is rendered by the mapping branch header; no
+// custom slot is needed.  Parity confidence: HIGH.
+// ---------------------------------------------------------------------------
+export const END_SPEC: NodeConfigSpec = {
+	fields: [
+		{
+			kind: 'mapping',
+			bind: 'resultMapping',
+			label: 'Result mapping',
+			addTestid: 'btn-add-result-mapping',
+			target: {
+				placeholder: 'result_field',
+				testid: 'input-result-target'
+			},
+			source: {
+				widget: 'refpicker',
+				placeholder: 'Pick source field…',
+				autoFillTargetWhenBlank: true
+			},
+			newRow: { targetField: '', expression: '' },
+			emptyHint:
+				'No result. The workflow completes with no structured return — fully backward-compatible. Add one or more fields to build the success envelope ({ ok: true, value }) returned to callers.',
+			footer:
+				'Each row borrows a field from upstream (the compiler synthesizes a non-consuming read-arc) and assembles the success envelope. Rename the left field to publish under a different key. A Failure node upstream takes precedence — its error envelope is preserved instead of overwritten.'
+		}
+	]
+};
+
+// ---------------------------------------------------------------------------
+// start
+//
+// Original: StartNodeSection.svelte — three regions:
+//   (1) Process name: text Input with empty→null coercion + InsertRefButton.
+//   (2) Initial token fields: PortsSection for the `initial` Port.
+//   (3) Entrypoints: bespoke graph-relational trigger list + 'Add trigger'.
+//
+// Mapped to:
+//   (1) TextField { bind:'processName', clearToNull:true } — the text branch
+//       already wires InsertRefButton when scope.length>0; clearToNull:true
+//       collapses '' → null (not undefined/''), matching the bespoke coercion.
+//   (2) PortField { bind:'initial' } — drop-in onto the existing port slot;
+//       identical PortsSection + verbatim write-back; synthesized sentinel
+//       { id:'in', label:'Input', fields:[] } matches the bespoke default.
+//       MUST preserve id:'in' so trigger edges' targetHandle pins correctly.
+//   (3) CustomField { kind:'custom', component:'start.entrypoints' } — the
+//       bespoke graph-relational Entrypoints region registered in custom-registry.ts.
+//       Receives full section context (binding, nodeId, onselectnode) verbatim.
+//
+// Parity notes:
+//   - processName clearToNull: empty → null (not undefined/''). Bespoke code:
+//       onchange({ ...data, processName: value.length ? value : null })
+//     FieldRenderer text branch with clearToNull:true emits null for '' exactly.
+//   - initial sentinel: id:'in' (used by trigger edge targetHandle); matches
+//     what StartNodeSection synthesizes: data.initial ?? { id:'in', label:'Input', fields:[] }
+//   - Entrypoints testids: start-entrypoints, btn-add-trigger, trigger-link —
+//     all owned by StartEntrypoints.svelte (verbatim lift, no testid change).
+// ---------------------------------------------------------------------------
+export const START_SPEC: NodeConfigSpec = {
+	fields: [
+		{
+			kind: 'text',
+			bind: 'processName',
+			label: 'Process name',
+			placeholder: "e.g. Invoice {{ invoice_id }}",
+			clearToNull: true,
+			description:
+				'Optional. When set, each instance registers a named process (shown in the process list and completed when the workflow ends). {{ ref }} placeholders interpolate initial-token fields declared below. Leave empty to opt out.'
+		},
+		{
+			kind: 'port',
+			bind: 'initial',
+			label: 'Initial token fields',
+			title: 'Initial token fields',
+			emptyHint:
+				'No initial fields. Instances of this template will start with an empty token (system fields only). Add fields to require typed input at instance creation.',
+			default: { id: 'in', label: 'Input', fields: [] }
+		},
+		{
+			kind: 'custom',
+			component: 'start.entrypoints',
+			testid: 'start-entrypoints-wrapper'
 		}
 	]
 };

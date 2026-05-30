@@ -32,10 +32,15 @@ export type FieldMapping = components['schemas']['FieldMapping'];
 /**
  * Authoring-only slot kinds that pick WHERE a value comes from, not what
  * widget to render for a data type. FieldRenderer handles these itself
- * (RefPicker / ResourcePicker / CodeEditor / PortsSection / inline mapping);
- * they are never passed to FieldWidget.
+ * (RefPicker / ResourcePicker / CodeEditor / PortsSection / inline mapping /
+ * bespoke custom component via registry). They are never passed to FieldWidget.
+ *
+ * 'custom' is an escape-hatch for graph-relational or otherwise irreducibly
+ * bespoke regions that cannot be expressed by the flat-data-binding slots.
+ * The component is resolved from a string KEY via custom-registry.ts — specs
+ * stay pure data (no .svelte imports), preserving serializability.
  */
-export type AuthoringSlotKind = 'ref' | 'resource' | 'code' | 'port' | 'mapping';
+export type AuthoringSlotKind = 'ref' | 'resource' | 'code' | 'port' | 'mapping' | 'custom';
 
 // ---------------------------------------------------------------------------
 // ConfigFieldKind — the full config-spec vocabulary
@@ -83,6 +88,13 @@ export type TextField = FieldBase & {
 	 * Writes from oninput still store whatever the user typed verbatim.
 	 */
 	valueDefault?: string;
+	/**
+	 * When true an empty string is collapsed to `null` (NOT undefined) before
+	 * writing back. Required for optional fields that must store null when
+	 * cleared, matching the wire shape (e.g. Start.processName which coerces
+	 * empty → null so the named-process opt-out is explicit).
+	 */
+	clearToNull?: boolean;
 };
 export type TextareaField = FieldBase & {
 	kind: 'textarea';
@@ -237,6 +249,50 @@ export type MappingField = FieldBase & {
 	newRow: { targetField: string; expression: string };
 	/** Copy shown in the dashed empty-state <p> when the array is empty. */
 	emptyHint: string;
+	/**
+	 * Optional static prose rendered BELOW the list (after both the empty-state
+	 * hint and any rows). Used for explanatory notes like End's read-arc advisory.
+	 * Plain text only — no HTML.
+	 */
+	footer?: string;
+};
+
+/**
+ * Escape-hatch authoring slot: mounts a bespoke component by registry KEY.
+ *
+ * The registered component receives the FULL section context (data, onchange,
+ * scope, resourceScope, nodeId, templateId, binding, onselectnode) so it can
+ * act as an embedded bespoke sub-panel exactly as it did standalone. The
+ * component is resolved from `component` (the KEY) via custom-registry.ts —
+ * NOT imported by specs.ts, keeping specs pure data / serializable.
+ *
+ * Keys are namespaced `<node>.<region>` (e.g. 'start.entrypoints') to avoid
+ * collisions and make ownership obvious.
+ *
+ * Most custom slots are graph/api-relational and bind nothing — `bind` is
+ * OPTIONAL for this reason; getByBind/setByBind are never invoked when absent.
+ * When present, `bind` names the data key the component may read/write.
+ *
+ * `props` carries optional STATIC scalar config only (variant flags etc.);
+ * no functions/components — preserves serializability. Keys in `props` MUST
+ * NOT collide with SectionProps keys (data, onchange, scope, resourceScope,
+ * nodeId, templateId, binding, onselectnode, readonly).
+ */
+export type CustomField = {
+	kind: 'custom';
+	/** Registry key used to look up the bespoke component (see custom-registry.ts). */
+	component: string;
+	/** Optional section heading rendered by the wrapper; omit for chrome-less embeds. */
+	label?: string;
+	/**
+	 * Optional data key the component reads/writes. Most custom slots are
+	 * graph-relational and bind nothing; omit those.
+	 */
+	bind?: string;
+	/** Optional wrapper data-testid; the bespoke component owns its own inner testids. */
+	testid?: string;
+	/** Optional STATIC scalar config forwarded to the component as extra props. */
+	props?: Record<string, string | number | boolean>;
 };
 
 export type ConfigFieldSpec =
@@ -253,12 +309,13 @@ export type ConfigFieldSpec =
 	| FileField
 	| SignatureField
 	| JsonField
-	// authoring-slot kinds (5)
+	// authoring-slot kinds (6: ref / resource / code / port / mapping / custom)
 	| RefField
 	| ResourceField
 	| CodeField
 	| PortField
-	| MappingField;
+	| MappingField
+	| CustomField;
 
 // ---------------------------------------------------------------------------
 // NodeConfigSpec — the full spec for one node type

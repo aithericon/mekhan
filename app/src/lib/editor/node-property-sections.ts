@@ -22,7 +22,6 @@ import type { NodeKind, WorkflowNodeData } from '$lib/types/editor';
 import type { ScopeEntry } from '$lib/editor/guard-scope';
 import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 
-import StartNodeSection from '$lib/components/editor/panels/property-sections/StartNodeSection.svelte';
 import HumanTaskSectionWrapper from '$lib/components/editor/panels/property-sections/HumanTaskSectionWrapper.svelte';
 import AutomatedStepSectionWrapper from '$lib/components/editor/panels/property-sections/AutomatedStepSectionWrapper.svelte';
 import DecisionNodeSection from '$lib/components/editor/panels/property-sections/DecisionNodeSection.svelte';
@@ -30,12 +29,11 @@ import ParallelSplitSection from '$lib/components/editor/panels/property-section
 import JoinSection from '$lib/components/editor/panels/property-sections/JoinSection.svelte';
 import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
 import ScopeSection from '$lib/components/editor/panels/property-sections/ScopeSection.svelte';
-import FailureSpecSection from '$lib/components/editor/panels/config-spec/FailureSpecSection.svelte';
 import TriggerNodeSection from '$lib/components/editor/panels/property-sections/TriggerNodeSection.svelte';
 import SubWorkflowSection from '$lib/components/editor/panels/property-sections/SubWorkflowSection.svelte';
 import AgentNodeSection from '$lib/components/editor/panels/property-sections/AgentNodeSection.svelte';
-import EndNodeSection from '$lib/components/editor/panels/property-sections/EndNodeSection.svelte';
-// Tier-1 spec-layer migrations: delay, progress_update, timeout, phase_update, map.
+// Tier-1 spec-layer migrations: delay, progress_update, timeout, phase_update, map, failure.
+// Tier-2 spec-layer migrations: start, end.
 // Bespoke section files still exist; these wrappers replace their registry entries
 // so the satisfies-check continues to pass over all NodeKind values.
 import ProgressUpdateSpecSection from '$lib/components/editor/panels/config-spec/ProgressUpdateSpecSection.svelte';
@@ -43,6 +41,9 @@ import DelaySpecSection from '$lib/components/editor/panels/config-spec/DelaySpe
 import TimeoutSpecSection from '$lib/components/editor/panels/config-spec/TimeoutSpecSection.svelte';
 import PhaseUpdateSpecSection from '$lib/components/editor/panels/config-spec/PhaseUpdateSpecSection.svelte';
 import MapSpecSection from '$lib/components/editor/panels/config-spec/MapSpecSection.svelte';
+import FailureSpecSection from '$lib/components/editor/panels/config-spec/FailureSpecSection.svelte';
+import EndSpecSection from '$lib/components/editor/panels/config-spec/EndSpecSection.svelte';
+import StartSpecSection from '$lib/components/editor/panels/config-spec/StartSpecSection.svelte';
 
 /**
  * The uniform prop contract NodePropertyPanel dispatches every section with.
@@ -72,8 +73,8 @@ export type SectionProps = {
 // instead of an intersection of every section's narrower Props. The cast is
 // sound because every section reads a subset of `SectionProps`.
 const SECTIONS = {
-	start: StartNodeSection,
-	end: EndNodeSection,
+	start: StartSpecSection,
+	end: EndSpecSection,
 	human_task: HumanTaskSectionWrapper,
 	automated_step: AutomatedStepSectionWrapper,
 	decision: DecisionNodeSection,
