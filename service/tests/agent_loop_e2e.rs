@@ -172,7 +172,7 @@ fn compile(nodes: Vec<WorkflowNode>, edges: Vec<WorkflowEdge>) -> Value {
         edges,
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     compile_to_air(&graph, "t", "", &std::collections::HashMap::new()).expect("compile")
 }
@@ -646,7 +646,7 @@ fn incoming_edge_to_tool_child_is_validation_error() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect_err("non-tools-handle edge into tool child must reject");
@@ -891,7 +891,7 @@ fn tool_input_schema_reflects_declared_input_port() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> = Default::default();
     let files = mekhan_service::compiler::node_files_inline(&inline);
@@ -974,7 +974,7 @@ fn tool_input_schema_reflects_declared_input_port() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let CompileArtifacts {
         node_configs: configs2,
@@ -1016,7 +1016,7 @@ fn duplicate_tool_name_is_compile_error() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect_err("duplicate tool name must fail");
@@ -1175,7 +1175,7 @@ fn subworkflow_tool_input_schema_reflects_child_start() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let sub_air = sub_air_with_contract("sub_lookup", child_id, contract);
     let (air, _iface, configs) = compile_with_sub_air(&graph, &sub_air);
@@ -1259,7 +1259,7 @@ fn subworkflow_tool_empty_child_start_is_permissive() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let sub_air = sub_air_with_contract("sub_lookup", child_id, Port::empty_input());
     let (_air, _iface, configs) = compile_with_sub_air(&graph, &sub_air);

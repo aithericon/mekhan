@@ -199,13 +199,39 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 format!("{label} - Grant Inbox"),
                 "grant",
             );
-            // Claim bridge_out, routing the pool's "grant" reply back to grant_inbox.
+            // Held-allocation-death reply inbox (docs/16 §7 fail-fast). The
+            // lease-adapter net's `t_lease_died` routes a `{ grant_id }` failure
+            // token here over the "fail" reply channel when the held salloc /
+            // dispatched drain-executor dies mid-lease. A register transition
+            // parks it write-once so the loop's continue-guard can READ-ARC it
+            // (non-consuming) — the in-flight iteration's completion can't
+            // re-arm the loop once failure is parked (§7.3).
+            let lease_failed_inbox_place = format!("p_{id}_lease_failed");
+            let p_lease_failed_inbox: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
+                lease_failed_inbox_place.clone(),
+                format!("{label} - Lease Failed Inbox"),
+                "fail",
+            );
+            // Parked lease-failure flag (write-once) the continue-guard read-arcs
+            // and `t_lease_abort` consumes (alongside the live body token) to
+            // fail-fast.
+            let p_lease_failed: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_lease_failed_parked"),
+                format!("{label} - Lease Failed (parked)"),
+            );
+            // Claim bridge_out, routing the pool's "grant" reply back to
+            // grant_inbox AND the "fail" reply (held-alloc death) back to the
+            // lease-failed inbox. Both channels ride the SAME claim token's reply
+            // routing so the death signal reaches the right instance/loop.
             let p_claim_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
                 format!("p_{id}_claim_out"),
                 format!("{label} - Claim Lease"),
                 pool_net_id,
                 well_known::POOL_CLAIM_INBOX,
-                &[("grant", grant_inbox_place.as_str())],
+                &[
+                    ("grant", grant_inbox_place.as_str()),
+                    ("fail", lease_failed_inbox_place.as_str()),
+                ],
             );
             // Register + release bridges are PLAIN (no reply routing) so the
             // pool's recycled capacity tokens stay clean (docs/14 taint note).
@@ -285,6 +311,53 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 ))
                 .logic_rhai("#{ output: input, release: #{ grant_id: held.grant_id } }")
                 .done();
+
+            // ── Fail-fast on held-allocation death (docs/16 §7) ─────────────
+            // t_{id}_lease_failed_register — park the held-alloc-death notice
+            // write-once into `p_{id}_lease_failed_parked`. A register step
+            // (rather than abort consuming the inbox directly) keeps the death
+            // observation DURABLE: once parked, `t_lease_abort` can consume the
+            // parked counter to fail fast even if the body is still mid-flight
+            // (no `body_out` yet) — the failure is not lost while waiting.
+            ctx.transition(
+                format!("t_{id}_lease_failed_register"),
+                format!("{label} - Register Lease Failure"),
+            )
+            .auto_input("fail", &p_lease_failed_inbox)
+            .auto_output("flag", &p_lease_failed)
+            .logic_rhai("#{ flag: #{ grant_id: fail.grant_id, failed: true } }")
+            .done();
+
+            // t_{id}_lease_abort — fail fast. CONSUME the parked iteration
+            // envelope `p_{id}_data` (which `t_continue` AND `t_exit` both
+            // require) so once a failure is parked the loop can NEVER re-arm or
+            // exit normally — this is the structural short-circuit the §7.3
+            // Review note demands, and it is INDEPENDENT of `body_out` (the held
+            // alloc can die while the body is still running, before any
+            // `body_out` arrives). Then `throw` a permanent ScriptError → the
+            // engine emits ErrorOccurred + NetFailed (the existing
+            // panic-on-unconnected-failure / subworkflow-failure-propagation
+            // machinery carries it to the caller, symmetric with the success
+            // reply). The parked failure flag is read-arced (non-consuming) so a
+            // duplicate death signal can't double-fire abort once the counter is
+            // gone — it just finds no `p_{id}_data` and stays disabled.
+            let d_fail = format!("df_{}", id.replace('-', "_"));
+            let d_counter = format!("dc_{}", id.replace('-', "_"));
+            let abort_msg = format!(
+                "loop {}: held lease allocation died mid-run — failing fast (the salloc / drain \
+                 executor is gone; enqueuing the next iteration would hang in a dead namespace)",
+                label
+            );
+            ctx.transition(
+                format!("t_{id}_lease_abort"),
+                format!("{label} - Lease Died (abort)"),
+            )
+            .auto_input(d_counter.clone(), &p_data)
+            .read_input(d_fail.clone(), &p_lease_failed)
+            .guard_rhai(format!("{d_fail}.failed == true"))
+            .priority("100")
+            .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&abort_msg)))
+            .done();
         }
     }
 

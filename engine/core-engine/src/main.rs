@@ -303,61 +303,24 @@ async fn main() {
         }));
     }
 
-    // Start NomadWatcher if Nomad backend is configured
-    #[cfg(feature = "nomad")]
-    let _nomad_watcher_handle = {
-        let nomad_cfg = petri_nomad::NomadConfig::from_env();
-        if let (Some(nomad_cfg), Some("nomad")) =
-            (nomad_cfg, engine_config.scheduler_backend.as_deref())
-        {
-            match petri_nomad::NomadWatcher::new(nomad_cfg.clone(), jetstream.clone()).await {
-                Ok(watcher) => {
-                    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
-                    info!(addr = %nomad_cfg.addr, "Starting Nomad event watcher");
-                    let handle = tokio::spawn(async move {
-                        watcher.run(shutdown_rx).await;
-                    });
-                    Some((handle, shutdown_tx))
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to create NomadWatcher");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    };
-
-    // Start SlurmWatcher if Slurm backend is configured
-    #[cfg(feature = "slurm")]
-    let _slurm_watcher_handle = {
-        if let (Some(slurm_cfg), Some("slurm")) = (
-            petri_slurm::SlurmConfig::from_env(),
-            engine_config.scheduler_backend.as_deref(),
-        ) {
-            match petri_slurm::SlurmWatcher::new(slurm_cfg.clone(), jetstream.clone()).await {
-                Ok(watcher) => {
-                    let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
-                    info!(
-                        host = %slurm_cfg.ssh_host,
-                        user = %slurm_cfg.ssh_user,
-                        "Starting Slurm poll watcher"
-                    );
-                    let handle = tokio::spawn(async move {
-                        watcher.run(shutdown_rx).await;
-                    });
-                    Some((handle, shutdown_tx))
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to create SlurmWatcher");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    };
+    // Multi-cluster scheduling (docs/16): the engine no longer starts ONE
+    // boot-time Slurm/Nomad watcher from env. Instead it constructs a
+    // `ClusterRegistry` that lazily builds a per-`(resource_id, version)`
+    // `ClusterClient` (allocator + per-cluster watcher) on the first lease/submit
+    // that references it, from the connection riding the effect_config, and
+    // idle-tears-down a cluster when no leases reference it. The registry is
+    // installed on the `NetRegistry` below (before the first `get_or_create`) and
+    // held here for the `GET /api/clusters` management surface.
+    //
+    // The single dev-bootstrap env path (`SLURM_SSH_HOST`/`NOMAD_ADDR` set, no
+    // datacenter resource) is preserved by `NetRegistry::build_env_flavor_dispatch`
+    // — when no registry is installed the legacy env dispatcher serves, so
+    // `just dev slurm-up`/`scheduler-up` keep working. (A future phase can also
+    // pre-build a dev-bootstrap `ClusterClient` under the reserved `_env` key.)
+    #[cfg(any(feature = "slurm", feature = "nomad"))]
+    let cluster_registry = std::sync::Arc::new(
+        petri_api::cluster_registry::ClusterRegistry::new(jetstream.clone()),
+    );
 
     // Create global executor SSE broadcast channel + backfill buffer
     #[cfg(feature = "executor")]
@@ -412,6 +375,12 @@ async fn main() {
     registry.set_subworkflow_cancellor(Arc::new(
         petri_api::net_registry::RegistryCancellor::new(registry.clone()),
     ));
+
+    // Install the multi-cluster ClusterRegistry BEFORE the first get_or_create
+    // so every net's resource_lease handlers route through it (docs/16). Must
+    // precede any net instantiation (the pre-dispatch freeze + handler wiring).
+    #[cfg(any(feature = "slurm", feature = "nomad"))]
+    registry.set_cluster_registry(cluster_registry.clone());
 
     // Start HibernationMaster (watches activity KV, hibernates idle nets)
     if let Some(ref activity) = activity_tracker {
@@ -492,6 +461,16 @@ async fn main() {
     // Net-scoped router (no default net — all access is via /api/nets/{net_id}/*)
     let mut app = create_router_with_registry(registry.clone());
 
+    // First-class cluster/watcher management (docs/16 §9): GET /api/clusters +
+    // force-reconnect/drain over the live `ClusterRegistry`. mekhan reads this
+    // through as /api/v1/clusters.
+    #[cfg(any(feature = "slurm", feature = "nomad"))]
+    {
+        app = app.merge(petri_api::cluster_routes::cluster_routes(
+            cluster_registry.clone(),
+        ));
+    }
+
     // Add net metadata discovery + deletion endpoints (requires metadata KV)
     if let Some(kv) = metadata_kv_for_api {
         let discovery_state = NetDiscoveryState {
@@ -550,16 +529,9 @@ async fn main() {
     // Signal shutdown to all event consumers
     shutdown_token.cancel();
 
-    #[cfg(feature = "nomad")]
-    if let Some((handle, shutdown_tx)) = _nomad_watcher_handle {
-        let _ = shutdown_tx.send(());
-        handle.abort();
-    }
-    #[cfg(feature = "slurm")]
-    if let Some((handle, shutdown_tx)) = _slurm_watcher_handle {
-        let _ = shutdown_tx.send(());
-        handle.abort();
-    }
+    // Per-cluster Slurm/Nomad watchers are owned by the `ClusterRegistry` now
+    // (lazy + idle-torn-down); they stop on idle-teardown / cancel rather than a
+    // boot-time shutdown handle (docs/16).
     #[cfg(feature = "executor")]
     if let Some((handle, shutdown_tx)) = _executor_watcher_handle {
         let _ = shutdown_tx.send(());
@@ -1176,6 +1148,15 @@ async fn delete_net_handler(
 
     // Case 1: Hot net — terminate properly (emits NetCancelled, cancels tasks)
     if state.registry.get(&net_id).is_some() {
+        // docs/16 §8 — pre-terminate hook: release any cluster lease HELD on
+        // behalf of this instance BEFORE we tear down the eval loop. `terminate`
+        // hibernates the loop before it can reach its natural `t_release`, so
+        // without this the held salloc / dispatched drain executor + the cluster
+        // watcher + SSH socket would leak. The release is best-effort + idempotent
+        // (404-tolerant), so a double-cancel or a cancel racing a natural release
+        // is harmless.
+        #[cfg(any(feature = "slurm", feature = "nomad"))]
+        state.registry.release_held_leases_for_instance(&net_id).await;
         match state
             .registry
             .terminate(

@@ -712,6 +712,124 @@
         }
       }
     },
+    "/api/v1/clusters": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "GET /api/v1/clusters",
+        "description": "List every live cluster client the engine's multi-cluster `ClusterRegistry`\nholds — connection health, watcher state, checkpoint cursor, active-lease\ncount, last-signal timestamp, last error — joined with the backing\ndatacenter resource's human name. Read-through of the engine's\n`GET /api/clusters`.",
+        "operationId": "list_clusters",
+        "responses": {
+          "200": {
+            "description": "Live cluster clients",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClustersResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine cluster API unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clusters/{resource_id}/drain": {
+      "post": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "POST /api/v1/clusters/{resource_id}/drain",
+        "description": "Gracefully drain a cluster: the engine refuses new leases for it, lets\nin-flight leases finish, then idle-tears it down. Read-through of the\nengine's `POST /api/clusters/{resource_id}/drain`.",
+        "operationId": "drain_cluster",
+        "parameters": [
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "Datacenter resource id (or `_env`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Drain requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterActionResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine cluster API unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clusters/{resource_id}/reconnect": {
+      "post": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "POST /api/v1/clusters/{resource_id}/reconnect",
+        "description": "Force-reconnect a cluster: the engine drops the watcher + allocator session\nso the next fire rebuilds the client. Read-through of the engine's\n`POST /api/clusters/{resource_id}/reconnect`.",
+        "operationId": "reconnect_cluster",
+        "parameters": [
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "Datacenter resource id (or `_env`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reconnect requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterActionResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine cluster API unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/compile": {
       "post": {
         "tags": [
@@ -6669,6 +6787,123 @@
               "$ref": "#/components/schemas/LlmToolCall"
             },
             "description": "For `role: assistant` — the tool calls the model emitted this turn."
+          }
+        }
+      },
+      "ClusterActionResponse": {
+        "type": "object",
+        "description": "Outcome of a lifecycle action (`reconnect` / `drain`).",
+        "required": [
+          "resource_id",
+          "action",
+          "applied"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`reconnect` | `drain`."
+          },
+          "applied": {
+            "type": "boolean",
+            "description": "`true` when the cluster was live and the action applied; `false` when no\nsuch cluster is currently resident (a no-op)."
+          },
+          "resource_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterSummary": {
+        "type": "object",
+        "description": "One live cluster's observable state, as surfaced to the control plane.\n\nMirrors the engine's `ClusterView` payload, enriched with the human name of\nthe backing datacenter resource (`path` / `display_name`) when it resolves.",
+        "required": [
+          "resource_id",
+          "version",
+          "flavor",
+          "connection_health",
+          "watcher_state",
+          "active_lease_count",
+          "draining"
+        ],
+        "properties": {
+          "active_lease_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Held leases + in-flight submits referencing this cluster."
+          },
+          "connection_health": {
+            "type": "string",
+            "description": "`connected` | `reconnecting` | `down` | `unknown`."
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last checkpoint cursor (poll timestamp / Nomad event index), if recorded."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The datacenter resource's human display name, when it resolves."
+          },
+          "draining": {
+            "type": "boolean",
+            "description": "Whether this cluster is draining (refusing new leases)."
+          },
+          "flavor": {
+            "type": "string",
+            "description": "Allocator dialect: `http` | `slurm` | `nomad`."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last connection/watcher error, if any."
+          },
+          "last_signal_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC3339 timestamp of the most recent signal delivery, if any."
+          },
+          "resource_id": {
+            "type": "string",
+            "description": "The datacenter `resource_id` (a UUID), or `\"_env\"` for the single\nenv-driven dev-bootstrap cluster."
+          },
+          "resource_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The datacenter resource's snake_case `path` (e.g. `prod_slurm`), when the\n`resource_id` resolves to a row. `None` for `_env` / deleted resources."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The datacenter resource version this client was built from."
+          },
+          "watcher_state": {
+            "type": "string",
+            "description": "`streaming` | `reconnecting` | `stopped` | `no_watcher`."
+          }
+        }
+      },
+      "ClustersResponse": {
+        "type": "object",
+        "description": "`GET /api/v1/clusters` response.",
+        "required": [
+          "clusters"
+        ],
+        "properties": {
+          "clusters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterSummary"
+            }
           }
         }
       },
@@ -13305,6 +13540,13 @@
           "edges"
         ],
         "properties": {
+          "default_scheduler": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Template-level default `datacenter` resource alias. A\n`Scheduled`/leased node whose own `scheduler` is absent inherits this\n(the second rung of the selection chain — node ?? template ??\nworkspace ?? error; see `docs/16-multi-cluster-scheduling.md` §6). Lives\non the graph JSON so it travels with the template + the Yjs doc.\n`None` = no template default (fall through to the workspace default)."
+          },
           "definitions": {
             "type": "object",
             "description": "Workflow-scoped reusable JSON-Schema fragments. Referenced from\n`executionSpec.config` (today: LLM `response_format.schema`) as\n`{\"$ref\": \"#/definitions/<name>\"}` and inlined at compile time by\n`compiler::schema_refs::inline_refs`. Local pointers only; external\n`$ref`s and JSON-Schema 2020-12 sibling-key merge semantics are\nrejected at validation. BTreeMap for byte-stable compile output.",
@@ -14501,6 +14743,10 @@
     {
       "name": "admin",
       "description": "Operator-only maintenance — remove / reseed the built-in demo workflows."
+    },
+    {
+      "name": "clusters",
+      "description": "Multi-cluster scheduling control plane — live datacenter cluster clients (connection health, watcher state, active leases) + force-reconnect / drain (read-through of the engine `ClusterRegistry`)."
     }
   ]
 }

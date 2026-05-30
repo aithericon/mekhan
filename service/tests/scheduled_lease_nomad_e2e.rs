@@ -233,7 +233,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     }
 }
 

@@ -559,6 +559,25 @@ pub(super) fn resolve_binding(
         return Err(wrong_kind());
     }
 
+    // Flavor-gated connection validation for datacenters. Both the per-step
+    // `Scheduled.scheduler` lease path and the loop `Loop.lease.scheduler`
+    // path funnel through here, so this is the single choke point. We assert
+    // the PUBLIC connection fields the flavor needs are present; the required
+    // SECRET (slurm `ssh_key`) is structurally guaranteed by the resource-create
+    // validator. Hard-fail with no fallback.
+    if kind == "datacenter" {
+        if let Some(missing) =
+            datacenter_missing_connection_fields(&resource.public_config)
+        {
+            return Err(CompileError::DatacenterConnectionIncomplete {
+                node_id: node_id.to_string(),
+                alias: alias.to_string(),
+                flavor: missing.0,
+                missing: missing.1,
+            });
+        }
+    }
+
     // Validate `request` against the kind's claim_schema before we bake it into
     // the ClaimRequest. Same `jsonschema` crate/version the engine
     // `SchemaRegistry` uses, so compile-time and runtime agree.
@@ -596,6 +615,55 @@ pub(super) fn resolve_binding(
         lease_schema: sanitize_definition_schema((pool_desc.lease_schema)()),
         request_rhai,
     })
+}
+
+/// Validate a `datacenter` resource's public connection config against its
+/// declared `scheduler_flavor`. Returns `Some((flavor, missing_fields))` when
+/// a flavor's required PUBLIC fields are absent, else `None`.
+///
+/// Required public fields per flavor (the matching secret is enforced by the
+/// resource-create validator, not here):
+/// - `slurm` → `ssh_host`, `ssh_user`, `template_dir`
+/// - `nomad` → `nomad_addr`
+/// - `http`  → `allocator_url`
+///
+/// An unknown/absent flavor is treated as "http" (the default leg). A field
+/// counts as present when it's a non-null, non-empty-string JSON value.
+pub(super) fn datacenter_missing_connection_fields(
+    public_config: &serde_json::Value,
+) -> Option<(String, Vec<String>)> {
+    let present = |key: &str| -> bool {
+        match public_config.get(key) {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+            Some(_) => true,
+        }
+    };
+
+    let flavor = public_config
+        .get("scheduler_flavor")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http")
+        .to_string();
+
+    let required: &[&str] = match flavor.as_str() {
+        "slurm" => &["ssh_host", "ssh_user", "template_dir"],
+        "nomad" => &["nomad_addr"],
+        // "http" and any unrecognized flavor fall back to the HTTP leg.
+        _ => &["allocator_url"],
+    };
+
+    let missing: Vec<String> = required
+        .iter()
+        .filter(|k| !present(k))
+        .map(|k| (*k).to_string())
+        .collect();
+
+    if missing.is_empty() {
+        None
+    } else {
+        Some((flavor, missing))
+    }
 }
 
 /// Drop schemars' root-only envelope keys (`$schema`, `title`) so a
@@ -1138,4 +1206,63 @@ fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Opt
             _ => None,
         }
     })
+}
+
+#[cfg(test)]
+mod datacenter_connection_tests {
+    use super::datacenter_missing_connection_fields;
+    use serde_json::json;
+
+    #[test]
+    fn slurm_complete_is_ok() {
+        let cfg = json!({
+            "scheduler_flavor": "slurm",
+            "ssh_host": "login.test",
+            "ssh_user": "runner",
+            "template_dir": "/opt/jobs",
+        });
+        assert!(datacenter_missing_connection_fields(&cfg).is_none());
+    }
+
+    #[test]
+    fn slurm_missing_host_and_dir() {
+        let cfg = json!({ "scheduler_flavor": "slurm", "ssh_user": "runner" });
+        let (flavor, missing) = datacenter_missing_connection_fields(&cfg).expect("incomplete");
+        assert_eq!(flavor, "slurm");
+        assert_eq!(missing, vec!["ssh_host".to_string(), "template_dir".to_string()]);
+    }
+
+    #[test]
+    fn slurm_empty_string_counts_as_missing() {
+        let cfg = json!({
+            "scheduler_flavor": "slurm",
+            "ssh_host": "   ",
+            "ssh_user": "runner",
+            "template_dir": "/opt/jobs",
+        });
+        let (_, missing) = datacenter_missing_connection_fields(&cfg).expect("blank is missing");
+        assert_eq!(missing, vec!["ssh_host".to_string()]);
+    }
+
+    #[test]
+    fn nomad_needs_addr() {
+        let ok = json!({ "scheduler_flavor": "nomad", "nomad_addr": "http://nomad:4646" });
+        assert!(datacenter_missing_connection_fields(&ok).is_none());
+        let bad = json!({ "scheduler_flavor": "nomad" });
+        let (flavor, missing) = datacenter_missing_connection_fields(&bad).expect("incomplete");
+        assert_eq!(flavor, "nomad");
+        assert_eq!(missing, vec!["nomad_addr".to_string()]);
+    }
+
+    #[test]
+    fn http_default_needs_allocator_url() {
+        // Absent flavor falls back to the http leg.
+        let bad = json!({});
+        let (flavor, missing) = datacenter_missing_connection_fields(&bad).expect("incomplete");
+        assert_eq!(flavor, "http");
+        assert_eq!(missing, vec!["allocator_url".to_string()]);
+
+        let ok = json!({ "scheduler_flavor": "http", "allocator_url": "http://a.test" });
+        assert!(datacenter_missing_connection_fields(&ok).is_none());
+    }
 }

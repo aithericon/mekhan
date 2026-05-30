@@ -91,6 +91,14 @@ fn descriptor_or_400(
 /// `[a-z][a-z0-9_]*` shape as resource paths, see [`IDENT_REGEX`]).
 const KV_KEYS_FIELD: &str = "__kv_keys";
 
+/// Internal marker key R1 stashes in a `datacenter` resource's `public_config`
+/// when (and only when) the optional `nomad_token` secret was supplied. mekhan
+/// can't see Vault from the deploy path, so this public sentinel tells the
+/// adapter-net builder whether to thread the `{{secret:…#nomad_token}}` template
+/// (present → authenticated Nomad) or omit it (absent → unauthenticated Nomad).
+/// Underscore-prefixed so it can't collide with a real connection field name.
+const NOMAD_TOKEN_SENTINEL: &str = "__has_nomad_token";
+
 /// Split a raw config map into `(public, secret)` JsonMaps based on the
 /// descriptor's field lists. Strays (keys that match neither list) become
 /// a structured 400 so the picker can highlight the offending field.
@@ -100,6 +108,77 @@ const KV_KEYS_FIELD: &str = "__kv_keys";
 /// `public_config.__kv_keys`, and the strays / required-fields gates are
 /// replaced by a per-key identifier-safety check.
 #[allow(clippy::type_complexity)]
+/// Authoritative create/update validation for `datacenter` resources: a
+/// `scheduler_flavor` must carry the connection fields that flavor needs so a
+/// half-configured cluster can never be persisted (let alone reach a fire).
+/// This is the belt-and-suspenders gate; the compiler re-asserts the PUBLIC
+/// fields at publish (`DatacenterConnectionIncomplete`) so the editor can
+/// highlight the offending node. No-op for every non-`datacenter` kind.
+///
+/// Required per flavor:
+/// - `slurm` → public `ssh_host`, `ssh_user`, `template_dir` + secret `ssh_key`
+/// - `nomad` → public `nomad_addr`
+/// - `http`  → public `allocator_url`
+///
+/// A field counts as present when it's a non-null, non-empty-string value.
+fn validate_datacenter_connection(
+    resource_type: &str,
+    public: &JsonMap<String, Value>,
+    secret: &JsonMap<String, Value>,
+) -> Result<(), ApiError> {
+    if resource_type != "datacenter" {
+        return Ok(());
+    }
+
+    let present = |map: &JsonMap<String, Value>, key: &str| -> bool {
+        match map.get(key) {
+            None | Some(Value::Null) => false,
+            Some(Value::String(s)) => !s.trim().is_empty(),
+            Some(_) => true,
+        }
+    };
+
+    let flavor = public
+        .get("scheduler_flavor")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http")
+        .to_string();
+
+    // (field, is_secret) pairs the flavor requires.
+    let required: &[(&str, bool)] = match flavor.as_str() {
+        "slurm" => &[
+            ("ssh_host", false),
+            ("ssh_user", false),
+            ("template_dir", false),
+            ("ssh_key", true),
+        ],
+        "nomad" => &[("nomad_addr", false)],
+        // "http" and any unrecognized flavor fall back to the HTTP leg.
+        _ => &[("allocator_url", false)],
+    };
+
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|(field, is_secret)| {
+            let map = if *is_secret { secret } else { public };
+            !present(map, field)
+        })
+        .map(|(field, _)| *field)
+        .collect();
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "datacenter (flavor '{flavor}') is missing required connection \
+                 field(s): {missing:?}"
+            ),
+        ))
+    }
+}
+
 fn split_config(
     descriptor: &aithericon_resources::ResourceTypeDescriptor,
     config: Value,
@@ -501,6 +580,7 @@ pub async fn create_resource(
     }
     let descriptor = descriptor_or_400(&req.resource_type)?;
     let (public, secret) = split_config(descriptor, req.config)?;
+    validate_datacenter_connection(&req.resource_type, &public, &secret)?;
 
     let workspace_id = req.workspace_id.unwrap_or_else(|| caller_workspace(&user));
     let resource_id = Uuid::new_v4();
@@ -647,36 +727,87 @@ async fn ensure_pool_net_for_kind(
             .await;
         }
         "datacenter" => {
-            // `allocator_url` is a required public field of the Datacenter kind.
-            let Some(allocator_url) = public.get("allocator_url").and_then(|v| v.as_str()) else {
-                tracing::warn!(
-                    %resource_id,
-                    "datacenter resource has no `allocator_url` in public_config; skipping adapter-net deploy"
-                );
-                return;
-            };
-            // `scheduler_flavor` (public field) routes the engine's
-            // FlavorDispatchAllocatorClient: `"slurm"` → salloc/scancel over SSH
-            // (the allocator_url/token are unused), else `"http"`. Without this in
-            // the adapter net's effect_config the dispatcher defaults to HTTP and
-            // POSTs the placeholder allocator_url, failing for a Slurm datacenter.
+            // `scheduler_flavor` (public field) is the discriminant: it picks the
+            // per-flavor connection the engine's `ClusterRegistry` builds a client
+            // from — `"slurm"` → SSH salloc/scancel, `"nomad"` → Nomad API,
+            // `"http"` (default) → POST/DELETE against `allocator_url`. The
+            // per-flavor connection fields all ride ON the resource (docs/16 §1).
             let scheduler_flavor = public
                 .get("scheduler_flavor")
                 .and_then(|v| v.as_str())
-                .unwrap_or("http");
-            // The token is the only secret field — reference it as a
-            // `{{secret:<vault_path>#token}}` template (the same template shape
-            // `resource_resolver.rs` emits), resolved by the engine at fire time.
+                .unwrap_or("http")
+                .to_string();
+
+            // Secret fields (`token`, `ssh_key`, `nomad_token`) are referenced as
+            // `{{secret:<vault_path>#<field>}}` templates (the same shape
+            // `resource_resolver.rs` emits), resolved by the engine at fire time
+            // (`firing.rs` `resolve_secrets`) — never in the AIR/event log. Only
+            // the secret the flavor actually carries is threaded.
             let vault_path = vault_path_for(workspace_id, resource_id, version);
-            let token_secret_ref = format!("{{{{secret:{vault_path}#token}}}}");
-            crate::petri::pool_net::ensure_datacenter_adapter_deployed(
-                &state.petri,
+            let secret_ref = |field: &str| format!("{{{{secret:{vault_path}#{field}}}}}");
+
+            // String/number readers off the public_config blob.
+            let s = |k: &str| public.get(k).and_then(|v| v.as_str()).map(String::from);
+            let port = |k: &str| {
+                public
+                    .get(k)
+                    .and_then(|v| v.as_u64())
+                    .and_then(|n| u16::try_from(n).ok())
+            };
+
+            // Validate-by-flavor: the required connection fields must be present
+            // (publish-time + create-time validation in R1 is the authoritative
+            // gate, but the net can't be deployed without them either). Skip the
+            // adapter-net deploy when malformed (best-effort — the resource CRUD
+            // already succeeded).
+            let required_present = match scheduler_flavor.as_str() {
+                "slurm" => public.get("ssh_host").and_then(|v| v.as_str()).is_some(),
+                "nomad" => public.get("nomad_addr").and_then(|v| v.as_str()).is_some(),
+                // http (or unknown) → needs allocator_url
+                _ => public.get("allocator_url").and_then(|v| v.as_str()).is_some(),
+            };
+            if !required_present {
+                tracing::warn!(
+                    %resource_id,
+                    scheduler_flavor,
+                    "datacenter resource is missing its flavor's required connection field in \
+                     public_config; skipping adapter-net deploy (R1 publish/create validation \
+                     is the authoritative gate)"
+                );
+                return;
+            }
+
+            let conn = crate::petri::pool_net::DatacenterConnection {
                 resource_id,
-                allocator_url,
-                &token_secret_ref,
-                scheduler_flavor,
-            )
-            .await;
+                resource_version: version,
+                scheduler_flavor: scheduler_flavor.clone(),
+
+                allocator_url: s("allocator_url"),
+                token_secret_ref: matches!(scheduler_flavor.as_str(), "http")
+                    .then(|| secret_ref("token")),
+
+                ssh_host: s("ssh_host"),
+                ssh_port: port("ssh_port"),
+                ssh_user: s("ssh_user"),
+                ssh_known_hosts: s("ssh_known_hosts"),
+                template_dir: s("template_dir"),
+                ssh_key_secret_ref: (scheduler_flavor == "slurm")
+                    .then(|| secret_ref("ssh_key")),
+
+                nomad_addr: s("nomad_addr"),
+                nomad_region: s("nomad_region"),
+                // nomad_token is the optional nomad-leg secret. Whether the
+                // resource actually carries it lives in Vault, not public_config,
+                // so mekhan can't tell from here — R1 surfaces its presence via
+                // the `NOMAD_TOKEN_SENTINEL` key it stashes in public_config when
+                // (and only when) the secret was supplied. Absent sentinel →
+                // unauthenticated Nomad, omit the key entirely (docs/16 §2.1).
+                nomad_token_secret_ref: (scheduler_flavor == "nomad"
+                    && public.contains_key(NOMAD_TOKEN_SENTINEL))
+                .then(|| secret_ref("nomad_token")),
+            };
+
+            crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
         }
         _ => {}
     }
@@ -949,6 +1080,7 @@ pub async fn rotate_resource(
 
     let descriptor = descriptor_or_400(&row.resource_type)?;
     let (public, secret) = split_config(descriptor, req.config)?;
+    validate_datacenter_connection(&row.resource_type, &public, &secret)?;
 
     let principal_id = user.subject_as_uuid();
     let new_version = row.latest_version + 1;

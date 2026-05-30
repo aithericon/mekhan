@@ -379,7 +379,7 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         }
     }
 

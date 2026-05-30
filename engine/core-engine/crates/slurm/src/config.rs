@@ -108,7 +108,59 @@ impl Default for SlurmConfig {
     }
 }
 
+/// Resolved Slurm connection parameters parsed from a datacenter resource's
+/// `effect_config` (NOT process env).
+///
+/// This is the multi-cluster analogue of [`SlurmConfig::from_env`]: the
+/// `ClusterRegistry` parses the resolved effect_config into one of these and
+/// hands it to [`SlurmConfig::from_connection`]. Only the connection-shaping
+/// fields are carried; the polling/timeout knobs keep their defaults (the
+/// resource models a *cluster connection*, not the watcher's cadence).
+///
+/// `ssh_key` is the inline PEM the caller has ALREADY written to a 0600 temp
+/// file — pass that file PATH here (mirroring [`SlurmConfig::ssh_key`], which is
+/// a path field, not key material). `None` falls back to the default key path.
+#[derive(Clone, Debug, Default)]
+pub struct SlurmConnectionParams {
+    /// Login node hostname *(required)*.
+    pub ssh_host: String,
+    /// SSH port (default: 22 when `None`).
+    pub ssh_port: Option<u16>,
+    /// SSH username *(required)*.
+    pub ssh_user: String,
+    /// Path to the SSH private key the registry materialised from the inline
+    /// PEM secret (default `~/.ssh/id_rsa` when `None`).
+    pub ssh_key: Option<String>,
+    /// Known-hosts check mode: `strict` / `add` / `accept` (default `strict`).
+    pub ssh_known_hosts: Option<String>,
+    /// Job-script template directory on the login node (default
+    /// `/opt/petri/templates` when `None`).
+    pub template_dir: Option<String>,
+}
+
 impl SlurmConfig {
+    /// Build configuration from an explicit resolved connection (the datacenter
+    /// resource's `effect_config`), NOT env.
+    ///
+    /// Connection-shaping fields come from `params`; the polling/timeout/lookback
+    /// knobs keep [`SlurmConfig::default`] values (the resource describes a cluster
+    /// connection, not the watcher cadence). `ssh_key` is the temp-file PATH the
+    /// registry wrote the inline PEM to.
+    pub fn from_connection(params: SlurmConnectionParams) -> Self {
+        let defaults = SlurmConfig::default();
+        SlurmConfig {
+            ssh_host: params.ssh_host,
+            ssh_port: params.ssh_port.unwrap_or(defaults.ssh_port),
+            ssh_user: params.ssh_user,
+            ssh_key: params.ssh_key.unwrap_or(defaults.ssh_key),
+            ssh_known_hosts: params.ssh_known_hosts.unwrap_or(defaults.ssh_known_hosts),
+            poll_interval_secs: defaults.poll_interval_secs,
+            template_dir: params.template_dir.unwrap_or(defaults.template_dir),
+            lookback_window_secs: defaults.lookback_window_secs,
+            command_timeout_secs: defaults.command_timeout_secs,
+        }
+    }
+
     /// Create configuration from environment variables.
     ///
     /// Returns `None` if `SLURM_SSH_HOST` is not set, indicating Slurm is not configured.
@@ -195,5 +247,43 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(config.destination(), "alice@slurm-login.cluster");
+    }
+
+    #[test]
+    fn test_from_connection_full() {
+        let config = SlurmConfig::from_connection(SlurmConnectionParams {
+            ssh_host: "login.hpc".to_string(),
+            ssh_port: Some(2222),
+            ssh_user: "bob".to_string(),
+            ssh_key: Some("/tmp/petri-key-abc".to_string()),
+            ssh_known_hosts: Some("accept".to_string()),
+            template_dir: Some("/scratch/petri/templates".to_string()),
+        });
+        assert_eq!(config.ssh_host, "login.hpc");
+        assert_eq!(config.ssh_port, 2222);
+        assert_eq!(config.ssh_user, "bob");
+        assert_eq!(config.ssh_key, "/tmp/petri-key-abc");
+        assert_eq!(config.ssh_known_hosts, "accept");
+        assert_eq!(config.template_dir, "/scratch/petri/templates");
+        // Watcher cadence/timeout knobs keep their defaults (not on the connection).
+        assert_eq!(config.poll_interval_secs, 5);
+        assert_eq!(config.lookback_window_secs, 3600);
+        assert_eq!(config.command_timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_from_connection_defaults_optional_fields() {
+        // Only the required fields supplied; the rest fall back to defaults.
+        let config = SlurmConfig::from_connection(SlurmConnectionParams {
+            ssh_host: "login.hpc".to_string(),
+            ssh_user: "carol".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(config.ssh_host, "login.hpc");
+        assert_eq!(config.ssh_user, "carol");
+        assert_eq!(config.ssh_port, 22);
+        assert_eq!(config.ssh_key, "~/.ssh/id_rsa");
+        assert_eq!(config.ssh_known_hosts, "strict");
+        assert_eq!(config.template_dir, "/opt/petri/templates");
     }
 }

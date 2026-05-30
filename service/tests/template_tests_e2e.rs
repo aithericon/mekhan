@@ -322,7 +322,7 @@ async fn seed_template_with_human_task(
         edges: Vec::<WorkflowEdge>::new(),
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let graph_json = serde_json::to_value(&graph).unwrap();
 

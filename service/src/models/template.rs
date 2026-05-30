@@ -95,6 +95,14 @@ pub struct WorkflowGraph {
     /// rejected at validation. BTreeMap for byte-stable compile output.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub definitions: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Template-level default `datacenter` resource alias. A
+    /// `Scheduled`/leased node whose own `scheduler` is absent inherits this
+    /// (the second rung of the selection chain — node ?? template ??
+    /// workspace ?? error; see `docs/16-multi-cluster-scheduling.md` §6). Lives
+    /// on the graph JSON so it travels with the template + the Yjs doc.
+    /// `None` = no template default (fall through to the workspace default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_scheduler: Option<String>,
 }
 
 fn is_default_instance_concurrency(c: &InstanceConcurrencyPolicy) -> bool {
@@ -2287,7 +2295,7 @@ impl WorkflowGraph {
             }],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         }
     }
 }
@@ -3065,6 +3073,7 @@ mod tests {
             viewport: None,
             instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
             definitions: defs,
+            default_scheduler: None,
         };
         let s = serde_json::to_string(&graph).unwrap();
         let parsed: WorkflowGraph = serde_json::from_str(&s).unwrap();
@@ -3081,6 +3090,7 @@ mod tests {
             viewport: None,
             instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
             definitions: std::collections::BTreeMap::new(),
+            default_scheduler: None,
         };
         let s2 = serde_json::to_string(&empty).unwrap();
         assert!(!s2.contains("definitions"));

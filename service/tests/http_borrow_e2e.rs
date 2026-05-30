@@ -175,7 +175,7 @@ fn graph(http_url: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     }
 }
 

@@ -891,6 +891,7 @@ mod tests {
             viewport: None,
             instance_concurrency: Default::default(),
             definitions: std::collections::BTreeMap::new(),
+            default_scheduler: None,
         };
         let err = validate_schema_refs(&graph).expect_err("unresolved ref must fail");
         match err {
@@ -920,6 +921,7 @@ mod tests {
             viewport: None,
             instance_concurrency: Default::default(),
             definitions,
+            default_scheduler: None,
         };
         validate_schema_refs(&graph).expect("resolved ref must pass");
     }

@@ -182,6 +182,20 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         })
         .unwrap_or_default();
 
+    // -- default_scheduler: read the top-level Y.Map written by
+    // graph_to_doc_with_files (`{ alias }`). Absent → None.
+    let default_scheduler = txn.get_map("defaultScheduler").and_then(|m| match m.get(&txn, "alias") {
+        Some(yrs::Out::Any(Any::String(s))) => {
+            let s = s.to_string();
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        _ => None,
+    });
+
     Ok(WorkflowGraph {
         nodes,
         edges,
@@ -192,6 +206,7 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         // need definitions are loaded from JSON-on-disk via the demo
         // seeder — that path uses serde and populates the field correctly.
         definitions: Default::default(),
+        default_scheduler,
     })
 }
 
@@ -385,6 +400,19 @@ pub fn graph_to_doc_with_files(
                 }
             }
         }
+
+        // -- default_scheduler: top-level Y.Map -------------------------
+        // Round-trips the template-level default datacenter alias (the
+        // second rung of the multi-cluster selection chain, docs/16 §6) so
+        // publish (which reads the graph back via doc_to_graph) sees the
+        // author's template default. Stored under `defaultScheduler` as a
+        // single-key map (`{ alias }`) — yrs has no top-level scalar root,
+        // and a map mirrors the `viewport`/`instanceConcurrency` convention.
+        // Absent when `None` so legacy docs keep parsing unchanged.
+        if let Some(ref sched) = graph.default_scheduler {
+            let ds_map = txn.get_or_insert_map("defaultScheduler");
+            ds_map.insert(&mut txn, "alias", sched.clone());
+        }
     }
     doc
 }
@@ -444,7 +472,7 @@ mod tests {
                 },
             ],
             edges: vec![],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let doc = graph_to_doc(&graph);
@@ -480,6 +508,25 @@ mod tests {
         assert_eq!(start.width, None);
     }
 
+    // Template-level `default_scheduler` (multi-cluster selection chain, docs/16
+    // §6) must survive graph→Y.Doc→graph so publish (which reads back via
+    // doc_to_graph) sees the author's template default. Same failure class as
+    // the loop-lease Yjs drop — an encoder that forgets the field silently
+    // downgrades selection to the workspace/error rung.
+    #[test]
+    fn default_scheduler_survives_ydoc_roundtrip() {
+        let mut graph = WorkflowGraph::default_graph();
+        graph.default_scheduler = Some("prod_dc".to_string());
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        assert_eq!(rt.default_scheduler.as_deref(), Some("prod_dc"));
+
+        // None → stays None (opt-out: no stray map written/read back).
+        let mut bare = WorkflowGraph::default_graph();
+        bare.default_scheduler = None;
+        let rt_none = doc_to_graph(&graph_to_doc(&bare)).expect("parse Y.Doc");
+        assert_eq!(rt_none.default_scheduler, None);
+    }
+
     #[test]
     fn start_process_name_survives_ydoc_roundtrip() {
         fn start_with(process_name: Option<&str>) -> WorkflowGraph {
@@ -504,7 +551,7 @@ mod tests {
                     height: None,
                 }],
                 edges: vec![],
-                viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+                viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
             }
         }
 
@@ -596,7 +643,7 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
@@ -683,7 +730,7 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
@@ -758,7 +805,7 @@ mod tests {
             edges: vec![],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");

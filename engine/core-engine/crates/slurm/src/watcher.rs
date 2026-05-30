@@ -19,7 +19,10 @@ use chrono::Utc;
 use tokio::sync::RwLock;
 
 use petri_domain::ExternalSignal;
-use petri_scheduler_bridge::{signal_subject, CheckpointStore, RoutingMeta, SignalPublisher};
+use petri_scheduler_bridge::{
+    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, CheckpointStore,
+    RoutingMeta, SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
+};
 
 use crate::config::SlurmConfig;
 use crate::models::{SacctEntry, SqueueEntry};
@@ -37,12 +40,6 @@ pub enum WatcherError {
     #[error("NATS error: {0}")]
     Nats(String),
 }
-
-/// KV key for the last-polled sacct timestamp.
-const CHECKPOINT_KEY: &str = "slurm.poll_cursor";
-
-/// KV key for persisted tracked jobs (survives watcher restarts).
-const TRACKED_JOBS_KEY: &str = "slurm.tracked_jobs";
 
 /// Tracked state for a job the watcher is monitoring.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -81,17 +78,37 @@ pub struct SlurmWatcher {
     config: SlurmConfig,
     signal_publisher: SignalPublisher,
     checkpoint: CheckpointStore,
+    /// Per-cluster checkpoint namespace (= the datacenter `resource_id`, or
+    /// [`DEV_BOOTSTRAP_CLUSTER_KEY`] for the env-built client). Prefixes every
+    /// checkpoint key so N clusters sharing the one `PETRI_WATCHER` KV bucket
+    /// never clobber each other's cursor.
+    cluster_key: String,
     /// Active jobs being tracked: job_id → tracked state.
     tracked: RwLock<HashMap<String, TrackedJob>>,
 }
 
 impl SlurmWatcher {
-    /// Create a new watcher.
+    /// Create a new watcher from the env/dev-bootstrap config.
     ///
-    /// Initializes the checkpoint KV bucket for restart resilience.
+    /// Initializes the checkpoint KV bucket for restart resilience. Uses the
+    /// reserved [`DEV_BOOTSTRAP_CLUSTER_KEY`] namespace — for a resource-driven
+    /// cluster, use [`SlurmWatcher::from_connection`] with the `resource_id`.
     pub async fn new(
         config: SlurmConfig,
         nats: async_nats::jetstream::Context,
+    ) -> Result<Self, WatcherError> {
+        Self::from_connection(config, nats, DEV_BOOTSTRAP_CLUSTER_KEY).await
+    }
+
+    /// Create a watcher for a specific cluster from a resolved connection.
+    ///
+    /// `cluster_key` (the datacenter `resource_id`) namespaces this watcher's
+    /// checkpoint cursor + tracked-jobs map so concurrent clusters on the one KV
+    /// bucket resume their OWN stream after a restart (no cross-contamination).
+    pub async fn from_connection(
+        config: SlurmConfig,
+        nats: async_nats::jetstream::Context,
+        cluster_key: impl Into<String>,
     ) -> Result<Self, WatcherError> {
         let signal_publisher = SignalPublisher::new(nats.clone());
         let checkpoint = CheckpointStore::new(&nats).await;
@@ -100,20 +117,34 @@ impl SlurmWatcher {
             config,
             signal_publisher,
             checkpoint,
+            cluster_key: cluster_key.into(),
             tracked: RwLock::new(HashMap::new()),
         })
     }
 
+    /// Per-cluster KV key for the last-polled sacct timestamp.
+    ///
+    /// Delegates to the shared key builder in `petri-scheduler-bridge` so the
+    /// per-cluster scheme is single-sourced (and unit-tested there).
+    fn checkpoint_key(&self) -> String {
+        slurm_poll_cursor_key(&self.cluster_key)
+    }
+
+    /// Per-cluster KV key for persisted tracked jobs (survives watcher restarts).
+    fn tracked_jobs_key(&self) -> String {
+        slurm_tracked_jobs_key(&self.cluster_key)
+    }
+
     /// Load the last checkpoint cursor (ISO timestamp).
     async fn load_checkpoint_cursor(&self) -> Option<String> {
-        let value = self.checkpoint.load(CHECKPOINT_KEY).await?;
+        let value = self.checkpoint.load(&self.checkpoint_key()).await?;
         tracing::info!(cursor = %value, "Loaded checkpoint cursor from NATS KV");
         Some(value)
     }
 
     /// Save the current poll cursor.
     async fn save_checkpoint_cursor(&self, cursor: &str) {
-        self.checkpoint.save(CHECKPOINT_KEY, cursor).await;
+        self.checkpoint.save(&self.checkpoint_key(), cursor).await;
     }
 
     /// Persist tracked jobs to NATS KV for restart recovery.
@@ -126,18 +157,18 @@ impl SlurmWatcher {
         let tracked = self.tracked.read().await;
         if tracked.is_empty() {
             // Clean up stale entry
-            self.checkpoint.save(TRACKED_JOBS_KEY, "{}").await;
+            self.checkpoint.save(&self.tracked_jobs_key(), "{}").await;
             return;
         }
         match serde_json::to_string(&*tracked) {
-            Ok(json) => self.checkpoint.save(TRACKED_JOBS_KEY, &json).await,
+            Ok(json) => self.checkpoint.save(&self.tracked_jobs_key(), &json).await,
             Err(e) => tracing::warn!(error = %e, "Failed to serialize tracked jobs"),
         }
     }
 
     /// Restore tracked jobs from NATS KV on startup.
     async fn restore_tracked_jobs(&self) {
-        if let Some(json) = self.checkpoint.load(TRACKED_JOBS_KEY).await {
+        if let Some(json) = self.checkpoint.load(&self.tracked_jobs_key()).await {
             match serde_json::from_str::<HashMap<String, TrackedJob>>(&json) {
                 Ok(restored) if !restored.is_empty() => {
                     tracing::info!(

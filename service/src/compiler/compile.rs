@@ -1630,7 +1630,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1675,7 +1675,7 @@ mod tests {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1744,7 +1744,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1796,7 +1796,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1831,7 +1831,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1854,7 +1854,7 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge_with_handle("e1", "s", "e", "in")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(
@@ -1889,7 +1889,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1948,7 +1948,7 @@ mod tests {
                 edge_with_handle("econd1", "d", "e1", "cond1"),
                 edge_with_handle("edefault", "d", "e2", "default"),
             ],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -2029,7 +2029,7 @@ mod tests {
                 edge_with_handle("edefault", "d", "e2", "default"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -2231,7 +2231,7 @@ mod tests {
                 edge("e_m_done", "merge", "done"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2329,7 +2329,7 @@ mod tests {
                 edge("e_j_e", "j", "e"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2379,7 +2379,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("retry graph should compile");
@@ -2556,7 +2556,7 @@ mod tests {
                 edge("esucc", "a", "e1"),
                 edge_with_handle("eerr", "a", "e2", "error"),
             ],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("error-handle edge should wire");
@@ -2878,6 +2878,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 type_name: "smtp".to_string(),
                 latest_version: 1,
+                public_config: serde_json::Value::Null,
             },
         );
 
@@ -3200,7 +3201,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         let scenario = crate::compiler::compile_to_scenario(
             &graph,
@@ -3235,7 +3236,7 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         assert!(
             compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).is_ok(),
@@ -3286,7 +3287,7 @@ mod tests {
             edges: vec![edge("e1", "s", "q"), edge("e2", "q", "e")],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -3423,7 +3424,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -3489,7 +3490,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -3536,7 +3537,7 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -4104,7 +4105,7 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "sub"), edge("e1", "sub", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         // SubWorkflow lowering only needs an opaque AIR Value to embed in the
@@ -4439,7 +4440,7 @@ mod tests {
                 },
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(),
+            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("compile");
@@ -4537,6 +4538,7 @@ mod tests {
             viewport: None,
             instance_concurrency: Default::default(),
             definitions,
+            default_scheduler: None,
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("compile with schema ref should succeed");
@@ -4601,6 +4603,7 @@ mod tests {
             viewport: None,
             instance_concurrency: Default::default(),
             definitions: std::collections::BTreeMap::new(),
+            default_scheduler: None,
         };
         let err = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect_err("unknown $ref must fail compilation");
@@ -4715,6 +4718,7 @@ mod tests {
             viewport: None,
             instance_concurrency: Default::default(),
             definitions,
+            default_scheduler: None,
         };
         let template_id = uuid::Uuid::new_v4();
         let config_storage = ConfigStorage { template_id, version: 1, key_fn: None };

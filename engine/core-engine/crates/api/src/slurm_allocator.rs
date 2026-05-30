@@ -104,6 +104,15 @@ impl SlurmAllocatorClient {
         }
     }
 
+    /// Build a client from a resolved connection (the datacenter resource's
+    /// `effect_config`), NOT env. The [`SlurmConfig`] is already built by the
+    /// `ClusterRegistry` from the parsed connection (it owns the temp-file PEM
+    /// path). Alias of [`SlurmAllocatorClient::new`] for symmetry with the
+    /// nomad leg and to mark the multi-cluster (resource-driven) build path.
+    pub fn from_connection(config: SlurmConfig) -> Self {
+        Self::new(config)
+    }
+
     /// Build a client from the `SLURM_*` environment, if `SLURM_SSH_HOST` is set
     /// (gating mirrors [`SlurmConfig::from_env`]). Returns `None` when Slurm is
     /// not configured, so the dispatcher's slurm leg is simply absent.

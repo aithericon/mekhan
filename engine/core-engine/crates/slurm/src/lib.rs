@@ -37,5 +37,5 @@ mod integration_tests;
 
 pub use alloc::{Allocation, AllocError};
 pub use client::SlurmClient;
-pub use config::SlurmConfig;
+pub use config::{SlurmConfig, SlurmConnectionParams};
 pub use watcher::{SlurmWatcher, WatcherError};

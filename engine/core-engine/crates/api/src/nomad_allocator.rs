@@ -80,6 +80,15 @@ pub struct NomadAllocatorClient {
 
 #[cfg(feature = "nomad")]
 impl NomadAllocatorClient {
+    /// Build a client from a resolved connection (the datacenter resource's
+    /// `effect_config`), NOT env. The [`NomadConfig`] is already built by the
+    /// `ClusterRegistry` from the parsed connection. Alias of
+    /// [`NomadAllocatorClient::new`] for symmetry with the slurm leg and to mark
+    /// the multi-cluster (resource-driven) build path.
+    pub fn from_connection(config: NomadConfig) -> Result<Self, AllocatorError> {
+        Self::new(config)
+    }
+
     /// Build a client around an explicit [`NomadConfig`].
     pub fn new(config: NomadConfig) -> Result<Self, AllocatorError> {
         let http = config
@@ -154,6 +163,21 @@ impl NomadAllocatorClient {
         meta.insert("LEASE_NAMESPACE".to_string(), executor_namespace.clone());
         meta.insert("LEASE_MAX_JOBS".to_string(), max_jobs.to_string());
         meta.insert("LEASE_IDLE_TIMEOUT".to_string(), idle_secs.to_string());
+
+        // Held-alloc-death routing (docs/16 §7). The lease handler injected
+        // `failure_routing` (petri_net_id/petri_place/petri_signal_key/
+        // petri_signal_failed) into the request; stamp those string meta tags
+        // onto the dispatched job so the NomadWatcher can route this alloc's
+        // TERMINAL signal to the adapter net's `lease_failed` place when it dies.
+        // Without this the watcher never tracks the held alloc → death is
+        // undetected → the leased loop wedges on a dead namespace.
+        if let Some(routing) = request.get("failure_routing").and_then(|v| v.as_object()) {
+            for (k, v) in routing {
+                if let Some(s) = v.as_str() {
+                    meta.insert(k.clone(), s.to_string());
+                }
+            }
+        }
 
         let dispatch_req = DispatchJobRequest {
             payload: None,
@@ -355,6 +379,34 @@ mod tests {
         assert!(cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"120\""), "body: {}", cap.body);
         // payload-free dispatch (meta-only)
         assert!(!cap.body.contains("\"Payload\""), "body: {}", cap.body);
+    }
+
+    #[tokio::test]
+    async fn acquire_stamps_failure_routing_into_dispatch_meta() {
+        // The lease handler injects failure_routing; the Nomad leg MUST stamp
+        // those keys into the dispatch meta so NomadWatcher routes the held
+        // alloc's terminal signal to `lease_failed` on death (docs/16 §7).
+        let (addr, captured) =
+            fake_nomad(r#"{"DispatchedJobID":"d/7","EvalID":"e","Index":1}"#).await;
+        let client = client_for(&addr);
+        client
+            .acquire_lease(
+                "inst-9:lp",
+                &json!({
+                    "failure_routing": {
+                        "petri_net_id": "pool-rid-9",
+                        "petri_place": "lease_failed",
+                        "petri_signal_key": "inst-9:lp",
+                        "petri_signal_failed": "lease_failed",
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+        let cap = captured.lock().unwrap().clone();
+        assert!(cap.body.contains("petri_signal_failed"), "body: {}", cap.body);
+        assert!(cap.body.contains("pool-rid-9"), "body: {}", cap.body);
+        assert!(cap.body.contains("lease_failed"), "body: {}", cap.body);
     }
 
     #[tokio::test]

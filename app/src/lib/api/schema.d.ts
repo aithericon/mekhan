@@ -337,6 +337,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clusters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/clusters
+         * @description List every live cluster client the engine's multi-cluster `ClusterRegistry`
+         *     holds — connection health, watcher state, checkpoint cursor, active-lease
+         *     count, last-signal timestamp, last error — joined with the backing
+         *     datacenter resource's human name. Read-through of the engine's
+         *     `GET /api/clusters`.
+         */
+        get: operations["list_clusters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clusters/{resource_id}/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/clusters/{resource_id}/drain
+         * @description Gracefully drain a cluster: the engine refuses new leases for it, lets
+         *     in-flight leases finish, then idle-tears it down. Read-through of the
+         *     engine's `POST /api/clusters/{resource_id}/drain`.
+         */
+        post: operations["drain_cluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clusters/{resource_id}/reconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/clusters/{resource_id}/reconnect
+         * @description Force-reconnect a cluster: the engine drops the watcher + allocator session
+         *     so the next fire rebuilds the client. Read-through of the engine's
+         *     `POST /api/clusters/{resource_id}/reconnect`.
+         */
+        post: operations["reconnect_cluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/compile": {
         parameters: {
             query?: never;
@@ -2317,6 +2385,65 @@ export interface components {
             tool_call_id?: string | null;
             /** @description For `role: assistant` — the tool calls the model emitted this turn. */
             tool_calls?: components["schemas"]["LlmToolCall"][];
+        };
+        /** @description Outcome of a lifecycle action (`reconnect` / `drain`). */
+        ClusterActionResponse: {
+            /** @description `reconnect` | `drain`. */
+            action: string;
+            /**
+             * @description `true` when the cluster was live and the action applied; `false` when no
+             *     such cluster is currently resident (a no-op).
+             */
+            applied: boolean;
+            resource_id: string;
+        };
+        /**
+         * @description One live cluster's observable state, as surfaced to the control plane.
+         *
+         *     Mirrors the engine's `ClusterView` payload, enriched with the human name of
+         *     the backing datacenter resource (`path` / `display_name`) when it resolves.
+         */
+        ClusterSummary: {
+            /**
+             * Format: int64
+             * @description Held leases + in-flight submits referencing this cluster.
+             */
+            active_lease_count: number;
+            /** @description `connected` | `reconnecting` | `down` | `unknown`. */
+            connection_health: string;
+            /** @description Last checkpoint cursor (poll timestamp / Nomad event index), if recorded. */
+            cursor?: string | null;
+            /** @description The datacenter resource's human display name, when it resolves. */
+            display_name?: string | null;
+            /** @description Whether this cluster is draining (refusing new leases). */
+            draining: boolean;
+            /** @description Allocator dialect: `http` | `slurm` | `nomad`. */
+            flavor: string;
+            /** @description Last connection/watcher error, if any. */
+            last_error?: string | null;
+            /** @description RFC3339 timestamp of the most recent signal delivery, if any. */
+            last_signal_at?: string | null;
+            /**
+             * @description The datacenter `resource_id` (a UUID), or `"_env"` for the single
+             *     env-driven dev-bootstrap cluster.
+             */
+            resource_id: string;
+            /**
+             * @description The datacenter resource's snake_case `path` (e.g. `prod_slurm`), when the
+             *     `resource_id` resolves to a row. `None` for `_env` / deleted resources.
+             */
+            resource_path?: string | null;
+            /**
+             * Format: int32
+             * @description The datacenter resource version this client was built from.
+             */
+            version: number;
+            /** @description `streaming` | `reconnecting` | `stopped` | `no_watcher`. */
+            watcher_state: string;
+        };
+        /** @description `GET /api/v1/clusters` response. */
+        ClustersResponse: {
+            clusters: components["schemas"]["ClusterSummary"][];
         };
         /**
          * @description Structured payload of a compile error for the editor. Returned as part of
@@ -5214,6 +5341,15 @@ export interface components {
         };
         WorkflowGraph: {
             /**
+             * @description Template-level default `datacenter` resource alias. A
+             *     `Scheduled`/leased node whose own `scheduler` is absent inherits this
+             *     (the second rung of the selection chain — node ?? template ??
+             *     workspace ?? error; see `docs/16-multi-cluster-scheduling.md` §6). Lives
+             *     on the graph JSON so it travels with the template + the Yjs doc.
+             *     `None` = no template default (fall through to the workspace default).
+             */
+            default_scheduler?: string | null;
+            /**
              * @description Workflow-scoped reusable JSON-Schema fragments. Referenced from
              *     `executionSpec.config` (today: LLM `response_format.schema`) as
              *     `{"$ref": "#/definitions/<name>"}` and inlined at compile time by
@@ -6317,6 +6453,99 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_clusters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live cluster clients */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClustersResponse"];
+                };
+            };
+            /** @description Engine cluster API unavailable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    drain_cluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Datacenter resource id (or `_env`) */
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Drain requested */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterActionResponse"];
+                };
+            };
+            /** @description Engine cluster API unavailable */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reconnect_cluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Datacenter resource id (or `_env`) */
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reconnect requested */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterActionResponse"];
+                };
+            };
+            /** @description Engine cluster API unavailable */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

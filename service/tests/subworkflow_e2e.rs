@@ -163,7 +163,7 @@ fn child_graph(tag: &str) -> WorkflowGraph {
     WorkflowGraph {
         nodes: vec![start(&s), end(&e)],
         edges: vec![edge("ce", &s, &e)],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
     }
 }
 
@@ -179,7 +179,7 @@ fn parent_graph(child_family: Uuid, pin: VersionPin) -> WorkflowGraph {
             edge("pe1", "pstart", "sub"),
             edge("pe2", "sub", "pend"),
         ],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
     }
 }
 
@@ -435,7 +435,7 @@ async fn publish_io_child(app: &axum::Router, tag: &str) -> Uuid {
         edges: vec![edge("ce", &s, &e)],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let id = create_with_graph(app, "IO Child", &graph).await;
     publish(app, id).await;
@@ -519,7 +519,7 @@ async fn subworkflow_output_derived_and_borrowable() {
         edges: vec![edge("pe1", "ps", "sub"), edge("pe2", "sub", "pe")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let parent = create_with_graph(&app, "Borrowing Parent", &parent_graph).await;
     let body = publish(&app, parent).await;
@@ -552,7 +552,7 @@ async fn subworkflow_borrow_of_undeclared_child_field_rejected() {
         edges: vec![edge("pe1", "ps", "sub"), edge("pe2", "sub", "pe")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let parent = create_with_graph(&app, "Bad Borrow Parent", &parent_graph).await;
 

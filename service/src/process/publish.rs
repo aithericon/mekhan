@@ -107,14 +107,47 @@ impl<'a> PublishService<'a> {
         // original `graph` is still persisted as `graph_json` below.
         let compiled_graph = reconcile_subworkflow_outputs(graph, &sub_air);
 
+        // Multi-cluster selection (docs/16 §6): resolve each Scheduled/leased
+        // node's effective cluster through the chain `node.scheduler ??
+        // template.default_scheduler ?? workspace.default_datacenter ?? error`,
+        // stamping the resolved alias into the node's own `scheduler` /
+        // `lease.scheduler` field. This runs ONCE here, BEFORE
+        // `discover_known_resources`, so both resource discovery and the
+        // compiler lowering read the already-resolved alias from the node data
+        // (single resolution site — collection and lowering cannot drift). A
+        // `Lease`/`Loop.lease` that bottoms out hard-fails with
+        // `SchedulerUnresolved`; a `Submit` with no resolution stays the
+        // env-global / dev-bootstrap path. The author's ORIGINAL `graph` is
+        // still persisted as `graph_json` below — the stamped defaults exist
+        // only in the compiled artifact.
+        let workspace_default =
+            workspace_default_datacenter_alias(self.state, workspace_id).await?;
+        let compiled_graph =
+            crate::compiler::scheduler_select::resolve_scheduler_defaults(
+                &compiled_graph,
+                workspace_default.as_deref(),
+            )
+            .map_err(|errs| {
+                let summary = errs
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let views: Vec<_> = errs.iter().map(|e| e.to_view()).collect();
+                ApiError::compile(format!("scheduler selection failed: {summary}"), views)
+            })?;
+
         // Discover workspace resources this graph touches by source-scanning
         // Python entrypoints for `<head>.<field>` accesses and looking the
         // heads up in the workspace's resources list. The compiler uses this
         // map (a) to validate name/slug collisions, (b) to discriminate
         // resource refs from slug refs in the borrow planner, and (c) to
         // pin each ref to `(resource_id, latest_version)` in the AIR.
+        // NB: discover against the scheduler-RESOLVED graph (`compiled_graph`),
+        // not the author's original — so a node that inherits its cluster from
+        // a template/workspace default collects + resolves the stamped alias.
         let known_resources =
-            discover_known_resources(self.state, graph, files, workspace_id).await?;
+            discover_known_resources(self.state, &compiled_graph, files, workspace_id).await?;
 
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
@@ -277,6 +310,31 @@ impl<'a> PublishService<'a> {
 /// [`CompileError::WorkspaceResourceUnknown`]. Without that hard fail the
 /// AIR builds without the borrow and the backend later crashes at run
 /// time with "compiler must emit a ResourceEnvelope borrow", which sends
+/// Read the workspace's default-datacenter setting and map it to its resource
+/// alias (path) — the LAST rung of the multi-cluster selection chain (docs/16
+/// §6). The column stores a `resource_id`; the selection chain stamps an
+/// *alias* into the node (so `discover_known_resources`/`resolve_binding` look
+/// it up uniformly), hence the join to `resources.path`. `None` when the
+/// workspace has no default (or its referenced resource was soft-deleted —
+/// `deleted_at IS NULL` filter so a publish then hard-fails loudly with
+/// `SchedulerUnresolved` rather than silently resolving a dead resource).
+async fn workspace_default_datacenter_alias(
+    state: &AppState,
+    workspace_id: Uuid,
+) -> Result<Option<String>, ApiError> {
+    let alias: Option<String> = sqlx::query_scalar(
+        "SELECT r.path \
+         FROM workspaces w \
+         JOIN resources r ON r.id = w.default_datacenter_resource_id \
+         WHERE w.id = $1 AND r.deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("workspace default datacenter lookup: {e}")))?;
+    Ok(alias)
+}
+
 /// the operator chasing the compiler instead of the missing resource row.
 async fn discover_known_resources(
     state: &AppState,
@@ -415,9 +473,17 @@ async fn discover_known_resources(
     // regardless of how many heads the source touches. Soft-deleted
     // resources are invisible (NULL filter on `deleted_at`).
     let head_vec: Vec<String> = heads.into_iter().collect();
-    let rows: Vec<(Uuid, String, String, i32)> = sqlx::query_as(
-        "SELECT id, path, resource_type, latest_version FROM resources \
-         WHERE workspace_id = $1 AND path = ANY($2) AND deleted_at IS NULL",
+    // Join to `resource_versions` for the pinned version's `public_config` so
+    // the compiler can inspect flavor-discriminated connection fields (e.g. a
+    // datacenter's `scheduler_flavor` + `ssh_*`/`nomad_*` presence) at publish.
+    // `LEFT JOIN` so a resource with no version row still resolves (empty
+    // config) rather than vanishing from `known`.
+    let rows: Vec<(Uuid, String, String, i32, Option<serde_json::Value>)> = sqlx::query_as(
+        "SELECT r.id, r.path, r.resource_type, r.latest_version, rv.public_config \
+         FROM resources r \
+         LEFT JOIN resource_versions rv \
+           ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.workspace_id = $1 AND r.path = ANY($2) AND r.deleted_at IS NULL",
     )
     .bind(workspace_id)
     .bind(&head_vec)
@@ -426,13 +492,14 @@ async fn discover_known_resources(
     .map_err(|e| ApiError::internal(format!("workspace resource lookup: {e}")))?;
 
     let mut known = KnownResources::new();
-    for (id, path, resource_type, latest_version) in rows {
+    for (id, path, resource_type, latest_version, public_config) in rows {
         known.insert(
             path,
             KnownResource {
                 id,
                 type_name: resource_type,
                 latest_version,
+                public_config: public_config.unwrap_or(serde_json::Value::Null),
             },
         );
     }

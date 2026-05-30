@@ -150,7 +150,7 @@ fn compile_with_one(node: WorkflowNode) -> Value {
         edges: vec![edge("e1", "s", "x"), edge("e2", "x", "e")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     compile_to_air(&graph, "t", "", &std::collections::HashMap::new()).expect("compile")
 }
@@ -333,7 +333,7 @@ fn agent_drop_oldest_context_strategy_rejects_in_v1() {
         edges: vec![edge("e1", "s", "x"), edge("e2", "x", "e")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect_err("DropOldest context_strategy must reject in v1");

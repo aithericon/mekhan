@@ -98,6 +98,12 @@ use utoipa::OpenApi;
             aithericon_executor_domain::PhaseStatus,
             aithericon_executor_domain::Phase,
             aithericon_executor_domain::Progress,
+            // Cluster management DTOs (docs/16 §9). `ClusterSummary` appears
+            // only inside `ClustersResponse.clusters: Vec<_>`, so register it +
+            // the response/action shapes explicitly for frontend codegen.
+            crate::handlers::clusters::ClusterSummary,
+            crate::handlers::clusters::ClustersResponse,
+            crate::handlers::clusters::ClusterActionResponse,
         ),
     ),
     tags(
@@ -120,6 +126,7 @@ use utoipa::OpenApi;
         (name = "me", description = "Per-session preferences — active workspace switcher."),
         (name = "users", description = "Directory lookups — email → OIDC subject resolver for member admin."),
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),
+        (name = "clusters", description = "Multi-cluster scheduling control plane — live datacenter cluster clients (connection health, watcher state, active leases) + force-reconnect / drain (read-through of the engine `ClusterRegistry`)."),
     ),
 )]
 pub struct ApiDoc;

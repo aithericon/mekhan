@@ -100,10 +100,25 @@ pub fn salloc_no_shell_command(grant_id: &str, request: &JsonValue) -> String {
         flags.push_str(extra);
     }
 
+    // `--comment` carries the watcher routing metadata as a JSON meta-tag map
+    // (the SlurmWatcher's `extract_routing` parses the comment as
+    // `HashMap<String,String>`). When the lease handler injected
+    // `failure_routing` (held-alloc-death → `lease_failed`, docs/16 §7), stamp
+    // THAT json so the watcher tracks this held alloc and emits the failed
+    // signal when it dies. Falling back to the bare `grant_id` (non-JSON) would
+    // make the watcher skip the alloc → death undetected → the leased loop
+    // wedges on a dead namespace. `--job-name=petri-<grant_id>` stays for
+    // `squeue --name` discoverability either way.
+    let comment = request
+        .get("failure_routing")
+        .filter(|v| v.is_object())
+        .and_then(|v| serde_json::to_string(v).ok())
+        .unwrap_or_else(|| grant_id.to_string());
+
     format!(
         "salloc --no-shell -N1 --job-name='petri-{}' --comment='{}'{} 2>&1",
         sq(grant_id),
-        sq(grant_id),
+        sq(&comment),
         flags,
     )
 }
@@ -352,6 +367,44 @@ mod tests {
         // A grant id with a quote must not break out of the single-quoted arg.
         let cmd = salloc_no_shell_command("a'b", &json!({}));
         assert!(cmd.contains("--job-name='petri-a'\\''b'"), "{}", cmd);
+    }
+
+    #[test]
+    fn test_salloc_command_no_routing_falls_back_to_grant_id_comment() {
+        // No failure_routing → comment is the bare grant_id (legacy/http-ish).
+        let cmd = salloc_no_shell_command("g1", &json!({}));
+        assert!(cmd.contains("--comment='g1'"), "{}", cmd);
+    }
+
+    #[test]
+    fn test_salloc_command_stamps_failure_routing_into_comment() {
+        // When the lease handler injected failure_routing, the held alloc's
+        // --comment MUST carry the routing JSON so the watcher tracks it and
+        // emits the failed signal on death (docs/16 §7). The bare grant_id
+        // stays on --job-name for squeue discoverability.
+        let req = json!({
+            "failure_routing": {
+                "petri_net_id": "pool-rid-123",
+                "petri_place": "lease_failed",
+                "petri_signal_key": "inst-1:lp",
+                "petri_signal_failed": "lease_failed",
+            }
+        });
+        let cmd = salloc_no_shell_command("inst-1:lp", &req);
+        assert!(cmd.contains("--job-name='petri-inst-1:lp'"), "{}", cmd);
+        assert!(
+            cmd.contains("petri_signal_failed") && cmd.contains("pool-rid-123"),
+            "comment must carry the routing JSON: {}",
+            cmd
+        );
+        // The comment must be valid JSON the watcher can parse as a meta map.
+        let comment = cmd
+            .split("--comment='")
+            .nth(1)
+            .and_then(|s| s.split("'").next())
+            .unwrap();
+        let _: std::collections::HashMap<String, String> =
+            serde_json::from_str(comment).expect("comment is a JSON meta map");
     }
 
     #[test]

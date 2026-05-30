@@ -11,6 +11,7 @@ pub(crate) mod placeholder_refs;
 pub(crate) mod python_refs;
 pub(crate) mod resource_binding;
 pub mod resource_refs;
+pub mod scheduler_select;
 pub(crate) mod schema_refs;
 pub(crate) mod rhai_gen;
 pub mod rhai_scope;

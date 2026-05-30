@@ -34,5 +34,5 @@ pub mod watcher;
 mod integration_tests;
 
 pub use client::NomadClient;
-pub use config::NomadConfig;
+pub use config::{NomadConfig, NomadConnectionParams};
 pub use watcher::{NomadWatcher, WatcherError};

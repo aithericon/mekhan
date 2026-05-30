@@ -157,7 +157,7 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
     }
 }
 
