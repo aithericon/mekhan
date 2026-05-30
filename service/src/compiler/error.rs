@@ -243,6 +243,63 @@ pub enum CompileError {
         kind: String,
     },
 
+    /// A `StreamConsumer` in the default `Rhai` dispatch mode has body edges
+    /// (a `body_in` source edge or a `body_out` target edge). `Rhai` folds
+    /// chunks with no per-chunk body — body edges are only valid in the
+    /// `SequentialBody`/`ParallelBody` modes. Either switch the dispatch mode or
+    /// remove the body wiring.
+    #[error(
+        "stream consumer '{node_id}': dispatch mode `rhai` has no per-chunk body, \
+         but a `body_in`/`body_out` edge is wired — switch to `sequentialBody`/\
+         `parallelBody` or remove the body wiring"
+    )]
+    StreamConsumerRhaiHasBody { node_id: String },
+
+    /// A body-mode `StreamConsumer` (`SequentialBody`/`ParallelBody`) is missing
+    /// its body — no child node with `parent_id == consumer.id`, or no
+    /// `body_in`+`body_out` edge pair. A body mode with nothing to run per chunk
+    /// is a config error. Mirrors `MapEmpty`.
+    #[error(
+        "stream consumer '{node_id}': dispatch mode requires a per-chunk body — \
+         add at least one node inside the consumer and wire its `body_in` output \
+         plus a body completion back to `body_out`"
+    )]
+    StreamConsumerBodyEmpty { node_id: String },
+
+    /// A body-mode `StreamConsumer`'s body terminal is a node kind that cannot
+    /// produce the `detail.outputs.<resultVar>` envelope the gather requires.
+    /// Same constraint as `MapBodyUnsupported`: the terminal must be a
+    /// parked-producer kind (inline AutomatedStep, Agent, or SubWorkflow).
+    #[error(
+        "stream consumer '{node_id}': body terminal '{child_id}' ({kind}) cannot \
+         be a body terminal — it produces no `detail.outputs` envelope for the \
+         gather. Use an inline AutomatedStep, Agent, or SubWorkflow."
+    )]
+    StreamConsumerBodyUnsupported {
+        node_id: String,
+        child_id: String,
+        kind: String,
+    },
+
+    /// A body-mode `StreamConsumer` is nested inside a Map (its `parent_id`
+    /// chain reaches a Map ancestor). v1 forbids this: the gather barrier's
+    /// `__map_id` correlation and namespace-on-token item injection assume a
+    /// single scatter scope. Mirrors `MapNested`.
+    #[error(
+        "stream consumer '{node_id}' is nested inside map '{outer_id}' — a \
+         body-mode stream consumer inside a map is not supported in v1"
+    )]
+    StreamConsumerNestedInMap { node_id: String, outer_id: String },
+
+    /// A `StreamConsumer` declares the `LiveReduce` dispatch mode, which is not
+    /// implemented in this phase (it needs the executor IPC feed + engine feed
+    /// effect — Phases 2/3). Reject cleanly at publish.
+    #[error(
+        "stream consumer '{node_id}': dispatch mode `liveReduce` is not yet \
+         supported — use `rhai`, `sequentialBody`, or `parallelBody`"
+    )]
+    StreamConsumerLiveReduceUnsupported { node_id: String },
+
     /// A Map's `itemsRef` parses + resolves to a known producer field, but
     /// that field's declared shape is not an array — the scatter can only
     /// fan out over a collection. Mirrors `RepeaterItemsRefNotArray`;
@@ -674,6 +731,13 @@ impl CompileError {
             Self::MapNested { .. } => "map_nested",
             Self::StreamConsumerMissingHandle { .. } => "stream_consumer_missing_handle",
             Self::StreamConsumerInvalidReduce { .. } => "stream_consumer_invalid_reduce",
+            Self::StreamConsumerRhaiHasBody { .. } => "stream_consumer_rhai_has_body",
+            Self::StreamConsumerBodyEmpty { .. } => "stream_consumer_body_empty",
+            Self::StreamConsumerBodyUnsupported { .. } => "stream_consumer_body_unsupported",
+            Self::StreamConsumerNestedInMap { .. } => "stream_consumer_nested_in_map",
+            Self::StreamConsumerLiveReduceUnsupported { .. } => {
+                "stream_consumer_live_reduce_unsupported"
+            }
             Self::MapBodyUnsupported { .. } => "map_body_unsupported",
             Self::MapItemsRefNotArray { .. } => "map_items_ref_not_array",
             Self::MapItemsRefUnresolved { .. } => "map_items_ref_unresolved",
@@ -744,6 +808,11 @@ impl CompileError {
             | Self::MapNested { node_id, .. }
             | Self::StreamConsumerMissingHandle { node_id, .. }
             | Self::StreamConsumerInvalidReduce { node_id, .. }
+            | Self::StreamConsumerRhaiHasBody { node_id }
+            | Self::StreamConsumerBodyEmpty { node_id }
+            | Self::StreamConsumerBodyUnsupported { node_id, .. }
+            | Self::StreamConsumerNestedInMap { node_id, .. }
+            | Self::StreamConsumerLiveReduceUnsupported { node_id }
             | Self::MapBodyUnsupported { node_id, .. }
             | Self::MapItemsRefNotArray { node_id, .. }
             | Self::MapItemsRefUnresolved { node_id, .. }

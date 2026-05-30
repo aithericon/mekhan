@@ -567,6 +567,7 @@ mod tests {
             description: None,
             result_var: "item".to_string(),
             reduce: Default::default(),
+            dispatch: Default::default(),
         };
         let decl = lookup_by_variant(&data).expect("stream_consumer registered");
         assert_eq!(decl.wire_name, "stream_consumer");

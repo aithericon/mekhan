@@ -1,0 +1,110 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Stream Python Body Demo",
+        "initial": {
+          "id": "in",
+          "label": "Stream Input",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "producer",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Producer",
+        "description": "Emits one distinct-named chunk per word on its streaming side-channel (set_output per call, mid-execution).",
+        "streamOutput": true,
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Produced",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "consumer",
+      "type": "stream_consumer",
+      "position": { "x": 620, "y": 160 },
+      "data": {
+        "type": "stream_consumer",
+        "label": "Consumer",
+        "description": "Drains the producer's stream and runs a per-chunk Python body (uppercase) one at a time in stream order, then Concat-joins the body results. Gates net completion on the end-of-stream count.",
+        "resultVar": "item",
+        "reduce": { "kind": "concat", "sep": " " },
+        "dispatch": { "mode": "sequentialBody" }
+      }
+    },
+    {
+      "id": "uppercase",
+      "type": "automated_step",
+      "parentId": "consumer",
+      "position": { "x": 620, "y": 320 },
+      "data": {
+        "type": "automated_step",
+        "label": "Uppercase Chunk",
+        "description": "Per-chunk body: reads the chunk via the consumer's resultVar (item) and set_output's its uppercase under the same name.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Uppercased",
+          "fields": [
+            { "id": "item", "label": "Uppercased Chunk", "kind": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 900, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "transcript", "expression": "consumer.output" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "consumer", "targetHandle": "stream", "type": "sequence" },
+    { "id": "e_producer_control", "source": "producer", "target": "consumer", "targetHandle": "control", "type": "sequence" },
+    { "id": "e_consumer_body_in", "source": "consumer", "sourceHandle": "body_in", "target": "uppercase", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_body_out_consumer", "source": "uppercase", "target": "consumer", "targetHandle": "body_out", "type": "sequence" },
+    { "id": "e_consumer_end", "source": "consumer", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

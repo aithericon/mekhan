@@ -4651,6 +4651,35 @@ export interface components {
             secret_key?: string;
         };
         /**
+         * @description How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.
+         *     Tagged on `mode` (camelCase), mirroring the other config enums.
+         *
+         *     - `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of
+         *       `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer
+         *       template omits `dispatch` and decodes to this — anything else would force a
+         *       body and break those templates at publish.
+         *     - `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at
+         *       a time in strict stream-sequence order (a single-permit lock + a
+         *       next-expected-sequence guard), then the N results are reduced.
+         *     - `ParallelBody`: same per-chunk body, dispatched map-style concurrently;
+         *       results are re-ordered + reduced at the gather barrier.
+         *     - `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not
+         *       implemented in this phase — the lowering rejects it cleanly.
+         */
+        StreamDispatch: {
+            /** @enum {string} */
+            mode: "rhai";
+        } | {
+            /** @enum {string} */
+            mode: "sequentialBody";
+        } | {
+            /** @enum {string} */
+            mode: "parallelBody";
+        } | {
+            /** @enum {string} */
+            mode: "liveReduce";
+        };
+        /**
          * @description How a `StreamConsumer` folds the drained chunks into its single output
          *     token. Tagged on `kind` (camelCase), mirroring the serde conventions of the
          *     other config enums. Each variant selects the gather barrier's reduce Rhai in
@@ -5509,6 +5538,13 @@ export interface components {
             type: "map";
         } | {
             description?: string | null;
+            /**
+             * @description How each drained chunk is dispatched BEFORE the reduce. Defaults to
+             *     `Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every
+             *     shipped consumer template omits this field and MUST decode to `Rhai`;
+             *     any other default would make them demand a body and break at publish.
+             */
+            dispatch?: components["schemas"]["StreamDispatch"];
             label: string;
             /**
              * @description How the drained chunks are folded into the single output token.

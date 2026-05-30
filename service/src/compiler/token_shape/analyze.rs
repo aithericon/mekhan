@@ -823,6 +823,26 @@ pub(crate) fn is_map_node(graph: &WorkflowGraph, id: &str) -> bool {
         .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Map { .. }))
 }
 
+/// True if `id` names a body-mode `StreamConsumer` (dispatch =
+/// `SequentialBody` or `ParallelBody`). These run a per-chunk body block — a
+/// child whose terminal edge enters the consumer's `body_out` handle — exactly
+/// like a Map body. The body terminal must therefore fork its FULL completed
+/// envelope (so `t_<id>_collect` can read `body.detail.outputs.<resultVar>` plus
+/// the `__map_idx`/`__map_id` correlation leaves), and the body-item namespace
+/// `<resultVar>.<field>` is token-resident inside the body. The default `Rhai`
+/// mode (and the inert `LiveReduce` mode) have no body and return `false`.
+pub(crate) fn is_stream_consumer_body_mode_node(graph: &WorkflowGraph, id: &str) -> bool {
+    use crate::models::template::StreamDispatch;
+    graph.nodes.iter().any(|n| {
+        n.id == id
+            && matches!(
+                &n.data,
+                WorkflowNodeData::StreamConsumer { dispatch, .. }
+                    if matches!(dispatch, StreamDispatch::SequentialBody | StreamDispatch::ParallelBody)
+            )
+    })
+}
+
 /// True if `id` names a `WorkflowNodeData::Loop` node. Loop counters live in a
 /// parked `p_<loop>_data` place keyed flat (`{iteration: N}`), so
 /// `<slug>.iteration` borrows resolve through the standard read-arc pipeline

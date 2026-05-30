@@ -625,6 +625,17 @@ pub(super) fn error_path_wired(outgoing_edges: &[&WorkflowEdge]) -> bool {
         .any(|e| e.source_handle.as_deref() == Some("error"))
 }
 
+/// True when `node` is the TERMINAL of a *container body* — the child whose
+/// edge enters the parent container's `body_out` handle. The container is
+/// either a **Map** OR a **body-mode StreamConsumer** (dispatch
+/// `SequentialBody`/`ParallelBody`): both run a body block per element/chunk and
+/// gather the results by `__map_id`, so a terminal child must fork its FULL
+/// completed envelope (`park_outputs`) — the slim `split_outputs` control token
+/// carries neither `detail.outputs.<resultVar>` nor the `__map_idx`/`__map_id`
+/// correlation leaves. Single source of truth shared by every body kind that can
+/// sit at such a terminal (AutomatedStep inline, SubWorkflow). The default
+/// `Rhai` StreamConsumer has no body and so is never a container.
+///
 /// `outgoing_edges` are the edges whose `source == node_id` (see `graph::outgoing`).
 pub(super) fn is_map_body_terminal(
     graph: &WorkflowGraph,
@@ -632,7 +643,8 @@ pub(super) fn is_map_body_terminal(
     outgoing_edges: &[&WorkflowEdge],
 ) -> bool {
     parent_id.is_some_and(|pid| {
-        crate::compiler::token_shape::is_map_node(graph, pid)
+        (crate::compiler::token_shape::is_map_node(graph, pid)
+            || crate::compiler::token_shape::is_stream_consumer_body_mode_node(graph, pid))
             && outgoing_edges
                 .iter()
                 .any(|e| e.target == pid && e.target_handle.as_deref() == Some("body_out"))

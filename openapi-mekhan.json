@@ -11884,6 +11884,67 @@
           }
         }
       },
+      "StreamDispatch": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "rhai"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "sequentialBody"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "parallelBody"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "liveReduce"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.\nTagged on `mode` (camelCase), mirroring the other config enums.\n\n- `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of\n  `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer\n  template omits `dispatch` and decodes to this — anything else would force a\n  body and break those templates at publish.\n- `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at\n  a time in strict stream-sequence order (a single-permit lock + a\n  next-expected-sequence guard), then the N results are reduced.\n- `ParallelBody`: same per-chunk body, dispatched map-style concurrently;\n  results are re-ordered + reduced at the gather barrier.\n- `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not\n  implemented in this phase — the lowering rejects it cleanly."
+      },
       "StreamReduce": {
         "oneOf": [
           {
@@ -13972,6 +14033,10 @@
                   "string",
                   "null"
                 ]
+              },
+              "dispatch": {
+                "$ref": "#/components/schemas/StreamDispatch",
+                "description": "How each drained chunk is dispatched BEFORE the reduce. Defaults to\n`Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every\nshipped consumer template omits this field and MUST decode to `Rhai`;\nany other default would make them demand a body and break at publish."
               },
               "label": {
                 "type": "string"

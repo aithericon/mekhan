@@ -404,11 +404,16 @@ export class YjsGraphBinding {
 				};
 			case 'stream_consumer': {
 				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_consumer' }>['reduce'];
+				type StreamDispatchT = Extract<
+					WorkflowNodeData,
+					{ type: 'stream_consumer' }
+				>['dispatch'];
 				return {
 					...base,
 					type: 'stream_consumer',
 					resultVar: (config?.resultVar as string) ?? 'item',
-					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' }
+					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' },
+					dispatch: (config?.dispatch as StreamDispatchT) ?? { mode: 'rhai' }
 				};
 			}
 		}
@@ -909,6 +914,7 @@ export class YjsGraphBinding {
 			case 'stream_consumer':
 				config.set('resultVar', data.resultVar ?? 'item');
 				config.set('reduce', data.reduce ?? { kind: 'array' });
+				config.set('dispatch', data.dispatch ?? { mode: 'rhai' });
 				break;
 		}
 	}

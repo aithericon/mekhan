@@ -15,6 +15,11 @@
 			case 'custom': return 'custom';
 		}
 	});
+
+	// Body-dispatch modes run a Python child per chunk — surface the body
+	// attach handles (mirrors the Map container) so the body can be wired.
+	const dispatchMode = $derived((data.dispatch ?? { mode: 'rhai' }).mode);
+	const hasBody = $derived(dispatchMode === 'sequentialBody' || dispatchMode === 'parallelBody');
 </script>
 
 <!--
@@ -74,3 +79,27 @@
 	style="background:#06b6d4;border-color:#0891b2;"
 	title="Flow out — continues after all stream chunks are drained and reduced"
 />
+
+<!--
+	Body-attach handles — only when a per-chunk Python body is dispatched
+	(SequentialBody / ParallelBody). `body_in` hands each drained chunk to the
+	body child; `body_out` receives the per-chunk result (gathered + reduced).
+	Hidden for Rhai (no body) and LiveReduce (one long-lived loop). Handle ids
+	MUST match the compiler's `lower/stream_consumer.rs` body wiring.
+-->
+{#if hasBody}
+	<Handle
+		id="body_in"
+		type="source"
+		position={Position.Bottom}
+		style="left:30%;background:#06b6d4;border-color:#0891b2;"
+		title="Body in — each drained chunk starts a per-chunk Python body"
+	/>
+	<Handle
+		id="body_out"
+		type="target"
+		position={Position.Bottom}
+		style="left:70%;background:#06b6d4;border-color:#0891b2;"
+		title="Body out — per-chunk body result (gathered + reduced)"
+	/>
+{/if}

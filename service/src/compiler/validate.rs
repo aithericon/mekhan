@@ -274,15 +274,33 @@ pub(crate) fn validate_timeout(
 /// Structural validation for a `StreamConsumer`: exactly one inbound `stream`
 /// handle edge + exactly one inbound `control` handle edge (the producer's data
 /// Signal place + its EOS/completion token). A `Custom` reduce expression must
-/// parse as a Rhai expression.
+/// parse as a Rhai expression. Per `dispatch` mode: `Rhai` must have NO body
+/// edges; `SequentialBody`/`ParallelBody` require a body (body_in+body_out edges,
+/// a valid `resultVar`, a supported body terminal kind, and no enclosing Map);
+/// `LiveReduce` is rejected (Phase-3 capability).
 pub(crate) fn validate_stream_consumer(
     node: &WorkflowNode,
     graph: &WorkflowGraph,
     _wg: &WorkflowDiGraph<'_>,
 ) -> Result<(), CompileError> {
-    let WorkflowNodeData::StreamConsumer { reduce, .. } = &node.data else {
+    use crate::models::template::StreamDispatch;
+    let WorkflowNodeData::StreamConsumer {
+        reduce,
+        result_var,
+        dispatch,
+        ..
+    } = &node.data
+    else {
         unreachable!("validate_stream_consumer on non-StreamConsumer variant");
     };
+
+    // `LiveReduce` is not supported this phase — reject cleanly (same verdict the
+    // lowering raises, surfaced at publish so the editor rings the node).
+    if matches!(dispatch, StreamDispatch::LiveReduce) {
+        return Err(CompileError::StreamConsumerLiveReduceUnsupported {
+            node_id: node.id.clone(),
+        });
+    }
 
     // Count inbound edges per target handle — exactly one `stream` and one
     // `control` are required (a missing/duplicated handle is a wiring bug).
@@ -323,6 +341,77 @@ pub(crate) fn validate_stream_consumer(
             });
         }
     }
+
+    // ── Per-dispatch body wiring ────────────────────────────────────────────
+    let has_body_in = graph
+        .edges
+        .iter()
+        .any(|e| e.source == node.id && e.source_handle.as_deref() == Some("body_in"));
+    let has_body_out = graph
+        .edges
+        .iter()
+        .any(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"));
+
+    match dispatch {
+        // `Rhai`: pure fold, no body. Any body wiring is a config error.
+        StreamDispatch::Rhai => {
+            if has_body_in || has_body_out {
+                return Err(CompileError::StreamConsumerRhaiHasBody {
+                    node_id: node.id.clone(),
+                });
+            }
+        }
+        // Body modes: require the body, a valid resultVar, a supported terminal,
+        // and no enclosing Map. Mirrors `validate_map`.
+        StreamDispatch::SequentialBody | StreamDispatch::ParallelBody => {
+            if result_var.trim().is_empty() || !is_rhai_ident(result_var.trim()) {
+                return Err(CompileError::MapResultVarInvalid {
+                    node_id: node.id.clone(),
+                    result_var: result_var.clone(),
+                });
+            }
+            // Nested inside a Map is unsupported (single scatter scope only).
+            if let Some(outer_id) = enclosing_map(graph, node) {
+                return Err(CompileError::StreamConsumerNestedInMap {
+                    node_id: node.id.clone(),
+                    outer_id,
+                });
+            }
+            if !has_body_in || !has_body_out {
+                return Err(CompileError::StreamConsumerBodyEmpty {
+                    node_id: node.id.clone(),
+                });
+            }
+            // Body-terminal kind gate: the node that SOURCES the `body_out` edge
+            // must be a parked-producer kind that emits a
+            // `detail.outputs.<resultVar>` envelope the gather can lift +
+            // correlate — same constraint as a Map body terminal.
+            let by_id: HashMap<&str, &WorkflowNode> =
+                graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+            for e in graph
+                .edges
+                .iter()
+                .filter(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"))
+            {
+                let Some(term) = by_id.get(e.source.as_str()) else {
+                    continue; // dangling source — reachability error surfaces elsewhere
+                };
+                if matches!(term.data, WorkflowNodeData::Map { .. }) {
+                    continue; // nested Map: deferred to that Map's own MapNested check
+                }
+                if !map_body_terminal_supported(&term.data) {
+                    return Err(CompileError::StreamConsumerBodyUnsupported {
+                        node_id: node.id.clone(),
+                        child_id: term.id.clone(),
+                        kind: term.data.type_name().to_string(),
+                    });
+                }
+            }
+        }
+        // Already rejected above.
+        StreamDispatch::LiveReduce => unreachable!("LiveReduce rejected above"),
+    }
+
     Ok(())
 }
 

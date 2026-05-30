@@ -459,6 +459,12 @@ pub enum WorkflowNodeData {
         /// `.value`).
         #[serde(default)]
         reduce: StreamReduce,
+        /// How each drained chunk is dispatched BEFORE the reduce. Defaults to
+        /// `Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every
+        /// shipped consumer template omits this field and MUST decode to `Rhai`;
+        /// any other default would make them demand a body and break at publish.
+        #[serde(default)]
+        dispatch: StreamDispatch,
     },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token
@@ -1423,6 +1429,36 @@ impl Default for StreamReduce {
     fn default() -> Self {
         StreamReduce::Array
     }
+}
+
+/// How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.
+/// Tagged on `mode` (camelCase), mirroring the other config enums.
+///
+/// - `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of
+///   `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer
+///   template omits `dispatch` and decodes to this — anything else would force a
+///   body and break those templates at publish.
+/// - `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at
+///   a time in strict stream-sequence order (a single-permit lock + a
+///   next-expected-sequence guard), then the N results are reduced.
+/// - `ParallelBody`: same per-chunk body, dispatched map-style concurrently;
+///   results are re-ordered + reduced at the gather barrier.
+/// - `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not
+///   implemented in this phase — the lowering rejects it cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema, Default)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum StreamDispatch {
+    /// Pure-Rhai passthrough, no per-chunk body. THE DEFAULT — keeps every
+    /// existing consumer template byte-identical.
+    #[default]
+    Rhai,
+    /// Python body per chunk, strictly one-at-a-time in stream order, then reduce.
+    SequentialBody,
+    /// Python body per chunk, map-style concurrent, reduce at the gather.
+    ParallelBody,
+    /// One long-lived Python reducer fed chunks live over IPC. Phase-3 only —
+    /// the compiler rejects this mode for now.
+    LiveReduce,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]

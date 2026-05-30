@@ -185,6 +185,31 @@ pub(crate) fn resolve_ref(
                 }) {
                     return RefResolution::Control;
                 }
+                // Body-mode StreamConsumer chunk namespace (`<resultVar>.<field>`).
+                // A node whose `parent_id` is a body-mode StreamConsumer runs once
+                // per drained chunk; the dispatch stamps `#{ <resultVar>: <value>,
+                // .. }` ONTO each body token (namespace-on-token, same as Map's
+                // `<itemVar>`). So `<resultVar>.<field>` is token-resident inside
+                // the body — resolve as Control (no read-arc). Checked here for the
+                // same reason as the Map arm: `<resultVar>` is intentionally NOT a
+                // node slug. Only the body-dispatch modes stamp the namespace; the
+                // `Rhai`/`LiveReduce` modes have no body, so the match is gated to
+                // `SequentialBody`/`ParallelBody`.
+                if graph.nodes.iter().any(|n| {
+                    n.id == parent
+                        && matches!(
+                            &n.data,
+                            WorkflowNodeData::StreamConsumer { result_var, dispatch, .. }
+                                if result_var == root
+                                    && matches!(
+                                        dispatch,
+                                        crate::models::template::StreamDispatch::SequentialBody
+                                            | crate::models::template::StreamDispatch::ParallelBody
+                                    )
+                        )
+                }) {
+                    return RefResolution::Control;
+                }
             }
             let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
                 return RefResolution::Unresolved;

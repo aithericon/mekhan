@@ -10,6 +10,7 @@
 	import * as Select from '$lib/components/ui/select';
 
 	type StreamReduce = components['schemas']['StreamReduce'];
+	type StreamDispatch = components['schemas']['StreamDispatch'];
 
 	type Props = {
 		data: StreamConsumerNodeData;
@@ -22,11 +23,21 @@
 	const reduce = $derived((data.reduce ?? { kind: 'array' }) as StreamReduce);
 	const reduceKind = $derived(reduce.kind);
 
+	const dispatch = $derived((data.dispatch ?? { mode: 'rhai' }) as StreamDispatch);
+	const dispatchMode = $derived(dispatch.mode);
+
 	const kindLabels: Record<StreamReduce['kind'], string> = {
 		array: 'Array (ordered list of chunks)',
 		concat: 'Concat (join into a string)',
 		sum: 'Sum (numeric total)',
 		custom: 'Custom (Rhai expression)'
+	};
+
+	const dispatchLabels: Record<StreamDispatch['mode'], string> = {
+		rhai: 'Rhai (fold chunks directly, no body)',
+		sequentialBody: 'Sequential body (Python per chunk, in order)',
+		parallelBody: 'Parallel body (Python per chunk, map-style)',
+		liveReduce: 'Live reduce (one long-lived Python loop)'
 	};
 
 	function setKind(kind: StreamReduce['kind']) {
@@ -38,6 +49,10 @@
 			case 'custom': next = { kind: 'custom', expr: '' }; break;
 		}
 		onchange({ ...data, reduce: next });
+	}
+
+	function setDispatch(mode: StreamDispatch['mode']) {
+		onchange({ ...data, dispatch: { mode } as StreamDispatch });
 	}
 </script>
 
@@ -62,7 +77,49 @@
 </FormField>
 
 <!--
-	Reduce strategy: how the drained chunks are folded into the single output token.
+	Dispatch mode: how each drained chunk is handled BEFORE the reduce.
+	Rhai folds chunks directly; the body modes run a Python child per chunk
+	(wire it via the body_in/body_out handles); liveReduce runs one long-lived
+	Python loop that owns the reduce itself.
+-->
+<FormField label="Dispatch" for="sc-dispatch-mode">
+	<Select.Root
+		type="single"
+		value={dispatchMode}
+		onValueChange={(v) => {
+			if (v) setDispatch(v as StreamDispatch['mode']);
+		}}
+		disabled={readonly}
+	>
+		<Select.Trigger id="sc-dispatch-mode" class="w-full" disabled={readonly}>
+			{dispatchLabels[dispatchMode]}
+		</Select.Trigger>
+		<Select.Content>
+			<Select.Item value="rhai"           label="Rhai (fold chunks directly, no body)" />
+			<Select.Item value="sequentialBody" label="Sequential body (Python per chunk, in order)" />
+			<Select.Item value="parallelBody"   label="Parallel body (Python per chunk, map-style)" />
+			<Select.Item value="liveReduce"     label="Live reduce (one long-lived Python loop)" />
+		</Select.Content>
+	</Select.Root>
+	{#if dispatchMode === 'sequentialBody' || dispatchMode === 'parallelBody'}
+		<p class="mt-1 text-sm text-muted-foreground">
+			Each chunk runs a Python body child. Wire the body via the
+			<code class="font-mono">body_in</code> / <code class="font-mono">body_out</code>
+			handles. The {dispatchMode === 'sequentialBody' ? 'in-order' : 'concurrent'} results
+			are then folded by the reduce below.
+		</p>
+	{:else if dispatchMode === 'liveReduce'}
+		<p class="mt-1 text-sm text-muted-foreground">
+			One long-lived Python loop is fed chunks and produces the result itself —
+			the reduce is managed by the Python loop, not the picker below.
+		</p>
+	{/if}
+</FormField>
+
+{#if dispatchMode !== 'liveReduce'}
+<!--
+	Reduce strategy: how the drained chunks (or per-chunk body results) are folded
+	into the single output token. Hidden for liveReduce — the Python loop reduces.
 -->
 <FormField label="Reduce strategy" for="sc-reduce-kind">
 	<Select.Root
@@ -127,6 +184,7 @@
 			Must return the reduced value.
 		</p>
 	</FormField>
+{/if}
 {/if}
 
 <p class="text-sm italic text-muted-foreground">
