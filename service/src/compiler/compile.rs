@@ -441,6 +441,18 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     ),
     CompileError,
 > {
+    // 0. Normalize Agent `response_format` `$ref`s against the workflow
+    //    `definitions` up front. An Agent's output is DERIVED from its
+    //    response_format (no cached output port), and the derivation /
+    //    token-shape paths don't carry `definitions` — so a bare `$ref`
+    //    schema would collapse to the default envelope and dangle downstream
+    //    `<agent>.<field>` borrows. Resolving into the node data here means
+    //    lowering, publish-interface AND token-shape analysis all see a
+    //    self-contained schema. Borrows the graph unchanged when no agent
+    //    carries a ref. See `schema_refs::inline_agent_response_format_refs`.
+    let normalized = crate::compiler::schema_refs::inline_agent_response_format_refs(graph)?;
+    let graph = normalized.as_ref();
+
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
 

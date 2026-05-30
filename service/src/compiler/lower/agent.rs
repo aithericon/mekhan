@@ -134,26 +134,16 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // downstream `<agent>.<schema_field>` borrows dangle. Falls back to the
     // default envelope when no response_format is set.
     //
-    // Resolve `{"$ref": "#/definitions/…"}` against the workflow `definitions`
-    // on a COPY before deriving — `derive_output_port` can't see the ref
-    // target otherwise and would silently fall back to the default envelope
-    // (this is exactly what bit `classify-and-group-v1`, whose schema is a
-    // bare `$ref`). The virtual node below keeps the UNRESOLVED config so the
-    // delegated `lower_automated_step` inlines refs the same way a
-    // hand-authored LLM step's config is inlined — preserving the
-    // byte-identical contract. Ref-resolution failures here are non-fatal: the
-    // derive falls back to the default envelope and `lower_automated_step`'s
-    // own `inline_refs` surfaces the real error with a precise JSON path.
-    let derived_output = {
-        let mut resolved = llm_config.clone();
-        let _ = crate::compiler::schema_refs::inline_refs(&mut resolved, cx.definitions);
-        crate::backends::lookup(ExecutionBackendType::Llm)
-            .and_then(|d| d.derive_output_port)
-            .map(|f| f(&resolved))
-            .unwrap_or_else(|| {
-                crate::models::template::default_output_port(ExecutionBackendType::Llm)
-            })
-    };
+    // `{"$ref": …}` schemas are already inlined into the node data up front by
+    // the compile-entry pass (`schema_refs::inline_agent_response_format_refs`),
+    // so `response_format` / `llm_config` here is self-contained — no per-site
+    // ref resolution needed (that pass is the single normalization source).
+    let derived_output = crate::backends::lookup(ExecutionBackendType::Llm)
+        .and_then(|d| d.derive_output_port)
+        .map(|f| f(&llm_config))
+        .unwrap_or_else(|| {
+            crate::models::template::default_output_port(ExecutionBackendType::Llm)
+        });
 
     let virtual_node = WorkflowNode {
         id: cx.node.id.clone(),
