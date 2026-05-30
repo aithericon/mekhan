@@ -732,3 +732,247 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         "leased-loop slurm run should have produced engine events"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fail-fast: when the held lease allocation DIES mid-flight (e.g. the cluster
+// preempts/kills it), the leased loop must FAIL FAST — detect the death via the
+// per-cluster watcher (held-alloc-death → `lease_failed` signal → `t_lease_abort`
+// throws → NetFailed) instead of hanging forever waiting for a body result from
+// a dead drain executor. This exercises the failure-routing stamp the allocator
+// writes into salloc `--comment` (so the watcher can map the dead alloc back to
+// the loop's `lease_failed` place).
+//
+// REQUIRES SLURM ACCOUNTING (`sacct`). The watcher distinguishes a KILLED alloc
+// (CANCELLED/FAILED → JobStatus::Failed → the `lease_failed` route) from a
+// normal release ONLY via `sacct`'s terminal state. Without accounting the
+// watcher falls back to squeue-disappearance, which infers `Completed` for
+// EVERY vanished job and so cannot tell a kill from a release — the failure
+// route never fires. The dev docker image (`engine/infra/slurm`) ships with
+// `sacct` DISABLED ("Slurm accounting storage is disabled"), so this test only
+// passes against a real Slurm cluster with accounting (`slurmdbd`) enabled. The
+// fail-fast WIRING (compiler `t_lease_abort`) + the routing stamp are
+// offline-covered; the Nomad watcher can prove death-detection live without an
+// accounting dependency (it streams allocation events).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SLEEP_PY: &str = r#"import time
+log_info("fail-fast body sleeping to hold the lease")
+time.sleep(45)
+set_output("ran", True)
+"#;
+
+/// Create the Slurm datacenter resource (connection-on-resource, inline PEM).
+async fn create_slurm_dc(app: &axum::Router, display: &str) -> Uuid {
+    let ssh_key_pem = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../engine/infra/slurm/ssh/slurm_test"
+    ))
+    .expect("read engine/infra/slurm/ssh/slurm_test private key");
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/resources")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "path": DC_ALIAS,
+                        "resource_type": "datacenter",
+                        "display_name": display,
+                        "config": {
+                            "scheduler_flavor": "slurm",
+                            "ssh_host": std::env::var("TEST_SLURM_SSH_HOST").unwrap_or_else(|_| "localhost".to_string()),
+                            "ssh_port": std::env::var("TEST_SLURM_SSH_PORT").ok().and_then(|s| s.parse::<u16>().ok()).unwrap_or(2222),
+                            "ssh_user": std::env::var("TEST_SLURM_SSH_USER").unwrap_or_else(|_| "testuser".to_string()),
+                            "ssh_known_hosts": "accept",
+                            "template_dir": std::env::var("TEST_SLURM_TEMPLATE_DIR").unwrap_or_else(|_| "/opt/petri/templates".to_string()),
+                            "ssh_key": ssh_key_pem
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::CREATED, "create slurm dc: {body}");
+    body["id"].as_str().unwrap().parse().unwrap()
+}
+
+async fn instance_status(db: &sqlx::PgPool, instance_id: Uuid) -> String {
+    sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+        .bind(instance_id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "live Slurm-lease fail-fast e2e: needs `just dev slurm-up` + VAULT_* + TEST_S3_* \
+            AND Slurm ACCOUNTING (sacct/slurmdbd) enabled — the dev docker image disables it, \
+            so the watcher can't distinguish a killed alloc from a release. See the module note."]
+async fn leased_loop_fails_fast_when_held_alloc_dies() {
+    if !engine_available().await {
+        panic!("engine not available at {} — start the stack", engine_url());
+    }
+
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let kv = listener_nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("kv");
+    let sub_mgr =
+        std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let listener_db = db.clone();
+    tokio::spawn(async move {
+        start_lifecycle_listener(
+            listener_nats,
+            listener_db,
+            sub_mgr,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+        .await;
+    });
+
+    let resource_id = create_slurm_dc(&app, "Slurm DC (fail-fast e2e)").await;
+    let pool_net_id = format!("pool-{resource_id}");
+    let pool_deadline = Instant::now() + Duration::from_secs(60);
+    while !net_running(&pool_net_id).await {
+        if Instant::now() > pool_deadline {
+            panic!("lease-adapter net `{pool_net_id}` did not reach running within 60s");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // Publish a leased loop whose body SLEEPS, so the held alloc stays up long
+    // enough for us to kill it mid-flight.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Leased-Loop Fail-Fast E2E",
+                        "graph": leased_loop_graph("lp", "body"),
+                        "files": { "body": { "main.py": SLEEP_PY } },
+                        "author_id": Uuid::new_v4(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
+    let template_id: Uuid = body_json(resp.into_body()).await["id"].as_str().unwrap().parse().unwrap();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let pub_body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "template_id": template_id, "created_by": Uuid::new_v4(),
+                            "metadata": { "e2e": "lease_fail_fast" } })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let inst_status = resp.status();
+    let instance = body_json(resp.into_body()).await;
+    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
+
+    // Wait for the held alloc to appear (acquire → salloc).
+    let alloc_deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let ids = squeue_lease_ids(instance_id, "lp");
+        if !ids.is_empty() {
+            break;
+        }
+        let st = instance_status(&db, instance_id).await;
+        assert!(
+            st != "failed" && st != "completed",
+            "instance reached {st} before the held alloc was ever observed"
+        );
+        if Instant::now() > alloc_deadline {
+            panic!("held Slurm alloc never appeared within 120s — acquire did not salloc");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // KILL the held allocation out from under the loop. `scancel` by the
+    // grant-derived job name cancels the salloc (and the srun'd drain executor
+    // on it) — simulating a cluster-side preemption / node failure.
+    let grant = format!("{instance_id}:lp");
+    slurm_ssh(&format!("scancel --name='petri-{grant}' 2>/dev/null || true"));
+
+    // Fail-fast assertion: the instance must reach `failed` — NOT hang, NOT
+    // complete — within a bounded window (watcher poll ~5s + signal route +
+    // t_lease_abort). A `completed` here means the loop ignored the dead lease;
+    // a timeout means it HUNG on a dead executor (the bug fail-fast prevents).
+    let fail_deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let st = instance_status(&db, instance_id).await;
+        if st == "failed" {
+            break;
+        }
+        assert_ne!(
+            st, "completed",
+            "instance COMPLETED after its held alloc was killed — fail-fast did \
+             not trigger (the loop ignored the dead lease / the failure-routing \
+             stamp did not reach the watcher)"
+        );
+        if Instant::now() > fail_deadline {
+            panic!(
+                "instance did not fail within 120s of killing the held alloc \
+                 (status: {st}) — the leased loop HUNG on a dead lease; the \
+                 held-alloc-death → lease_failed → t_lease_abort path did not fire"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // No-orphan: the failed loop must have released/cleaned its alloc — squeue
+    // for the grant goes empty within a deadline (scancel already removed it;
+    // assert it stays gone, i.e. the abort path didn't re-salloc).
+    let drain_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if squeue_lease_ids(instance_id, "lp").is_empty() {
+            break;
+        }
+        if Instant::now() > drain_deadline {
+            panic!("a Slurm alloc for the failed loop is still live 60s after fail — orphan");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
