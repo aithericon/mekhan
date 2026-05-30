@@ -1344,6 +1344,7 @@ fn subworkflow_tool(id: &str, label: &str, child_template_id: uuid::Uuid) -> Wor
                     accept: None,
                 }],
             },
+            input_contract: mekhan_service::models::template::default_subworkflow_input_contract(),
         },
         parent_id: None,
         width: None,
