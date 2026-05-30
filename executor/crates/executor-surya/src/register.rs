@@ -107,6 +107,18 @@ pub struct RegisterRequest {
     pub engines: serde_json::Value,
     pub loaded_models: Vec<String>,
     pub services: serde_json::Value,
+    /// Workstream #122: dispatch backend kind this pool advertises
+    /// ("http" / "python" / "surya" / "file_ops" / …). For the Surya OCR
+    /// pool this is always `"surya"` — cap-routing persists it on the
+    /// `compute_pools` row, threads it through `PickRouteResponse` →
+    /// `cloud-layer-workflow::merge_enrichment` → enriched effect_config →
+    /// mekhan executor token's `ExecutionSpec.backend`, where this crate's
+    /// `SuryaBackend::supports` matches on `spec.backend == "surya"`.
+    /// `#[serde(skip_serializing_if = "Option::is_none")]` preserves wire
+    /// compat with pre-#122 cap-routing instances which `#[serde(default)]`
+    /// the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_backend: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +213,9 @@ pub fn build_register_request(
         engines: build_engines_advertisement(engine_capabilities),
         loaded_models: vec![],
         services,
+        // Workstream #122: the Surya pool dispatches OCR via its Surya
+        // subprocess; mekhan's SuryaBackend matches `spec.backend == "surya"`.
+        pool_backend: Some("surya".to_string()),
     }
 }
 
@@ -297,6 +312,14 @@ mod tests {
             req.control_url.as_deref(),
             Some("http://127.0.0.1:3302"),
             "executor-surya's control_url defaults to pool_url"
+        );
+        // Workstream #122: pool_backend advertisement must be "surya" so
+        // cap-routing threads it into ExecutionSpec.backend, where mekhan's
+        // SuryaBackend::supports matches `spec.backend == "surya"`.
+        assert_eq!(
+            req.pool_backend.as_deref(),
+            Some("surya"),
+            "Surya pool MUST advertise pool_backend=\"surya\""
         );
     }
 
