@@ -14,7 +14,11 @@
       ],
       "MetaOptional": [
         "LEASE_MAX_JOBS",
-        "LEASE_IDLE_TIMEOUT"
+        "LEASE_IDLE_TIMEOUT",
+        "petri_net_id",
+        "petri_place",
+        "petri_signal_key",
+        "petri_signal_failed"
       ]
     },
     "TaskGroups": [

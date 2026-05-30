@@ -394,10 +394,14 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
                         "path": DC_ALIAS,
                         "resource_type": "datacenter",
                         "display_name": "Nomad Datacenter (e2e)",
+                        // Multi-cluster: the cluster CONNECTION lives on the
+                        // resource (not engine env). The engine's ClusterRegistry
+                        // builds a NomadAllocatorClient::from_connection(nomad_addr)
+                        // from the effect_config this resource threads.
                         "config": {
-                            "allocator_url": "http://unused",
                             "scheduler_flavor": "nomad",
-                            "token": "unused"
+                            "nomad_addr": std::env::var("TEST_NOMAD_ADDR")
+                                .unwrap_or_else(|_| "http://localhost:4646".to_string())
                         }
                     })
                     .to_string(),

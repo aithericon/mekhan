@@ -252,29 +252,26 @@ fn split_config(
         )));
     }
 
-    // Required-field gate: every secret field must be supplied (we can't
-    // synthesize Vault writes from nothing). Public fields use the type's
-    // own optionality semantics; we keep the schema check shallow and
-    // delegate field-kind enforcement to the type's JSON Schema, surfaced
-    // to the frontend via `GET /types` so the form is self-validating.
-    let mut missing = Vec::new();
-    for f in descriptor.secret_fields {
-        if !secret.contains_key(*f) {
-            missing.push((*f).to_string());
-        }
-    }
-    // Required *public* fields — read off the schema's "required" array.
-    // The schemars-derived schema lists non-Option fields as required;
-    // optional ones (e.g. Postgres.sslmode) are absent from the list.
+    // Required-field gate, driven SOLELY by the schema's "required" array (the
+    // schemars-derived schema lists non-Option fields as required; Option ones
+    // — e.g. Postgres.sslmode, and every per-flavor datacenter connection field
+    // incl. the `ssh_key`/`nomad_token`/`token` secrets — are absent). A secret
+    // field is therefore required iff the schema says so: a flavor-tagged
+    // datacenter supplies only its own flavor's secret (slurm→ssh_key,
+    // nomad→nomad_token, both Option), so we must NOT demand all three. The
+    // per-flavor connection COMPLETENESS (a slurm datacenter must carry ssh_host
+    // + ssh_key, etc.) is enforced separately by validate_datacenter_connection.
     let schema = schema_json_cached(descriptor);
+    let mut missing = Vec::new();
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
         for r in required {
             if let Some(name) = r.as_str() {
-                // Skip fields that are secret — already checked above.
-                if descriptor.secret_fields.contains(&name) {
-                    continue;
-                }
-                if !public.contains_key(name) {
+                let present = if descriptor.secret_fields.contains(&name) {
+                    secret.contains_key(name)
+                } else {
+                    public.contains_key(name)
+                };
+                if !present {
                     missing.push(name.to_string());
                 }
             }
