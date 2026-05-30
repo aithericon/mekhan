@@ -1249,6 +1249,146 @@ mod tests {
         );
     }
 
+    /// Compile the `document-pipeline-branching-v1` demo to AIR and dump the
+    /// canonical JSON to a file so the clinic can ship the **compiler output**
+    /// (not a hand-authored net). Gated on `DUMP_BRANCHING_AIR=<path>`: when
+    /// the env var is set, the test writes the AIR to that path; otherwise it
+    /// is a no-op (keeps CI quiet). This is the single export step in the
+    /// graph.json → clinic-AIR regeneration flow — see the demo README.
+    ///
+    /// The clinic ships this AIR through `apply-workflows.sh` →
+    /// `POST /api/v1/templates/apply-air`, which stores the AIR **verbatim**
+    /// and uploads **nothing** to S3 (the endpoint is opaque to
+    /// mekhan-service). The compiler's default lowering parks every node's
+    /// static config in the S3 side-channel and emits a `config_ref`
+    /// `storage_path` — which would dangle in the clinic path because no
+    /// publish-time upload runs. So this dumper post-processes the AIR to
+    /// **inline** each parked config back into its prepare-transition Rhai
+    /// (`config_ref { storage_path }` → `config { … }`), using the
+    /// `node_configs` side-channel the compiler returns. Per
+    /// `executor-domain::ExecutionSpec`, an inline `config` with no
+    /// `config_ref` is a first-class, fully-supported path (the executor's
+    /// `FetchConfigHook` is skipped). The Python `main.py` source is already
+    /// inlined by the lowering (`inputs[].source.content`), so the resulting
+    /// AIR is fully self-contained — no S3 dependency.
+    #[test]
+    fn dump_document_pipeline_branching_v1_air() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+        use crate::compiler::rhai_gen::json_to_rhai_literal;
+
+        let Some(out_path) = std::env::var_os("DUMP_BRANCHING_AIR") else {
+            return;
+        };
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+            .expect("document-pipeline-branching-v1 must load");
+
+        let files = node_files_inline(&demo.files);
+        let (mut air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("document-pipeline-branching-v1 must compile to AIR");
+
+        // Inline every parked config back into its prepare-transition Rhai so
+        // the AIR carries no `config_ref` storage dependency. The compiler
+        // minted each `config_ref` as the literal
+        //   "config_ref": #{ "storage_path": "<key>" }
+        // inside the `<node>/prepare` transition's logic source. We replace
+        // that exact substring with
+        //   "config": <rhai literal of the parked config>
+        // and assert each replacement landed (so a lowering change to the
+        // emitted shape fails loudly here rather than shipping a dangling ref).
+        let transitions = air
+            .get_mut("transitions")
+            .and_then(|v| v.as_array_mut())
+            .expect("AIR must carry a transitions array");
+        let mut inlined = 0usize;
+        for (node_id, config) in &node_configs {
+            let storage_key =
+                ConfigStorage::ephemeral().key(node_id);
+            let needle = format!(
+                "\"config_ref\": #{{ \"storage_path\": \"{}\" }}",
+                storage_key.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            let replacement =
+                format!("\"config\": {}", json_to_rhai_literal(config));
+
+            let prepare_id = format!("{node_id}/prepare");
+            let t = transitions
+                .iter_mut()
+                .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(prepare_id.as_str()))
+                .unwrap_or_else(|| panic!("prepare transition `{prepare_id}` must exist"));
+            let src = t
+                .pointer_mut("/logic/source")
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| panic!("`{prepare_id}` must carry a Rhai logic.source"));
+            assert!(
+                src.contains(&needle),
+                "`{prepare_id}` Rhai must contain the config_ref literal to inline; \
+                 looked for: {needle}"
+            );
+            let rewritten = src.replace(&needle, &replacement);
+            *t.pointer_mut("/logic/source").unwrap() =
+                serde_json::Value::String(rewritten);
+            inlined += 1;
+        }
+        assert_eq!(
+            inlined,
+            node_configs.len(),
+            "every parked node config must be inlined"
+        );
+
+        // No dangling storage refs may remain in any executable transition
+        // logic (proves the inlining was total). Note: the `definitions` block
+        // carries the *schema* for the ExecutorSubmitInput token, whose shape
+        // legitimately includes an (unused, None) `config_ref` field plus
+        // doc-comments that name `config_ref` / the `node-config.json` key
+        // pattern — that is inert token-type metadata, not a live storage
+        // reference. The load-bearing signal that a real parked-config offload
+        // survived is a `node-config.json` storage_path inside a
+        // `transition.logic.source`, so we assert on that surface only.
+        for t in air
+            .get("transitions")
+            .and_then(|v| v.as_array())
+            .expect("transitions array")
+        {
+            if let Some(src) = t.pointer("/logic/source").and_then(|v| v.as_str()) {
+                let tid = t.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                assert!(
+                    !src.contains("node-config.json"),
+                    "transition `{tid}` logic.source still references a node-config.json \
+                     storage path — inlining missed it"
+                );
+                assert!(
+                    !src.contains("config_ref"),
+                    "transition `{tid}` logic.source still references config_ref — \
+                     inlining missed it"
+                );
+            }
+        }
+
+        let canonical = serde_json::to_string_pretty(&air).expect("AIR must serialize");
+        std::fs::write(&out_path, format!("{canonical}\n"))
+            .unwrap_or_else(|e| panic!("write AIR to {out_path:?}: {e}"));
+        eprintln!(
+            "wrote self-contained branching AIR ({} bytes, {} configs inlined) to {:?}",
+            canonical.len(),
+            inlined,
+            out_path
+        );
+    }
+
     /// `classify-and-group-v1` is the strict prefix of `document-pipeline-v1`
     /// (OCR → vision-LLM classify; no extract / persist / verify). The demo
     /// carries a strict `GroupedClassification` `$ref` response_format schema

@@ -321,7 +321,6 @@ pub async fn get_token_payload(
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
-    use std::sync::Arc;
 
     use axum::{
         body::Body,
