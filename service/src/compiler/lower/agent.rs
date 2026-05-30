@@ -118,6 +118,9 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             output: crate::models::template::default_output_port(ExecutionBackendType::Llm),
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            // Agent's degenerate single-shot LLM body does not expose the
+            // prototype streaming side-channel.
+            stream_output: false,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,
@@ -501,6 +504,8 @@ fn lower_agent_loop(
                 process_step: None,
                 catalogue: false,
                 process: false,
+                // Agent body has no `stream_output` side-channel.
+                stream_log: None,
             },
         )
     });

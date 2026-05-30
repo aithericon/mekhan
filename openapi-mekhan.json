@@ -13647,6 +13647,10 @@
                 "$ref": "#/components/schemas/RetryPolicy",
                 "description": "Retry behaviour on execution failure/timeout. Defaults to 3\nimmediate retries (the historical hardcoded value), so existing\ntemplates keep their prior semantics without re-authoring."
               },
+              "streamOutput": {
+                "type": "boolean",
+                "description": "PROTOTYPE — opt-in streaming side-channel. When `true`, the node\nexposes a second output port \"stream\" and the compiler synthesizes a\nSignal place `p_{id}_stream` that receives ONE token per executor\n`EventCategory::Log` event (Python `log_info()/log_debug()/…`). An\nedge from the \"stream\" handle fires the downstream node once per log\ntoken; the normal \"out\" control token still governs termination.\nPlain `bool` + `#[serde(default)]` ⇒ existing templates (field\nabsent → `false`) round-trip unchanged (same precedent as\n`retry_policy`/`deployment_model`)."
+              },
               "type": {
                 "type": "string",
                 "enum": [

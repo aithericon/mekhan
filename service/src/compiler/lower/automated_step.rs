@@ -78,11 +78,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         execution_spec,
         retry_policy,
         output,
+        stream_output,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
+    let stream_output = *stream_output;
 
     // Is this the terminal node of a Map body? If so it must forward its FULL
     // completed envelope (park data AND the whole token) so the Map's
@@ -141,6 +143,23 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     let p_error: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
 
+    // PROTOTYPE — streaming side-channel: when `stream_output` is set, mint a
+    // Signal place `p_{id}_stream` (intentionally multi-token — one token per
+    // executor Log event) at NODE scope and hand it to the lifecycle's
+    // `stream_log` bridge below. The lifecycle's fanout copies each log token
+    // here AND keeps hpi_logs intact. A downstream edge from the node's "stream"
+    // handle consumes from here (registered in `output_places`). Leftover stream
+    // tokens never block `NetCompleted` (Signal is never terminal); the slim
+    // control token still governs completion.
+    let p_stream: Option<PlaceHandle<DynamicToken>> = if stream_output {
+        Some(ctx.signal(format!("p_{id}_stream"), format!("{label} - Stream")))
+    } else {
+        None
+    };
+    // Clone for the move into the `scoped_prefix` closure (the original is
+    // consumed by `output_places` registration after the closure returns).
+    let p_stream_bridge = p_stream.clone();
+
     // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
     let handles = ctx.scoped_prefix(id, label, |ctx| {
         let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
@@ -189,6 +208,10 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
                 // causality consumer projects them into hpi_metrics /
                 // hpi_logs against the causality-discovered process.
                 process: true,
+                // PROTOTYPE — when set, the lifecycle ALSO copies each Log
+                // event onto this place (one token per `log_info()` call) so
+                // the node's "stream" handle fires the downstream once per log.
+                stream_log: p_stream_bridge,
             },
         );
 
@@ -239,18 +262,26 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         split_outputs(ctx, id, label, &p_output)
     };
 
+    // Slim control success output + the unchanged named "error" output. An
+    // edge from the node's error handle (source_handle == "error") wires to
+    // `p_error` via `find_output_place`; if no error edge exists `p_error`
+    // simply has no consumer.
+    let mut output_places = vec![
+        (None, p_ctrl),
+        (Some("error".to_string()), p_error),
+    ];
+    // PROTOTYPE — register the "stream" handle → `p_{id}_stream` so a normal
+    // edge from that handle (sourceHandle == "stream") wires the Signal place to
+    // the downstream transition via `wire_edge`/`find_output_place`. No special
+    // consuming transition is needed — the standard edge-wiring path applies.
+    if let Some(p_stream) = p_stream {
+        output_places.push((Some("stream".to_string()), p_stream));
+    }
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            // Slim control success output + the unchanged named "error"
-            // output. An edge from the node's error handle (source_handle
-            // == "error") wires to `p_error` via `find_output_place`; if no
-            // error edge exists `p_error` simply has no consumer.
-            output_places: vec![
-                (None, p_ctrl),
-                (Some("error".to_string()), p_error),
-            ],
+            output_places,
             input_places: HashMap::new(),
             input_handles: HashMap::new(),
         },
@@ -829,6 +860,13 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
                 process_step: None,
                 catalogue: true,
                 process: true,
+                // TODO(streaming-output prototype): the `stream_output` "stream"
+                // handle is wired only on the plain inline executor path
+                // (`lower_automated_step`). Pooled/leased steps do not yet
+                // expose the stream side-channel — `None` keeps this path
+                // byte-identical. Plumbing `p_{id}_stream` through here would
+                // mirror the inline path exactly.
+                stream_log: None,
             },
         );
 

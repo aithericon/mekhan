@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000f14",
+  "name": "14 · Streaming Output",
+  "description": "Prototype of the streaming-output side-channel. A producer AutomatedStep with streamOutput=true emits ~8 log_info() chunk events; the compiler routes them (via petri_event_log) into a Signal place p_producer_stream, and a consumer step wired from the producer's 'stream' handle fires once per token. The control 'out' token governs termination (producer -> End) as today; 'stream' is purely additive. Known prototype limits: no stream backpressure or end-of-stream sentinel.",
+  "visibility": "public"
+}

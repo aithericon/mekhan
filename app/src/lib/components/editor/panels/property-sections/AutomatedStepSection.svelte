@@ -351,6 +351,18 @@
 		const found = schedulerResources.find((r) => r.path === scheduler);
 		return found ? `${found.path} — ${found.display_name}` : scheduler;
 	}
+
+	// Streaming side-channel. When on, the compiler synthesizes a Signal place
+	// `p_{id}_stream` and routes the runner's log events (SDK `log_info()` …)
+	// into it — one token per log event — exposed as a second "stream" output
+	// port. The normal control "out" token still governs termination; "stream"
+	// is purely additive. Optional-chained for legacy data (absent → false);
+	// Rust `#[serde(default)]` covers the wire side.
+	const streamOutput = $derived(data.streamOutput ?? false);
+
+	function setStreamOutput(on: boolean) {
+		onchange({ ...data, streamOutput: on });
+	}
 </script>
 
 <div class="space-y-1.5">
@@ -581,6 +593,26 @@
 			{/if}
 		</div>
 	{/if}
+</div>
+
+<div class="space-y-1 pt-3 border-t border-border/40">
+	<span class="text-sm font-medium text-muted-foreground">Streaming</span>
+	<label class="flex items-center gap-1.5 text-sm text-foreground">
+		<Checkbox
+			checked={streamOutput}
+			disabled={readonly}
+			onCheckedChange={(v) => setStreamOutput(v === true)}
+			data-testid="toggle-stream-output"
+		/>
+		Stream output
+	</label>
+	<p class="text-sm text-muted-foreground">
+		Adds a second <code class="font-mono">stream</code> output port that emits one
+		token per log event (the runner's <code class="font-mono">log_info()</code> …
+		calls) while the step runs. A downstream node wired from it fires once per
+		token. The normal <code class="font-mono">out</code> port still governs
+		completion — this is an additive side-channel.
+	</p>
 </div>
 
 <div class="space-y-2 pt-3 border-t border-border/40">

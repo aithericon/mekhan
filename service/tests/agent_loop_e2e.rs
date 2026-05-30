@@ -144,6 +144,7 @@ fn tool_child(id: &str, _agent_id: &str, tool_name: &str) -> WorkflowNode {
             ),
             retry_policy: RetryPolicy::default(),
             deployment_model: DeploymentModel::default(),
+            stream_output: false,
         },
         parent_id: None,
         width: None,

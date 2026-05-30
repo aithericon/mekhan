@@ -5385,6 +5385,18 @@ export interface components {
              *     templates keep their prior semantics without re-authoring.
              */
             retryPolicy?: components["schemas"]["RetryPolicy"];
+            /**
+             * @description PROTOTYPE — opt-in streaming side-channel. When `true`, the node
+             *     exposes a second output port "stream" and the compiler synthesizes a
+             *     Signal place `p_{id}_stream` that receives ONE token per executor
+             *     `EventCategory::Log` event (Python `log_info()/log_debug()/…`). An
+             *     edge from the "stream" handle fires the downstream node once per log
+             *     token; the normal "out" control token still governs termination.
+             *     Plain `bool` + `#[serde(default)]` ⇒ existing templates (field
+             *     absent → `false`) round-trip unchanged (same precedent as
+             *     `retry_policy`/`deployment_model`).
+             */
+            streamOutput?: boolean;
             /** @enum {string} */
             type: "automated_step";
         } | {

@@ -599,6 +599,7 @@ mod tests {
             output: default_automated_output_port(),
             retry_policy: RetryPolicy::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         };
         let decl = lookup_by_variant(&data).expect("automated_step registered");
         assert_eq!(decl.wire_name, "automated_step");
@@ -822,6 +823,7 @@ mod tests {
                 output: default_automated_output_port(),
                 retry_policy: RetryPolicy::default(),
                 deployment_model: Default::default(),
+                stream_output: false,
             },
             // Rhai-bearing only (no structural validate hook — covered by
             // guard_rhai_sources / validate_guards):

@@ -313,6 +313,17 @@ pub enum WorkflowNodeData {
         /// consolidation pivot).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
+        /// PROTOTYPE — opt-in streaming side-channel. When `true`, the node
+        /// exposes a second output port "stream" and the compiler synthesizes a
+        /// Signal place `p_{id}_stream` that receives ONE token per executor
+        /// `EventCategory::Log` event (Python `log_info()/log_debug()/…`). An
+        /// edge from the "stream" handle fires the downstream node once per log
+        /// token; the normal "out" control token still governs termination.
+        /// Plain `bool` + `#[serde(default)]` ⇒ existing templates (field
+        /// absent → `false`) round-trip unchanged (same precedent as
+        /// `retry_policy`/`deployment_model`).
+        #[serde(rename = "streamOutput", default)]
+        stream_output: bool,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -2559,6 +2570,8 @@ pub mod dsl {
                         // DSL does not model deployment topology — inline.
                         deployment_model: DeploymentModel::default(),
                         // DSL does not model resource pools (yet).
+                        // DSL does not model streaming output (prototype flag).
+                        stream_output: false,
                     })
                 }
                 "decision" => {
