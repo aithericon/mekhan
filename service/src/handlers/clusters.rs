@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 
+use serde_json::Value;
+
 use axum::{
     extract::{Path, State},
     Json,
@@ -115,16 +117,24 @@ async fn resolve_names(
 
 /// GET /api/v1/clusters
 ///
-/// List every live cluster client the engine's multi-cluster `ClusterRegistry`
-/// holds — connection health, watcher state, checkpoint cursor, active-lease
-/// count, last-signal timestamp, last error — joined with the backing
-/// datacenter resource's human name. Read-through of the engine's
-/// `GET /api/clusters`.
+/// List every REGISTERED datacenter (the `datacenter` resources in the DB),
+/// overlaid with the engine's live `ClusterRegistry` state when a cluster
+/// client is currently resident. This is the management view of "what clusters
+/// exist", NOT "what clusters happen to hold a connection right now": the engine
+/// builds a cluster client LAZILY on first lease and idle-tears-it-down after a
+/// grace window, so a registered-but-idle datacenter has NO live engine entry.
+/// Without the DB overlay it would vanish from the list the moment its last
+/// lease drained — which is exactly the "my pools aren't visible" surprise.
+///
+/// A datacenter with no live client shows `watcher_state: "idle"` /
+/// `connection_health: "idle"` and `active_lease_count: 0`. Any live engine
+/// cluster NOT backed by a current DB row (e.g. the `_env` dev bootstrap, or a
+/// just-deleted resource still draining) is appended so nothing is hidden.
 #[utoipa::path(
     get,
     path = "/api/v1/clusters",
     responses(
-        (status = 200, description = "Live cluster clients", body = ClustersResponse),
+        (status = 200, description = "Registered datacenters + live cluster state", body = ClustersResponse),
         (status = 502, description = "Engine cluster API unavailable", body = ErrorResponse),
     ),
     tag = "clusters",
@@ -133,50 +143,99 @@ pub async fn list_clusters(
     State(state): State<AppState>,
     _user: AuthUser,
 ) -> Result<Json<ClustersResponse>, ApiError> {
-    let payload = state.petri.list_clusters().await.map_err(petri_err)?;
-
-    // The engine returns `{ "clusters": [ ClusterView, … ] }`. Tolerate an
-    // absent/empty array (no clusters live yet).
-    let raw = payload
-        .get("clusters")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let ids: Vec<String> = raw
-        .iter()
-        .filter_map(|c| c.get("resource_id").and_then(|v| v.as_str()).map(str::to_string))
-        .collect();
-    let names = resolve_names(&state, &ids).await;
-
-    let clusters = raw
-        .iter()
-        .map(|c| {
-            let s = |k: &str| c.get(k).and_then(|v| v.as_str()).map(str::to_string);
-            let resource_id = s("resource_id").unwrap_or_default();
-            let (resource_path, display_name) = names
-                .get(&resource_id)
-                .map(|(p, d)| (Some(p.clone()), Some(d.clone())))
-                .unwrap_or((None, None));
-            ClusterSummary {
-                version: c.get("version").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-                flavor: s("flavor").unwrap_or_default(),
-                connection_health: s("connection_health").unwrap_or_else(|| "unknown".into()),
-                watcher_state: s("watcher_state").unwrap_or_else(|| "no_watcher".into()),
-                cursor: s("cursor"),
-                active_lease_count: c
-                    .get("active_lease_count")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0),
-                last_signal_at: s("last_signal_at"),
-                draining: c.get("draining").and_then(|v| v.as_bool()).unwrap_or(false),
-                last_error: s("last_error"),
-                resource_path,
-                display_name,
-                resource_id,
-            }
+    // Live engine state, keyed by resource_id. The engine being unreachable is a
+    // bad-gateway — but we still want the registered datacenters, so tolerate an
+    // empty/missing array rather than failing the whole list on a cold engine.
+    let live: HashMap<String, Value> = state
+        .petri
+        .list_clusters()
+        .await
+        .ok()
+        .and_then(|p| p.get("clusters").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| {
+            let id = c.get("resource_id").and_then(|v| v.as_str())?.to_string();
+            Some((id, c))
         })
         .collect();
+
+    // Registered datacenters — the source of truth for "what clusters exist".
+    let registered = sqlx::query_as::<_, (Uuid, String, String, i32, Option<String>)>(
+        "SELECT r.id, r.path, r.display_name, rv.version, \
+                rv.public_config->>'scheduler_flavor' AS flavor \
+         FROM resources r \
+         JOIN resource_versions rv \
+           ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.resource_type = 'datacenter' \
+         ORDER BY r.path",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    // Helper: read a live engine entry into a ClusterSummary, given the names.
+    let from_live = |c: &Value, resource_id: String, path: Option<String>, name: Option<String>| {
+        let s = |k: &str| c.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        ClusterSummary {
+            version: c.get("version").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+            flavor: s("flavor").unwrap_or_default(),
+            connection_health: s("connection_health").unwrap_or_else(|| "unknown".into()),
+            watcher_state: s("watcher_state").unwrap_or_else(|| "no_watcher".into()),
+            cursor: s("cursor"),
+            active_lease_count: c
+                .get("active_lease_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            last_signal_at: s("last_signal_at"),
+            draining: c.get("draining").and_then(|v| v.as_bool()).unwrap_or(false),
+            last_error: s("last_error"),
+            resource_path: path,
+            display_name: name,
+            resource_id,
+        }
+    };
+
+    let mut clusters: Vec<ClusterSummary> = Vec::with_capacity(registered.len() + live.len());
+    let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (id, path, display_name, version, flavor) in registered {
+        let id_str = id.to_string();
+        covered.insert(id_str.clone());
+        clusters.push(match live.get(&id_str) {
+            // Live client resident — show its real connection/watcher state.
+            Some(c) => from_live(c, id_str, Some(path), Some(display_name)),
+            // Registered but idle (no client built, or torn down after idle).
+            None => ClusterSummary {
+                version,
+                flavor: flavor.unwrap_or_default(),
+                connection_health: "idle".into(),
+                watcher_state: "idle".into(),
+                cursor: None,
+                active_lease_count: 0,
+                last_signal_at: None,
+                draining: false,
+                last_error: None,
+                resource_path: Some(path),
+                display_name: Some(display_name),
+                resource_id: id_str,
+            },
+        });
+    }
+
+    // Live engine clusters not backed by a current DB datacenter row (e.g. the
+    // `_env` dev bootstrap, or a resource deleted while still draining).
+    let orphan_ids: Vec<String> = live.keys().filter(|id| !covered.contains(*id)).cloned().collect();
+    let names = resolve_names(&state, &orphan_ids).await;
+    for id in orphan_ids {
+        if let Some(c) = live.get(&id) {
+            let (path, name) = names
+                .get(&id)
+                .map(|(p, d)| (Some(p.clone()), Some(d.clone())))
+                .unwrap_or((None, None));
+            clusters.push(from_live(c, id, path, name));
+        }
+    }
 
     Ok(Json(ClustersResponse { clusters }))
 }
