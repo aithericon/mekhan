@@ -273,6 +273,12 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // unaffected; only the token handed to the container's `body_out` changes.
     let (data_place_id, p_ctrl) = if is_map_body_terminal {
         park_outputs(ctx, id, label, &p_output)
+    } else if stream_output {
+        // Streaming producer: the slim control token additionally carries
+        // `stream_count` (the end-of-stream item count) so a downstream
+        // StreamConsumer's `t_close` can size its gather barrier. Plain
+        // `split_outputs` strips `detail`, losing it.
+        split_outputs_streaming(ctx, id, label, &p_output)
     } else {
         split_outputs(ctx, id, label, &p_output)
     };

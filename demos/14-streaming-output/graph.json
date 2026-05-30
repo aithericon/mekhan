@@ -11,25 +11,18 @@
         "initial": {
           "id": "in",
           "label": "Stream Input",
-          "fields": [
-            {
-              "name": "chunks",
-              "label": "Number of Chunks",
-              "kind": "number",
-              "required": false
-            }
-          ]
+          "fields": []
         }
       }
     },
     {
       "id": "producer",
       "type": "automated_step",
-      "position": { "x": 340, "y": 160 },
+      "position": { "x": 320, "y": 160 },
       "data": {
         "type": "automated_step",
         "label": "Producer",
-        "description": "Emits ~8 log_info() chunk events on its streaming side-channel, then parks a final output on the control path.",
+        "description": "Emits one distinct-named chunk per word on its streaming side-channel (set_output per call, mid-execution).",
         "streamOutput": true,
         "executionSpec": {
           "backendType": "python",
@@ -46,59 +39,39 @@
         "output": {
           "id": "out",
           "label": "Produced",
-          "fields": [
-            { "name": "produced", "label": "Produced", "kind": "bool", "required": true },
-            { "name": "count", "label": "Chunk Count", "kind": "number", "required": true }
-          ]
+          "fields": []
         }
       }
     },
     {
       "id": "consumer",
-      "type": "automated_step",
-      "position": { "x": 640, "y": 360 },
+      "type": "stream_consumer",
+      "position": { "x": 620, "y": 160 },
       "data": {
-        "type": "automated_step",
+        "type": "stream_consumer",
         "label": "Consumer",
-        "description": "Fires once per stream token tapped from the producer's stream port. Emits a CONSUMED marker so streaming can be observed live.",
-        "executionSpec": {
-          "backendType": "python",
-          "entrypoint": "main.py",
-          "config": {
-            "python": "python3",
-            "requirements": [],
-            "virtualenv": false,
-            "sdk": true,
-            "inherit_env": true,
-            "env": {}
-          }
-        },
-        "output": {
-          "id": "out",
-          "label": "Consumed",
-          "fields": [
-            { "name": "consumed", "label": "Consumed", "kind": "bool", "required": true }
-          ]
-        }
+        "description": "Drains the producer's stream, concatenates the chunk values in stream order, and gates net completion on the end-of-stream count.",
+        "resultVar": "item",
+        "reduce": { "kind": "concat", "sep": " " }
       }
     },
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 940, "y": 160 },
+      "position": { "x": 900, "y": 160 },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "produced", "expression": "producer.produced" },
-          { "targetField": "count", "expression": "producer.count" }
+          { "targetField": "transcript", "expression": "consumer.output" }
         ]
       }
     }
   ],
   "edges": [
     { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_producer_end", "source": "producer", "target": "end", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_producer_consumer", "source": "producer", "sourceHandle": "stream", "target": "consumer", "targetHandle": "in", "type": "sequence" }
+    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "consumer", "targetHandle": "stream", "type": "sequence" },
+    { "id": "e_producer_control", "source": "producer", "target": "consumer", "targetHandle": "control", "type": "sequence" },
+    { "id": "e_consumer_end", "source": "consumer", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

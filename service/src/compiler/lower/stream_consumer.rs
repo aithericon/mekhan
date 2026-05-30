@@ -112,17 +112,18 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
         .done();
 
     // t_<id>_close — consume the producer's control/EOS token and emit the
-    // gather coordinator. `stream_count` rides on the control token's `detail`
-    // (the lifecycle `t_success` forwards `detail: sig.detail`, and the
-    // executor's terminal `Completed` detail now carries `stream_count`). If it
-    // is missing (a non-streaming producer mis-wired into the control handle)
+    // gather coordinator. `stream_count` rides as a TOP-LEVEL leaf on the
+    // streaming producer's slim control token: `split_outputs_streaming`
+    // surfaces it there because the plain `YIELD_LOGIC` strips `detail` down to
+    // `{status, task_id}` (so `ctrl.detail.stream_count` would not survive). If
+    // absent (a non-streaming producer mis-wired into the control handle)
     // default to 0 so the gather fires immediately on an empty stream rather
     // than wedging.
     ctx.transition(format!("t_{id}_close"), format!("{label} - Close Stream"))
         .auto_input("ctrl", &p_control_in)
         .auto_output("count", &p_count)
         .logic_rhai(format!(
-            "let __n = if \"stream_count\" in ctrl.detail {{ ctrl.detail.stream_count }} else {{ 0 }}; \
+            "let __n = if \"stream_count\" in ctrl {{ ctrl.stream_count }} else {{ 0 }}; \
              #{{ count: #{{ expected: __n, \"__map_id\": \"{id_lit}\" }} }}"
         ))
         .done();

@@ -5710,3 +5710,106 @@ fn pool_resource_kinds_and_pool_registry() {
     // A non-pool kind is not in the pool registry.
     assert!(pool_kind("postgres").is_none());
 }
+
+
+// ---------------------------------------------------------------------------
+// StreamConsumer: `<slug>.output` borrow resolution (parked-producer namespace)
+// ---------------------------------------------------------------------------
+
+/// A `WorkflowEdge` with explicit source AND target handles (the StreamConsumer
+/// wiring needs distinct `stream` / `control` TARGET handles, which the shared
+/// `edge_with_handle` helper can't express — it hard-codes `target_handle:
+/// "in"`).
+fn edge_src_tgt(
+    id: &str,
+    source: &str,
+    source_handle: Option<&str>,
+    target: &str,
+    target_handle: &str,
+) -> WorkflowEdge {
+    WorkflowEdge {
+        id: id.to_string(),
+        source: source.to_string(),
+        target: target.to_string(),
+        source_handle: source_handle.map(str::to_string),
+        target_handle: Some(target_handle.to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    }
+}
+
+/// Regression for the `input.output` borrow bug: a `StreamConsumer` parks its
+/// reduced value at `p_<id>_data` and must expose it as the qualified
+/// `<slug>.output` (NOT collapse into the generic `input` control-token scope).
+/// Mirrors demo 14: start → producer(stream_output) ==stream==> consumer
+/// (StreamConsumer, Concat), producer ==control==> consumer, consumer → End
+/// whose `resultMapping` borrows `consumer.output`. The fix is two-fold —
+/// `is_parked_producer` recognizes StreamConsumer, and `out_shape_stream_consumer`
+/// returns a FLAT `{ output }` so the slug namespacing applies externally.
+#[test]
+fn stream_consumer_output_is_borrowable_as_slug_output() {
+    let consumer = WorkflowNode {
+        id: "consumer".to_string(),
+        node_type: "stream_consumer".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::StreamConsumer {
+            label: "Consumer".to_string(),
+            description: None,
+            result_var: "item".to_string(),
+            reduce: mekhan_service::models::template::StreamReduce::Concat {
+                sep: Some(" ".to_string()),
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+    let end = WorkflowNode {
+        id: "end".to_string(),
+        node_type: "end".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::End {
+            label: "Done".to_string(),
+            description: None,
+            terminal: mekhan_service::models::template::default_terminal_port(),
+            result_mapping: vec![mekhan_service::models::template::FieldMapping {
+                target_field: "transcript".to_string(),
+                expression: "consumer.output".to_string(),
+            }],
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_step_node_streaming("producer", "Producer", true),
+            consumer,
+            end,
+        ],
+        edges: vec![
+            edge("e_s", "s", "producer"),
+            // producer's `stream` source handle → consumer's `stream` target.
+            edge_src_tgt("e_stream", "producer", Some("stream"), "consumer", "stream"),
+            // producer's default `out` → consumer's `control` target.
+            edge_src_tgt("e_control", "producer", None, "consumer", "control"),
+            // consumer → End.
+            edge("e_ce", "consumer", "end"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "stream_borrow_test", "", &std::collections::HashMap::new());
+    assert!(
+        air.is_ok(),
+        "End mapping `transcript <- consumer.output` must resolve the StreamConsumer's \
+         parked `<slug>.output` (regression for the `input.output` bug): {:?}",
+        air.err()
+    );
+}
