@@ -107,10 +107,16 @@ impl SlurmClient {
     /// path, and runs the same worker template (`<template_dir>/<id>.sh`) — only
     /// the launch verb (`srun --jobid` vs `sbatch`) differs.
     ///
-    /// `srun` runs the step synchronously and propagates the step's exit code:
-    /// a non-zero exit surfaces as `SshError::CommandFailed` → mapped to
-    /// `SchedulerError::SubmissionFailed`. Since `srun` returns no parsable batch
-    /// id, [`SubmitResult::scheduler_job_id`] is set to the held `alloc_id` for
+    /// Dispatched ASYNC (fire-and-forget) like `sbatch`, NOT synchronously: the
+    /// `srun` is launched detached (`nohup … &`) so this method returns the
+    /// instant the step starts. This is required by the scheduler-net pipeline —
+    /// `forward_to_executor` fires on submit success and only THEN enqueues the
+    /// job to apalis for the executor to pull; a blocking `srun` would hold the
+    /// `scheduler_submit` effect open until the executor had already idle-timed-
+    /// out waiting for a job that hadn't been enqueued yet (PerJob orphan, exit
+    /// 75). The body's result flows back over NATS; Slurm-side failures surface
+    /// via the watcher's `sig_failed`. Since `srun` returns no parsable batch id,
+    /// [`SubmitResult::scheduler_job_id`] is set to the held `alloc_id` for
     /// status correlation (the step lives under that allocation's job id).
     async fn submit_into_alloc(
         &self,
@@ -134,10 +140,24 @@ impl SlurmClient {
             &template_path,
         );
 
-        // srun runs synchronously; a non-zero step exit becomes CommandFailed.
-        self.exec_with_reconnect(&command)
+        // ASYNC / fire-and-forget — the same dispatch contract as `sbatch`
+        // (which returns a job-id immediately). scheduler-net's
+        // `forward_to_executor` fires on submit SUCCESS (NOT on sig_running) and
+        // enqueues the job to apalis; the srun-launched executor (PerJob,
+        // idle-waiting) then pulls it. A SYNCHRONOUS srun would block THIS effect
+        // from returning until the executor has already exited — so the enqueue
+        // (which needs the effect to return) never reaches the still-waiting
+        // executor, which orphans (exit 75). Detach instead: `nohup` + redirect
+        // every fd + background, so the SSH command returns the instant the step
+        // is launched. The body's success/failure flows back over NATS (the
+        // executor reports its own result); a Slurm-side crash is caught by the
+        // watcher's sig_failed, exactly like the sbatch path.
+        let exec_tag = request.execution_id.replace(['\'', '/'], "_");
+        let detached =
+            format!("nohup {command} > /tmp/petri-srun-{exec_tag}.out 2>&1 < /dev/null & echo dispatched");
+        self.exec_with_reconnect(&detached)
             .await
-            .map_err(map_ssh_err("srun into allocation failed"))?;
+            .map_err(map_ssh_err("srun into allocation dispatch failed"))?;
 
         tracing::info!(
             alloc_id = %alloc_id,
@@ -145,7 +165,7 @@ impl SlurmClient {
             signal_key = %request.signal_key,
             execution_id = %request.execution_id,
             net_id = %self.net_id,
-            "Slurm body dispatched onto held allocation via srun"
+            "Slurm body dispatched onto held allocation via srun (async, detached)"
         );
 
         // srun yields no parsable batch id; the step lives under the held

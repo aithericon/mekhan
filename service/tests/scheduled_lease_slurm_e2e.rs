@@ -18,7 +18,7 @@
 //!      holds it across all `max_iterations` iterations — witnessed by a STABLE
 //!      single `squeue --name='petri-<grant_id>'` job id sampled while running.
 //!   2. Each iteration `srun`s into that held alloc (NOT a fresh `sbatch`) —
-//!      witnessed by N new `/tmp/petri-executor-*.out` files all carrying
+//!      witnessed by N new `/tmp/petri-srun-*.out` files all carrying
 //!      `handling execution job` (the executor really pulled+ran work).
 //!   3. The allocation is released EXACTLY ONCE on the loop's terminal exit —
 //!      witnessed by the `squeue` name going EMPTY after the instance completes.
@@ -473,9 +473,9 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
 
     // Snapshot the executor out-files BEFORE launch — see the rationale in
     // `scheduled_slurm_e2e.rs`: `sacct` is disabled on the dev image, so the
-    // set of NEW `/tmp/petri-executor-*.out` files is how we identify THIS
+    // set of NEW `/tmp/petri-srun-*.out` files is how we identify THIS
     // run's per-iteration srun steps unambiguously.
-    let baseline_outs = slurm_ssh("ls /tmp/petri-executor-*.out 2>/dev/null | sort");
+    let baseline_outs = slurm_ssh("ls /tmp/petri-srun-*.out 2>/dev/null | sort");
 
     // ── (3) Launch an instance.
     let resp = app
@@ -612,14 +612,14 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
          collapsed to Inline. places={place_ids:?}"
     );
 
-    // ── (6) srun reuse witness: N new `/tmp/petri-executor-*.out` files (one per
+    // ── (6) srun reuse witness: N new `/tmp/petri-srun-*.out` files (one per
     //    iteration), each carrying `handling execution job` (the executor really
     //    pulled+ran work on the leased nodes — not an idle-out namespace-mismatch
     //    no-op). This is the per-iteration analogue of the single-job assertion
     //    in `scheduled_slurm_e2e.rs`.
     let out_deadline = Instant::now() + Duration::from_secs(90);
     let new_outs: Vec<String> = loop {
-        let listing = slurm_ssh("ls /tmp/petri-executor-*.out 2>/dev/null | sort");
+        let listing = slurm_ssh("ls /tmp/petri-srun-*.out 2>/dev/null | sort");
         let new_paths: Vec<String> = listing
             .lines()
             .filter(|p| !baseline_outs.lines().any(|b| b == *p))
@@ -630,7 +630,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         }
         if Instant::now() > out_deadline {
             panic!(
-                "expected {MAX_ITERATIONS} new /tmp/petri-executor-*.out files (one srun per \
+                "expected {MAX_ITERATIONS} new /tmp/petri-srun-*.out files (one srun per \
                  iteration) within 90s of completion, saw {}: {new_paths:?}. \
                  Last listing: {listing:?}",
                 new_paths.len()

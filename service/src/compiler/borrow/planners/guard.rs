@@ -573,6 +573,7 @@ pub(crate) fn guard_readarc_plan(
             WorkflowNodeData::Loop {
                 loop_condition,
                 accumulators,
+                lease,
                 ..
             } => {
                 // loop_condition borrows resolve into the loop's own parked
@@ -587,6 +588,21 @@ pub(crate) fn guard_readarc_plan(
                 // `init` is intentionally NOT scanned — v1 keeps it simple
                 // (no upstream borrows), evaluated in the enter scope.
                 let mut srcs: Vec<String> = Vec::new();
+                // The continue/exit guards ALWAYS reference `<slug>.iteration`
+                // (`{slug}.iteration < {max}`, independent of loop_condition), so
+                // the counter MUST get the read-arc rewrite `<slug>.iteration` →
+                // `d_<id>.iteration` to match its input port. Without this source
+                // a loop whose `loop_condition` is a constant (e.g. `"true"`, a
+                // maxIterations-only loop) with no accumulators was skipped
+                // entirely → the unbound `<slug>.iteration` made the guard
+                // un-evaluable and the loop wedged after iteration 0.
+                let slug = node.slug();
+                srcs.push(format!("{slug}.iteration"));
+                // A leased loop's `t_continue` re-folds `lease: {slug}.lease`
+                // forward — rewrite that ref onto the parked envelope too.
+                if lease.is_some() {
+                    srcs.push(format!("{slug}.lease"));
+                }
                 if !loop_condition.trim().is_empty() {
                     srcs.push(loop_condition.clone());
                 }
@@ -594,9 +610,6 @@ pub(crate) fn guard_readarc_plan(
                     if !a.merge_expr.trim().is_empty() {
                         srcs.push(a.merge_expr.clone());
                     }
-                }
-                if srcs.is_empty() {
-                    continue;
                 }
                 srcs
             }
