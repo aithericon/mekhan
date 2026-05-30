@@ -9,9 +9,19 @@ import { defineConfig } from 'vite';
 // unaffected — these only touch the dev `server` block.
 const appPort = Number(process.env.MEKHAN_APP_PORT) || 15173;
 const mekhanUrl = process.env.MEKHAN_SERVICE_URL || 'http://localhost:13100';
+// `ws://host:port` base for the editor's Yjs WebSocket. In dev it connects
+// DIRECTLY to this per-worktree mekhan backend (which binds 0.0.0.0, so the
+// IPv4 `127.0.0.1` rewrite in session.ts is valid and fast), bypassing the
+// Vite dev server's WS proxy — Vite binds IPv6 `::1`, so a proxied
+// `ws://127.0.0.1:<appport>` would be refused. Only referenced in the
+// `import.meta.env.DEV` branch (dead-code-eliminated in prod builds).
+const mekhanWsUrl = mekhanUrl.replace(/^http/, 'ws');
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
+	define: {
+		__MEKHAN_WS_URL__: JSON.stringify(mekhanWsUrl)
+	},
 	resolve: {
 		dedupe: ['svelte', 'bits-ui']
 	},
