@@ -112,6 +112,20 @@ pub fn resolve_scheduler_defaults(
                     }),
                 }
             }
+            // ── LeaseScope (docs/17) — same resolution as a loop lease ────────
+            WorkflowNodeData::LeaseScope { lease, .. } => {
+                let node_scheduler = non_blank(&lease.scheduler);
+                if let Some(alias) = node_scheduler {
+                    lease.scheduler = alias.to_string();
+                    continue;
+                }
+                match default_alias {
+                    Some(alias) => lease.scheduler = alias.to_string(),
+                    None => errors.push(CompileError::SchedulerUnresolved {
+                        node_id: node.id.clone(),
+                    }),
+                }
+            }
             _ => {}
         }
     }
