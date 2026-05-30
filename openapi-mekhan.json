@@ -718,11 +718,11 @@
           "clusters"
         ],
         "summary": "GET /api/v1/clusters",
-        "description": "List every live cluster client the engine's multi-cluster `ClusterRegistry`\nholds — connection health, watcher state, checkpoint cursor, active-lease\ncount, last-signal timestamp, last error — joined with the backing\ndatacenter resource's human name. Read-through of the engine's\n`GET /api/clusters`.",
+        "description": "List every REGISTERED datacenter (the `datacenter` resources in the DB),\noverlaid with the engine's live `ClusterRegistry` state when a cluster\nclient is currently resident. This is the management view of \"what clusters\nexist\", NOT \"what clusters happen to hold a connection right now\": the engine\nbuilds a cluster client LAZILY on first lease and idle-tears-it-down after a\ngrace window, so a registered-but-idle datacenter has NO live engine entry.\nWithout the DB overlay it would vanish from the list the moment its last\nlease drained — which is exactly the \"my pools aren't visible\" surprise.\n\nA datacenter with no live client shows `watcher_state: \"idle\"` /\n`connection_health: \"idle\"` and `active_lease_count: 0`. Any live engine\ncluster NOT backed by a current DB row (e.g. the `_env` dev bootstrap, or a\njust-deleted resource still draining) is appended so nothing is hidden.",
         "operationId": "list_clusters",
         "responses": {
           "200": {
-            "description": "Live cluster clients",
+            "description": "Registered datacenters + live cluster state",
             "content": {
               "application/json": {
                 "schema": {
