@@ -1,23 +1,27 @@
 <script lang="ts">
 	/**
-	 * SPIKE — config-spec/FieldRenderer.svelte
+	 * config-spec/FieldRenderer.svelte
 	 *
-	 * Dispatches on spec.kind to the existing shared widgets.  Introduces NO new
-	 * widget implementations — it is a pure router onto the same building blocks
-	 * used by hand-written section components.
+	 * Dispatches on spec.kind:
+	 *   - Authoring-slot kinds (ref / resource / code) → own widget branches
+	 *     (RefPicker, ResourcePicker, CodeEditor). Kept as-is from the spike.
+	 *   - Value-input kinds (all canonical FieldKind values) → delegate to
+	 *     $lib/fields/FieldWidget, which owns the exhaustive 12-kind renderer.
 	 *
-	 * Props align with the SectionProps contract (scope, resourceScope, readonly)
-	 * so FieldRenderer is trivially composable inside SchemaDrivenSection.
+	 * Config-spec-specific concerns PRESERVED here:
+	 *   - Number `transform: 'clamp01' | 'optInt'` coercion + live-% label
+	 *     (ProgressUpdate fraction UX). FieldWidget is presentation-only;
+	 *     the transform is applied in this wrapper before calling onchange.
+	 *   - Textarea InsertRefButton (scope-ref insertion into the raw text).
+	 *   - Code field: RefPicker for Rhai snippets.
 	 */
 
-	import type { ConfigFieldSpec } from '$lib/editor/config-spec/types';
+	import type { ConfigFieldSpec, NumberField } from '$lib/editor/config-spec/types';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
+	import type { FieldSpec } from '$lib/fields/spec';
 
 	import { FormField } from '$lib/components/ui/form-field';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Select from '$lib/components/ui/select';
+	import FieldWidget from '$lib/fields/FieldWidget.svelte';
 	import CodeEditor from '../shared/CodeEditor.svelte';
 	import RefPicker from '../property-sections/RefPicker.svelte';
 	import ResourcePicker from '../property-sections/shared/ResourcePicker.svelte';
@@ -48,7 +52,9 @@
 	}: Props = $props();
 
 	// ---------------------------------------------------------------------------
-	// Helpers shared across numeric fields
+	// Number coercion — config-spec-specific transforms preserved here.
+	// FieldWidget emits raw strings (coerceNumbers=false); we apply the transform
+	// before forwarding to the host's onchange.
 	// ---------------------------------------------------------------------------
 
 	function clamp01(raw: string): number {
@@ -63,121 +69,88 @@
 		return Number.isNaN(n) ? undefined : n;
 	}
 
+	function handleNumberChange(raw: unknown) {
+		if (spec.kind !== 'number') {
+			onchange(raw);
+			return;
+		}
+		const numSpec = spec as NumberField;
+		const rawStr = String(raw ?? '');
+		if (numSpec.transform === 'clamp01') {
+			onchange(clamp01(rawStr));
+		} else if (numSpec.transform === 'optInt') {
+			onchange(optInt(rawStr));
+		} else {
+			onchange(rawStr === '' ? undefined : parseFloat(rawStr));
+		}
+	}
+
 	// ---------------------------------------------------------------------------
-	// Derived label — number fields with transform:'clamp01' display a live pct%
+	// Derived label — number fields with transform:'clamp01' show a live pct%
 	// suffix mirroring the original ProgressUpdateNodeSection behaviour.
 	// ---------------------------------------------------------------------------
 	const fieldLabel = $derived(
-		spec.kind === 'number' && spec.transform === 'clamp01'
+		spec.kind === 'number' && (spec as NumberField).transform === 'clamp01'
 			? `${spec.label} — ${Math.round(((value as number) ?? 0) * 100)}%`
 			: spec.label
 	);
 
-	// Unique-enough id for aria `for` / `id` pairing within the panel.
 	const fieldId = $derived(`field-${spec.bind}`);
+
+	// ---------------------------------------------------------------------------
+	// Build a FieldSpec for the canonical FieldWidget from the ConfigFieldSpec.
+	// Only value-input kind branches reach FieldWidget, so authoring-slot fields
+	// (ref / resource / code) are never forwarded here.
+	// ---------------------------------------------------------------------------
+	const fieldWidgetSpec = $derived.by((): FieldSpec => {
+		// All ConfigFieldSpec value-input variants share FieldBase; authoring slots
+		// are handled before this is used. We build a FieldSpec from the common fields
+		// plus per-kind extras.
+		const base: FieldSpec = {
+			name: spec.bind,
+			kind: spec.kind as FieldSpec['kind'],
+			label: fieldLabel,
+			description: spec.description,
+			readonly
+		};
+		// Per-kind extras
+		if (spec.kind === 'text' || spec.kind === 'textarea') {
+			return { ...base, placeholder: spec.placeholder, rows: (spec as { rows?: number }).rows };
+		}
+		if (spec.kind === 'number') {
+			const n = spec as NumberField;
+			return { ...base, min: n.min, max: n.max, step: n.step };
+		}
+		if (spec.kind === 'select' || spec.kind === 'radio') {
+			return { ...base, options: (spec as { options: { value: string; label: string }[] }).options };
+		}
+		if (spec.kind === 'range') {
+			const r = spec as { min?: number; max?: number; step?: number };
+			return { ...base, min: r.min, max: r.max, step: r.step };
+		}
+		if (spec.kind === 'rating') {
+			return { ...base, maxRating: (spec as { maxRating?: number }).maxRating };
+		}
+		if (spec.kind === 'date') {
+			return { ...base, includeTime: (spec as { includeTime?: boolean }).includeTime };
+		}
+		if (spec.kind === 'file') {
+			const f = spec as { accept?: string; maxFiles?: number; maxFileSize?: number };
+			return { ...base, accept: f.accept, maxFiles: f.maxFiles, maxFileSize: f.maxFileSize };
+		}
+		if (spec.kind === 'signature') {
+			return { ...base, penColor: (spec as { penColor?: string }).penColor };
+		}
+		if (spec.kind === 'json') {
+			return { ...base, rows: (spec as { rows?: number }).rows };
+		}
+		// bool / any other canonical kind — no extra props needed
+		return base;
+	});
 </script>
 
-{#if spec.kind === 'text'}
-	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
-		<Input
-			id={fieldId}
-			type="text"
-			class="text-sm"
-			value={(value as string) ?? ''}
-			placeholder={spec.placeholder}
-			disabled={readonly}
-			oninput={(e) => onchange((e.currentTarget as HTMLInputElement).value)}
-		/>
-	</FormField>
-
-{:else if spec.kind === 'textarea'}
-	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
-		<Textarea
-			id={fieldId}
-			value={(value as string) ?? ''}
-			rows={spec.rows ?? 2}
-			placeholder={spec.placeholder}
-			disabled={readonly}
-			oninput={(e) => {
-				const v = (e.currentTarget as HTMLTextAreaElement).value;
-				onchange(v === '' ? undefined : v);
-			}}
-		/>
-		{#if scope.length > 0}
-			<div class="mt-1.5">
-				<InsertRefButton
-					{scope}
-					{resourceScope}
-					disabled={readonly}
-					oninsert={(snippet) => onchange(appendSnippet(value as string | undefined, snippet))}
-				/>
-			</div>
-		{/if}
-	</FormField>
-
-{:else if spec.kind === 'number'}
-	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
-		<Input
-			id={fieldId}
-			type="number"
-			class="text-sm"
-			min={spec.min}
-			max={spec.max}
-			step={spec.step}
-			value={(value as number | undefined) ?? ''}
-			disabled={readonly}
-			oninput={(e) => {
-				const raw = (e.currentTarget as HTMLInputElement).value;
-				if (spec.transform === 'clamp01') {
-					onchange(clamp01(raw));
-				} else if (spec.transform === 'optInt') {
-					onchange(optInt(raw));
-				} else {
-					onchange(raw === '' ? undefined : parseFloat(raw));
-				}
-			}}
-		/>
-	</FormField>
-
-{:else if spec.kind === 'bool'}
-	<!-- Matches SchemaForm's bool/checkbox pattern: inline label + Checkbox, no FormField wrapper. -->
-	<div class="flex flex-col gap-1.5">
-		<label class="flex items-center gap-1.5 text-sm text-muted-foreground" for={fieldId}>
-			<Checkbox
-				id={fieldId}
-				checked={(value as boolean) ?? false}
-				disabled={readonly}
-				onCheckedChange={(v) => onchange(v)}
-			/>
-			{spec.label}
-		</label>
-		{#if spec.description}
-			<p class="text-sm text-muted-foreground">{spec.description}</p>
-		{/if}
-	</div>
-
-{:else if spec.kind === 'select'}
-	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
-		<Select.Root
-			type="single"
-			value={(value as string) ?? ''}
-			onValueChange={(v) => onchange(v ?? '')}
-			disabled={readonly}
-		>
-			<Select.Trigger class="w-full text-sm">
-				{spec.options.find((o) => o.value === value)?.label ?? 'Select…'}
-			</Select.Trigger>
-			<Select.Content>
-				{#each spec.options as option (option.value)}
-					<Select.Item value={option.value} label={option.label}>
-						{option.label}
-					</Select.Item>
-				{/each}
-			</Select.Content>
-		</Select.Root>
-	</FormField>
-
-{:else if spec.kind === 'ref'}
+{#if spec.kind === 'ref'}
+	<!-- Authoring-slot: RefPicker -->
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
 		<RefPicker
 			{scope}
@@ -191,7 +164,7 @@
 	</FormField>
 
 {:else if spec.kind === 'resource'}
-	<!-- ResourcePicker already wraps its own FormField internally -->
+	<!-- Authoring-slot: ResourcePicker (wraps its own FormField) -->
 	<ResourcePicker
 		resourceType={spec.resourceType}
 		selected={(value as string) ?? ''}
@@ -202,6 +175,7 @@
 	/>
 
 {:else if spec.kind === 'code'}
+	<!-- Authoring-slot: CodeEditor -->
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
 		<CodeEditor
 			value={(value as string) ?? ''}
@@ -227,5 +201,66 @@
 				/>
 			</div>
 		{/if}
+	</FormField>
+
+{:else if spec.kind === 'textarea'}
+	<!-- Value-input: textarea needs the InsertRefButton; wrap then delegate. -->
+	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
+		<FieldWidget
+			spec={fieldWidgetSpec}
+			{value}
+			{readonly}
+			onchange={(next) => onchange(next)}
+		/>
+		{#if scope.length > 0}
+			<div class="mt-1.5">
+				<InsertRefButton
+					{scope}
+					{resourceScope}
+					disabled={readonly}
+					oninsert={(snippet) => onchange(appendSnippet(value as string | undefined, snippet))}
+				/>
+			</div>
+		{/if}
+	</FormField>
+
+{:else if spec.kind === 'number'}
+	<!-- Value-input: number needs transform coercion; intercept onchange. -->
+	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
+		<FieldWidget
+			spec={fieldWidgetSpec}
+			{value}
+			{readonly}
+			onchange={handleNumberChange}
+		/>
+	</FormField>
+
+{:else if spec.kind === 'bool'}
+	<!-- Value-input: bool uses inline label pattern (no FormField wrapper). -->
+	<div class="flex flex-col gap-1.5">
+		<label class="flex items-center gap-1.5 text-sm text-muted-foreground" for={fieldId}>
+			<FieldWidget
+				spec={fieldWidgetSpec}
+				{value}
+				{readonly}
+				onchange={(next) => onchange(next)}
+			/>
+			{spec.label}
+		</label>
+		{#if spec.description}
+			<p class="text-sm text-muted-foreground">{spec.description}</p>
+		{/if}
+	</div>
+
+{:else}
+	<!-- All remaining value-input kinds (text / select / radio / range / rating /
+	     date / file / signature / json) delegate directly to FieldWidget. -->
+	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
+		<FieldWidget
+			spec={fieldWidgetSpec}
+			{value}
+			{readonly}
+			onchange={(next) => onchange(next)}
+		/>
 	</FormField>
 {/if}

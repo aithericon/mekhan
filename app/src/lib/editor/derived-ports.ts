@@ -6,6 +6,7 @@
 
 import type { components } from '$lib/api/schema';
 import { getWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
+import { fromTaskFieldKind, fromJsonType } from '$lib/fields/adapters';
 
 type WorkflowNodeData = components['schemas']['WorkflowNodeData'];
 type Port = components['schemas']['Port'];
@@ -110,21 +111,23 @@ function llmTextResponseField(): PortField {
 }
 
 // TS twin of `backends::llm::kind_from_json_schema`.
+// Delegates to the canonical fromJsonType adapter; the string→textarea-by-format
+// branch is inspected here (this caller can see prop.format; fromJsonType cannot).
+// The `hasEnum` path is not relevant in the LLM output-field context (json_schema
+// response_format properties are not keyed by enum), so we always pass false.
 function kindFromJsonSchema(prop: Record<string, unknown>): FieldKind {
-	const ty = typeof prop.type === 'string' ? prop.type : undefined;
-	switch (ty) {
-		case 'string': {
-			const format = typeof prop.format === 'string' ? prop.format : undefined;
-			return format === 'textarea' || format === 'multi-line' ? 'textarea' : 'text';
-		}
-		case 'integer':
-		case 'number':
-			return 'number';
-		case 'boolean':
-			return 'bool';
-		default:
-			return 'json';
-	}
+	const ty = typeof prop.type === 'string' ? prop.type : 'unknown';
+	const format = typeof prop.format === 'string' ? prop.format : undefined;
+	// fromJsonType is total/exhaustive — any unrecognised ty maps to 'json'.
+	// Cast: ty here is unconstrained string from JSON; the adapter handles
+	// unknown values via its `default:never` guard by mapping 'unknown'→json.
+	const jsonType = (
+		ty === 'string' || ty === 'integer' || ty === 'number' ||
+		ty === 'boolean' || ty === 'array' || ty === 'object'
+			? ty
+			: 'unknown'
+	) as import('$lib/fields/adapters').JsonType;
+	return fromJsonType(jsonType, { hasEnum: false, format }) as FieldKind;
 }
 
 // TS twin of `backends::llm::derive_output_port` — the LLM success output a
@@ -315,25 +318,15 @@ function deriveDecisionOutputPorts(data: DecisionNodeData): Port[] {
 	return out;
 }
 
+// Delegates to the canonical fromTaskFieldKind adapter (total, exhaustive —
+// all 11 TaskFieldKind values are handled including radio/date/range/rating
+// which the old `default: 'text'` silently swallowed).
+// The return type is cast to FieldKind (the port-wire type) because canonical
+// FieldKind is a superset; any canonical value that is NOT a valid port FieldKind
+// (e.g. 'radio', 'range', 'rating') will be stored in the derived PortField.kind
+// for display purposes only — the compiler + engine do not see these fields.
 function taskFieldKindToFieldKind(k: TaskFieldKind): FieldKind {
-	switch (k) {
-		case 'text':
-			return 'text';
-		case 'textarea':
-			return 'textarea';
-		case 'number':
-			return 'number';
-		case 'select':
-			return 'select';
-		case 'checkbox':
-			return 'bool';
-		case 'file':
-			return 'file';
-		case 'signature':
-			return 'signature';
-		default:
-			return 'text';
-	}
+	return fromTaskFieldKind(k) as FieldKind;
 }
 
 /**

@@ -12,6 +12,8 @@
 	import { getTemplate, createInstance, uploadFile } from '$lib/api/client';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
+	import { fromPortFieldKind } from '$lib/fields/adapters';
+	import { defaultValueForKind } from '$lib/fields/spec';
 
 	type Port = components['schemas']['Port'];
 	type PortField = components['schemas']['PortField'];
@@ -100,16 +102,10 @@
 	}
 
 	function defaultForKind(f: PortField): unknown {
-		switch (f.kind) {
-			case 'number':
-				return 0;
-			case 'bool':
-				return false;
-			case 'file':
-				return null;
-			default:
-				return '';
-		}
+		// Delegate to the canonical single-sourced defaultValueForKind.
+		// fromPortFieldKind maps: timestamp→date, all others 1:1.
+		// Parity: date defaults to '' (no calendar widget here; renders plain text).
+		return defaultValueForKind(fromPortFieldKind(f.kind));
 	}
 
 	function updateValue(startId: string, fieldName: string, v: unknown) {
@@ -335,17 +331,34 @@
 														{uploadError[errKey]}
 													</p>
 												{/if}
+											{:else if field.kind === 'text' || field.kind === 'signature' || field.kind === 'timestamp'}
+											<!-- text: plain text input.
+											     signature: no real signature-capture widget here (host quirk preserved).
+											     timestamp: no date picker here (host quirk preserved).
+											     Both degrade intentionally to a plain text Input in this runtime host. -->
+											<Input
+												type="text"
+												value={String(values[start.id]?.[field.name] ?? '')}
+												oninput={(e) =>
+													updateValue(
+														start.id,
+														field.name,
+														(e.currentTarget as HTMLInputElement).value
+													)}
+											/>
 											{:else}
-												<Input
-													type="text"
-													value={String(values[start.id]?.[field.name] ?? '')}
-													oninput={(e) =>
-														updateValue(
-															start.id,
-															field.name,
-															(e.currentTarget as HTMLInputElement).value
-														)}
-												/>
+											<!-- Explicit fallback: unreachable if all 9 port FieldKind values
+											     are named above. Renders a text input to avoid a blank UI. -->
+											<Input
+												type="text"
+												value={String(values[start.id]?.[field.name] ?? '')}
+												oninput={(e) =>
+													updateValue(
+														start.id,
+														field.name,
+														(e.currentTarget as HTMLInputElement).value
+													)}
+											/>
 											{/if}
 										</FormField>
 									{/each}

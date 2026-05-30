@@ -34,6 +34,8 @@
 			.replace(/^_|_$/g, '');
 	}
 
+	// Build-exhaustive map: adding or removing a FieldKind from the wire schema
+	// causes a TypeScript error here, forcing an update of the kind picker.
 	const kindLabels: Record<FieldKind, string> = {
 		text: 'Text',
 		textarea: 'Textarea',
@@ -45,6 +47,23 @@
 		timestamp: 'Timestamp',
 		json: 'JSON'
 	};
+
+	// Port-authorable subset: excludes radio / range / rating / date (those are
+	// HPI-only kinds that don't map to a port FieldKind wire value). The items
+	// below are typed as FieldKind[] so tsc catches any drift with the wire enum.
+	// NOTE: wire value 'timestamp' is kept (NOT 'date') — the stored value on
+	// PortField must remain the wire FieldKind; adapters convert for display only.
+	const PORT_AUTHORABLE_KINDS: FieldKind[] = [
+		'text',
+		'textarea',
+		'number',
+		'bool',
+		'select',
+		'file',
+		'signature',
+		'timestamp',
+		'json'
+	];
 </script>
 
 <div class="rounded-md border border-border/50 bg-background text-sm">
@@ -88,15 +107,9 @@
 					{kindLabels[field.kind] ?? field.kind}
 				</Select.Trigger>
 				<Select.Content>
-					<Select.Item value="text" label="Text" />
-					<Select.Item value="textarea" label="Textarea" />
-					<Select.Item value="number" label="Number" />
-					<Select.Item value="bool" label="Bool" />
-					<Select.Item value="select" label="Select" />
-					<Select.Item value="file" label="File" />
-					<Select.Item value="signature" label="Signature" />
-					<Select.Item value="timestamp" label="Timestamp" />
-					<Select.Item value="json" label="JSON" />
+					{#each PORT_AUTHORABLE_KINDS as k (k)}
+						<Select.Item value={k} label={kindLabels[k]} />
+					{/each}
 				</Select.Content>
 			</Select.Root>
 		</div>
