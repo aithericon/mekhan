@@ -136,70 +136,7 @@
         "responseFormat": {
           "type": "json_schema",
           "schema": {
-            "type": "object",
-            "required": [
-              "groups"
-            ],
-            "properties": {
-              "groups": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "type": "object",
-                  "required": [
-                    "doc_id",
-                    "class",
-                    "page_ids",
-                    "order",
-                    "confidence"
-                  ],
-                  "properties": {
-                    "doc_id": {
-                      "type": "string"
-                    },
-                    "class": {
-                      "type": "string",
-                      "enum": [
-                        "lab_result",
-                        "prescription",
-                        "referral_letter",
-                        "imaging_report",
-                        "discharge_summary",
-                        "consultation_note",
-                        "insurance_form",
-                        "invoice",
-                        "consent_form",
-                        "other"
-                      ]
-                    },
-                    "page_ids": {
-                      "type": "array",
-                      "items": {
-                        "type": "integer",
-                        "minimum": 1
-                      }
-                    },
-                    "order": {
-                      "type": "array",
-                      "items": {
-                        "type": "integer",
-                        "minimum": 1
-                      }
-                    },
-                    "confidence": {
-                      "type": "number",
-                      "minimum": 0,
-                      "maximum": 1
-                    },
-                    "reasoning": {
-                      "type": "string"
-                    }
-                  },
-                  "additionalProperties": false
-                }
-              }
-            },
-            "additionalProperties": false
+            "$ref": "#/definitions/GroupedClassification"
           }
         },
         "images": [
@@ -267,5 +204,73 @@
       "type": "sequence",
       "sourceHandle": "out"
     }
-  ]
+  ],
+  "definitions": {
+    "GroupedClassification": {
+      "type": "object",
+      "required": [
+        "groups"
+      ],
+      "properties": {
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "doc_id",
+              "class",
+              "page_ids",
+              "order",
+              "confidence"
+            ],
+            "properties": {
+              "doc_id": {
+                "type": "string"
+              },
+              "class": {
+                "type": "string",
+                "enum": [
+                  "lab_result",
+                  "prescription",
+                  "referral_letter",
+                  "imaging_report",
+                  "discharge_summary",
+                  "consultation_note",
+                  "insurance_form",
+                  "invoice",
+                  "consent_form",
+                  "other"
+                ]
+              },
+              "page_ids": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "order": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "reasoning": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

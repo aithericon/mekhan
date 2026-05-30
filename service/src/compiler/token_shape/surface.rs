@@ -23,6 +23,14 @@ pub struct TypeSurface {
 /// publish when it's too late. This is what `POST /api/v1/compile` (or a sibling
 /// `/api/v1/analyze`) should additionally return on every edit.
 pub fn surface_types(graph: &WorkflowGraph) -> TypeSurface {
+    // Resolve Agent `response_format` `$ref`s so the variable picker / scope
+    // sees the schema's fields (not the default envelope) — the same pre-pass
+    // the compile path runs. Best-effort: a draft mid-edit may carry a
+    // dangling ref, so fall back to the un-normalized graph rather than
+    // blanking the surface (the real error still lands at publish).
+    let normalized = crate::compiler::schema_refs::inline_agent_response_format_refs(graph)
+        .unwrap_or(std::borrow::Cow::Borrowed(graph));
+    let graph = normalized.as_ref();
     match analyze(graph) {
         Ok(r) => TypeSurface {
             place_schemas: r.place_schemas,
