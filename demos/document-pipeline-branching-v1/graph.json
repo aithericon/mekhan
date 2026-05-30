@@ -1,0 +1,439 @@
+{
+  "nodes": [
+    {
+      "id": "trg_document_pipeline_branching_v1",
+      "type": "trigger",
+      "position": { "x": 52, "y": 60 },
+      "data": {
+        "type": "trigger",
+        "label": "Intake API",
+        "source": {
+          "kind": "manual",
+          "form": []
+        },
+        "concurrency": "allow",
+        "payloadMapping": [
+          { "targetField": "document_file", "expression": "document_file" },
+          { "targetField": "document_id", "expression": "document_id" }
+        ],
+        "enabled": true
+      }
+    },
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 52, "y": 330 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Document branching — {{ document_id }}",
+        "initial": {
+          "id": "in",
+          "label": "Document Intake",
+          "fields": [
+            {
+              "name": "document_file",
+              "label": "Document (PDF, PNG, JPG)",
+              "kind": "file",
+              "required": true,
+              "accept": "application/pdf,image/png,image/jpeg,image/webp"
+            },
+            {
+              "name": "document_id",
+              "label": "Document ID",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "classify",
+      "type": "automated_step",
+      "position": { "x": 396, "y": 330 },
+      "data": {
+        "type": "automated_step",
+        "label": "Classify (vision LLM, raw file)",
+        "description": "Vision-only classification on the RAW uploaded file — runs BEFORE OCR (Decision 3: classify→ocr ordering). The model looks at the document image directly (no OCR text available yet) and returns one document_type plus a confidence. NEEDS-LIVE-EXPERIMENTATION: classifying without OCR text is unvalidated — a vision model may misread dense lab tables vs. narrative letters without the text layer. Only explicit lab classes (lab_result / laborergebnis) route into the bloodwork branch; everything else (including befund) falls through to the generic branch.",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "llama3.2-vision:11b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "max_tokens": 512,
+            "system_prompt": "You are a document classification assistant. Look at the document image and classify it into exactly one of the allowed classes, with a confidence in 0..1. You have NO OCR text — judge from the visual layout alone.",
+            "prompt": "Classify this document into ONE of: lab_result, laborergebnis, befund, referral_letter, imaging_report, discharge_summary, consultation_note, insurance_form, invoice, consent_form, other.\n\nReturn JSON: {document_type, confidence}.",
+            "images": [
+              { "path": "{{ start.document_file }}" }
+            ],
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "required": ["document_type", "confidence"],
+                "properties": {
+                  "document_type": {
+                    "type": "string",
+                    "enum": [
+                      "lab_result",
+                      "laborergebnis",
+                      "befund",
+                      "referral_letter",
+                      "imaging_report",
+                      "discharge_summary",
+                      "consultation_note",
+                      "insurance_form",
+                      "invoice",
+                      "consent_form",
+                      "other"
+                    ]
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Classification",
+          "fields": [
+            { "name": "document_type", "label": "Document type", "kind": "text", "required": true },
+            { "name": "confidence", "label": "Confidence", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "route-by-class",
+      "type": "decision",
+      "position": { "x": 740, "y": 330 },
+      "data": {
+        "type": "decision",
+        "label": "Route by class",
+        "description": "DAG branch on classify.document_type. Only explicit lab classes route to the bloodwork (OCR + bbox-grounded) branch; befund is NOT pinned to bloodwork in Phase 1 — it (and every other class) falls through to the generic extractor.",
+        "conditions": [
+          {
+            "edgeId": "branch-bloodwork",
+            "label": "lab_result / laborergebnis",
+            "guard": "classify.document_type == \"lab_result\" || classify.document_type == \"laborergebnis\""
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "ocr",
+      "type": "automated_step",
+      "position": { "x": 1084, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "OCR (Surya, per-word boxes)",
+        "description": "Bloodwork-branch OCR. Surya emits the full text plus per-word bounding boxes (normalised 0..1) with a global word_index and page — the geometry the downstream resolve-bbox step unions into per-field visual_refs. No model field: Surya IS the OCR engine.",
+        "executionSpec": {
+          "backendType": "surya",
+          "config": {
+            "mode": "single",
+            "file": "{{ start.document_file }}"
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "OCR result",
+          "fields": [
+            { "name": "full_text", "label": "Full text", "kind": "textarea", "required": true },
+            { "name": "words", "label": "Words (with bounding boxes)", "kind": "json", "required": true },
+            { "name": "pages", "label": "Pages (geometry)", "kind": "json", "required": false },
+            { "name": "page_count", "label": "Page count", "kind": "number", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "extract-bloodwork",
+      "type": "automated_step",
+      "position": { "x": 1428, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "Extract — Bloodwork (OCR-text)",
+        "description": "Lab-result extractor driven by the OCR text. Each row of the result table becomes one field. For every field the model returns a word_range [start_word_index, end_word_index] (inclusive) pointing at the VALUE in the OCR words — used downstream to union per-word boxes into a visual_ref.",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "qwen3.5:9b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "max_tokens": 4096,
+            "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. For each field return word_range = [start_word_index, end_word_index] (inclusive) pointing at the VALUE in the OCR words.",
+            "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, word_range:[start,end]}]}.",
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Bloodwork fields",
+          "fields": [
+            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resolve-bbox",
+      "type": "automated_step",
+      "position": { "x": 1772, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "Resolve bbox (Python)",
+        "description": "Per field, union the OCR word boxes whose word_index falls in the field's word_range into a visual_ref {page (1-based), bbox{x,y,w,h ∈ 0..1}}. Fuzzy value-match fallback when word_range is absent. Reads ocr.words (read-arc borrow) + extract_bloodwork.fields. Ports the clinic's deleted visual_references::bbox_from_word_range cascade.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Fields with visual_ref",
+          "fields": [
+            { "name": "fields", "label": "Fields (with visual_ref)", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "extract-generic",
+      "type": "automated_step",
+      "position": { "x": 1084, "y": 530 },
+      "data": {
+        "type": "automated_step",
+        "label": "Extract — Generic (vision)",
+        "description": "Generic-fallback branch for every non-lab class (including befund). No OCR layer and no bbox grounding — the vision model reads the raw file directly and emits a flat fields[] list.",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "llama3.2-vision:11b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "max_tokens": 2048,
+            "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field from the document image.",
+            "prompt": "Extract every identifiable field from this {{ classify.document_type }} document.\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, word_range:[start,end]}]}. You have no OCR word index, so set word_range to null.",
+            "images": [
+              { "path": "{{ start.document_file }}" }
+            ],
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Generic fields",
+          "fields": [
+            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "merge-extraction",
+      "type": "join",
+      "slug": "extraction",
+      "position": { "x": 2116, "y": 330 },
+      "data": {
+        "type": "join",
+        "label": "Merge branches",
+        "description": "Bloodwork (resolve-bbox) and generic (extract-generic) branch tails converge here. `mode: \"any\"` — XOR-join, fires on the first incoming control token (the dual of route-by-class's decision split). Re-parks whichever branch's payload under slug `extraction` so downstream validate does a single clean borrow extraction.fields.",
+        "mode": "any",
+        "output": {
+          "id": "out",
+          "label": "Extraction",
+          "fields": [
+            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "validate",
+      "type": "automated_step",
+      "position": { "x": 2460, "y": 330 },
+      "data": {
+        "type": "automated_step",
+        "label": "Validate (shape coerce, Python)",
+        "description": "Shape-coerces the merged fields into a defaults-filled list (preserving any visual_ref the bloodwork branch produced) and stamps the document_type from the classifier. Reads extraction.fields + classify.document_type.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Validated extraction",
+          "fields": [
+            { "name": "fields", "label": "Fields", "kind": "json", "required": true },
+            { "name": "document_type", "label": "Document type", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end-ok",
+      "type": "end",
+      "position": { "x": 2804, "y": 330 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "document_id", "expression": "start.document_id" },
+          { "targetField": "document_type", "expression": "classify.document_type" },
+          { "targetField": "fields", "expression": "validate.fields" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-trigger-start",
+      "source": "trg_document_pipeline_branching_v1",
+      "target": "start",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-start-classify",
+      "source": "start",
+      "target": "classify",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-classify-route",
+      "source": "classify",
+      "target": "route-by-class",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-route-bloodwork",
+      "source": "route-by-class",
+      "target": "ocr",
+      "sourceHandle": "branch-bloodwork",
+      "targetHandle": "in",
+      "label": "lab_result / laborergebnis",
+      "type": "conditional"
+    },
+    {
+      "id": "e-route-generic",
+      "source": "route-by-class",
+      "target": "extract-generic",
+      "sourceHandle": "default",
+      "targetHandle": "in",
+      "label": "default",
+      "type": "conditional"
+    },
+    {
+      "id": "e-ocr-extract",
+      "source": "ocr",
+      "target": "extract-bloodwork",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-extract-resolve",
+      "source": "extract-bloodwork",
+      "target": "resolve-bbox",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-resolve-merge",
+      "source": "resolve-bbox",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-generic-merge",
+      "source": "extract-generic",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-merge-validate",
+      "source": "merge-extraction",
+      "target": "validate",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-validate-end",
+      "source": "validate",
+      "target": "end-ok",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ],
+  "definitions": {
+    "ExtractionFields": {
+      "type": "object",
+      "required": ["fields"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "value", "confidence"],
+            "properties": {
+              "key": { "type": "string" },
+              "value": { "type": "string" },
+              "unit": { "type": ["string", "null"] },
+              "reference_range": { "type": ["string", "null"] },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "word_range": {
+                "type": ["array", "null"],
+                "items": { "type": "integer", "minimum": 0 },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

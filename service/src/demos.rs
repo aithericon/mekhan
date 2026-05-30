@@ -1137,6 +1137,118 @@ mod tests {
         );
     }
 
+    /// `document-pipeline-branching-v1` is the Phase-1 branching pipeline:
+    /// vision-LLM classify (on the raw file, BEFORE OCR) → `decision`
+    /// route-by-class → two branches (bloodwork: Surya OCR → OCR-text extract
+    /// → Python resolve-bbox; generic: single vision extract) → XOR-`join`
+    /// (mode=any) → Python validate → end. It exercises four things together
+    /// on a real bundled fixture: (1) a Surya `automated_step` (the
+    /// `{{ start.document_file }}` placeholder bypasses the node-file gate),
+    /// (2) the strict `$ref` ExtractionFields schema parked in the
+    /// side-channel, (3) two Python nodes whose `main.py` reads NON-predecessor
+    /// producers via bare `slug.field` accesses (`ocr.words`,
+    /// `extract_bloodwork.fields`, `extraction.fields`, `classify.document_type`)
+    /// — the read-arc synthesis the resolve-bbox cascade depends on, and (4)
+    /// the join converging the two branch tails. A break in any of those
+    /// layers fails here rather than silently at `MEKHAN__DEMOS__SEED=true`
+    /// startup. Mirrors `document_pipeline_v1_compiles_with_strict_schemas`.
+    #[test]
+    fn document_pipeline_branching_v1_compiles_with_strict_schemas() {
+        use crate::compiler::{
+            compile_to_air_with_subworkflows_interfaces_and_configs, node_files_inline,
+            resource_refs::KnownResources, ConfigStorage, SubWorkflowAir,
+        };
+        use crate::models::template::{JoinMode, WorkflowNodeData};
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+            .expect("document-pipeline-branching-v1 must load");
+        assert_eq!(demo.metadata.name, "Document Pipeline — Branching v1");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000054"
+        );
+
+        // Stable trigger node id — tests + the dispatcher registry key off it,
+        // so drift must be a deliberate, type-checked break.
+        assert!(
+            demo.graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "trg_document_pipeline_branching_v1"),
+            "trigger node id must be trg_document_pipeline_branching_v1"
+        );
+
+        // The XOR-join the two branch tails fan into.
+        let merge = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "merge-extraction")
+            .expect("merge-extraction node must exist");
+        match &merge.data {
+            WorkflowNodeData::Join { mode, output, .. } => {
+                assert_eq!(*mode, JoinMode::Any, "branching demo uses XOR-join (mode=any)");
+                assert!(
+                    output.fields.iter().any(|f| f.name == "fields"),
+                    "merge-extraction.output must declare a `fields` field"
+                );
+            }
+            other => panic!("merge-extraction must be a Join, got {other:?}"),
+        }
+
+        // Both Python nodes must ship their main.py with the SDK calls intact.
+        for node_id in ["resolve-bbox", "validate"] {
+            let node_files = demo
+                .files
+                .get(node_id)
+                .unwrap_or_else(|| panic!("{node_id} node must have files"));
+            assert!(
+                node_files
+                    .get("main.py")
+                    .is_some_and(|s| s.contains("set_output")),
+                "{node_id}/main.py must be loaded with the SDK calls intact"
+            );
+        }
+
+        let files = node_files_inline(&demo.files);
+        let (_air, _iface, node_configs) =
+            compile_to_air_with_subworkflows_interfaces_and_configs(
+                &demo.graph,
+                &demo.metadata.name,
+                demo.metadata.description.as_deref().unwrap_or(""),
+                &files,
+                &demo.files,
+                &SubWorkflowAir::new(),
+                &KnownResources::new(),
+                ConfigStorage::ephemeral(),
+            )
+            .expect("document-pipeline-branching-v1 must compile (no Rhai-complexity panic)");
+
+        // Both LLM extractors park their resolved config (the strict
+        // ExtractionFields `$ref` would blow Rhai's complexity limit inline).
+        for node_id in ["classify", "extract-bloodwork", "extract-generic"] {
+            assert!(
+                node_configs.contains_key(node_id),
+                "node config for `{node_id}` must be parked in side-channel; got keys: {:?}",
+                node_configs.keys().collect::<Vec<_>>()
+            );
+        }
+        // The heavy `$ref`-expanded schema must have made it into the
+        // side-channel with the `$ref` inlined first.
+        let bw = node_configs
+            .get("extract-bloodwork")
+            .expect("extract-bloodwork config")
+            .to_string();
+        assert!(
+            bw.contains("word_range"),
+            "extract-bloodwork config must contain the expanded ExtractionFields schema: {bw}"
+        );
+        assert!(
+            !bw.contains("\"$ref\""),
+            "$ref must have been inlined before parking: {bw}"
+        );
+    }
+
     /// `classify-and-group-v1` is the strict prefix of `document-pipeline-v1`
     /// (OCR → vision-LLM classify; no extract / persist / verify). The demo
     /// carries a strict `GroupedClassification` `$ref` response_format schema
