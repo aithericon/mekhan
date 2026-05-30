@@ -2,6 +2,7 @@ pub mod artifact_store;
 pub mod dto;
 pub mod handlers;
 pub mod net_registry;
+pub mod nomad_allocator;
 pub mod router;
 pub mod scenario_bridge;
 pub mod slurm_allocator;

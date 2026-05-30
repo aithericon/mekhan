@@ -49,6 +49,13 @@ pub struct ExecutionSubmitRequest {
     /// Leave `None` for the legacy auto-generate behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_id: Option<String>,
+
+    /// Per-job executor namespace override. When Some, the client publishes to
+    /// `{namespace}.{prio}.{exec_id}` instead of its construction-time fixed
+    /// namespace, so a leased body can target a lease-scoped queue
+    /// (lease-<grant_id>) drained by a persistent executor. None → fixed default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// Result of a successful execution submission.
@@ -121,6 +128,7 @@ mod tests {
             signal_routes: None,
             event_routes: None,
             execution_id: None,
+            namespace: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();

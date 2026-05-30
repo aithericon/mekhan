@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 default = []
-nomad = ["dep:petri-nomad"]
+nomad = ["dep:petri-nomad", "dep:reqwest"]
 slurm = ["dep:petri-slurm"]
 executor = ["dep:petri-executor", "dep:async-nats"]
 catalogue = ["dep:async-nats"]
@@ -15,6 +15,7 @@ artifact-store = ["dep:aithericon-executor-storage", "dep:aithericon-executor-st
 [dependencies]
 petri-nomad = { workspace = true, optional = true }
 petri-slurm = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 petri-executor = { workspace = true, optional = true }
 async-nats = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true, optional = true }

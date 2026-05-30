@@ -97,84 +97,6 @@ impl SlurmClient {
         }
     }
 
-    /// Run the worker template ON an already-held Slurm allocation via `srun`.
-    ///
-    /// The L2 leased-body dispatch path. Where [`SlurmClient::submit`]'s default
-    /// branch `sbatch`es a NEW job, this attaches a step to the held allocation
-    /// `alloc_id` (`srun --jobid=<alloc_id> … <template>`) so the body runs on
-    /// the leased nodes. It carries the same `--comment` routing metadata and
-    /// the same `PETRI_TOKEN_DATA` / `EXECUTOR_TARGET_EXEC_ID` env as the sbatch
-    /// path, and runs the same worker template (`<template_dir>/<id>.sh`) — only
-    /// the launch verb (`srun --jobid` vs `sbatch`) differs.
-    ///
-    /// Dispatched ASYNC (fire-and-forget) like `sbatch`, NOT synchronously: the
-    /// `srun` is launched detached (`nohup … &`) so this method returns the
-    /// instant the step starts. This is required by the scheduler-net pipeline —
-    /// `forward_to_executor` fires on submit success and only THEN enqueues the
-    /// job to apalis for the executor to pull; a blocking `srun` would hold the
-    /// `scheduler_submit` effect open until the executor had already idle-timed-
-    /// out waiting for a job that hadn't been enqueued yet (PerJob orphan, exit
-    /// 75). The body's result flows back over NATS; Slurm-side failures surface
-    /// via the watcher's `sig_failed`. Since `srun` returns no parsable batch id,
-    /// [`SubmitResult::scheduler_job_id`] is set to the held `alloc_id` for
-    /// status correlation (the step lives under that allocation's job id).
-    async fn submit_into_alloc(
-        &self,
-        alloc_id: &str,
-        request: &SubmitRequest,
-    ) -> Result<SubmitResult, SchedulerError> {
-        let comment_json = self.build_comment_json(&request.signal_key);
-        let token_data_json = serde_json::to_string(&request.token_data).unwrap_or_default();
-
-        let template_path = format!(
-            "{}/{}.sh",
-            self.config.template_dir, request.job_template_id
-        );
-
-        let command = crate::alloc::srun_into_alloc_template_command(
-            alloc_id,
-            &comment_json,
-            &request.signal_key.replace('\'', "_"),
-            &token_data_json,
-            &request.execution_id.replace('\'', "_"),
-            &template_path,
-        );
-
-        // ASYNC / fire-and-forget — the same dispatch contract as `sbatch`
-        // (which returns a job-id immediately). scheduler-net's
-        // `forward_to_executor` fires on submit SUCCESS (NOT on sig_running) and
-        // enqueues the job to apalis; the srun-launched executor (PerJob,
-        // idle-waiting) then pulls it. A SYNCHRONOUS srun would block THIS effect
-        // from returning until the executor has already exited — so the enqueue
-        // (which needs the effect to return) never reaches the still-waiting
-        // executor, which orphans (exit 75). Detach instead: `nohup` + redirect
-        // every fd + background, so the SSH command returns the instant the step
-        // is launched. The body's success/failure flows back over NATS (the
-        // executor reports its own result); a Slurm-side crash is caught by the
-        // watcher's sig_failed, exactly like the sbatch path.
-        let exec_tag = request.execution_id.replace(['\'', '/'], "_");
-        let detached =
-            format!("nohup {command} > /tmp/petri-srun-{exec_tag}.out 2>&1 < /dev/null & echo dispatched");
-        self.exec_with_reconnect(&detached)
-            .await
-            .map_err(map_ssh_err("srun into allocation dispatch failed"))?;
-
-        tracing::info!(
-            alloc_id = %alloc_id,
-            template = %request.job_template_id,
-            signal_key = %request.signal_key,
-            execution_id = %request.execution_id,
-            net_id = %self.net_id,
-            "Slurm body dispatched onto held allocation via srun (async, detached)"
-        );
-
-        // srun yields no parsable batch id; the step lives under the held
-        // allocation's job id, so correlate status against alloc_id.
-        Ok(SubmitResult {
-            scheduler_job_id: alloc_id.to_string(),
-        })
-    }
-
     /// Build the routing metadata JSON for the `--comment` flag.
     fn build_comment_json(&self, corr: &str) -> String {
         let routing = RoutingMeta {
@@ -202,21 +124,11 @@ fn map_ssh_err(context: &str) -> impl FnOnce(SshError) -> SchedulerError + '_ {
 #[async_trait::async_trait]
 impl SchedulerClient for SlurmClient {
     async fn submit(&self, request: SubmitRequest) -> Result<SubmitResult, SchedulerError> {
-        // L2 leased-body branch: when the token carries a held allocation id
-        // (set by the compiler as `spec.alloc_id` on the leased-body's
-        // SchedulerSubmitInput — an opaque Value field, no engine type change),
-        // run the body ON that allocation via `srun --jobid` instead of queuing
-        // a new `sbatch` job. The id rides `token_data["spec"]["alloc_id"]`.
-        let alloc_id = request
-            .token_data
-            .get("spec")
-            .and_then(|s| s.get("alloc_id"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        if let Some(alloc_id) = alloc_id {
-            return self.submit_into_alloc(alloc_id, &request).await;
-        }
-
+        // The leased-loop body no longer srun's onto a held allocation through
+        // this `submit` (the old `spec.alloc_id` seam is gone). A `run_on_lease`
+        // body now ENQUEUES to a lease-scoped NATS namespace drained by ONE
+        // persistent executor the acquire path launched on the held alloc — so
+        // every `submit` here is a plain `sbatch` of a fresh queued job.
         let comment_json = self.build_comment_json(&request.signal_key);
 
         // Build the sbatch command

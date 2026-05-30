@@ -16,9 +16,12 @@
 //! anything: `salloc --no-shell` grants the nodes and returns immediately,
 //! keeping them reserved until `scancel`. So:
 //!   - **acquire** → `salloc --no-shell` (or reuse an existing allocation for the
-//!     same `grant_id` — idempotency) then `scontrol show job` to resolve the
-//!     node, returning the 4-key lease JSON `{ node, gpu_uuid, alloc_id, expiry }`.
-//!   - **release** → `scancel <alloc_id>` (tolerant of an already-gone job).
+//!     same `grant_id` — idempotency), `scontrol show job` to resolve the node,
+//!     then `srun --jobid` a persistent drain executor onto the held alloc
+//!     (Pool mode, lease-scoped namespace `lease-<grant_id>`), returning the
+//!     lease JSON `{ node, gpu_uuid, alloc_id, expiry, executor_namespace }`.
+//!   - **release** → `scancel <alloc_id>` (tolerant of an already-gone job) —
+//!     SIGTERM drains the executor in-flight + frees the nodes.
 //!
 //! `gpu_uuid` is `""` on the CPU-only dev cluster (no GPU to bind).
 //!
@@ -128,8 +131,10 @@ impl SlurmAllocatorClient {
         }
     }
 
-    /// Acquire (or reuse) a held allocation and resolve its node, returning the
-    /// 4-key lease JSON the acquire handler consumes.
+    /// Acquire (or reuse) a held allocation, resolve its node, launch ONE
+    /// persistent drain executor on it (Pool mode, lease-scoped namespace), and
+    /// return the lease JSON (`node`/`gpu_uuid`/`alloc_id`/`expiry`/`executor_namespace`)
+    /// the acquire handler consumes.
     async fn acquire_lease(
         &self,
         grant_id: &str,
@@ -174,6 +179,52 @@ impl SlurmAllocatorClient {
         // handler tolerates a null node.
         let allocation = alloc::scontrol_node(session, &alloc_id).await?;
 
+        // The lease-scoped NATS namespace the persistent drain executor consumes
+        // and the leased loop body enqueues to. `grant_id` is `instance_id:node_id`;
+        // the `:` (and any `/`) must be sanitised because it would otherwise break
+        // the NATS stream name (`lease-…_medium`) / subject token (`lease-….medium.>`).
+        let executor_namespace = format!("lease-{}", grant_id.replace([':', '/'], "-"));
+
+        // Launch ONE persistent drain executor on the held allocation, DETACHED.
+        // It runs in Pool/drain mode (no EXECUTOR_TARGET_EXEC_ID) consuming the
+        // lease-scoped namespace, and pulls EVERY job the leased loop enqueues
+        // there — keeping warm state (venv/model/GPU) across iterations. A SYNC
+        // srun would block `acquire` for the whole lease, so we fire-and-forget.
+        // `scancel` on release sends SIGTERM → graceful 30s drain → exit;
+        // `LEASE_IDLE_TIMEOUT` is the belt-and-suspenders self-exit on a wedge.
+        //
+        // `max_jobs`/`idle_secs` come from the claim request when present; `acquire`
+        // only sees the claim, not the loop's maxIterations, so default generously
+        // (a high cap + a long idle window). The natural cap is the loop's
+        // maxIterations, which release (scancel) enforces anyway.
+        let max_jobs = request
+            .get("max_jobs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(100_000);
+        let idle_secs = request
+            .get("idle_timeout_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(300);
+        let template = format!(
+            "{}/mekhan-lease-executor.sh",
+            self.config.template_dir.trim_end_matches('/'),
+        );
+        alloc::srun_lease_executor(
+            session,
+            &alloc_id,
+            &template,
+            &executor_namespace,
+            max_jobs,
+            idle_secs,
+        )
+        .await?;
+        tracing::info!(
+            grant_id = %grant_id,
+            alloc_id = %alloc_id,
+            executor_namespace = %executor_namespace,
+            "slurm lease: launched persistent drain executor",
+        );
+
         // `Lease__datacenter` (DatacenterLease) types every field as a required
         // `String`, and the engine validates the grant token against it on
         // injection into the instance's grant-inbox. So absent node/expiry MUST
@@ -191,6 +242,7 @@ impl SlurmAllocatorClient {
             "gpu_uuid": "",
             "alloc_id": alloc_id,
             "expiry": expiry,
+            "executor_namespace": executor_namespace,
         }))
     }
 }
@@ -229,35 +281,57 @@ impl AllocatorClient for SlurmAllocatorClient {
 
 /// Per-fire flavor dispatcher: a single registered [`AllocatorClient`] that
 /// routes each acquire/release on the `scheduler_flavor` the handler extracted
-/// from the resolved `effect_config` (`"http"` default → the generic HTTP
-/// allocator; `"slurm"` → the SSH/salloc-backed [`SlurmAllocatorClient`]).
+/// from the resolved `effect_config` (`"http"`/`""` default → the generic HTTP
+/// allocator; `"slurm"` → the SSH/salloc-backed [`SlurmAllocatorClient`];
+/// `"nomad"` → the dispatch-backed [`NomadAllocatorClient`]).
 ///
 /// It overrides ONLY the flavor-aware seam methods
 /// (`acquire_with_flavor`/`release_with_flavor`); the bare `acquire`/`release`
 /// fall through to the http leg so a direct (flavorless) caller still works.
+///
+/// An UNKNOWN flavor is a HARD error (not a silent fall-through to http): an
+/// unconfigured/misspelled flavor must fail loudly rather than misroute a lease
+/// to the generic HTTP allocator (which would POST to whatever
+/// `allocator_url` the datacenter secret carried — wrong backend, silent).
 pub struct FlavorDispatchAllocatorClient {
     http: Arc<dyn AllocatorClient>,
     /// Present only when the `slurm` feature is on AND `SLURM_*` env is set.
     slurm: Option<Arc<dyn AllocatorClient>>,
+    /// Present only when the `nomad` feature is on AND `NOMAD_ADDR` is set.
+    nomad: Option<Arc<dyn AllocatorClient>>,
 }
 
 impl FlavorDispatchAllocatorClient {
-    pub fn new(http: Arc<dyn AllocatorClient>, slurm: Option<Arc<dyn AllocatorClient>>) -> Self {
-        Self { http, slurm }
+    pub fn new(
+        http: Arc<dyn AllocatorClient>,
+        slurm: Option<Arc<dyn AllocatorClient>>,
+        nomad: Option<Arc<dyn AllocatorClient>>,
+    ) -> Self {
+        Self { http, slurm, nomad }
     }
 
-    /// Resolve the leg for a flavor. `"slurm"` requires the slurm leg to be
-    /// present (feature on + env set); otherwise it is a configuration error.
+    /// Resolve the leg for a flavor. `"slurm"`/`"nomad"` require the respective
+    /// leg to be present (feature on + env set); an unknown flavor is a hard
+    /// error so a misconfiguration fails loudly instead of misrouting to http.
     fn leg(&self, scheduler_flavor: &str) -> Result<&Arc<dyn AllocatorClient>, AllocatorError> {
         match scheduler_flavor {
+            // "http" / "" (flavorless) → the generic HTTP allocator.
+            "http" | "" => Ok(&self.http),
             "slurm" => self.slurm.as_ref().ok_or_else(|| {
                 AllocatorError::BadResponse(
                     "scheduler_flavor=slurm but no Slurm allocator is configured (set SLURM_SSH_HOST and build with the `slurm` feature)"
                         .into(),
                 )
             }),
-            // "http" (and any unknown flavor) → the generic HTTP allocator.
-            _ => Ok(&self.http),
+            "nomad" => self.nomad.as_ref().ok_or_else(|| {
+                AllocatorError::BadResponse(
+                    "scheduler_flavor=nomad but no Nomad allocator is configured (set NOMAD_ADDR and build with the `nomad` feature)"
+                        .into(),
+                )
+            }),
+            other => Err(AllocatorError::BadResponse(format!(
+                "unknown scheduler_flavor {other:?} — expected http|slurm|nomad"
+            ))),
         }
     }
 }
@@ -365,7 +439,12 @@ mod tests {
     async fn dispatch_routes_http_by_default_and_on_http_flavor() {
         let http = FakeLeg::new("http");
         let slurm = FakeLeg::new("slurm");
-        let dispatch = FlavorDispatchAllocatorClient::new(http.clone(), Some(slurm.clone()));
+        let nomad = FakeLeg::new("nomad");
+        let dispatch = FlavorDispatchAllocatorClient::new(
+            http.clone(),
+            Some(slurm.clone()),
+            Some(nomad.clone()),
+        );
 
         // explicit "http"
         let out = dispatch
@@ -373,18 +452,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.get("leg").unwrap(), "http");
+        // empty flavor (flavorless via the seam) also goes to http
+        dispatch
+            .acquire_with_flavor("", "url", "tok", "g1", &json!({}))
+            .await
+            .unwrap();
         // bare acquire (flavorless) also goes to http
         dispatch.acquire("url", "tok", "g1", &json!({})).await.unwrap();
 
-        assert_eq!(http.acquires.load(Ordering::SeqCst), 2);
+        assert_eq!(http.acquires.load(Ordering::SeqCst), 3);
         assert_eq!(slurm.acquires.load(Ordering::SeqCst), 0);
+        assert_eq!(nomad.acquires.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn dispatch_routes_slurm_flavor_to_slurm_leg() {
         let http = FakeLeg::new("http");
         let slurm = FakeLeg::new("slurm");
-        let dispatch = FlavorDispatchAllocatorClient::new(http.clone(), Some(slurm.clone()));
+        let dispatch = FlavorDispatchAllocatorClient::new(http.clone(), Some(slurm.clone()), None);
 
         let out = dispatch
             .acquire_with_flavor("slurm", "url", "tok", "g1", &json!({}))
@@ -403,9 +488,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_routes_nomad_flavor_to_nomad_leg() {
+        let http = FakeLeg::new("http");
+        let nomad = FakeLeg::new("nomad");
+        let dispatch = FlavorDispatchAllocatorClient::new(http.clone(), None, Some(nomad.clone()));
+
+        let out = dispatch
+            .acquire_with_flavor("nomad", "url", "tok", "g1", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(out.get("leg").unwrap(), "nomad");
+
+        dispatch
+            .release_with_flavor("nomad", "url", "tok", "alloc-9")
+            .await
+            .unwrap();
+
+        assert_eq!(nomad.acquires.load(Ordering::SeqCst), 1);
+        assert_eq!(nomad.releases.load(Ordering::SeqCst), 1);
+        assert_eq!(http.acquires.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn dispatch_slurm_flavor_without_leg_is_an_error() {
         let http = FakeLeg::new("http");
-        let dispatch = FlavorDispatchAllocatorClient::new(http.clone(), None);
+        let dispatch = FlavorDispatchAllocatorClient::new(http.clone(), None, None);
 
         let err = dispatch
             .acquire_with_flavor("slurm", "url", "tok", "g1", &json!({}))
@@ -416,5 +523,51 @@ mod tests {
             other => panic!("expected BadResponse, got {other:?}"),
         }
         assert_eq!(http.acquires.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_nomad_flavor_without_leg_is_an_error() {
+        let http = FakeLeg::new("http");
+        let dispatch = FlavorDispatchAllocatorClient::new(http.clone(), None, None);
+
+        let err = dispatch
+            .acquire_with_flavor("nomad", "url", "tok", "g1", &json!({}))
+            .await
+            .unwrap_err();
+        match err {
+            AllocatorError::BadResponse(msg) => assert!(msg.contains("nomad")),
+            other => panic!("expected BadResponse, got {other:?}"),
+        }
+        assert_eq!(http.acquires.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_flavor_is_a_hard_error_not_http() {
+        // The load-bearing fix: an unconfigured/misspelled flavor must fail
+        // loudly, NOT silently fall through to the generic HTTP allocator.
+        let http = FakeLeg::new("http");
+        let slurm = FakeLeg::new("slurm");
+        let nomad = FakeLeg::new("nomad");
+        let dispatch = FlavorDispatchAllocatorClient::new(
+            http.clone(),
+            Some(slurm.clone()),
+            Some(nomad.clone()),
+        );
+
+        let err = dispatch
+            .acquire_with_flavor("k8s", "url", "tok", "g1", &json!({}))
+            .await
+            .unwrap_err();
+        match err {
+            AllocatorError::BadResponse(msg) => {
+                assert!(msg.contains("k8s"));
+                assert!(msg.contains("http|slurm|nomad"));
+            }
+            other => panic!("expected BadResponse, got {other:?}"),
+        }
+        // NOT routed to http (the old silent fall-through), nor any backend.
+        assert_eq!(http.acquires.load(Ordering::SeqCst), 0);
+        assert_eq!(slurm.acquires.load(Ordering::SeqCst), 0);
+        assert_eq!(nomad.acquires.load(Ordering::SeqCst), 0);
     }
 }

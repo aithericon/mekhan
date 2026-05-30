@@ -1183,17 +1183,21 @@ pub enum DeploymentModel {
         /// `Submit` wire shape round-trips byte-identically.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request: Option<serde_json::Value>,
-        /// L4 opt-in: run this body ON the enclosing leased loop's held
-        /// allocation instead of submitting a fresh job. The body Scheduled
+        /// Opt-in: ENQUEUE this body to the enclosing leased loop's lease
+        /// namespace instead of submitting a fresh scheduler job. The body
         /// step ALWAYS sits inside the leasing loop (`parent_id == loop.id`)
         /// and there is exactly one loop lease in scope — no ambiguity. When
-        /// set (and the enclosing Loop carries a `lease`), the compiler injects
-        /// `"alloc_id": <loop_slug>.lease.alloc_id` into the prepare-transition
-        /// `spec` literal via the standard read-arc borrow pipeline; the engine
-        /// (L2 `SlurmClient::submit`) then `srun`s the job into the held
-        /// allocation rather than `sbatch`-ing a new one. `false` (default) =
-        /// today's independent submit. `alloc_id` rides the opaque `spec`
-        /// `Value` — no typed engine field.
+        /// set (and the enclosing Loop carries a `lease`), the body lowers via
+        /// the EXECUTOR enqueue path (NOT the scheduler-net) and the compiler
+        /// injects `d.executor_namespace = <loop_slug>.lease.executor_namespace`
+        /// onto the job token via the standard read-arc borrow pipeline. The
+        /// engine's `ExecutorSubmitHandler` reads that per-job namespace and
+        /// publishes to the lease-scoped NATS queue (`lease-<grant_id>`) drained
+        /// by the ONE persistent executor the acquire path launched on the held
+        /// allocation — so every iteration's body runs WARM on the same held
+        /// instance (venv/model/GPU state persists). `false` (default) = an
+        /// independent scheduler submit. The namespace rides the job token's
+        /// top-level `executor_namespace` key — no typed engine field.
         #[serde(
             default,
             rename = "runOnLease",

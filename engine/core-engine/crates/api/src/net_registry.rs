@@ -875,8 +875,17 @@ where
                 .map(|c| Arc::new(c) as Arc<dyn AllocatorClient>);
         #[cfg(not(feature = "slurm"))]
         let slurm_allocator: Option<Arc<dyn AllocatorClient>> = None;
+        // The Nomad leg mirrors the Slurm leg: built from the `NOMAD_*` env only
+        // when the `nomad` feature is on AND `NOMAD_ADDR` is set; otherwise
+        // absent, so a `scheduler_flavor=nomad` fire fails loudly.
+        #[cfg(feature = "nomad")]
+        let nomad_allocator: Option<Arc<dyn AllocatorClient>> =
+            crate::nomad_allocator::NomadAllocatorClient::from_env()
+                .map(|c| Arc::new(c) as Arc<dyn AllocatorClient>);
+        #[cfg(not(feature = "nomad"))]
+        let nomad_allocator: Option<Arc<dyn AllocatorClient>> = None;
         let allocator_client: Arc<dyn AllocatorClient> = Arc::new(
-            FlavorDispatchAllocatorClient::new(http_allocator, slurm_allocator),
+            FlavorDispatchAllocatorClient::new(http_allocator, slurm_allocator, nomad_allocator),
         );
         service
             .register_effect_handler(

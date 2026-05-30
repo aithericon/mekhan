@@ -243,6 +243,75 @@ pub fn srun_into_alloc_template_command(
     )
 }
 
+/// Build the `srun --jobid=<alloc_id> … <template_path>` command that launches
+/// the PERSISTENT DRAIN EXECUTOR on a held allocation.
+///
+/// Unlike [`srun_into_alloc_template_command`] (which dispatches a single body
+/// job, PerJob, via `EXECUTOR_TARGET_EXEC_ID`), this runs ONE long-lived
+/// executor in Pool/drain mode that consumes a lease-scoped NATS namespace and
+/// pulls EVERY job the leased loop enqueues there. The selector for Pool mode is
+/// the ABSENCE of `EXECUTOR_TARGET_EXEC_ID`; what it drains is parameterised
+/// per-acquire via three env vars the drain template reads:
+///
+/// - `LEASE_NAMESPACE=lease-<grant_id>` — the disjoint queue the body enqueues to.
+/// - `LEASE_MAX_JOBS=<cap>` — drain N then exit (the loop's maxIterations).
+/// - `LEASE_IDLE_TIMEOUT=<secs>` — survive inter-iteration gaps, self-exit if wedged.
+///
+/// All values are single-quote escaped via [`sq`]. The command is meant to be
+/// run detached (the executor runs for the whole lease) — see
+/// [`detached_launch`].
+pub fn srun_lease_executor_command(
+    alloc_id: &str,
+    template_path: &str,
+    namespace: &str,
+    max_jobs: u64,
+    idle_secs: u64,
+) -> String {
+    format!(
+        "srun --jobid='{}' --export=ALL,LEASE_NAMESPACE='{}',LEASE_MAX_JOBS='{}',LEASE_IDLE_TIMEOUT='{}' {}",
+        sq(alloc_id),
+        sq(namespace),
+        max_jobs,
+        idle_secs,
+        template_path,
+    )
+}
+
+/// Wrap a command for fire-and-forget detached execution over SSH.
+///
+/// Mirrors `SlurmClient::submit_into_alloc`'s detach: `nohup … &` with every fd
+/// redirected so the SSH `exec` returns immediately instead of blocking for the
+/// command's whole lifetime. Required for the persistent drain executor — a
+/// SYNC `srun` would block `acquire` for the entire lease. `tag` names the log
+/// file (single-quote escaped for safe embedding).
+pub fn detached_launch(command: &str, tag: &str) -> String {
+    format!(
+        "nohup {command} > '/tmp/petri-lease-exec-{}.out' 2>&1 < /dev/null & echo dispatched",
+        sq(tag),
+    )
+}
+
+/// Launch the persistent drain executor on a held allocation, DETACHED.
+///
+/// Builds [`srun_lease_executor_command`], wraps it in [`detached_launch`], and
+/// fires it through the held session. Returns immediately (fire-and-forget): the
+/// executor runs for the whole lease, draining the lease-scoped namespace, and
+/// exits on `scancel` (SIGTERM → graceful drain) or `LEASE_IDLE_TIMEOUT`.
+pub async fn srun_lease_executor(
+    ssh: &SshSession,
+    alloc_id: &str,
+    template_path: &str,
+    namespace: &str,
+    max_jobs: u64,
+    idle_secs: u64,
+) -> Result<(), AllocError> {
+    let command =
+        srun_lease_executor_command(alloc_id, template_path, namespace, max_jobs, idle_secs);
+    let detached = detached_launch(&command, alloc_id);
+    ssh.exec(&detached).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +414,53 @@ mod tests {
         );
         assert!(cmd.contains("--jobid='a'\\''b'"), "{}", cmd);
         assert!(cmd.contains("--job-name='petri-k'\\''1'"), "{}", cmd);
+    }
+
+    #[test]
+    fn test_srun_lease_executor_command_shape() {
+        // The drain-launch form: srun a persistent executor onto a held alloc,
+        // parameterised by the lease-scoped namespace + drain bounds. Crucially
+        // it carries NO EXECUTOR_TARGET_EXEC_ID (Pool mode is selected by its
+        // absence; the template reads LEASE_* instead).
+        let cmd = srun_lease_executor_command(
+            "12345",
+            "/opt/petri/templates/mekhan-lease-executor.sh",
+            "lease-inst-1:node-2",
+            8,
+            300,
+        );
+        assert!(cmd.starts_with("srun --jobid='12345'"), "{}", cmd);
+        assert!(
+            cmd.contains("--export=ALL,LEASE_NAMESPACE='lease-inst-1:node-2',LEASE_MAX_JOBS='8',LEASE_IDLE_TIMEOUT='300'"),
+            "{}",
+            cmd
+        );
+        assert!(
+            cmd.ends_with(" /opt/petri/templates/mekhan-lease-executor.sh"),
+            "{}",
+            cmd
+        );
+        // No PerJob target — Pool/drain mode.
+        assert!(!cmd.contains("EXECUTOR_TARGET_EXEC_ID"), "{}", cmd);
+    }
+
+    #[test]
+    fn test_srun_lease_executor_command_escapes() {
+        // A namespace/alloc with a quote must not break out of the quoted arg.
+        let cmd = srun_lease_executor_command("a'b", "/t.sh", "lease-x'y", 1, 60);
+        assert!(cmd.contains("--jobid='a'\\''b'"), "{}", cmd);
+        assert!(cmd.contains("LEASE_NAMESPACE='lease-x'\\''y'"), "{}", cmd);
+    }
+
+    #[test]
+    fn test_detached_launch_shape() {
+        // Fire-and-forget: nohup + every-fd redirect + background, so the SSH
+        // exec returns immediately while the executor runs for the whole lease.
+        let inner = "srun --jobid='12345' /opt/petri/templates/mekhan-lease-executor.sh";
+        let detached = detached_launch(inner, "12345");
+        assert!(detached.starts_with("nohup srun --jobid='12345'"), "{}", detached);
+        assert!(detached.contains("> '/tmp/petri-lease-exec-12345.out' 2>&1"), "{}", detached);
+        assert!(detached.contains("< /dev/null &"), "{}", detached);
+        assert!(detached.ends_with("echo dispatched"), "{}", detached);
     }
 }

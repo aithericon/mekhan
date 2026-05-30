@@ -1,0 +1,55 @@
+{
+  "_comment": "Nomad parameterized job that dispatches ONE persistent drain executor for the datacenter LEASE path (the Nomad analogue of mekhan-lease-executor.sh). Unlike petri-executor-worker (PerJob, MAX_JOBS=1, one-shot via EXECUTOR_TARGET_EXEC_ID), this is Pool/drain: NO EXECUTOR_TARGET_EXEC_ID, so the executor opens a durable shared consumer on the {ns}_{prio} stream with a wildcard {ns}.{prio}.> filter and pulls EVERY job the leased loop enqueues to the lease-scoped namespace. The lease params (namespace + cap + idle) ride as dispatch Meta and are surfaced to the task env via ${NOMAD_META_*}. Release = nomad job stop → SIGTERM → graceful 30s drain → exit. NomadAllocatorClient::acquire dispatches this (job id 'petri-lease-executor', overridable via NOMAD_LEASE_JOB_TEMPLATE); the dispatched child job id becomes the lease alloc_id.",
+  "Job": {
+    "ID": "petri-lease-executor",
+    "Name": "petri-lease-executor",
+    "Type": "service",
+    "Datacenters": ["dc1"],
+    "ParameterizedJob": {
+      "Payload": "forbidden",
+      "MetaRequired": ["LEASE_NAMESPACE"],
+      "MetaOptional": ["LEASE_MAX_JOBS", "LEASE_IDLE_TIMEOUT"]
+    },
+    "TaskGroups": [
+      {
+        "Name": "lease-executor",
+        "Count": 1,
+        "RestartPolicy": {
+          "Attempts": 0,
+          "Mode": "fail"
+        },
+        "ReschedulePolicy": {
+          "Attempts": 0
+        },
+        "Tasks": [
+          {
+            "Name": "petri-lease-worker",
+            "Driver": "raw_exec",
+            "Config": {
+              "command": "PLACEHOLDER_EXECUTOR_BINARY",
+              "args": []
+            },
+            "KillSignal": "SIGTERM",
+            "KillTimeout": "35s",
+            "Env": {
+              "EXECUTOR_NATS_URL": "nats://localhost:4333",
+              "EXECUTOR_NAMESPACE": "${NOMAD_META_LEASE_NAMESPACE}",
+              "EXECUTOR_SOURCE": "nats_queue",
+              "EXECUTOR_LIFETIME": "run_to_completion",
+              "EXECUTOR_MAX_JOBS": "${NOMAD_META_LEASE_MAX_JOBS}",
+              "EXECUTOR_IDLE_TIMEOUT_SECS": "${NOMAD_META_LEASE_IDLE_TIMEOUT}",
+              "EXECUTOR_CONCURRENCY": "1",
+              "EXECUTOR_NAME": "nomad-lease-executor-${NOMAD_ALLOC_ID}",
+              "EXECUTOR_BASE_DIR": "/tmp/aithericon-executor-nomad-lease",
+              "EXECUTOR_DEFAULT_TIMEOUT_SECS": "600"
+            },
+            "Resources": {
+              "CPU": 1000,
+              "MemoryMB": 1024
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

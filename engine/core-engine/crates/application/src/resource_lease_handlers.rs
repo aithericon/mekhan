@@ -337,6 +337,15 @@ impl EffectHandler for ResourceLeaseAcquireHandler {
             })?
             .to_string();
         let expiry = lease.get("expiry").cloned().unwrap_or(JsonValue::Null);
+        // The lease-scoped NATS namespace the persistent drain executor consumes
+        // and the leased loop body enqueues to. The slurm/nomad allocator legs
+        // emit it; the HTTP leg does not (no persistent executor), so default to
+        // "" — empty-not-null keeps the required-String `Lease__datacenter`
+        // schema valid on grant-inbox injection.
+        let executor_namespace = lease
+            .get("executor_namespace")
+            .cloned()
+            .unwrap_or(JsonValue::String(String::new()));
 
         let lease_token = serde_json::json!({
             "grant_id": grant_id,
@@ -344,6 +353,7 @@ impl EffectHandler for ResourceLeaseAcquireHandler {
             "gpu_uuid": gpu_uuid,
             "alloc_id": alloc_id,
             "expiry": expiry,
+            "executor_namespace": executor_namespace,
         });
 
         tracing::info!(
@@ -496,7 +506,8 @@ mod tests {
                 "node": "node-7",
                 "gpu_uuid": "GPU-abc123",
                 "alloc_id": "alloc-42",
-                "expiry": "2026-01-01T00:00:00Z"
+                "expiry": "2026-01-01T00:00:00Z",
+                "executor_namespace": "lease-instance-1-render"
             }))
         }
 
@@ -548,6 +559,8 @@ mod tests {
         assert_eq!(lease["gpu_uuid"], "GPU-abc123");
         assert_eq!(lease["alloc_id"], "alloc-42");
         assert_eq!(lease["expiry"], "2026-01-01T00:00:00Z");
+        // The lease-scoped drain-executor namespace rides the typed lease token.
+        assert_eq!(lease["executor_namespace"], "lease-instance-1-render");
 
         // effect_result journals alloc_id (for replay + traceability).
         assert_eq!(out.result["alloc_id"], "alloc-42");

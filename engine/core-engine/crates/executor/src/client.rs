@@ -74,6 +74,19 @@ impl ApalisPriority {
     }
 }
 
+/// apalis-nats JetStream stream name for a `{namespace}` / `{priority}` pair
+/// (e.g. `executor_jobs_medium`, `lease-abc_medium`).
+fn stream_name_for(namespace: &str, priority: ApalisPriority) -> String {
+    format!("{}_{}", namespace, priority.as_str())
+}
+
+/// Per-job publish subject `{namespace}.{priority}.{execution_id}`. A per-job
+/// namespace (`lease-<grant_id>`) targets the lease-scoped queue drained by a
+/// persistent executor; the fixed daemon namespace is byte-identical.
+fn subject_for(namespace: &str, priority: ApalisPriority, execution_id: &str) -> String {
+    format!("{}.{}.{}", namespace, priority.as_str(), execution_id)
+}
+
 // ---------------------------------------------------------------------------
 // ExecutorNatsClient
 // ---------------------------------------------------------------------------
@@ -90,8 +103,11 @@ pub struct ExecutorNatsClient {
     signal_routes: HashMap<String, String>,
     event_routes: HashMap<String, String>,
     namespace: String,
-    /// Whether the target stream has been ensured this session.
-    stream_ensured: std::sync::atomic::AtomicBool,
+    /// Names of streams ensured this session, keyed by `{ns}_{prio}`. A leased
+    /// body targets a per-job namespace (`lease-<grant_id>`) whose stream
+    /// differs from the fixed-namespace daemon path, so the ensure cache is
+    /// keyed per stream name rather than a single session-wide bool.
+    streams_ensured: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Secret store for resolving `{{secret:KEY}}` refs before wrapping.
     #[cfg(feature = "vault-secrets")]
     secret_store: Option<Arc<dyn aithericon_secrets::SecretStore>>,
@@ -132,7 +148,7 @@ impl ExecutorNatsClient {
             signal_routes,
             event_routes,
             namespace: namespace.to_string(),
-            stream_ensured: std::sync::atomic::AtomicBool::new(false),
+            streams_ensured: std::sync::Mutex::new(std::collections::HashSet::new()),
             #[cfg(feature = "vault-secrets")]
             secret_store: None,
             #[cfg(feature = "vault-secrets")]
@@ -260,23 +276,33 @@ impl ExecutorNatsClient {
         })
     }
 
-    /// Idempotently ensure the apalis-nats stream for the given priority exists.
+    /// Idempotently ensure the apalis-nats stream for the given priority and
+    /// namespace exists.
     ///
     /// Uses `get_or_create_stream` so it's a no-op if the executor already
-    /// created it. The config matches what apalis-nats produces.
-    async fn ensure_stream(&self, priority: ApalisPriority) -> Result<(), ExecutorError> {
+    /// created it. The config matches what apalis-nats produces. The ensure
+    /// cache is keyed by stream name so a per-job namespace (lease-scoped) is
+    /// ensured independently of the fixed-namespace daemon path.
+    async fn ensure_stream(
+        &self,
+        priority: ApalisPriority,
+        namespace: &str,
+    ) -> Result<(), ExecutorError> {
+        let stream_name = stream_name_for(namespace, priority);
+
         if self
-            .stream_ensured
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .streams_ensured
+            .lock()
+            .map(|set| set.contains(&stream_name))
+            .unwrap_or(false)
         {
             return Ok(());
         }
 
-        let stream_name = format!("{}_{}", self.namespace, priority.as_str());
         // Wildcard subject filter — publishers route by `{ns}.{prio}.{exec_id}`
         // so the stream accepts both daemon-mode wildcard pulls and one-shot
         // per-exec consumers.
-        let subjects = vec![format!("{}.{}.>", self.namespace, priority.as_str())];
+        let subjects = vec![format!("{}.{}.>", namespace, priority.as_str())];
 
         self.jetstream
             .get_or_create_stream(async_nats::jetstream::stream::Config {
@@ -297,8 +323,9 @@ impl ExecutorNatsClient {
                 ))
             })?;
 
-        self.stream_ensured
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut set) = self.streams_ensured.lock() {
+            set.insert(stream_name);
+        }
         Ok(())
     }
 }
@@ -311,8 +338,13 @@ impl ExecutorClient for ExecutorNatsClient {
     ) -> Result<ExecutionSubmitResult, ExecutorError> {
         let priority = ApalisPriority::default(); // Medium
 
-        // Ensure the target stream exists (idempotent, cached after first call).
-        self.ensure_stream(priority).await?;
+        // Prefer a per-job namespace (a leased body targets `lease-<grant_id>`
+        // drained by a persistent executor); fall back to the construction-time
+        // fixed namespace for the daemon path.
+        let ns = request.namespace.as_deref().unwrap_or(&self.namespace);
+
+        // Ensure the target stream exists (idempotent, cached per stream name).
+        self.ensure_stream(priority, ns).await?;
 
         let routing = self.build_routing_meta(
             &request.signal_key,
@@ -362,7 +394,7 @@ impl ExecutorClient for ExecutorNatsClient {
             priority: priority.as_json_str(),
             attempts: 0,
             created_at: Utc::now(),
-            namespace: &self.namespace,
+            namespace: ns,
         };
 
         let payload = serde_json::to_vec(&envelope).map_err(|e| {
@@ -372,7 +404,7 @@ impl ExecutorClient for ExecutorNatsClient {
         // Per-job subject: `{namespace}.{priority}.{execution_id}`. Pool
         // consumers (daemon mode) match via `{ns}.{prio}.>` wildcard; PerJob
         // consumers (one-shot sbatch) exact-match their assigned exec_id.
-        let subject = format!("{}.{}.{}", self.namespace, priority.as_str(), execution_id);
+        let subject = subject_for(ns, priority, &execution_id);
 
         let mut headers = async_nats::HeaderMap::new();
         headers.insert("Nats-Msg-Id", execution_id.as_str());
@@ -490,5 +522,35 @@ mod tests {
         assert_eq!(json["namespace"], "executor_jobs");
         assert_eq!(json["attempts"], 0);
         assert_eq!(json["data"]["execution_id"], "test-exec-1");
+    }
+
+    #[test]
+    fn test_per_job_namespace_routes_subject_and_stream() {
+        // A leased body stamps `request.namespace = Some("lease-x")` — the
+        // client must publish to the lease-scoped queue, not its fixed default.
+        let fixed = "executor_jobs";
+        let req_ns = Some("lease-x".to_string());
+
+        // Mirror submit()'s resolution: prefer the per-job ns, else fixed.
+        let ns = req_ns.as_deref().unwrap_or(fixed);
+        assert_eq!(ns, "lease-x");
+        assert_eq!(
+            subject_for(ns, ApalisPriority::Medium, "exec-42"),
+            "lease-x.medium.exec-42"
+        );
+        assert_eq!(stream_name_for(ns, ApalisPriority::Medium), "lease-x_medium");
+
+        // Absent per-job ns → byte-identical to the fixed-namespace daemon path.
+        let none_ns: Option<String> = None;
+        let ns = none_ns.as_deref().unwrap_or(fixed);
+        assert_eq!(ns, "executor_jobs");
+        assert_eq!(
+            subject_for(ns, ApalisPriority::Medium, "exec-42"),
+            "executor_jobs.medium.exec-42"
+        );
+        assert_eq!(
+            stream_name_for(ns, ApalisPriority::Medium),
+            "executor_jobs_medium"
+        );
     }
 }

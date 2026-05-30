@@ -651,18 +651,20 @@ pub(crate) fn guard_readarc_plan(
             WorkflowNodeData::Map { items_ref, .. } if !items_ref.trim().is_empty() => {
                 vec![items_ref.clone()]
             }
-            // L4: a `Scheduled { operation: Submit, run_on_lease: true }`
-            // AutomatedStep nested in a leased Loop borrows the enclosing
-            // loop's held allocation. `lower_automated_step_scheduled` injects
-            // `d.spec.alloc_id = <loop_slug>.lease.alloc_id;` into the
-            // `t_<id>_prepare` logic; we synthesize the SAME dotted source here
-            // so the standard read-arc pipeline wires a read-arc into the loop's
-            // parked `p_<loop>_data` and rewrites the dotted text to
-            // `d_<loop>.lease.alloc_id`. `resolve_ref`'s `is_loop_node` branch
-            // resolves `<loop>.lease.alloc_id` via `resolves_under_opaque`
-            // (the parked `<loop>.lease` is `Any`), returning a `Borrow` —
-            // no new BorrowSource, no new apply arm. Without an enclosing
-            // leased loop the lowering injects nothing, so we emit nothing.
+            // A `Scheduled { operation: Submit, run_on_lease: true }`
+            // AutomatedStep nested in a leased Loop now ENQUEUES to the lease
+            // namespace (it lowers via the EXECUTOR path, not scheduler-net).
+            // `lower_automated_step` injects
+            // `d.executor_namespace = <loop_slug>.lease.executor_namespace;` into
+            // the `t_<id>_prepare` logic; we synthesize the SAME dotted source
+            // here so the standard read-arc pipeline wires a read-arc into the
+            // loop's parked `p_<loop>_data` and rewrites the dotted text to
+            // `d_<loop>.lease.executor_namespace`. `resolve_ref`'s `is_loop_node`
+            // branch resolves `<loop>.lease.executor_namespace` via
+            // `resolves_under_opaque` (the parked `<loop>.lease` is `Any`),
+            // returning a `Borrow` — no new BorrowSource, no new apply arm.
+            // Without an enclosing leased loop the lowering injects nothing, so
+            // we emit nothing.
             WorkflowNodeData::AutomatedStep {
                 deployment_model:
                     crate::models::template::DeploymentModel::Scheduled {
@@ -672,7 +674,7 @@ pub(crate) fn guard_readarc_plan(
                     },
                 ..
             } => match enclosing_leased_loop_slug(node, graph) {
-                Some(loop_slug) => vec![format!("{loop_slug}.lease.alloc_id")],
+                Some(loop_slug) => vec![format!("{loop_slug}.lease.executor_namespace")],
                 None => continue,
             },
             _ => continue,
@@ -741,13 +743,13 @@ pub(crate) fn guard_readarc_plan(
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
 use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
 
-/// L4: slug of the Loop that ENCLOSES `node` (`node.parent_id == loop.id`)
+/// Slug of the Loop that ENCLOSES `node` (`node.parent_id == loop.id`)
 /// iff that loop carries a `lease`. Mirrors the identically-named helper in
 /// `lower::automated_step` (both call `WorkflowNode::slug()`) so the dotted
-/// `<loop_slug>.lease.alloc_id` synthesized here is byte-identical to the one
-/// injected into the `t_<id>_prepare` logic — `apply_guard_borrows` relies on
-/// the literal match to find + rewrite the ref. Loops are exempt from slug
-/// suffixing, so `slug()` == the `SlugIndex` key.
+/// `<loop_slug>.lease.executor_namespace` synthesized here is byte-identical to
+/// the one injected into the `t_<id>_prepare` logic — `apply_guard_borrows`
+/// relies on the literal match to find + rewrite the ref. Loops are exempt from
+/// slug suffixing, so `slug()` == the `SlugIndex` key.
 fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
     let parent_id = node.parent_id.as_deref()?;
     graph.nodes.iter().find_map(|n| {

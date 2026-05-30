@@ -1430,22 +1430,25 @@ fn compile_leased_loop_scheduled_body(
     .map(|a| a.air)
 }
 
-/// L4 keystone: a `Scheduled { operation: submit, runOnLease: true }` body
-/// inside a `Loop { lease }` emits `spec.alloc_id` sourced FROM the enclosing
+/// Keystone: a `Scheduled { operation: submit, runOnLease: true }` body inside
+/// a `Loop { lease }` ENQUEUES to the lease namespace. It lowers via the
+/// EXECUTOR enqueue path (NOT the scheduler-net): the prepare transition stamps
+/// `d.executor_namespace` on the job-token top level, sourced FROM the enclosing
 /// loop's parked lease — via a read-arc into the loop's `p_aloop_data` and the
-/// word-boundary rewrite `aloop.lease.alloc_id` → `d_aloop.lease.alloc_id`. The
-/// body still bridges to the scheduler-net (it did not collapse to an inline
-/// executor body), and the loop kept its full L3 lease topology.
+/// word-boundary rewrite `aloop.lease.executor_namespace` →
+/// `d_aloop.lease.executor_namespace`. The body is an executor lifecycle (it has
+/// a `body/inbox` and NO scheduler `p_body_sched_out`), and the loop kept its
+/// full lease topology.
 #[test]
 fn leased_loop_scheduled_body_runs_on_held_alloc() {
     let graph = load_graph("leased-loop-scheduled-body.json");
     let air = compile_leased_loop_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
-        .expect("leased-loop Scheduled runOnLease body should compile");
+        .expect("leased-loop runOnLease body should compile");
 
     assert_all_transitions_wired(&air);
     assert_arcs_reference_existing_places(&air);
 
-    // (1) The loop kept its L3 lease topology — acquire-once / hold / release.
+    // (1) The loop kept its lease topology — acquire-once / hold / release.
     for pid in [
         "p_aloop_claim_out",
         "p_aloop_grant_inbox",
@@ -1457,45 +1460,47 @@ fn leased_loop_scheduled_body_runs_on_held_alloc() {
         assert!(has_place(&air, pid), "loop lease topology must keep {pid}");
     }
 
-    // (2) The body stayed a Scheduled job: it bridges to the scheduler-net via
-    //     `p_body_sched_out`, NOT an inline executor `body/inbox`.
+    // (2) The body retargeted to the EXECUTOR enqueue path: it has the
+    //     scoped executor lifecycle inbox (`body/inbox`) and NO scheduler-net
+    //     bridge_out (`p_body_sched_out`).
     assert!(
-        has_place(&air, "p_body_sched_out"),
-        "Scheduled body must keep its scheduler bridge_out"
+        has_place(&air, "body/inbox"),
+        "runOnLease body must lower to the executor lifecycle inbox"
     );
     assert!(
-        !has_place(&air, "p_body/inbox"),
-        "Scheduled body must NOT collapse to an inline executor body"
+        !has_place(&air, "p_body_sched_out"),
+        "runOnLease body must NOT bridge to the scheduler-net"
     );
 
-    // (3) The prepare transition carries `spec.alloc_id`, sourced from the
+    // (3) The prepare transition stamps `d.executor_namespace`, sourced from the
     //     enclosing loop's lease. After the read-arc rewrite the raw dotted
-    //     `aloop.lease.alloc_id` becomes the bound scope var
-    //     `d_aloop.lease.alloc_id`.
-    let prepare_logic = transitions(&air)
+    //     `aloop.lease.executor_namespace` becomes the bound scope var
+    //     `d_aloop.lease.executor_namespace`. The scoped prepare id is
+    //     `body/prepare`.
+    let prepare = transitions(&air)
         .iter()
-        .find(|t| t["id"] == "t_body_prepare")
-        .expect("body prepare transition")["logic"]["source"]
-        .as_str()
-        .unwrap()
-        .to_string();
+        .find(|t| t["id"] == "body/prepare")
+        .expect("body prepare transition")
+        .clone();
+    let prepare_logic = prepare["logic"]["source"].as_str().unwrap().to_string();
     assert!(
-        prepare_logic.contains("d.spec.alloc_id = d_aloop.lease.alloc_id"),
-        "prepare must set spec.alloc_id from the loop lease (rewritten ref): {prepare_logic}"
+        prepare_logic.contains("d.executor_namespace = d_aloop.lease.executor_namespace"),
+        "prepare must stamp executor_namespace from the loop lease (rewritten ref): {prepare_logic}"
+    );
+    // No scheduler `spec.alloc_id` srun seam survives — the body enqueues now.
+    assert!(
+        !prepare_logic.contains("alloc_id"),
+        "the leased body must no longer carry the alloc_id srun seam: {prepare_logic}"
     );
     // The raw, pre-rewrite dotted form must NOT survive (proves the read-arc
     // pipeline actually bound it rather than leaving a dangling ref).
     assert!(
-        !prepare_logic.contains(" aloop.lease.alloc_id"),
-        "the raw `aloop.lease.alloc_id` must have been rewritten to the bound var: {prepare_logic}"
+        !prepare_logic.contains(" aloop.lease.executor_namespace"),
+        "the raw `aloop.lease.executor_namespace` must have been rewritten to the bound var: {prepare_logic}"
     );
 
     // (4) The read-arc that binds `d_aloop` is wired onto the prepare transition
     //     as a non-consuming read into the loop's parked `p_aloop_data`.
-    let prepare = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_body_prepare")
-        .unwrap();
     let has_loop_read_arc = prepare["inputs"]
         .as_array()
         .unwrap()
@@ -1535,15 +1540,16 @@ fn scheduled_body_without_run_on_lease_does_not_borrow_alloc() {
         "Submit body still bridges to the scheduler-net"
     );
 
-    // ...but with NO alloc_id injection and NO read-arc into the loop data.
+    // ...but with NO lease borrow and NO read-arc into the loop data. A plain
+    // Submit keeps the unscoped `t_body_prepare` scheduler-net prepare.
     let prepare = transitions(&air)
         .iter()
         .find(|t| t["id"] == "t_body_prepare")
         .expect("body prepare transition");
     let prepare_logic = prepare["logic"]["source"].as_str().unwrap();
     assert!(
-        !prepare_logic.contains("alloc_id"),
-        "no-runOnLease body must not inject spec.alloc_id: {prepare_logic}"
+        !prepare_logic.contains("alloc_id") && !prepare_logic.contains("executor_namespace"),
+        "no-runOnLease body must not borrow the loop lease: {prepare_logic}"
     );
     let borrows_loop = prepare["inputs"]
         .as_array()

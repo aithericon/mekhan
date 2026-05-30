@@ -1,45 +1,51 @@
-//! End-to-end coverage for a **loop-scoped Slurm lease** (L4) — the seam where
-//! a leased `Loop` holds ONE Slurm allocation across all its iterations and
-//! every iteration's `Scheduled { runOnLease: true }` body `srun`s onto that
-//! held allocation instead of `sbatch`-ing a fresh job.
+//! End-to-end coverage for a **loop-scoped Slurm lease** with a PERSISTENT
+//! DRAIN EXECUTOR — the seam where a leased `Loop` holds ONE Slurm allocation
+//! across all its iterations, launches ONE long-lived executor onto that held
+//! allocation at acquire, and every iteration's `runOnLease` body simply
+//! ENQUEUES its job to the lease-scoped NATS namespace that the held executor
+//! drains. The executor process is REUSED across all iterations (warm venv /
+//! model / GPU state), not restarted per-iteration.
 //!
 //!   parent-net ─▶ datacenter pool-net (lease adapter)
 //!                   ▲ claim (salloc, once)        │ release (scancel, once)
-//!   Loop(lease) ────┘                             └──── at terminal exit
-//!     │  held alloc_id parked at p_lp_data.lease.alloc_id
-//!     ▼  (read-arc → d.spec.alloc_id per iteration)
-//!   body AutomatedStep(Scheduled, runOnLease) ─▶ scheduler-net
-//!     └─(SlurmClient::submit sees spec.alloc_id ⇒ srun --jobid=<alloc>)─▶
-//!        executor (in the SAME held Slurm alloc) ─▶ result ─▶ parent
+//!   Loop(lease) ────┘  └─ srun ONE drain executor └──── at terminal exit
+//!     │                    on the held alloc (Pool mode, ns=lease-<grant>)
+//!     │  parked lease at p_lp_data.lease.executor_namespace
+//!     ▼  (read-arc → d.executor_namespace per iteration)
+//!   body AutomatedStep(runOnLease) ─▶ executor lifecycle enqueue
+//!     └─(publish to lease-<grant>.<prio>.<id> on NATS)─▶
+//!        the held drain executor pulls + runs it (WARM) ─▶ result ─▶ parent
 //!
-//! This is the L4 counterpart of `scheduled_slurm_e2e.rs` (single Submit, no
-//! loop, no lease). What it additionally proves over that test:
+//! This is the drain-model counterpart of `scheduled_slurm_e2e.rs` (single
+//! Submit, no loop, no lease). What it additionally proves over that test:
 //!   1. The loop acquires EXACTLY ONE allocation (one `p_lp_held` token) and
 //!      holds it across all `max_iterations` iterations — witnessed by a STABLE
 //!      single `squeue --name='petri-<grant_id>'` job id sampled while running.
-//!   2. Each iteration `srun`s into that held alloc (NOT a fresh `sbatch`) —
-//!      witnessed by N new `/tmp/petri-srun-*.out` files all carrying
-//!      `handling execution job` (the executor really pulled+ran work).
+//!   2. ONE persistent executor (launched once on acquire) drains ALL N jobs —
+//!      witnessed by a SINGLE new `/tmp/petri-lease-exec-*.out` file carrying
+//!      `Starting lease drain executor` plus N `handling execution job` lines
+//!      (the SAME process pulled+ran every iteration's work — warm reuse, the
+//!      actual payoff over the old srun-per-iteration model).
 //!   3. The allocation is released EXACTLY ONCE on the loop's terminal exit —
-//!      witnessed by the `squeue` name going EMPTY after the instance completes.
+//!      witnessed by the `squeue` name going EMPTY after the instance completes
+//!      (scancel → SIGTERM → the drain executor exits).
 //!   4. Topology regression guard: the loop kept its lease bridges
 //!      (`p_lp_claim_out` / `p_lp_grant_inbox` / `p_lp_register_out` /
-//!      `p_lp_release_out` / `p_lp_held`) AND the body kept its Scheduled
-//!      bridge (`p_body_sched_out`, not an inline `body/inbox`) — i.e. neither
-//!      the loop-lease hoist nor the Scheduled body collapsed.
+//!      `p_lp_release_out` / `p_lp_held`) AND the body retargeted to the
+//!      executor lifecycle (`body/inbox`, NOT a scheduler `p_body_sched_out`) —
+//!      i.e. the loop-lease hoist held and the body now enqueues.
 //!
 //! ── Prerequisites (identical to `scheduled_slurm_e2e.rs` PLUS a datacenter) ──
 //!
 //!   just dev slurm-up
 //!
-//! (Docker Slurm cluster up, `mekhan-executor-worker.sh` + the aithericon
-//! Python SDK installed in the container, engine restarted with
-//! `SCHEDULER_BACKEND=slurm` AND the SSH allocator env so the lease adapter can
-//! `salloc`/`scancel` over SSH: `SLURM_SSH_HOST` + `SLURM_SSH_{PORT,USER,KEY,
-//! KNOWN_HOSTS}`, scheduler-net + executor-net deployed & running.) The
-//! Slurm-spawned executor pulls the staged `main.py` from the dev rustfs bucket
-//! `mekhan-artifacts` via `host.docker.internal`, so this test needs the same
-//! S3 overrides as the other executor-backed e2e:
+//! (Docker Slurm cluster up, `mekhan-lease-executor.sh` (the drain template) +
+//! the aithericon Python SDK installed in the container, engine restarted with
+//! the SSH allocator env so the lease adapter can `salloc`/`scancel` AND `srun`
+//! the drain executor over SSH: `SLURM_SSH_HOST` + `SLURM_SSH_{PORT,USER,KEY,
+//! KNOWN_HOSTS}`.) The drain executor pulls the staged `main.py` from the dev
+//! rustfs bucket `mekhan-artifacts` via `host.docker.internal`, so this test
+//! needs the same S3 overrides as the other executor-backed e2e:
 //!
 //!   TEST_S3_BUCKET=mekhan-artifacts \
 //!   AWS_ENDPOINT_URL=http://localhost:19005 \
@@ -128,8 +134,9 @@ fn end(id: &str) -> WorkflowNode {
 
 /// `Start → Loop{lease, max_iterations} → End`, with a `Scheduled{runOnLease}`
 /// AutomatedStep body parented under the loop. The loop holds a Slurm
-/// allocation against the `slurm_dc` datacenter resource for the WHOLE run;
-/// each iteration's body `srun`s onto that held alloc.
+/// allocation against the `slurm_dc` datacenter resource for the WHOLE run and
+/// launches ONE drain executor onto it at acquire; each iteration's body
+/// enqueues to that held executor's lease-scoped namespace.
 ///
 /// Node/edge shape follows `lower_loop`'s handle convention:
 ///   - `Start -> Loop` on the loop's `in` target handle.
@@ -191,12 +198,13 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     input: Port::empty_input(),
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
-                    // L4 seam: Scheduled Submit + `runOnLease`. Because the body's
-                    // parent is the leased Loop, the compiler injects
-                    // `d.spec.alloc_id = lp.lease.alloc_id` into `t_<body>_prepare`
-                    // and registers the matching Guard read-arc into the loop's
-                    // parked `p_lp_data` envelope — so the engine srun's onto the
-                    // held alloc rather than sbatch-ing a fresh job.
+                    // Drain seam: Scheduled Submit + `runOnLease`. Because the
+                    // body's parent is the leased Loop, the compiler RE-ROUTES it
+                    // off the scheduler-net onto the executor lifecycle and stamps
+                    // `d.executor_namespace = lp.lease.executor_namespace` into the
+                    // body's `prepare`, with the matching Guard read-arc into the
+                    // loop's parked `p_lp_data` envelope — so the iteration enqueues
+                    // to the lease-scoped namespace the held drain executor pulls.
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: None,
                         job_template: "mekhan-executor-worker".to_string(),
@@ -351,9 +359,13 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
             engine_url()
         );
     }
-    if !net_running("scheduler-net").await || !net_running("executor-net").await {
-        panic!("scheduler-net / executor-net not deployed+running — run `just dev slurm-up`");
-    }
+    // NOTE: the drain-model leased body uses the EXECUTOR LIFECYCLE (it enqueues
+    // to the lease-scoped namespace drained by the executor srun'd onto the held
+    // alloc), NOT the scheduler-net. So unlike `scheduled_slurm_e2e.rs` this test
+    // needs neither scheduler-net nor executor-net — only the engine's SLURM_SSH_*
+    // allocator env (so acquire can salloc + srun the drain executor) and the
+    // `mekhan-lease-executor.sh` drain template installed in the container, both
+    // set up by `just dev slurm-up`.
 
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
@@ -471,11 +483,12 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     let pub_body = body_json(resp.into_body()).await;
     assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
 
-    // Snapshot the executor out-files BEFORE launch — see the rationale in
-    // `scheduled_slurm_e2e.rs`: `sacct` is disabled on the dev image, so the
-    // set of NEW `/tmp/petri-srun-*.out` files is how we identify THIS
-    // run's per-iteration srun steps unambiguously.
-    let baseline_outs = slurm_ssh("ls /tmp/petri-srun-*.out 2>/dev/null | sort");
+    // Snapshot the drain-executor out-files BEFORE launch — `sacct` is disabled
+    // on the dev image, so the set of NEW `/tmp/petri-lease-exec-*.out` files is
+    // how we identify THIS run's drain executor unambiguously. The drain launch
+    // (`alloc::detached_launch`) redirects the executor's stdout to
+    // `/tmp/petri-lease-exec-<alloc_id>.out`.
+    let baseline_outs = slurm_ssh("ls /tmp/petri-lease-exec-*.out 2>/dev/null | sort");
 
     // ── (3) Launch an instance.
     let resp = app
@@ -567,10 +580,9 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     );
 
     // ── (5) Topology regression guard. A leased loop whose lease hoist silently
-    //    collapsed (or a Scheduled body that lowered Inline) still "completes",
-    //    but the instance net lacks the lease bridges / the Scheduled bridge_out.
-    //    Assert the loop's lease places exist AND the body kept its Scheduled
-    //    bridge (NOT an inline `body/inbox`).
+    //    collapsed still "completes", but the instance net lacks the lease
+    //    bridges. Assert the loop's lease places exist AND the body retargeted to
+    //    the executor lifecycle (`body/inbox`, NOT a scheduler `p_body_sched_out`).
     let topo: Value = reqwest::get(format!(
         "{}/api/nets/mekhan-{instance_id}/topology",
         engine_url()
@@ -602,51 +614,71 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         );
     }
     assert!(
-        place_ids.iter().any(|p| p == "p_body_sched_out"),
-        "instance net is missing the Scheduled bridge_out `p_body_sched_out` — \
-         the body step lowered Inline (deployment_model lost?). places={place_ids:?}"
+        place_ids.iter().any(|p| p == "body/inbox"),
+        "instance net is missing the executor-lifecycle inbox `body/inbox` — the \
+         runOnLease body did not retarget to the executor enqueue path. \
+         places={place_ids:?}"
     );
     assert!(
-        !place_ids.iter().any(|p| p == "body/submitted" || p == "body/inbox"),
-        "instance net has inline executor-lifecycle places — the Scheduled body \
-         collapsed to Inline. places={place_ids:?}"
+        !place_ids.iter().any(|p| p == "p_body_sched_out"),
+        "instance net still has the scheduler bridge_out `p_body_sched_out` — the \
+         runOnLease body did not move off the scheduler-net. places={place_ids:?}"
     );
 
-    // ── (6) srun reuse witness: N new `/tmp/petri-srun-*.out` files (one per
-    //    iteration), each carrying `handling execution job` (the executor really
-    //    pulled+ran work on the leased nodes — not an idle-out namespace-mismatch
-    //    no-op). This is the per-iteration analogue of the single-job assertion
-    //    in `scheduled_slurm_e2e.rs`.
-    let out_deadline = Instant::now() + Duration::from_secs(90);
-    let new_outs: Vec<String> = loop {
-        let listing = slurm_ssh("ls /tmp/petri-srun-*.out 2>/dev/null | sort");
+    // ── (6) WARM-REUSE witness: EXACTLY ONE new `/tmp/petri-lease-exec-*.out`
+    //    file (the single persistent drain executor launched on acquire), and it
+    //    drained ALL N iteration jobs — its log carries `Starting lease drain
+    //    executor` once plus >= MAX_ITERATIONS `handling execution job` lines.
+    //    This is the load-bearing improvement over the old srun-per-iteration
+    //    model: ONE process (warm venv/state) handled every iteration, instead of
+    //    N fresh executors each paying cold-start.
+    let out_deadline = Instant::now() + Duration::from_secs(120);
+    let (drain_out, drain_log): (String, String) = loop {
+        let listing = slurm_ssh("ls /tmp/petri-lease-exec-*.out 2>/dev/null | sort");
         let new_paths: Vec<String> = listing
             .lines()
             .filter(|p| !baseline_outs.lines().any(|b| b == *p))
             .map(str::to_string)
             .collect();
-        if new_paths.len() >= MAX_ITERATIONS as usize {
-            break new_paths;
+        // The lease launches exactly one drain executor; more than one means the
+        // acquire fired multiple times (lease hoist regression).
+        assert!(
+            new_paths.len() <= 1,
+            "expected EXACTLY ONE drain-executor out-file (one srun on acquire), \
+             saw {}: {new_paths:?} — the lease acquire fired more than once \
+             (the executor was NOT reused across iterations)",
+            new_paths.len()
+        );
+        if let Some(path) = new_paths.first() {
+            let log = slurm_ssh(&format!("cat {path} 2>/dev/null || true"));
+            let handled = log.matches("handling execution job").count();
+            if handled >= MAX_ITERATIONS as usize {
+                break (path.clone(), log);
+            }
         }
         if Instant::now() > out_deadline {
+            let listing2 = slurm_ssh("ls /tmp/petri-lease-exec-*.out 2>/dev/null | sort");
             panic!(
-                "expected {MAX_ITERATIONS} new /tmp/petri-srun-*.out files (one srun per \
-                 iteration) within 90s of completion, saw {}: {new_paths:?}. \
-                 Last listing: {listing:?}",
-                new_paths.len()
+                "the single drain executor did not drain {MAX_ITERATIONS} jobs within 120s \
+                 of completion. new out-files: {new_paths:?}. listing: {listing2:?}"
             );
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
-    for out_path in &new_outs {
-        let stdout = slurm_ssh(&format!("cat {out_path} 2>/dev/null || true"));
-        assert!(
-            stdout.contains("handling execution job"),
-            "Slurm-leased executor at {out_path} never processed work (idle-out → \
-             namespace mismatch, or srun-into-alloc did not pull the job). stdout tail:\n{}",
-            stdout.lines().rev().take(20).collect::<Vec<_>>().join("\n")
-        );
-    }
+    let handled = drain_log.matches("handling execution job").count();
+    assert!(
+        drain_log.contains("Starting lease drain executor"),
+        "drain-executor log at {drain_out} is missing its startup banner — the \
+         mekhan-lease-executor.sh template may not have launched. tail:\n{}",
+        drain_log.lines().rev().take(20).collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        handled >= MAX_ITERATIONS as usize,
+        "the drain executor at {drain_out} handled {handled} jobs, expected \
+         >= {MAX_ITERATIONS} (one persistent executor must drain every iteration \
+         warm). tail:\n{}",
+        drain_log.lines().rev().take(30).collect::<Vec<_>>().join("\n")
+    );
 
     // ── (7) Release witness: after the instance completes, the loop's terminal
     //    exit releases the lease EXACTLY ONCE (release_inbox → adapter scancel

@@ -39,10 +39,22 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         return lower_automated_step_scheduled_lease(cx);
     }
 
+    // `Scheduled { operation: Submit, run_on_lease: true }` is NO LONGER a
+    // scheduler-net submit. The rework retargets a leased-loop body to the
+    // EXECUTOR enqueue path with a per-job `executor_namespace` borrowed from
+    // the enclosing loop lease — the held alloc runs ONE persistent drain
+    // executor on the lease namespace, and the body just enqueues to it. So a
+    // `run_on_lease` Submit body FALLS THROUGH to the plain executor lowering
+    // below (which stamps `d.executor_namespace`), NOT `lower_automated_step_scheduled`.
+    //
+    // A non-lease `Scheduled` body still bridges to the scheduler-net. `Lease`
+    // was already routed above, so this arm only ever sees `Submit` here — the
+    // `run_on_lease: false` gate is what distinguishes the scheduler-net submit
+    // from the retargeted enqueue.
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled { .. },
+            deployment_model: DeploymentModel::Scheduled { run_on_lease: false, .. },
             ..
         }
     ) {
@@ -131,6 +143,39 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     let outputs_rhai = declared_outputs_rhai(*backend_type, output);
 
     let max_retries = retry_policy.max_retries;
+
+    // ── Lease retarget seam ─────────────────────────────────────────────────
+    // A `Scheduled { Submit, run_on_lease: true }` body lowers HERE (the plain
+    // executor lifecycle), NOT through the scheduler-net. When it sits inside a
+    // leased Loop we stamp a per-job `executor_namespace` onto the TOP of the
+    // job token `d` (NOT inside `d.spec`) — the engine's `ExecutorSubmitHandler`
+    // reads `d.executor_namespace` off `job_data` and publishes to the
+    // lease-scoped NATS queue (`lease-<grant_id>`) that the held alloc's
+    // persistent drain executor is consuming. The dotted
+    // `<loop_slug>.lease.executor_namespace` is a RAW borrow ref: the matching
+    // arm in `guard_readarc_plan` registers the same-shaped Guard borrow, so the
+    // standard read-arc pipeline (`apply_guard_borrows`) wires a read-arc into
+    // the loop's parked `p_<loop>_data` and word-boundary-rewrites the dotted
+    // text to `d_<loop>.lease.executor_namespace`. No enclosing leased loop ⇒
+    // no fragment (an authoring concern, surfaced by the editor/lint).
+    let run_on_lease = matches!(
+        &cx.node.data,
+        WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Scheduled {
+                run_on_lease: true,
+                ..
+            },
+            ..
+        }
+    );
+    let ns_frag = if run_on_lease {
+        enclosing_leased_loop_slug(cx.node, cx.graph)
+            .map(|loop_slug| format!(r#" d.executor_namespace = {loop_slug}.lease.executor_namespace;"#))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     let ctx = &mut *cx.ctx;
 
     // Node interface places (outside prefix scope)
@@ -168,12 +213,28 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         // so the runtime stages the producer's parked data alongside
         // `input.json` and the runner exposes `<slug>` as a Python global.
         // The sentinel survives a no-op replacement (empty pushes) cleanly.
-        ctx.transition("prepare", format!("{label} - Prepare"))
+        let prepare_logic = format!(
+            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }};{ns_frag} #{{ job: d }}"#
+        );
+        let prepare = ctx
+            .transition("prepare", format!("{label} - Prepare"))
             .auto_input("input", &p_input)
-            .auto_output("job", &exec_inbox)
-            .logic(format!(
-                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
-            ));
+            .auto_output("job", &exec_inbox);
+        if ns_frag.is_empty() {
+            // Common path: fail-fast build-time script validation (no borrowed
+            // refs in the literal, so `logic()` can validate variable bindings).
+            prepare.logic(prepare_logic);
+        } else {
+            // run_on_lease: the literal carries the RAW
+            // `<loop>.lease.executor_namespace` borrow, which the post-build
+            // read-arc pipeline (`apply_guard_borrows`) rewrites to
+            // `d_<loop>.lease.executor_namespace` and binds via a synthesized
+            // read-arc into `p_<loop>_data`. `logic()`'s build-time validation
+            // would reject the not-yet-bound `<loop>` root var, so use
+            // `logic_rhai` (the same deferral every Loop/Decision guard relies
+            // on — the engine validates the final rewritten Rhai at load).
+            prepare.logic_rhai(prepare_logic).done();
+        }
 
         let lc = executor_lifecycle(
             ctx,
@@ -294,12 +355,14 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     else {
         unreachable!("lower_automated_step_scheduled on non-Scheduled step")
     };
-    let run_on_lease = *run_on_lease;
-    // This entry handles `operation: Submit` only — the dispatcher routes
-    // `operation: Lease` to `lower_automated_step_scheduled_lease` (R4).
+    // This entry handles a NON-lease `operation: Submit` only. The dispatcher
+    // routes `operation: Lease` to `lower_automated_step_scheduled_lease` (R4)
+    // and a `run_on_lease: true` Submit to the EXECUTOR enqueue path
+    // (`lower_automated_step`, stamping `d.executor_namespace`) — neither
+    // reaches here.
     debug_assert!(
-        matches!(operation, ScheduledOperation::Submit),
-        "lower_automated_step_scheduled must only see operation: submit"
+        matches!(operation, ScheduledOperation::Submit) && !*run_on_lease,
+        "lower_automated_step_scheduled must only see a non-lease operation: submit"
     );
     // `scheduler` binds a `datacenter` resource (docs/13) for the LEASE path;
     // for SUBMIT it is unused — the env-global scheduler-net services the submit
@@ -340,31 +403,13 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let job_template_lit = rhai_str_escape(&job_template);
     let id_lit = rhai_str_escape(&id);
 
-    // L4 seam: when this `Submit` body opts into `runOnLease` AND it sits
-    // inside a leased Loop, inject one extra key into the SchedulerSubmitInput
-    // `spec` literal — `"alloc_id": <loop_slug>.lease.alloc_id`. The dotted
-    // `<loop_slug>.lease.alloc_id` is a RAW ref (NOT pre-resolved): the matching
-    // arm in `guard_readarc_plan` registers the same-shaped Guard borrow, so the
-    // standard read-arc pipeline (`apply_guard_borrows`) wires a read-arc into
-    // the loop's parked `p_<loop>_data` and word-boundary-rewrites the dotted
-    // text to `d_<loop>.lease.alloc_id` — binding it to the held grant in the
-    // prepare scope. The engine's `SlurmClient::submit` reads this opaque
-    // `spec.alloc_id` key and `srun`s onto the held allocation (L2). The
-    // alloc_id rides the opaque `spec` Value — no typed engine field.
-    //
-    // Guard: the parent MUST be a Loop carrying a `lease` (the only producer of
-    // `<loop>.lease`). A `runOnLease` body without an enclosing leased loop is
-    // an authoring error — `enclosing_leased_loop_slug` returns `None`, no key
-    // is injected, and the borrow planner likewise emits nothing, so the body
-    // simply submits normally rather than failing the compile (the editor / a
-    // future lint surfaces the misuse).
-    let alloc_id_frag = if run_on_lease {
-        enclosing_leased_loop_slug(cx.node, cx.graph)
-            .map(|loop_slug| format!(r#" d.spec.alloc_id = {loop_slug}.lease.alloc_id;"#))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // NOTE: `runOnLease` no longer reaches this scheduler-net path. A
+    // `Scheduled { Submit, run_on_lease: true }` body now lowers via the
+    // EXECUTOR enqueue path (`lower_automated_step`), where it stamps a per-job
+    // `d.executor_namespace` borrowed from the enclosing loop lease and the
+    // held alloc's persistent drain executor pulls it. The old `spec.alloc_id`
+    // srun-onto-the-alloc seam (and the engine's `SlurmClient::submit_into_alloc`
+    // branch) are gone. This function only services a plain, non-lease Submit.
 
     let ctx = &mut *cx.ctx;
 
@@ -405,26 +450,14 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     // See `lower_automated_step` for the `/*__BORROWED_INPUTS__*/` marker —
     // same Python-slug staging story for the scheduled lifecycle.
     let prepare_logic = format!(
-        r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }};{alloc_id_frag} #{{ job: d }}"#
+        r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
     );
-    let prepare = ctx
-        .transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
+    // No borrowed refs in the literal (run_on_lease no longer routes here), so
+    // `logic()` can fail-fast on build-time variable-binding validation.
+    ctx.transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
         .auto_input("input", &p_input)
-        .auto_output("job", &sched_out);
-    if alloc_id_frag.is_empty() {
-        // Common path: fail-fast build-time script validation (no borrowed
-        // refs in the literal, so `logic()` can validate variable bindings).
-        prepare.logic(prepare_logic);
-    } else {
-        // runOnLease: the literal carries the RAW `<loop>.lease.alloc_id`
-        // borrow, which the post-build read-arc pipeline (`apply_guard_borrows`)
-        // rewrites to `d_<loop>.lease.alloc_id` and binds via a synthesized
-        // read-arc into `p_<loop>_data`. `logic()`'s build-time validation
-        // would reject the not-yet-bound `<loop>` root var, so use `logic_rhai`
-        // (the same deferral every Loop/Decision guard relies on — the engine
-        // still validates the final rewritten Rhai at scenario load).
-        prepare.logic_rhai(prepare_logic).done();
-    }
+        .auto_output("job", &sched_out)
+        .logic(prepare_logic);
 
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
         .auto_input("res", &sched_result)
@@ -1081,16 +1114,17 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
     Ok(())
 }
 
-/// L4: resolve the slug of the Loop that ENCLOSES `node` (`node.parent_id ==
+/// Resolve the slug of the Loop that ENCLOSES `node` (`node.parent_id ==
 /// loop.id`) **iff** that loop carries a `lease`. Returns the loop's
 /// `slug()` — the exact key the borrow pipeline + `out_shape_loop` use for
-/// `<loop>.lease.<field>` — so the injected `<loop_slug>.lease.alloc_id` ref
-/// lines up with the read-arc the matching `guard_readarc_plan` arm registers.
+/// `<loop>.lease.<field>` — so the injected
+/// `<loop_slug>.lease.executor_namespace` ref lines up with the read-arc the
+/// matching `guard_readarc_plan` arm registers.
 ///
 /// `None` when the body has no parent, the parent isn't a Loop, or the loop
-/// holds no lease. A `runOnLease` body in any of those cases simply submits
-/// normally (no `alloc_id` injected) — the misuse is an authoring concern, not
-/// a hard compile error here.
+/// holds no lease. A `runOnLease` body in any of those cases simply enqueues
+/// to the daemon namespace (no `executor_namespace` injected) — the misuse is
+/// an authoring concern, not a hard compile error here.
 fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
     let parent_id = node.parent_id.as_deref()?;
     graph.nodes.iter().find_map(|n| {
