@@ -118,6 +118,220 @@ fn _count_places_of_type(air: &Value, place_type: &str) -> usize {
         .count()
 }
 
+/// Build an AutomatedStep (Python/executor inline path) with `stream_output`
+/// toggleable. Mirrors the `auto_node` shape used elsewhere in this file but
+/// lets the streaming flag be set per-test.
+fn automated_step_node_streaming(id: &str, label: &str, stream_output: bool) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "automated_step".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: label.to_string(),
+            description: None,
+            execution_spec: ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Docker,
+                entrypoint: None,
+                config: json!({"image": "alpine:latest"}),
+            },
+            input: Port::empty_input(),
+            output: mekhan_service::models::template::default_output_port(
+                ExecutionBackendType::Docker,
+            ),
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+            stream_output,
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+/// True if `transition` has any INBOUND arc (plain input or read-arc) whose
+/// referenced place id == `place_id`. Tolerant of the AIR serialization:
+/// arcs may live under `inputs` / `input_arcs` / `read_arcs`, and each arc
+/// may be a bare place-id string or an object carrying a `place` (or `id`)
+/// field. We scan all candidate arc collections so the assertion does not
+/// hinge on one exact field name.
+fn transition_consumes_place(transition: &Value, place_id: &str) -> bool {
+    let arc_refs_place = |arc: &Value| -> bool {
+        if let Some(s) = arc.as_str() {
+            return s == place_id;
+        }
+        for key in ["place", "place_id", "id", "source", "from"] {
+            if arc.get(key).map(|v| v == place_id).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    };
+    for coll_key in ["inputs", "input_arcs", "read_arcs", "input"] {
+        if let Some(arr) = transition.get(coll_key).and_then(|v| v.as_array()) {
+            if arr.iter().any(arc_refs_place) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// True if `transition` has any OUTBOUND arc whose referenced place id ==
+/// `place_id`. Same serialization tolerance as `transition_consumes_place`,
+/// scanning the output-arc collections. Used to assert the lifecycle's
+/// `log_output` transition feeds the synthesized stream place.
+fn transition_produces_place(transition: &Value, place_id: &str) -> bool {
+    let arc_refs_place = |arc: &Value| -> bool {
+        if let Some(s) = arc.as_str() {
+            return s == place_id;
+        }
+        for key in ["place", "place_id", "id", "target", "to"] {
+            if arc.get(key).map(|v| v == place_id).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    };
+    for coll_key in ["outputs", "output_arcs", "output"] {
+        if let Some(arr) = transition.get(coll_key).and_then(|v| v.as_array()) {
+            if arr.iter().any(arc_refs_place) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// PROTOTYPE — stream_output side-channel on AutomatedStep (OUTPUT channel)
+//
+// When `stream_output: true`, the compiler mints a Signal-kind place
+// `p_{id}_stream` (intentionally multi-token — one token per `set_output`
+// value the step emits), registers it under the node's "stream" output handle,
+// and an edge from that handle wires it into the downstream transition via the
+// standard `wire_edge`/`find_output_place` path.
+//
+// The data source is the executor's OUTPUT channel: each `set_output(name,
+// value)` becomes an `EventCategory::Output` / `StatusDetail::OutputSet { name,
+// value }` event, routed by the SDK `executor_lifecycle` into the lifecycle's
+// `output_log` place via its `log_output` transition. When `stream_output` is
+// set, that `log_output` transition grows a SECOND output arc onto the user's
+// stream place (one producer, two output arcs — no token-stealing). So the
+// stream token carries structured `{ ..., detail: { name, value } }` data the
+// consumer reads — NOT a log string. Assertion (2) verifies the `log_output`
+// transition actually produces the stream place.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_automated_step_stream_output_synthesizes_signal_place() {
+    // Start → producer(stream_output=true); producer."out" → End AND
+    // producer."stream" → consumer(automated_step).
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_step_node_streaming("producer", "Producer", true),
+            automated_step_node_streaming("consumer", "Consumer", false),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e_s", "s", "producer"),
+            // Control/termination path: producer's "out" governs completion.
+            edge("e_out", "producer", "e"),
+            // Streaming side-channel: producer's "stream" handle → consumer.
+            edge_with_handle("e_stream", "producer", "consumer", "stream"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "stream_test", "", &std::collections::HashMap::new())
+        .expect("Start→AutomatedStep(stream)→End + stream→consumer should compile");
+
+    // (1) The Signal-kind stream place exists with the exact id the backend
+    //     mints (`p_{id}_stream`, raw node-scoped id) and serializes as
+    //     "type":"signal" (PlaceKind::Signal).
+    assert!(
+        has_place(&air, "p_producer_stream"),
+        "expected the synthesized stream place p_producer_stream"
+    );
+    let stream_place = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_producer_stream")
+        .expect("p_producer_stream must be present");
+    assert_eq!(
+        stream_place["type"], "signal",
+        "p_producer_stream must be a Signal-kind place (multi-token output side-channel), got {:?}",
+        stream_place["type"]
+    );
+
+    // (2) The producer's lifecycle `log_output` transition (which consumes the
+    //     executor OUTPUT-event signal place) feeds the synthesized stream
+    //     place: when stream_output is set, the SDK grows a SECOND output arc
+    //     from `log_output` onto `p_producer_stream`. This is the load-bearing
+    //     assertion — it proves the stream is wired to the structured OUTPUT
+    //     (`set_output`) channel, not the log-message channel. The transition
+    //     id is lifecycle-scoped under the node prefix (`producer/log_output`).
+    let log_output = get_transition(&air, "producer/log_output")
+        .expect("expected producer's scoped `log_output` lifecycle transition");
+    assert!(
+        transition_produces_place(log_output, "p_producer_stream"),
+        "the `log_output` transition must produce p_producer_stream when \
+         stream_output is set (the OUTPUT-channel tap); transition: {log_output:?}"
+    );
+
+    // (3) A consuming arc exists from p_producer_stream into the consumer's
+    //     transition: the "stream" edge wires the Signal place to a downstream
+    //     transition via the standard wire path. Find ANY transition that has
+    //     an inbound arc referencing the stream place.
+    let consumes_stream = transitions(&air)
+        .iter()
+        .any(|t| transition_consumes_place(t, "p_producer_stream"));
+    assert!(
+        consumes_stream,
+        "expected some downstream transition to consume p_producer_stream \
+         (the 'stream' handle edge → consumer); transitions: {:?}",
+        transitions(&air)
+            .iter()
+            .map(|t| t["id"].clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_automated_step_without_stream_output_has_no_stream_place() {
+    // NEGATIVE control: stream_output=false → no p_*_stream place is minted
+    // and no "stream" port/handle exists to wire. A plain Start→AutomatedStep
+    // →End must be byte-shape-identical to the pre-feature lowering.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_step_node_streaming("producer", "Producer", false),
+            end_node("e"),
+        ],
+        edges: vec![edge("e_s", "s", "producer"), edge("e_out", "producer", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "no_stream_test", "", &std::collections::HashMap::new())
+        .expect("plain Start→AutomatedStep→End should compile");
+
+    assert!(
+        !has_place(&air, "p_producer_stream"),
+        "stream_output=false must NOT mint p_producer_stream"
+    );
+    // Defensive: no place at all carries the `_stream` suffix when disabled.
+    assert!(
+        !places(&air)
+            .iter()
+            .any(|p| p["id"].as_str().map(|s| s.ends_with("_stream")).unwrap_or(false)),
+        "no *_stream place should exist when stream_output is disabled"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Start -> End
 // ---------------------------------------------------------------------------
@@ -320,6 +534,7 @@ fn automated_step_produces_executor_lifecycle() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
@@ -440,6 +655,7 @@ fn automated_step_wired_error_routes_to_handler() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
@@ -1409,6 +1625,7 @@ fn automated_step_has_scoped_effect_errors() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
@@ -1453,6 +1670,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
             ),
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: None,
         width: None,
@@ -2332,6 +2550,7 @@ fn guard_multi_hop_scope_walk() {
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: None,
         width: None,
@@ -2539,6 +2758,7 @@ fn loop_with_accumulators_graph(
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: Some("lp".to_string()),
         width: None,
@@ -4222,6 +4442,7 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
             ),
             retry_policy: Default::default(),
             deployment_model: dm,
+            stream_output: false,
         },
         parent_id: None,
         width: None,
@@ -4340,6 +4561,7 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
@@ -5416,6 +5638,7 @@ fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: Some(parent.to_string()),
         width: None,
@@ -5766,4 +5989,107 @@ fn pool_resource_kinds_and_pool_registry() {
     );
     // A non-pool kind is not in the pool registry.
     assert!(pool_kind("postgres").is_none());
+}
+
+
+// ---------------------------------------------------------------------------
+// StreamConsumer: `<slug>.output` borrow resolution (parked-producer namespace)
+// ---------------------------------------------------------------------------
+
+/// A `WorkflowEdge` with explicit source AND target handles (the StreamConsumer
+/// wiring needs distinct `stream` / `control` TARGET handles, which the shared
+/// `edge_with_handle` helper can't express — it hard-codes `target_handle:
+/// "in"`).
+fn edge_src_tgt(
+    id: &str,
+    source: &str,
+    source_handle: Option<&str>,
+    target: &str,
+    target_handle: &str,
+) -> WorkflowEdge {
+    WorkflowEdge {
+        id: id.to_string(),
+        source: source.to_string(),
+        target: target.to_string(),
+        source_handle: source_handle.map(str::to_string),
+        target_handle: Some(target_handle.to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    }
+}
+
+/// Regression for the `input.output` borrow bug: a `StreamConsumer` parks its
+/// reduced value at `p_<id>_data` and must expose it as the qualified
+/// `<slug>.output` (NOT collapse into the generic `input` control-token scope).
+/// Mirrors demo 14: start → producer(stream_output) ==stream==> consumer
+/// (StreamConsumer, Concat), producer ==control==> consumer, consumer → End
+/// whose `resultMapping` borrows `consumer.output`. The fix is two-fold —
+/// `is_parked_producer` recognizes StreamConsumer, and `out_shape_stream_consumer`
+/// returns a FLAT `{ output }` so the slug namespacing applies externally.
+#[test]
+fn stream_consumer_output_is_borrowable_as_slug_output() {
+    let consumer = WorkflowNode {
+        id: "consumer".to_string(),
+        node_type: "stream_consumer".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::StreamConsumer {
+            label: "Consumer".to_string(),
+            description: None,
+            result_var: "item".to_string(),
+            reduce: mekhan_service::models::template::StreamReduce::Concat {
+                sep: Some(" ".to_string()),
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+    let end = WorkflowNode {
+        id: "end".to_string(),
+        node_type: "end".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::End {
+            label: "Done".to_string(),
+            description: None,
+            terminal: mekhan_service::models::template::default_terminal_port(),
+            result_mapping: vec![mekhan_service::models::template::FieldMapping {
+                target_field: "transcript".to_string(),
+                expression: "consumer.output".to_string(),
+            }],
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_step_node_streaming("producer", "Producer", true),
+            consumer,
+            end,
+        ],
+        edges: vec![
+            edge("e_s", "s", "producer"),
+            // producer's `stream` source handle → consumer's `stream` target.
+            edge_src_tgt("e_stream", "producer", Some("stream"), "consumer", "stream"),
+            // producer's default `out` → consumer's `control` target.
+            edge_src_tgt("e_control", "producer", None, "consumer", "control"),
+            // consumer → End.
+            edge("e_ce", "consumer", "end"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "stream_borrow_test", "", &std::collections::HashMap::new());
+    assert!(
+        air.is_ok(),
+        "End mapping `transcript <- consumer.output` must resolve the StreamConsumer's \
+         parked `<slug>.output` (regression for the `input.output` bug): {:?}",
+        air.err()
+    );
 }

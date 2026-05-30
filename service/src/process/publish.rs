@@ -489,16 +489,27 @@ fn synthesize_py_io_files(
 /// the specific cause is logged.
 /// Return a clone of `graph` with every SubWorkflow node's declared `output`
 /// port replaced by its resolved child's authoritative `output_contract`
-/// (derived from the child's End `result_mapping`). Nodes with no resolved
-/// child (none should exist post-`resolve_subworkflow_air`) keep their declared
-/// output. The publish path compiles from this reconciled graph so the result
-/// shape can't drift from the frozen child; the editor's snapshot is advisory.
+/// (derived from the child's End `result_mapping`), and its display-only
+/// `input_contract` snapshot refreshed from the child's Start port. Nodes with
+/// no resolved child (none should exist post-`resolve_subworkflow_air`) keep
+/// their declared values. The publish path compiles from this reconciled graph
+/// so the result shape can't drift from the frozen child; both snapshots are
+/// advisory for the editor (the compiler re-derives input from the child).
 fn reconcile_subworkflow_outputs(graph: &WorkflowGraph, sub_air: &SubWorkflowAir) -> WorkflowGraph {
     let mut g = graph.clone();
     for node in &mut g.nodes {
-        if let WorkflowNodeData::SubWorkflow { output, .. } = &mut node.data {
+        if let WorkflowNodeData::SubWorkflow {
+            output,
+            input_contract,
+            ..
+        } = &mut node.data
+        {
             if let Some(child) = sub_air.get(&node.id) {
                 *output = child.output_contract.clone();
+                // Display-only: keep the persisted graph's input snapshot in
+                // sync with the frozen child so a reopened editor shows the
+                // same contract publish saw (the compiler ignores this field).
+                *input_contract = child.input_contract.clone();
             }
         }
     }

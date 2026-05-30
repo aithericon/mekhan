@@ -468,6 +468,7 @@ pub(crate) mod phase_update;
 pub(crate) mod progress_update;
 pub(crate) mod scope;
 pub(crate) mod start;
+pub(crate) mod stream_consumer;
 pub(crate) mod subworkflow;
 pub(crate) mod timeout;
 
@@ -524,6 +525,43 @@ pub(super) fn split_outputs(
     .auto_output("data", &p_data)
     .auto_output("ctrl", &p_ctrl)
     .logic(YIELD_LOGIC);
+    (format!("p_{id}_data"), p_ctrl)
+}
+
+/// Foundation variant for a **streaming producer** (`stream_output: true`):
+/// identical to [`split_outputs`] but the slim control token ALSO carries
+/// `stream_count` — the end-of-stream item count the executor stamped on the
+/// terminal `Completed` detail. The plain [`YIELD_LOGIC`] keeps only
+/// `{status, task_id}` and strips `detail`, so a downstream StreamConsumer's
+/// `t_close` (which needs N to size its end-of-stream gather barrier) would
+/// otherwise see no count. We surface it as a top-level `stream_count` leaf on
+/// the control token (read at split time off the full token's `detail`, where
+/// it is present), defaulting to 0 if absent. The parked data place is the full
+/// envelope, unchanged — only the control token gains the leaf.
+pub(super) fn split_outputs_streaming(
+    ctx: &mut Context,
+    id: &str,
+    label: &str,
+    producer_out: &PlaceHandle<DynamicToken>,
+) -> (String, PlaceHandle<DynamicToken>) {
+    let p_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_data"),
+        format!("{label} - Parked Data (write-once)"),
+    );
+    let p_ctrl: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_ctrl"), format!("{label} - Control Token"));
+    ctx.transition(
+        format!("t_{id}_yield"),
+        format!("{label} - Yield (park data, forward control + stream_count)"),
+    )
+    .auto_input("tok", producer_out)
+    .auto_output("data", &p_data)
+    .auto_output("ctrl", &p_ctrl)
+    .logic(
+        "let __d = tok; \
+         let __sc = if type_of(__d.detail) == \"map\" && \"stream_count\" in __d.detail { __d.detail.stream_count } else { 0 }; \
+         #{ data: __d, ctrl: #{ status: __d.status, task_id: __d.task_id, stream_count: __sc } }",
+    );
     (format!("p_{id}_data"), p_ctrl)
 }
 

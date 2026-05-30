@@ -240,6 +240,7 @@ fn definition(ctx: &mut Context) {
             process_step: None,
             catalogue: true,
             process: false,
+            stream_output: None,
         },
     );
 

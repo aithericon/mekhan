@@ -215,13 +215,19 @@ export class YjsGraphBinding {
 				const deploymentModel = config?.deploymentModel as
 					| AutomatedStepNodeData['deploymentModel']
 					| undefined;
+				// PROTOTYPE — `streamOutput` exposes the node's second "stream"
+				// output handle (see AutomatedStepNode.svelte). It must be read
+				// back here or the editor reconstruction drops the flag and the
+				// handle never renders even though the backend seeded it `true`.
+				const streamOutput = config?.streamOutput === true;
 				return {
 					...base,
 					type: 'automated_step',
 					executionSpec: { entrypoint: 'main.py', ...spec },
 					...(output ? { output: output as never } : {}),
 					retryPolicy,
-					...(deploymentModel ? { deploymentModel } : {})
+					...(deploymentModel ? { deploymentModel } : {}),
+					...(streamOutput ? { streamOutput } : {})
 				};
 			}
 			case 'decision':
@@ -385,6 +391,15 @@ export class YjsGraphBinding {
 					type: 'timeout',
 					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
+			case 'stream_consumer': {
+				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_consumer' }>['reduce'];
+				return {
+					...base,
+					type: 'stream_consumer',
+					resultVar: (config?.resultVar as string) ?? 'item',
+					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' }
+				};
+			}
 		}
 	}
 
@@ -746,6 +761,11 @@ export class YjsGraphBinding {
 				// (token-pool admission) and scheduled `scheduler`/`operation`
 				// knobs travel with it. Default = plain executor dispatch.
 				config.set('deploymentModel', data.deploymentModel ?? { mode: 'executor' });
+				// PROTOTYPE — persist the streaming-output flag so toggling the
+				// "Stream output" checkbox survives the Y.Doc round-trip and the
+				// second "stream" handle renders. Written unconditionally (mirrors
+				// the backend's `streamOutput` Y.Map key) so clearing it persists.
+				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);
@@ -864,6 +884,10 @@ export class YjsGraphBinding {
 				break;
 			case 'timeout':
 				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
+				break;
+			case 'stream_consumer':
+				config.set('resultVar', data.resultVar ?? 'item');
+				config.set('reduce', data.reduce ?? { kind: 'array' });
 				break;
 		}
 	}

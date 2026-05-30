@@ -640,6 +640,16 @@ impl JobExecutor {
                     "stderr_tail": exec_result.stderr_tail,
                     "artifact_manifest": exec_result.artifact_manifest,
                     "outputs": exec_result.outputs,
+                    // End-of-stream marker for the streaming-output side-channel:
+                    // the number of distinct `set_output` names this job produced.
+                    // This is exactly the count of OutputSet tokens that reach a
+                    // downstream stream consumer (dedup is per-name), so a streaming
+                    // fold/gather can use it as its end-of-stream `expected` count
+                    // without a new token type — it rides the existing terminal
+                    // status detail to `sig_completed` → the producer's control
+                    // token (`completed.detail.stream_count`). Derived from data
+                    // already in this detail (`outputs`); harmless for non-streaming.
+                    "stream_count": exec_result.outputs.len(),
                     "progress": exec_result.progress,
                     "metrics": exec_result.metrics,
                     "logs": exec_result.logs,

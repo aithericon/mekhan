@@ -78,11 +78,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         execution_spec,
         retry_policy,
         output,
+        stream_output,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
+    let stream_output = *stream_output;
 
     // Is this the terminal node of a Map body? If so it must forward its FULL
     // completed envelope (park data AND the whole token) so the Map's
@@ -159,6 +161,26 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         None
     };
 
+    // Streaming side-channel: when `stream_output` is set, mint a Signal place
+    // `p_{id}_stream` (intentionally multi-token — one token per executor
+    // Output event, i.e. per `set_output(name, value)` the job produces) at
+    // NODE scope and hand it to the lifecycle's `stream_output` bridge below.
+    // The lifecycle's `log_output` transition grows a second output arc onto
+    // this place, copying each Output event here AND onto `output_log`. A
+    // downstream edge from the node's "stream" handle consumes from here
+    // (registered in `output_places`) and reads `{ name, value }` off the
+    // token's `.detail`. Leftover stream tokens never block `NetCompleted`
+    // (Signal is never terminal); the slim control token still governs
+    // completion.
+    let p_stream: Option<PlaceHandle<DynamicToken>> = if stream_output {
+        Some(ctx.signal(format!("p_{id}_stream"), format!("{label} - Stream")))
+    } else {
+        None
+    };
+    // Clone for the move into the `scoped_prefix` closure (the original is
+    // consumed by `output_places` registration after the closure returns).
+    let p_stream_bridge = p_stream.clone();
+
     // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
     let handles = ctx.scoped_prefix(id, label, |ctx| {
         let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
@@ -186,11 +208,22 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         // so the runtime stages the producer's parked data alongside
         // `input.json` and the runner exposes `<slug>` as a Python global.
         // The sentinel survives a no-op replacement (empty pushes) cleanly.
+        // PROTOTYPE — when `stream_output` is set, opt the executor into
+        // emitting `output` events PER `set_output` CALL (mid-execution) so the
+        // node's "stream" port delivers each value while the step still runs,
+        // instead of only at job end (which races net completion). The executor
+        // gates per-call OutputSet emission on this `output` category being in
+        // `stream_events`; non-streaming steps omit it and are unaffected.
+        let stream_events_rhai = if stream_output {
+            r#"["metric", "progress", "phase", "log", "output"]"#
+        } else {
+            r#"["metric", "progress", "phase", "log"]"#
+        };
         ctx.transition("prepare", format!("{label} - Prepare"))
             .auto_input("input", &p_input)
             .auto_output("job", &exec_inbox)
             .logic(format!(
-                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; #{{ job: d }}"#
             ));
 
         let lc = executor_lifecycle(
@@ -207,6 +240,11 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
                 // causality consumer projects them into hpi_metrics /
                 // hpi_logs against the causality-discovered process.
                 process: true,
+                // When set, the lifecycle's `log_output` transition ALSO copies
+                // each Output event onto this place (one token per
+                // `set_output(name, value)`) so the node's "stream" handle fires
+                // the downstream once per output.
+                stream_output: p_stream_bridge,
             },
         );
 
@@ -270,6 +308,12 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // unaffected; only the token handed to the container's `body_out` changes.
     let (data_place_id, p_ctrl) = if is_map_body_terminal {
         park_outputs(ctx, id, label, &p_output)
+    } else if stream_output {
+        // Streaming producer: the slim control token additionally carries
+        // `stream_count` (the end-of-stream item count) so a downstream
+        // StreamConsumer's `t_close` can size its gather barrier. Plain
+        // `split_outputs` strips `detail`, losing it.
+        split_outputs_streaming(ctx, id, label, &p_output)
     } else {
         split_outputs(ctx, id, label, &p_output)
     };
@@ -282,6 +326,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     let mut output_places = vec![(None, p_ctrl)];
     if let Some(p_error) = p_error {
         output_places.push((Some("error".to_string()), p_error));
+    }
+    // PROTOTYPE — register the "stream" handle → `p_{id}_stream` so a normal
+    // edge from that handle (sourceHandle == "stream") wires the Signal place to
+    // the downstream transition via `wire_edge`/`find_output_place`. No special
+    // consuming transition is needed — the standard edge-wiring path applies.
+    if let Some(p_stream) = p_stream {
+        output_places.push((Some("stream".to_string()), p_stream));
     }
     cx.ports.insert(
         id.clone(),
@@ -904,6 +955,13 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
                 process_step: None,
                 catalogue: true,
                 process: true,
+                // TODO(streaming-output): the `stream_output` "stream" handle is
+                // wired only on the plain inline executor path
+                // (`lower_automated_step`). Pooled/leased steps do not yet
+                // expose the stream side-channel — `None` keeps this path
+                // byte-identical. Plumbing `p_{id}_stream` through here would
+                // mirror the inline path exactly.
+                stream_output: None,
             },
         );
 

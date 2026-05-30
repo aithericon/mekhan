@@ -116,6 +116,15 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         unreachable!("lower_agent_degenerate on non-Agent node")
     };
 
+    // Clone/copy the fields we forward to the synthesized AutomatedStep into
+    // owned locals up front so the immutable borrow of `cx.node.data` ends
+    // before we reborrow `cx.ctx` mutably into `virtual_cx` below (LoweringCtx
+    // is invariant over its lifetime, so a lingering `&cx` borrow held by
+    // `deployment_model`/`retry_policy` would clash with the `&mut *cx.*`
+    // reborrows).
+    let retry_policy = *retry_policy;
+    let deployment_model = deployment_model.clone();
+
     let llm_config = crate::models::template::agent_to_llm_config(
         model,
         system_prompt.as_deref(),
@@ -165,8 +174,11 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // and `retry_policy` flow straight through `lower_automated_step`.
             // This is what makes the degenerate Agent a complete replacement
             // for the retired hand-authored LLM step.
-            retry_policy: *retry_policy,
-            deployment_model: deployment_model.clone(),
+            retry_policy,
+            deployment_model,
+            // Agent's degenerate single-shot LLM body does not expose the
+            // prototype streaming side-channel.
+            stream_output: false,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,
@@ -578,6 +590,8 @@ fn lower_agent_loop(
                 process_step: None,
                 catalogue: false,
                 process: false,
+                // Agent body has no `stream_output` side-channel.
+                stream_output: None,
             },
         )
     });

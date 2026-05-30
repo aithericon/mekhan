@@ -8,6 +8,11 @@ declare global {
 		// interface PageState {}
 		// interface Platform {}
 	}
+
+	// Injected by vite.config.ts `define` from MEKHAN_SERVICE_URL: the dev-only
+	// `ws://host:port` base the editor's Yjs WebSocket connects to directly.
+	// See app/src/lib/yjs/session.ts for why the dev WS bypasses the Vite proxy.
+	const __MEKHAN_WS_URL__: string;
 }
 
 export {};

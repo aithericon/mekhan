@@ -511,6 +511,34 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
 /// where `<element>` is the declared `output` port shape (or `Any` when no
 /// fields are declared). The `[*]` borrow surface reuses the Repeater Array
 /// machinery (see `is_parked_producer` + `parse_repeater_ref`).
+/// StreamConsumer: drains a producer's stream, reduces it, and parks the
+/// reduced value write-once at `p_<id>_data` as `#{ output: <reduced> }`. The
+/// outbound shape forwards the inbound control token and ADDS a `<slug>`
+/// namespace with a single `output` field so downstream nodes can borrow
+/// `<slug>.output` (e.g. an End mapping `transcript ← consumer.output`) — the
+/// same declared-producer-field mechanism Loop uses for `<slug>.iteration`. The
+/// reduced value is heterogeneous (Array→array, Concat→string, Sum→number,
+/// Custom→any), so `output` is declared `Any` (mirrors Loop accumulators).
+pub(crate) fn out_shape_stream_consumer(node: &WorkflowNode, _in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::StreamConsumer { .. } = &node.data else {
+        unreachable!("out_shape_stream_consumer on non-StreamConsumer variant");
+    };
+    // FLAT { output: Any } (NOT slug-nested): a StreamConsumer is a parked
+    // producer (see `is_parked_producer`), so the borrow resolver namespaces this
+    // leaf EXTERNALLY by slug — `output` surfaces as `<slug>.output` automatically,
+    // exactly like `out_shape_automated_step`'s flat envelope fields resolve as
+    // `<slug>.<field>` and match the parked-envelope key (`#{ output: <reduced> }`,
+    // see `lower_stream_consumer`). Slug-nesting here would instead collapse the
+    // leaf into the generic `input` control-token scope (the `input.output` bug).
+    let mut o = TokenShape::object();
+    o.insert(
+        "output",
+        TokenShape::Any,
+        Provenance::new(node, "stream-consumer reduced output (parked `<slug>.output`)"),
+    );
+    o
+}
+
 pub(crate) fn out_shape_map(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
     let WorkflowNodeData::Map { output, .. } = &node.data else {
         unreachable!("out_shape_map on non-Map variant");
@@ -779,6 +807,7 @@ pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::Loop { .. }
                     | WorkflowNodeData::Join { .. }
                     | WorkflowNodeData::Map { .. }
+                    | WorkflowNodeData::StreamConsumer { .. }
             )
     })
 }

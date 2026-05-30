@@ -162,6 +162,17 @@
 	// editor itself lives in the shared `DeploymentSection` component (also used
 	// by the Agent panel).
 	const allowScheduled = $derived(currentBackend?.schedulable ?? true);
+
+	// Streaming side-channel (prototype): expose a `stream` output port that
+	// fires once per `set_output(...)` the job emits mid-execution. Bound to
+	// the node's `streamOutput` flag; the compiler mints a Signal `p_{id}_stream`
+	// place + registers the "stream" handle when set.
+	const streamOutput = $derived(data.streamOutput ?? false);
+
+	function toggleStreamOutput(e: Event) {
+		const checked = (e.target as HTMLInputElement).checked;
+		onchange({ ...data, streamOutput: checked });
+	}
 </script>
 
 <div class="space-y-1.5">
@@ -205,6 +216,26 @@
 	{readonly}
 	onchange={(dm) => onchange({ ...data, deploymentModel: dm })}
 />
+
+<!--
+	Streaming output (prototype). A checkbox that opts this step into the
+	mid-execution `stream` port. Kept minimal — no per-event config yet.
+-->
+<div class="space-y-1 pt-3 border-t border-border/40">
+	<label class="flex items-center gap-2 text-sm">
+		<input
+			type="checkbox"
+			checked={streamOutput}
+			disabled={readonly}
+			onchange={toggleStreamOutput}
+		/>
+		<span>Stream output (prototype)</span>
+	</label>
+	<p class="text-sm text-muted-foreground">
+		Emits a <code class="font-mono">stream</code> handle that fires once per
+		<code class="font-mono">set_output(…)</code> call during execution.
+	</p>
+</div>
 
 <div class="space-y-2 pt-3 border-t border-border/40">
 	<div class="flex items-center justify-between">

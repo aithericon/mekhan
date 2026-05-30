@@ -129,6 +129,7 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                         operation: ScheduledOperation::Submit,
                         request: None,
                     },
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
