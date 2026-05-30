@@ -4075,6 +4075,7 @@ mod tests {
                         accept: None,
                     }],
                 },
+                input_contract: crate::models::template::Port::empty_input(),
             },
             parent_id: None,
             width: None,

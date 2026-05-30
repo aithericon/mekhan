@@ -686,6 +686,16 @@ pub enum WorkflowNodeData {
         /// child's End `terminal` port.
         #[serde(default = "default_subworkflow_output_port")]
         output: Port,
+        /// Display-only snapshot of the child's **input** contract — its
+        /// `Start { initial }` port. Reconciled at publish from the resolved
+        /// child and refreshed by the editor's `/io-contract` fetch, exactly
+        /// like `output`. The compiler re-derives the real child input from the
+        /// frozen child, so this field never feeds compilation: it exists so the
+        /// canvas can show "what this sub-workflow consumes" (the way a Start
+        /// node shows its declared fields) without opening the property panel.
+        /// Empty `in` port ⇒ not yet resolved / child declares no Start fields.
+        #[serde(rename = "inputContract", default = "default_subworkflow_input_contract")]
+        input_contract: Port,
     },
 }
 
@@ -1125,6 +1135,13 @@ pub fn default_subworkflow_output_port() -> Port {
         label: "Result".to_string(),
         fields: vec![],
     }
+}
+
+/// Deserialization default for `SubWorkflow.input_contract` — an empty `in`
+/// port. Display-only; the real contract is filled by publish reconcile / the
+/// editor's io-contract fetch. Existing graphs without the field load unchanged.
+pub fn default_subworkflow_input_contract() -> Port {
+    Port::empty_input()
 }
 
 /// Deserialization default for `Join.output` — an empty `out` port. The

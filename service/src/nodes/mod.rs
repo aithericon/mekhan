@@ -317,7 +317,8 @@ mod tests {
     use super::*;
     use crate::models::template::{
         default_automated_input_port, default_automated_output_port, default_initial_port,
-        default_join_output_port, default_subworkflow_output_port, default_terminal_port,
+        default_join_output_port, default_subworkflow_input_contract,
+        default_subworkflow_output_port, default_terminal_port,
         BranchCondition, ConcurrencyPolicy, ContextStrategy, ExecutionBackendType,
         ExecutionSpecConfig, JoinMode, ManualTrigger, ModelRef, PhaseUpdateStatus, RetryPolicy,
         ToolErrorPolicy, TriggerSource, VersionPin,
@@ -561,6 +562,7 @@ mod tests {
             version_pin: VersionPin::Latest,
             input_mapping: vec![],
             output: default_subworkflow_output_port(),
+            input_contract: default_subworkflow_input_contract(),
         };
         let decl = lookup_by_variant(&data).expect("sub_workflow registered");
         assert_eq!(decl.wire_name, "sub_workflow");
