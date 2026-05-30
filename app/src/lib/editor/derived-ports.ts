@@ -5,6 +5,7 @@
 // node card matches what the compiler will see at publish.
 
 import type { components } from '$lib/api/schema';
+import { getWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 
 type WorkflowNodeData = components['schemas']['WorkflowNodeData'];
 type Port = components['schemas']['Port'];
@@ -222,13 +223,58 @@ const AGENT_LOOP_EXTRAS: PortField[] = [
 	}
 ];
 
+const REF_PREFIX = '#/definitions/';
+const REF_DEPTH_CAP = 64;
+
+// Client mirror of `compiler::schema_refs::inline_refs`: deep-resolve local
+// `{"$ref":"#/definitions/<name>"}` pointers against the workflow definitions
+// (sourced from the loaded template — they're absent from the Yjs doc).
+// Display-only + permissive: an unresolved/cyclic ref is left/blanked rather
+// than thrown (the server-side pass is the authoritative validator).
+function resolveDefinitionRefs(
+	value: unknown,
+	definitions: Record<string, unknown>,
+	depth = 0,
+	seen: Set<string> = new Set()
+): unknown {
+	if (depth > REF_DEPTH_CAP) return value;
+	if (Array.isArray(value)) {
+		return value.map((v) => resolveDefinitionRefs(v, definitions, depth + 1, seen));
+	}
+	if (value && typeof value === 'object') {
+		const obj = value as Record<string, unknown>;
+		const ref = obj['$ref'];
+		if (typeof ref === 'string' && ref.startsWith(REF_PREFIX)) {
+			const name = ref.slice(REF_PREFIX.length);
+			if (seen.has(name)) return {}; // cycle → bail (display-only)
+			const target = definitions[name];
+			if (target === undefined) return obj; // unresolved → leave as-is (text fallback)
+			const nextSeen = new Set(seen);
+			nextSeen.add(name);
+			return resolveDefinitionRefs(target, definitions, depth + 1, nextSeen);
+		}
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(obj)) {
+			out[k] = resolveDefinitionRefs(v, definitions, depth + 1, seen);
+		}
+		return out;
+	}
+	return value;
+}
+
 function deriveAgentOutputPorts(data: AgentNodeData): Port[] {
 	// Content field(s) derived from response_format (json_schema → schema
 	// fields; text → `response`) + the always-present metadata tail — matching
 	// `nodes::agent::output_ports`. Loop-path agents (`max_turns > 1 ||
 	// stop_when`) additionally expose turn/history/final_response/input.
+	//
+	// Resolve `{"$ref":"#/definitions/X"}` against the editor's workflow
+	// definitions first so a $ref schema expands to its fields, same as the
+	// server's compile-entry pre-pass. Reading the store here is reactive: the
+	// card/panel re-derive once the template (and its definitions) load.
 	const takesLoopPath = (data.maxTurns ?? 1) > 1 || !!data.stopWhen;
-	const fields = deriveLlmSuccessFields(data.responseFormat);
+	const responseFormat = resolveDefinitionRefs(data.responseFormat, getWorkflowDefinitions());
+	const fields = deriveLlmSuccessFields(responseFormat);
 	if (takesLoopPath) fields.push(...AGENT_LOOP_EXTRAS);
 	return [
 		{ id: 'out', label: 'Output', fields },
