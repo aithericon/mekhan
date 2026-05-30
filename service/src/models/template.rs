@@ -595,6 +595,16 @@ pub enum WorkflowNodeData {
             skip_serializing_if = "Option::is_none"
         )]
         response_format: Option<serde_json::Value>,
+        /// Vision inputs attached to the user message — each `{"path":
+        /// "{{<slug>.<field>}}", "media_type"?: "..."}`. Opaque JSON in the
+        /// model layer (same as `response_format`); the executor LLM backend
+        /// validates it and the compiler's LLM `ref_scanner` walks
+        /// `images[i].path` for `{{<slug>.<field>}}` borrows exactly as it
+        /// does for a single-shot LLM step. Empty by default. Carries the
+        /// vision capability that lets the Agent fully subsume the retired
+        /// LLM step.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<serde_json::Value>,
         /// Hard cap on agent turns. `1` (default) is the single-shot LLM
         /// call indistinguishable from `AutomatedStep(Llm)` — the degenerate
         /// path the equivalence test pins down.
@@ -617,6 +627,23 @@ pub enum WorkflowNodeData {
         /// Inert in PR 1 (no tools).
         #[serde(rename = "onToolError", default)]
         on_tool_error: ToolErrorPolicy,
+        /// Retry behaviour on a per-turn inference failure/timeout. Same shape
+        /// and defaults as `AutomatedStep::retry_policy`. On the degenerate
+        /// (single-shot) path this threads straight through to the synthesized
+        /// `AutomatedStep(Llm)`. On the multi-turn loop path it caps the
+        /// executor's per-turn `max_retries`.
+        #[serde(rename = "retryPolicy", default)]
+        retry_policy: RetryPolicy,
+        /// Where/how each inference turn is dispatched — same field, defaults
+        /// and semantics as `AutomatedStep::deployment_model`. On the
+        /// degenerate single-shot path it reaches the full
+        /// `Executor{pool}` / `Scheduled{lease}` dispatch in
+        /// `lower_automated_step`. The multi-turn loop path supports
+        /// `Executor { pool: None }` only in v1 and compile-rejects the rest
+        /// (mirrors the `context_strategy` gate); per-turn pooled/scheduled
+        /// admission is a follow-up (docs/12).
+        #[serde(rename = "deploymentModel", default)]
+        deployment_model: DeploymentModel,
     },
     /// Calls another published template as a child net and returns its
     /// terminal result, correlated per invocation. Compiles (via
@@ -1790,6 +1817,7 @@ pub fn agent_to_llm_config(
     system_prompt: Option<&str>,
     user_prompt: &str,
     response_format: Option<&serde_json::Value>,
+    images: &[serde_json::Value],
     tools: &[serde_json::Value],
 ) -> serde_json::Value {
     use serde_json::{Number, Value};
@@ -1820,6 +1848,9 @@ pub fn agent_to_llm_config(
     }
     if let Some(rf) = response_format {
         config.insert("response_format".to_string(), rf.clone());
+    }
+    if !images.is_empty() {
+        config.insert("images".to_string(), Value::Array(images.to_vec()));
     }
     if !tools.is_empty() {
         config.insert("tools".to_string(), Value::Array(tools.to_vec()));
@@ -2364,6 +2395,8 @@ pub mod dsl {
         pub user_prompt: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub response_format: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub images: Vec<serde_json::Value>,
         #[serde(default = "default_max_turns")]
         pub max_turns: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2372,6 +2405,10 @@ pub mod dsl {
         pub context_strategy: ContextStrategy,
         #[serde(default)]
         pub on_tool_error: ToolErrorPolicy,
+        #[serde(default)]
+        pub retry_policy: RetryPolicy,
+        #[serde(default)]
+        pub deployment_model: DeploymentModel,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2500,10 +2537,13 @@ pub mod dsl {
                         system_prompt: a.system_prompt.clone(),
                         user_prompt: a.user_prompt.clone(),
                         response_format: a.response_format.clone(),
+                        images: a.images.clone(),
                         max_turns: a.max_turns,
                         stop_when: a.stop_when.clone(),
                         context_strategy: a.context_strategy,
                         on_tool_error: a.on_tool_error,
+                        retry_policy: a.retry_policy,
+                        deployment_model: a.deployment_model.clone(),
                     })
                 }
                 "automated_step" => {
@@ -2809,10 +2849,13 @@ pub mod dsl {
                     system_prompt,
                     user_prompt,
                     response_format,
+                    images,
                     max_turns,
                     stop_when,
                     context_strategy,
                     on_tool_error,
+                    retry_policy,
+                    deployment_model,
                     ..
                 } => {
                     step.agent = Some(DslAgent {
@@ -2820,10 +2863,13 @@ pub mod dsl {
                         system_prompt: system_prompt.clone(),
                         user_prompt: user_prompt.clone(),
                         response_format: response_format.clone(),
+                        images: images.clone(),
                         max_turns: *max_turns,
                         stop_when: stop_when.clone(),
                         context_strategy: *context_strategy,
                         on_tool_error: *on_tool_error,
+                        retry_policy: *retry_policy,
+                        deployment_model: deployment_model.clone(),
                     });
                 }
                 WorkflowNodeData::Trigger { .. }

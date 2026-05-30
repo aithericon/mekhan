@@ -490,6 +490,10 @@ pub struct BackendDescriptor {
     pub resource_channel: ResourceChannel,
     /// Whether the editor should show the Scheduled deployment toggle.
     pub schedulable: bool,
+    /// Whether this backend can be selected as an AutomatedStep backend in
+    /// the node-authoring picker. `GET /api/v1/backends` only returns
+    /// authorable backends; this field is carried for frontend transparency.
+    pub user_authorable: bool,
     /// Whether this backend's declared output port fields drive a Rhai
     /// `outputs:` constant (mostly informational for the frontend).
     pub consumes_declared_outputs: bool,
@@ -525,6 +529,7 @@ impl BackendDecl {
             dispatch_mode: self.meta.dispatch_mode,
             resource_channel: self.meta.resource_channel,
             schedulable: self.meta.schedulable,
+            user_authorable: self.meta.user_authorable,
             consumes_declared_outputs: self.consumes_declared_outputs,
             output_authoring: self.output_authoring,
             config_schema: (self.config_schema_fn)(),

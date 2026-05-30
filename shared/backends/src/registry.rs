@@ -47,6 +47,15 @@ pub struct BackendMeta {
     /// `None` for backends that don't bind workspace resources at all
     /// (Process, Docker, CatalogueQuery today).
     pub resource_channel: ResourceChannel,
+    /// Whether this backend can be selected as an `AutomatedStep` backend in
+    /// the editor's node-authoring surface. `false` hides it from the
+    /// `/api/v1/backends` picker list while keeping the variant fully
+    /// compilable + runnable — the channel for backends that are an internal
+    /// lowering target rather than a user-authored node kind. `Llm` is
+    /// `false`: inference is authored via the dedicated **Agent** node (whose
+    /// degenerate single-shot path emits byte-identical `AutomatedStep(Llm)`
+    /// IR), so a standalone "LLM step" is no longer a user-facing concept.
+    pub user_authorable: bool,
 }
 
 // Per-backend constants. Service-side `BackendDecl` references these via
@@ -62,6 +71,7 @@ pub const PYTHON_META: BackendMeta = BackendMeta {
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::None,
+    user_authorable: true,
 };
 
 pub const PROCESS_META: BackendMeta = BackendMeta {
@@ -72,6 +82,7 @@ pub const PROCESS_META: BackendMeta = BackendMeta {
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::None,
+    user_authorable: true,
 };
 
 pub const DOCKER_META: BackendMeta = BackendMeta {
@@ -82,6 +93,7 @@ pub const DOCKER_META: BackendMeta = BackendMeta {
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::None,
+    user_authorable: true,
 };
 
 pub const HTTP_META: BackendMeta = BackendMeta {
@@ -95,6 +107,7 @@ pub const HTTP_META: BackendMeta = BackendMeta {
     // fills the selected `AuthConfig` scheme's secret. Resource kinds:
     // `http_bearer` / `http_basic` / `http_api_key`.
     resource_channel: ResourceChannel::ConfigOverlay,
+    user_authorable: true,
 };
 
 pub const LLM_META: BackendMeta = BackendMeta {
@@ -105,6 +118,10 @@ pub const LLM_META: BackendMeta = BackendMeta {
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::ConfigOverlay,
+    // Not user-authorable: inference is authored via the Agent node. The
+    // variant stays fully compilable/runnable as the Agent degenerate path's
+    // IR target — it's just no longer offered in the backend picker.
+    user_authorable: false,
 };
 
 pub const FILE_OPS_META: BackendMeta = BackendMeta {
@@ -115,6 +132,7 @@ pub const FILE_OPS_META: BackendMeta = BackendMeta {
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::StagedFile,
+    user_authorable: true,
 };
 
 pub const KREUZBERG_META: BackendMeta = BackendMeta {
@@ -125,6 +143,7 @@ pub const KREUZBERG_META: BackendMeta = BackendMeta {
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::None,
+    user_authorable: true,
 };
 
 pub const SMTP_META: BackendMeta = BackendMeta {
@@ -135,6 +154,7 @@ pub const SMTP_META: BackendMeta = BackendMeta {
     dispatch_mode: DispatchMode::ExecutorJob,
     schedulable: true,
     resource_channel: ResourceChannel::StagedFile,
+    user_authorable: true,
 };
 
 pub const CATALOGUE_QUERY_META: BackendMeta = BackendMeta {
@@ -147,6 +167,7 @@ pub const CATALOGUE_QUERY_META: BackendMeta = BackendMeta {
     },
     schedulable: false,
     resource_channel: ResourceChannel::None,
+    user_authorable: true,
 };
 
 /// Every shipped backend. One entry per [`ExecutionBackendType`] variant;

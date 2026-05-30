@@ -2220,6 +2220,12 @@ export interface components {
              *     generic form).
              */
             secretFields: string[];
+            /**
+             * @description Whether this backend can be selected as an AutomatedStep backend in
+             *     the node-authoring picker. `GET /api/v1/backends` only returns
+             *     authorable backends; this field is carried for frontend transparency.
+             */
+            userAuthorable: boolean;
         };
         /**
          * @description Delay applied between automated-step retry attempts.
@@ -5561,7 +5567,29 @@ export interface components {
              *     compaction). Inert in the degenerate path.
              */
             contextStrategy?: components["schemas"]["ContextStrategy"];
+            /**
+             * @description Where/how each inference turn is dispatched — same field, defaults
+             *     and semantics as `AutomatedStep::deployment_model`. On the
+             *     degenerate single-shot path it reaches the full
+             *     `Executor{pool}` / `Scheduled{lease}` dispatch in
+             *     `lower_automated_step`. The multi-turn loop path supports
+             *     `Executor { pool: None }` only in v1 and compile-rejects the rest
+             *     (mirrors the `context_strategy` gate); per-turn pooled/scheduled
+             *     admission is a follow-up (docs/12).
+             */
+            deploymentModel?: components["schemas"]["DeploymentModel"];
             description?: string | null;
+            /**
+             * @description Vision inputs attached to the user message — each `{"path":
+             *     "{{<slug>.<field>}}", "media_type"?: "..."}`. Opaque JSON in the
+             *     model layer (same as `response_format`); the executor LLM backend
+             *     validates it and the compiler's LLM `ref_scanner` walks
+             *     `images[i].path` for `{{<slug>.<field>}}` borrows exactly as it
+             *     does for a single-shot LLM step. Empty by default. Carries the
+             *     vision capability that lets the Agent fully subsume the retired
+             *     LLM step.
+             */
+            images?: unknown[];
             label: string;
             /**
              * Format: int32
@@ -5588,6 +5616,14 @@ export interface components {
              *     model layer — the executor LLM backend validates it.
              */
             responseFormat?: unknown;
+            /**
+             * @description Retry behaviour on a per-turn inference failure/timeout. Same shape
+             *     + defaults as `AutomatedStep::retry_policy`. On the degenerate
+             *     (single-shot) path this threads straight through to the synthesized
+             *     `AutomatedStep(Llm)`. On the multi-turn loop path it caps the
+             *     executor's per-turn `max_retries`.
+             */
+            retryPolicy?: components["schemas"]["RetryPolicy"];
             /**
              * @description Optional terminal Rhai guard. When `Some`, the agent loop exits
              *     once this expression evaluates true on the parked agent state.

@@ -10,6 +10,8 @@
 	import LlmCommonFields, {
 		type LlmCommonShape
 	} from './shared/LlmCommonFields.svelte';
+	import JsonSchemaBuilder, { detectShape } from './automated/JsonSchemaBuilder.svelte';
+	import DeploymentSection from './DeploymentSection.svelte';
 	import { sanitizeSlug } from '$lib/editor/sanitize-slug';
 	import { untrack } from 'svelte';
 
@@ -62,19 +64,36 @@
 		}
 	}
 
-	// Response format: agent currently has no Builder mode (LLM step's
-	// `JsonSchemaBuilder` is a separate, larger refactor to also land
-	// here). Raw JSON editor only, with the same draft/parse guard so
-	// mid-edit JSON isn't clobbered — kept duplicated from LlmConfigPanel
-	// for now because the two editors are configured differently
-	// (builder vs raw-only) and sharing them would tangle that toggle.
+	// Response format: text vs json_schema, with a Builder/Raw toggle for the
+	// schema (same component the retired LLM step used — single source of
+	// truth via the shared `JsonSchemaBuilder`). The draft/parse guard keeps
+	// mid-edit JSON from being clobbered by a Yjs round-trip.
 	const responseFormat = $derived(
 		(data.responseFormat as Record<string, unknown> | undefined) ?? { type: 'text' }
 	);
 	const responseFormatType = $derived((responseFormat.type as string) ?? 'text');
+	const schemaObj = $derived(
+		(responseFormat.schema as Record<string, unknown> | undefined) ?? {}
+	);
+	const schemaShape = $derived(detectShape(schemaObj));
+	const builderCompatible = $derived(schemaShape.kind !== 'raw_only');
 
 	let schemaDraft = $state('');
 	let schemaParseError = $state<string | null>(null);
+
+	// Builder vs raw JSON. Default to builder when the persisted schema is
+	// round-trippable; fall back to raw + disable the toggle when it isn't.
+	let schemaEditor = $state<'builder' | 'raw'>('builder');
+	$effect(() => {
+		const compatible = builderCompatible;
+		untrack(() => {
+			if (!compatible && schemaEditor === 'builder') schemaEditor = 'raw';
+		});
+	});
+
+	function handleBuilderChange(schema: Record<string, unknown>) {
+		onchange({ ...data, responseFormat: { type: 'json_schema', schema } });
+	}
 
 	$effect(() => {
 		const schema = (responseFormat.schema as Record<string, unknown> | undefined) ?? {};
@@ -149,6 +168,17 @@
 	// take the byte-identical AutomatedStep(Llm) path. Surface that so the
 	// author knows tools won't fire — and the agent loop won't either.
 	const isSingleShot = $derived((data.maxTurns ?? 1) <= 1 && !data.stopWhen);
+
+	// Deployment: single-shot agents inherit the full AutomatedStep dispatch
+	// (pool / scheduler / lease) via the byte-identical degenerate lowering.
+	// Multi-turn / tool-bearing agents run their turns on the plain executor
+	// pool only in v1 — a non-default deployment there is compile-rejected, so
+	// warn in the editor (same idiom as the context-strategy preview warning).
+	const deploymentIsDefault = $derived(
+		!data.deploymentModel ||
+			(data.deploymentModel.mode === 'executor' && data.deploymentModel.pool == null)
+	);
+	const deploymentRejectedForLoop = $derived(!isSingleShot && !deploymentIsDefault);
 </script>
 
 <LlmCommonFields
@@ -311,34 +341,86 @@
 </div>
 
 {#if responseFormatType === 'json_schema'}
-	<div class="space-y-1.5">
-		<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
-		<CodeEditor
-			value={schemaDraft}
-			language="json"
-			{readonly}
-			minHeight="80px"
-			maxHeight="200px"
-			onchange={(val) => {
-				schemaDraft = val;
-				try {
-					const parsed = JSON.parse(val);
-					schemaParseError = null;
-					onchange({
-						...data,
-						responseFormat: { type: 'json_schema', schema: parsed }
-					});
-				} catch (e) {
-					schemaParseError = e instanceof Error ? e.message : String(e);
-				}
-			}}
-		/>
-		{#if schemaParseError}
-			<p class="text-sm text-destructive">
-				Invalid JSON — schema is frozen at the last valid value. ({schemaParseError})
-			</p>
+	<div class="space-y-2">
+		<div class="flex items-center justify-between">
+			<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
+			<div class="flex gap-1" data-testid="agent-schema-editor-toggle">
+				<button
+					type="button"
+					class="rounded-md border px-2 py-0.5 text-sm transition-colors {schemaEditor ===
+					'builder'
+						? 'border-primary bg-primary/5 text-foreground'
+						: 'border-border text-muted-foreground hover:bg-accent/30'}"
+					disabled={readonly || !builderCompatible}
+					title={builderCompatible
+						? 'Visual property editor'
+						: 'Schema uses constructs the builder can’t represent — raw only.'}
+					onclick={() => (schemaEditor = 'builder')}
+					data-testid="agent-schema-mode-builder"
+				>
+					Builder
+				</button>
+				<button
+					type="button"
+					class="rounded-md border px-2 py-0.5 text-sm transition-colors {schemaEditor === 'raw'
+						? 'border-primary bg-primary/5 text-foreground'
+						: 'border-border text-muted-foreground hover:bg-accent/30'}"
+					disabled={readonly}
+					onclick={() => (schemaEditor = 'raw')}
+					data-testid="agent-schema-mode-raw"
+				>
+					Raw JSON
+				</button>
+			</div>
+		</div>
+
+		{#if schemaEditor === 'builder' && builderCompatible}
+			<JsonSchemaBuilder schema={schemaObj} {readonly} onchange={handleBuilderChange} />
+		{:else}
+			<CodeEditor
+				value={schemaDraft}
+				language="json"
+				{readonly}
+				minHeight="80px"
+				maxHeight="200px"
+				onchange={(val) => {
+					schemaDraft = val;
+					try {
+						const parsed = JSON.parse(val);
+						schemaParseError = null;
+						onchange({
+							...data,
+							responseFormat: { type: 'json_schema', schema: parsed }
+						});
+					} catch (e) {
+						schemaParseError = e instanceof Error ? e.message : String(e);
+					}
+				}}
+			/>
+			{#if schemaParseError}
+				<p class="text-sm text-destructive">
+					Invalid JSON — schema is frozen at the last valid value. ({schemaParseError})
+				</p>
+			{/if}
 		{/if}
 	</div>
+{/if}
+
+<!-- Deployment: where each inference turn runs. Single-shot agents reach the
+     full Executor{pool} / Scheduled{lease} dispatch; multi-turn agents run on
+     the plain executor pool only in v1 (a non-default choice is compile-
+     rejected — surfaced below). -->
+<DeploymentSection
+	value={data.deploymentModel}
+	{readonly}
+	onchange={(dm) => onchange({ ...data, deploymentModel: dm })}
+/>
+{#if deploymentRejectedForLoop}
+	<p class="text-sm text-destructive" data-testid="agent-deployment-loop-warning">
+		Publish will reject — pooled/scheduled deployment is only supported on single-shot agents
+		in v1. Set <code>Max turns</code> to 1 and clear <code>Stop when</code> / tools, or use the
+		<code>Executor (worker pool)</code> default here.
+	</p>
 {/if}
 
 <!-- Tool children summary -->

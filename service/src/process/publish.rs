@@ -319,6 +319,7 @@ async fn discover_known_resources(
                 system_prompt,
                 user_prompt,
                 response_format,
+                images,
                 ..
             } => (
                 crate::models::template::ExecutionBackendType::Llm,
@@ -327,6 +328,7 @@ async fn discover_known_resources(
                     system_prompt.as_deref(),
                     user_prompt,
                     response_format.as_ref(),
+                    images,
                     &[],
                 )),
                 None,

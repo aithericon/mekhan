@@ -147,6 +147,7 @@ pub(crate) fn automated_step_borrow_plan(
                 system_prompt,
                 user_prompt,
                 response_format,
+                images,
                 ..
             } => (
                 crate::models::template::ExecutionBackendType::Llm,
@@ -155,6 +156,7 @@ pub(crate) fn automated_step_borrow_plan(
                     system_prompt.as_deref(),
                     user_prompt,
                     response_format.as_ref(),
+                    images,
                     &[],
                 )),
                 None,

@@ -437,10 +437,13 @@ mod tests {
             system_prompt: None,
             user_prompt: "hello".to_string(),
             response_format: None,
+            images: vec![],
             max_turns: 1,
             stop_when: None,
             context_strategy: ContextStrategy::None,
             on_tool_error: ToolErrorPolicy::Feedback,
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
         };
         let decl = lookup_by_variant(&data).expect("agent registered");
         assert_eq!(decl.wire_name, "agent");

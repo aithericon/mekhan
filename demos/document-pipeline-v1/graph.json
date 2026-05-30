@@ -38,7 +38,7 @@
       "data": {
         "type": "start",
         "label": "Start",
-        "processName": "Document intake \u2014 patient {{ patient_id }}",
+        "processName": "Document intake — patient {{ patient_id }}",
         "initial": {
           "id": "in",
           "label": "Document Intake",
@@ -70,7 +70,7 @@
       "data": {
         "type": "automated_step",
         "label": "OCR (kreuzberg)",
-        "description": "Extract text + tables + metadata from the uploaded document. Tesseract backend with German+English models and table detection enabled. Outputs are kreuzberg's native ExtractionResult shape 1:1 \u2014 `content`, `mime_type`, `metadata`, `tables`, `detected_languages`. No renaming or remapping.",
+        "description": "Extract text + tables + metadata from the uploaded document. Tesseract backend with German+English models and table detection enabled. Outputs are kreuzberg's native ExtractionResult shape 1:1 — `content`, `mime_type`, `metadata`, `tables`, `detected_languages`. No renaming or remapping.",
         "executionSpec": {
           "backendType": "kreuzberg",
           "config": {
@@ -115,105 +115,73 @@
     },
     {
       "id": "classify",
-      "type": "automated_step",
+      "type": "agent",
       "position": {
         "x": 702,
         "y": 330
       },
       "data": {
-        "type": "automated_step",
+        "type": "agent",
         "label": "Classify (vision LLM)",
         "description": "Vision MoE: looks at the document image and the OCR text together, returns one of the canonical document classes plus a confidence.",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "llama3.2-vision:11b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 512,
-            "system_prompt": "You are a medical document classification assistant. Look at the document image and the OCR text. Group the page(s) into a single logical document and classify it.",
-            "prompt": "Classify this medical document into ONE of: lab_result, prescription, referral_letter, imaging_report, discharge_summary, consultation_note, insurance_form, invoice, consent_form, other.\n\nOCR text (supplementary, truncated to 4000 chars):\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {document_class, document_date (YYYY-MM-DD or null), confidence (0..1), reasoning}.",
-            "images": [
-              {
-                "path": "{{ start.document_file }}"
-              }
+        "model": {
+          "provider": "ollama",
+          "model": "llama3.2-vision:11b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 512
+        },
+        "userPrompt": "Classify this medical document into ONE of: lab_result, prescription, referral_letter, imaging_report, discharge_summary, consultation_note, insurance_form, invoice, consent_form, other.\n\nOCR text (supplementary, truncated to 4000 chars):\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {document_class, document_date (YYYY-MM-DD or null), confidence (0..1), reasoning}.",
+        "systemPrompt": "You are a medical document classification assistant. Look at the document image and the OCR text. Group the page(s) into a single logical document and classify it.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "type": "object",
+            "required": [
+              "document_class",
+              "confidence",
+              "reasoning"
             ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "type": "object",
-                "required": [
-                  "document_class",
-                  "confidence",
-                  "reasoning"
-                ],
-                "properties": {
-                  "document_class": {
-                    "type": "string",
-                    "enum": [
-                      "lab_result",
-                      "prescription",
-                      "referral_letter",
-                      "imaging_report",
-                      "discharge_summary",
-                      "consultation_note",
-                      "insurance_form",
-                      "invoice",
-                      "consent_form",
-                      "other"
-                    ]
-                  },
-                  "document_date": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "confidence": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 1
-                  },
-                  "reasoning": {
-                    "type": "string"
-                  }
-                },
-                "additionalProperties": false
+            "properties": {
+              "document_class": {
+                "type": "string",
+                "enum": [
+                  "lab_result",
+                  "prescription",
+                  "referral_letter",
+                  "imaging_report",
+                  "discharge_summary",
+                  "consultation_note",
+                  "insurance_form",
+                  "invoice",
+                  "consent_form",
+                  "other"
+                ]
+              },
+              "document_date": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "reasoning": {
+                "type": "string"
               }
-            }
+            },
+            "additionalProperties": false
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Classification",
-          "fields": [
-            {
-              "name": "document_class",
-              "label": "Class",
-              "kind": "text",
-              "required": true
-            },
-            {
-              "name": "document_date",
-              "label": "Date",
-              "kind": "text",
-              "required": false
-            },
-            {
-              "name": "confidence",
-              "label": "Confidence",
-              "kind": "number",
-              "required": true
-            },
-            {
-              "name": "reasoning",
-              "label": "Reasoning",
-              "kind": "text",
-              "required": false
-            }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
@@ -254,242 +222,172 @@
     },
     {
       "id": "extract-bloodwork",
-      "type": "automated_step",
+      "type": "agent",
       "position": {
         "x": 1430,
         "y": 30
       },
       "data": {
-        "type": "automated_step",
-        "label": "Extract \u2014 Bloodwork",
+        "type": "agent",
+        "label": "Extract — Bloodwork",
         "description": "Lab-result extractor. Each row of the result table becomes one field with citations.",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 4096,
-            "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, H\u00e4moglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Every extracted field MUST carry a citations[] array with kind=ocr_span and supporting_text quoted verbatim from the OCR text.",
-            "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nTables (JSON; each entry has `markdown`, `cells`, `page_number`):\n---\n{{ ocr.tables }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [
-              {
-                "path": "{{ start.document_file }}"
-              }
-            ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "$ref": "#/definitions/ExtractionFields"
-              }
-            }
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 4096
+        },
+        "userPrompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nTables (JSON; each entry has `markdown`, `cells`, `page_number`):\n---\n{{ ocr.tables }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+        "systemPrompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Every extracted field MUST carry a citations[] array with kind=ocr_span and supporting_text quoted verbatim from the OCR text.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "$ref": "#/definitions/ExtractionFields"
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Bloodwork fields",
-          "fields": [
-            {
-              "name": "fields",
-              "label": "Extracted fields",
-              "kind": "json",
-              "required": true
-            }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
       "id": "extract-prescription",
-      "type": "automated_step",
+      "type": "agent",
       "position": {
         "x": 1430,
         "y": 240
       },
       "data": {
-        "type": "automated_step",
-        "label": "Extract \u2014 Prescription",
+        "type": "agent",
+        "label": "Extract — Prescription",
         "description": "Prescription extractor. One field per medication.",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 2048,
-            "system_prompt": "You are a medical prescription extractor. Extract every medication with its dose, frequency, route, duration, prescriber, date, and indication. Each field MUST carry a citations[] array.",
-            "prompt": "Extract all prescription details.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]} where key \u2208 {medication, dose, frequency, route, duration, prescriber, date, indication, patient_name, svnr}.",
-            "images": [
-              {
-                "path": "{{ start.document_file }}"
-              }
-            ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "$ref": "#/definitions/ExtractionFields"
-              }
-            }
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 2048
+        },
+        "userPrompt": "Extract all prescription details.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]} where key ∈ {medication, dose, frequency, route, duration, prescriber, date, indication, patient_name, svnr}.",
+        "systemPrompt": "You are a medical prescription extractor. Extract every medication with its dose, frequency, route, duration, prescriber, date, and indication. Each field MUST carry a citations[] array.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "$ref": "#/definitions/ExtractionFields"
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Prescription fields",
-          "fields": [
-            {
-              "name": "fields",
-              "label": "Extracted fields",
-              "kind": "json",
-              "required": true
-            }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
       "id": "extract-clinical-note",
-      "type": "automated_step",
+      "type": "agent",
       "position": {
         "x": 1430,
         "y": 450
       },
       "data": {
-        "type": "automated_step",
-        "label": "Extract \u2014 Clinical Note",
+        "type": "agent",
+        "label": "Extract — Clinical Note",
         "description": "Narrative clinical doc extractor (referral / imaging / discharge / consultation).",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 4096,
-            "system_prompt": "You are a clinical document extractor. Pull structured fields out of this narrative document. For discharge/consultation include admission/discharge dates, ICD-10-coded diagnoses, procedures, meds-at-discharge, follow-up. For imaging include exam type, body region, findings, impression. Every field MUST carry a citations[] array.",
-            "prompt": "Extract structured fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [
-              {
-                "path": "{{ start.document_file }}"
-              }
-            ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "$ref": "#/definitions/ExtractionFields"
-              }
-            }
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 4096
+        },
+        "userPrompt": "Extract structured fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+        "systemPrompt": "You are a clinical document extractor. Pull structured fields out of this narrative document. For discharge/consultation include admission/discharge dates, ICD-10-coded diagnoses, procedures, meds-at-discharge, follow-up. For imaging include exam type, body region, findings, impression. Every field MUST carry a citations[] array.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "$ref": "#/definitions/ExtractionFields"
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Clinical fields",
-          "fields": [
-            {
-              "name": "fields",
-              "label": "Extracted fields",
-              "kind": "json",
-              "required": true
-            }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
       "id": "extract-form-fields",
-      "type": "automated_step",
+      "type": "agent",
       "position": {
         "x": 1430,
         "y": 660
       },
       "data": {
-        "type": "automated_step",
-        "label": "Extract \u2014 Form Fields",
+        "type": "agent",
+        "label": "Extract — Form Fields",
         "description": "Administrative form extractor (insurance / invoice / consent).",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 2048,
-            "system_prompt": "You are a form-field extractor. Pull every labelled field out of this administrative document. Every field MUST carry a citations[] array.",
-            "prompt": "Extract all labelled form fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [
-              {
-                "path": "{{ start.document_file }}"
-              }
-            ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "$ref": "#/definitions/ExtractionFields"
-              }
-            }
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 2048
+        },
+        "userPrompt": "Extract all labelled form fields from this {{ classify.document_class }}.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+        "systemPrompt": "You are a form-field extractor. Pull every labelled field out of this administrative document. Every field MUST carry a citations[] array.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "$ref": "#/definitions/ExtractionFields"
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Form fields",
-          "fields": [
-            {
-              "name": "fields",
-              "label": "Extracted fields",
-              "kind": "json",
-              "required": true
-            }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
       "id": "extract-generic",
-      "type": "automated_step",
+      "type": "agent",
       "position": {
         "x": 1430,
         "y": 870
       },
       "data": {
-        "type": "automated_step",
-        "label": "Extract \u2014 Generic",
+        "type": "agent",
+        "label": "Extract — Generic",
         "description": "Best-effort extractor for documents that did not match any specialist branch.",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 2048,
-            "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field. Every field MUST carry a citations[] array.",
-            "prompt": "Extract every identifiable field from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
-            "images": [
-              {
-                "path": "{{ start.document_file }}"
-              }
-            ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "$ref": "#/definitions/ExtractionFields"
-              }
-            }
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 2048
+        },
+        "userPrompt": "Extract every identifiable field from this document.\n\nOCR text:\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {fields: [{key, value, unit, reference_range, confidence, citations:[{kind, supporting_text, confidence}]}]}.",
+        "systemPrompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field. Every field MUST carry a citations[] array.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "$ref": "#/definitions/ExtractionFields"
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Generic fields",
-          "fields": [
-            {
-              "name": "fields",
-              "label": "Extracted fields",
-              "kind": "json",
-              "required": true
-            }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
@@ -503,7 +401,7 @@
       "data": {
         "type": "join",
         "label": "Merge branches",
-        "description": "Branches converge. `mode: \"any\"` \u2014 fires on the first incoming control token (XOR-join, dual of decision). The other mode, `\"all\"`, waits for every incoming branch and merges their payloads (AND-join). One node type, one knob \u2014 the wait-vs-fire-immediately semantics are explicit in the config, not encoded in the type name.",
+        "description": "Branches converge. `mode: \"any\"` — fires on the first incoming control token (XOR-join, dual of decision). The other mode, `\"all\"`, waits for every incoming branch and merges their payloads (AND-join). One node type, one knob — the wait-vs-fire-immediately semantics are explicit in the config, not encoded in the type name.",
         "mode": "any",
         "output": {
           "id": "out",
@@ -660,7 +558,7 @@
       "data": {
         "type": "human_task",
         "label": "Medical-assistant review",
-        "taskTitle": "Review extraction \u2014 {{ classify.document_class }}",
+        "taskTitle": "Review extraction — {{ classify.document_class }}",
         "instructionsMdsvex": "The extraction for patient **{{ patient_id }}** needs a quick eyes-on. Classification confidence was **{{ classify.confidence }}**; **{{ verify.unverified_count }}** field(s) failed citation verification.\n\nApprove, edit, or send back for re-OCR.",
         "steps": []
       }
@@ -757,7 +655,8 @@
       "source": "classify",
       "target": "route-by-class",
       "targetHandle": "in",
-      "type": "sequence"
+      "type": "sequence",
+      "sourceHandle": "out"
     },
     {
       "id": "e-route-lab",
@@ -809,35 +708,40 @@
       "source": "extract-bloodwork",
       "target": "merge-extraction",
       "targetHandle": "in",
-      "type": "sequence"
+      "type": "sequence",
+      "sourceHandle": "out"
     },
     {
       "id": "e-rx-merge",
       "source": "extract-prescription",
       "target": "merge-extraction",
       "targetHandle": "in",
-      "type": "sequence"
+      "type": "sequence",
+      "sourceHandle": "out"
     },
     {
       "id": "e-clinical-merge",
       "source": "extract-clinical-note",
       "target": "merge-extraction",
       "targetHandle": "in",
-      "type": "sequence"
+      "type": "sequence",
+      "sourceHandle": "out"
     },
     {
       "id": "e-form-merge",
       "source": "extract-form-fields",
       "target": "merge-extraction",
       "targetHandle": "in",
-      "type": "sequence"
+      "type": "sequence",
+      "sourceHandle": "out"
     },
     {
       "id": "e-generic-merge",
       "source": "extract-generic",
       "target": "merge-extraction",
       "targetHandle": "in",
-      "type": "sequence"
+      "type": "sequence",
+      "sourceHandle": "out"
     },
     {
       "id": "e-merge-persist",
