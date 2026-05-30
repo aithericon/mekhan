@@ -2,6 +2,7 @@ pub mod artifact;
 pub mod batch;
 pub mod error;
 pub mod event;
+pub mod execute_contract;
 pub mod job;
 pub mod llm;
 pub mod logs;
@@ -16,6 +17,7 @@ pub use artifact::{Artifact, ArtifactCategory, ArtifactManifest};
 pub use batch::{BatchManifest, BatchResult, JobResult};
 pub use error::ExecutorError;
 pub use event::{EventCategory, ExecutionEvent, StagedEvent, StatusDetail};
+pub use execute_contract::{ExecuteRequest, ExecuteResponse};
 pub use job::{
     ExecutionJob, ExecutionSpec, InputDeclaration, InputSource, JobPriority, OutputDeclaration,
     OutputUploadConfig,
