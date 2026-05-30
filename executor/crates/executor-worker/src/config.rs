@@ -104,6 +104,18 @@ pub struct ExecutorConfig {
     #[serde(default = "default_max_deliver")]
     pub max_deliver: i64,
 
+    /// Maximum un-acked messages JetStream will deliver to this consumer at once.
+    ///
+    /// A serial worker (`concurrency = 1`) that holds a large prefetch buffer can
+    /// have queued-but-unstarted messages redelivered while it is blocked on a
+    /// slow job (e.g. a cold Python venv build) — they exceed their ack window
+    /// before the worker even reaches them. Bounding this to the worker's
+    /// parallelism prevents that over-delivery. The lease drain executor sets it
+    /// to `1` (`EXECUTOR_MAX_ACK_PENDING`); the daemon keeps the larger default
+    /// for pull-pipelining throughput.
+    #[serde(default = "default_max_ack_pending")]
+    pub max_ack_pending: i64,
+
     /// Number of replicas for the status stream.
     #[serde(default = "default_status_replicas")]
     pub status_replicas: usize,
@@ -419,6 +431,12 @@ fn default_max_deliver() -> i64 {
     3
 }
 
+fn default_max_ack_pending() -> i64 {
+    // Matches the apalis-nats default; preserves the daemon's pull-pipelining.
+    // The lease drain executor overrides to 1 via EXECUTOR_MAX_ACK_PENDING.
+    100
+}
+
 fn default_status_replicas() -> usize {
     1
 }
@@ -456,6 +474,7 @@ mod tests {
             ack_wait_secs: default_ack_wait_secs(),
             heartbeat_interval_secs: default_heartbeat_interval_secs(),
             max_deliver: default_max_deliver(),
+            max_ack_pending: default_max_ack_pending(),
             status_replicas: default_status_replicas(),
             cleanup_policy: CleanupPolicy::default(),
             storage: None,

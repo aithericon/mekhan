@@ -1002,8 +1002,20 @@ slurm-up:
     export EXECUTOR_LIFETIME=run_to_completion
     export EXECUTOR_MAX_JOBS="${LEASE_MAX_JOBS}"
     export EXECUTOR_CONCURRENCY=1
+    # Serial drain: deliver at most one un-acked message at a time. Without this
+    # the durable Pool consumer hands the whole queue to a concurrency=1 worker;
+    # messages queued behind a slow job (cold venv build) exceed their ack window
+    # and get redelivered → the same iteration re-runs. Bound to the worker's
+    # parallelism (1) so JetStream never over-delivers.
+    export EXECUTOR_MAX_ACK_PENDING=1
     export EXECUTOR_NAME="lease-executor-${SLURM_JOB_ID}"
     export EXECUTOR_BASE_DIR=/tmp/aithericon-executor-lease/${SLURM_JOB_ID}
+    # Share the venv cache ACROSS lease executors (stable, not under the
+    # per-job base_dir). Otherwise every new lease cold-builds its first venv
+    # (~8s) — which, on a 275ms job, blows the message's ack window and the
+    # consumer redelivers the same iteration. A stable cache makes the first job
+    # of each lease warm too, so each iteration runs exactly once.
+    export EXECUTOR_PYTHON__CACHE_DIR=/tmp/aithericon-lease-venvs
     export EXECUTOR_DEFAULT_TIMEOUT_SECS=60
     export EXECUTOR_IDLE_TIMEOUT_SECS="${LEASE_IDLE_TIMEOUT:-300}"
     export AITHERICON_SDK_PATH=/opt/petri/aithericon-sdk
