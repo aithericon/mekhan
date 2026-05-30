@@ -1,14 +1,21 @@
 {
-  "_comment": "Nomad parameterized job that dispatches ONE persistent drain executor for the datacenter LEASE path (the Nomad analogue of mekhan-lease-executor.sh). Unlike petri-executor-worker (PerJob, MAX_JOBS=1, one-shot via EXECUTOR_TARGET_EXEC_ID), this is Pool/drain: NO EXECUTOR_TARGET_EXEC_ID, so the executor opens a durable shared consumer on the {ns}_{prio} stream with a wildcard {ns}.{prio}.> filter and pulls EVERY job the leased loop enqueues to the lease-scoped namespace. The lease params (namespace + cap + idle) ride as dispatch Meta and are surfaced to the task env via ${NOMAD_META_*}. Release = nomad job stop → SIGTERM → graceful 30s drain → exit. NomadAllocatorClient::acquire dispatches this (job id 'petri-lease-executor', overridable via NOMAD_LEASE_JOB_TEMPLATE); the dispatched child job id becomes the lease alloc_id.",
+  "_comment": "Nomad parameterized job that dispatches ONE persistent drain executor for the datacenter LEASE path (the Nomad analogue of mekhan-lease-executor.sh). Unlike petri-executor-worker (PerJob, MAX_JOBS=1, one-shot via EXECUTOR_TARGET_EXEC_ID), this is Pool/drain: NO EXECUTOR_TARGET_EXEC_ID, so the executor opens a durable shared consumer on the {ns}_{prio} stream with a wildcard {ns}.{prio}.> filter and pulls EVERY job the leased loop enqueues to the lease-scoped namespace. The lease params (namespace + cap + idle) ride as dispatch Meta and are surfaced to the task env via ${NOMAD_META_*}. Release = nomad job stop \u2192 SIGTERM \u2192 graceful 30s drain \u2192 exit. NomadAllocatorClient::acquire dispatches this (job id 'petri-lease-executor', overridable via NOMAD_LEASE_JOB_TEMPLATE); the dispatched child job id becomes the lease alloc_id.",
   "Job": {
     "ID": "petri-lease-executor",
     "Name": "petri-lease-executor",
-    "Type": "service",
-    "Datacenters": ["dc1"],
+    "Type": "batch",
+    "Datacenters": [
+      "dc1"
+    ],
     "ParameterizedJob": {
       "Payload": "forbidden",
-      "MetaRequired": ["LEASE_NAMESPACE"],
-      "MetaOptional": ["LEASE_MAX_JOBS", "LEASE_IDLE_TIMEOUT"]
+      "MetaRequired": [
+        "LEASE_NAMESPACE"
+      ],
+      "MetaOptional": [
+        "LEASE_MAX_JOBS",
+        "LEASE_IDLE_TIMEOUT"
+      ]
     },
     "TaskGroups": [
       {
@@ -30,7 +37,7 @@
               "args": []
             },
             "KillSignal": "SIGTERM",
-            "KillTimeout": "35s",
+            "KillTimeout": 35000000000,
             "Env": {
               "EXECUTOR_NATS_URL": "nats://localhost:4333",
               "EXECUTOR_NAMESPACE": "${NOMAD_META_LEASE_NAMESPACE}",
