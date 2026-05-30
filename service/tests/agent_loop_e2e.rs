@@ -74,6 +74,22 @@ fn edge(id: &str, source: &str, target: &str) -> WorkflowEdge {
     }
 }
 
+/// Edge leaving a node's named source handle (e.g. the agent's `error`
+/// handle). A wired `error` edge keeps the agent on the handled-`Result::Err`
+/// path: `p_<agent>_error` is created and failure/bubble tokens route to it
+/// (vs. the unwired panic/throw model).
+fn edge_with_handle(id: &str, source: &str, target: &str, handle: &str) -> WorkflowEdge {
+    WorkflowEdge {
+        id: id.to_string(),
+        source: source.to_string(),
+        target: target.to_string(),
+        source_handle: Some(handle.to_string()),
+        target_handle: Some("in".to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    }
+}
+
 fn anthropic_haiku() -> ModelRef {
     ModelRef {
         provider: "anthropic".to_string(),
@@ -199,16 +215,26 @@ fn transition_ids(air: &Value) -> Vec<String> {
 /// agent-loop AIR shape.
 #[test]
 fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
+    // Wire the agent's `error` handle to a handler so the handled-`Result::Err`
+    // shape (`p_a_error` present) is exercised; without it the new panic/Result
+    // model would crash on failure and omit `p_a_error`. The tool child's own
+    // `error` handle is wired too so it keeps an error output place — the
+    // Feedback tool-error collector (`t_a_collect_lookup_error`) only mints when
+    // the child exposes one (otherwise the child's failure crashes the net).
     let air = compile(
         vec![
             start_node("s"),
             agent_node("a"),
             tool_child("lookup_node", "a", "lookup"),
+            end_node("handler"),
+            end_node("tool_handler"),
             end_node("e"),
         ],
         vec![
             edge("e1", "s", "a"),
             edge("e2", "a", "e"),
+            edge_with_handle("e_err", "a", "handler", "error"),
+            edge_with_handle("e_tool_err", "lookup_node", "tool_handler", "error"),
             tools_edge("et_lookup", "a", "lookup_node"),
         ],
     );
@@ -571,16 +597,26 @@ fn bubble_policy_routes_unknown_to_error_and_mints_bubble_collectors() {
     } else {
         unreachable!()
     }
+    // Wire the agent's `error` handle so the bubble path routes to `p_a_error`
+    // (the handled-`Result::Err` shape this test pins). Unwired, the bubble path
+    // would instead throw to crash the net under the new panic/Result model. The
+    // tool child's `error` handle is wired too so it exposes an error output —
+    // the bubble collector (`t_a_collect_lookup_bubble`) bridges the child's
+    // error place into the agent, so it only mints when the child has one.
     let air = compile(
         vec![
             start_node("s"),
             node,
             tool_child("lookup_node", "a", "lookup"),
+            end_node("handler"),
+            end_node("tool_handler"),
             end_node("e"),
         ],
         vec![
             edge("e1", "s", "a"),
             edge("e2", "a", "e"),
+            edge_with_handle("e_err", "a", "handler", "error"),
+            edge_with_handle("e_tool_err", "lookup_node", "tool_handler", "error"),
             tools_edge("et_lookup", "a", "lookup_node"),
         ],
     );
@@ -729,6 +765,90 @@ fn every_emitted_rhai_script_parses() {
     assert!(
         failures.is_empty(),
         "every emitted Rhai script must parse; got {} failure(s):\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+/// UNWIRED Bubble-policy agent with a tool: under the Rust panic/Result model
+/// both bubble surfaces (the unknown-tool route AND the per-tool collect-bubble)
+/// must CRASH the net (Rhai `throw`) rather than produce into a dead-end
+/// `p_a_error`. Also confirms every emitted `throw` form parses as valid Rhai
+/// (the unknown-tool path throws a `String` variable; the collect-bubble throws
+/// a string literal).
+#[test]
+fn unwired_bubble_agent_crashes_net_and_rhai_parses() {
+    let mut node = agent_node("a");
+    if let WorkflowNodeData::Agent { on_tool_error, .. } = &mut node.data {
+        *on_tool_error = ToolErrorPolicy::Bubble;
+    } else {
+        unreachable!()
+    }
+    // No `error` edge on the agent → unwired. The tool child's `error` handle IS
+    // wired so it exposes an error output (the collect-bubble bridges it), but
+    // the AGENT bubbling that error has nowhere to go → it throws.
+    let air = compile(
+        vec![
+            start_node("s"),
+            node,
+            tool_child("lookup_node", "a", "lookup"),
+            end_node("tool_handler"),
+            end_node("e"),
+        ],
+        vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            edge_with_handle("e_tool_err", "lookup_node", "tool_handler", "error"),
+            tools_edge("et_lookup", "a", "lookup_node"),
+        ],
+    );
+
+    // No dead-end agent error place.
+    assert!(
+        !place_ids(&air).iter().any(|p| p == "p_a_error"),
+        "unwired Bubble agent must NOT create a dead-end p_a_error place"
+    );
+
+    let get = |id: &str| -> Value {
+        air.get("transitions")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("expected transition {id}"))
+            .clone()
+    };
+
+    // Both bubble surfaces throw.
+    let route_unknown = get("t_a_route_unknown");
+    assert!(
+        route_unknown["logic"].to_string().contains("throw"),
+        "unwired Bubble t_a_route_unknown must throw: {}",
+        route_unknown["logic"]
+    );
+    let collect_bubble = get("t_a_collect_lookup_bubble");
+    assert!(
+        collect_bubble["logic"].to_string().contains("throw"),
+        "unwired Bubble t_a_collect_lookup_bubble must throw: {}",
+        collect_bubble["logic"]
+    );
+
+    // Every emitted throw (and all other Rhai) parses.
+    let engine = rhai::Engine::new_raw();
+    let mut failures: Vec<String> = Vec::new();
+    for tr in air.get("transitions").and_then(Value::as_array).unwrap() {
+        let tid = tr.get("id").and_then(Value::as_str).unwrap_or("<no-id>");
+        for field in ["logic", "guard"] {
+            if let Some(source) = tr.get(field).and_then(|l| l.get("source")).and_then(Value::as_str) {
+                if let Err(e) = engine.compile(source) {
+                    failures.push(format!("[{tid}.{field}] {e}\n    source: {source}"));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "every emitted Rhai script (incl. unwired throws) must parse; got {} failure(s):\n{}",
         failures.len(),
         failures.join("\n\n")
     );

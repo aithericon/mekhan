@@ -1978,12 +1978,6 @@
       "type": "state"
     },
     {
-      "id": "p_branin_error",
-      "name": "Branin objective - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_branin_main",
       "name": "Branin objective - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -2017,12 +2011,6 @@
       "id": "p_gather_data",
       "name": "Fold evals into observations - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__gather",
-      "type": "state"
-    },
-    {
-      "id": "p_gather_error",
-      "name": "Fold evals into observations - Error",
-      "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
@@ -2131,12 +2119,6 @@
       "id": "p_propose_data",
       "name": "Fit GP + propose K candidates - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__propose",
-      "type": "state"
-    },
-    {
-      "id": "p_propose_error",
-      "name": "Fit GP + propose K candidates - Error",
-      "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
@@ -2594,7 +2576,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "branin/exhausted",
+      "id": "branin/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2618,32 +2600,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Branin objective' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_branin_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_20",
@@ -4127,7 +4087,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "gather/exhausted",
+      "id": "gather/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4151,32 +4111,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Fold evals into observations' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_gather_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_13",
@@ -5682,7 +5620,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "propose/exhausted",
+      "id": "propose/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -5706,32 +5644,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Fit GP + propose K candidates' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_propose_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_6",
@@ -7140,7 +7056,7 @@
       ]
     },
     {
-      "id": "t_branin_to_error",
+      "id": "t_branin_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -7164,32 +7080,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Branin objective' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Branin objective - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_branin_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Branin objective - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_branin_to_output",
@@ -7578,7 +7472,7 @@
       ]
     },
     {
-      "id": "t_gather_to_error",
+      "id": "t_gather_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -7602,32 +7496,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Fold evals into observations' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Fold evals into observations - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_gather_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Fold evals into observations - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_gather_to_output",
@@ -8316,7 +8188,7 @@
       ]
     },
     {
-      "id": "t_propose_to_error",
+      "id": "t_propose_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -8340,32 +8212,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Fit GP + propose K candidates' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Fit GP + propose K candidates - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_propose_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Fit GP + propose K candidates - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_propose_to_output",

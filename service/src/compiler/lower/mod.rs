@@ -136,7 +136,12 @@ pub(crate) struct AgentToolWiring {
     pub(crate) agent_label: String,
     pub(crate) p_state: PlaceHandle<DynamicToken>,
     pub(crate) p_state_in_tool: PlaceHandle<DynamicToken>,
-    pub(crate) p_error: PlaceHandle<DynamicToken>,
+    /// The agent's error place — `Some` only when the agent's error handle is
+    /// wired to a downstream handler. `None` (unwired) makes the per-tool
+    /// collect-bubble path crash the net (Rhai `throw`) instead of parking a
+    /// dead-end error token. Mirrors the `Option<PlaceHandle>` panic/Result
+    /// model in `lower_automated_step`.
+    pub(crate) p_error: Option<PlaceHandle<DynamicToken>>,
     pub(crate) tools: Vec<AgentToolEntry>,
 }
 
@@ -555,6 +560,22 @@ pub(super) fn park_outputs(
 /// reads its body output via the parked `<body>.<field>` borrow once per
 /// iteration, with no K-fan-out correlation.
 ///
+/// True when this node's failure/error handle is WIRED to a downstream
+/// handler — i.e. some outgoing edge carries `source_handle == "error"`. This
+/// is the Rust `Result::Err`-is-handled predicate: a wired handle means the
+/// error token routes to a handler and the net continues; an unwired handle
+/// means a permanent failure must crash the net (a panic that unwinds to the
+/// top → `NetFailed`) rather than strand a token in a dead-end error place.
+///
+/// `outgoing_edges` are the edges whose `source == node_id` (see
+/// `graph::outgoing`), so `e.source == node_id` always holds here — we only
+/// inspect the handle.
+pub(super) fn error_path_wired(outgoing_edges: &[&WorkflowEdge]) -> bool {
+    outgoing_edges
+        .iter()
+        .any(|e| e.source_handle.as_deref() == Some("error"))
+}
+
 /// `outgoing_edges` are the edges whose `source == node_id` (see `graph::outgoing`).
 pub(super) fn is_map_body_terminal(
     graph: &WorkflowGraph,
@@ -702,17 +723,37 @@ pub(crate) fn apply_agent_tool_wirings(
                         ))
                         .done();
                     }
-                    ToolErrorPolicy::Bubble => {
-                        ctx.transition(
-                            format!("t_{agent_id}_collect_{tn}_bubble"),
-                            format!("{agent_label} - Collect {tn} (error → bubble)"),
-                        )
-                        .auto_input("err", &child_err)
-                        .auto_input("state", &wiring.p_state_in_tool)
-                        .auto_output("error", &wiring.p_error)
-                        .logic_rhai("#{ error: err }".to_string())
-                        .done();
-                    }
+                    ToolErrorPolicy::Bubble => match &wiring.p_error {
+                        // Wired: surface the tool failure on the agent's error
+                        // handle (today's behavior, byte-identical).
+                        Some(p_error) => {
+                            ctx.transition(
+                                format!("t_{agent_id}_collect_{tn}_bubble"),
+                                format!("{agent_label} - Collect {tn} (error → bubble)"),
+                            )
+                            .auto_input("err", &child_err)
+                            .auto_input("state", &wiring.p_state_in_tool)
+                            .auto_output("error", p_error)
+                            .logic_rhai("#{ error: err }".to_string())
+                            .done();
+                        }
+                        // Unwired: the bubbled tool failure has no handler — crash
+                        // the net. Still consume `{err, state}` so nothing strands,
+                        // then `throw` (permanent ScriptError → NetFailed).
+                        None => {
+                            let msg = format!(
+                                "agent '{agent_id}' tool '{tn}' failed (bubble) and no error handler is wired"
+                            );
+                            ctx.transition(
+                                format!("t_{agent_id}_collect_{tn}_bubble"),
+                                format!("{agent_label} - Collect {tn} (error → crash net)"),
+                            )
+                            .auto_input("err", &child_err)
+                            .auto_input("state", &wiring.p_state_in_tool)
+                            .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+                            .done();
+                        }
+                    },
                 }
             }
         }

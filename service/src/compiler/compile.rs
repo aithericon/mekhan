@@ -3226,8 +3226,13 @@ mod tests {
 
     #[test]
     fn test_automated_step_without_error_edge_still_compiles() {
-        // Default (no error edge): p_a_error has no consumer — the prior
-        // dead-end-on-failure behaviour is preserved, compilation succeeds.
+        // No error edge: instead of a dead-end `p_a_error` place (which used
+        // to strand the failure token and wedge the net at 'running'), the
+        // exhausted/dead-letter transitions now `throw` → permanent
+        // ScriptError → NetFailed (the unhandled-panic path). Compilation
+        // still succeeds; the runtime behaviour is the crash, not a strand.
+        // The compiled topology is asserted by
+        // `automated_step_produces_executor_lifecycle` in compiler_tests.rs.
         let graph = WorkflowGraph {
             nodes: vec![
                 start_node("s"),
