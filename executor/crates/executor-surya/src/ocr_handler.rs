@@ -24,7 +24,7 @@ use axum::{http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::surya::SuryaAdapter;
-use crate::port::{OcrPage, OcrRequest, OcrWord};
+use crate::port::OcrRequest;
 
 #[derive(Debug, Deserialize)]
 pub struct OcrExtractRequest {
@@ -42,17 +42,6 @@ pub struct OcrExtractRequest {
 pub struct OcrExtractResponse {
     /// Extracted text content (from the wrapper's `full_text` field).
     pub ocr_text: String,
-    /// Concatenated text across all pages. Distinct from `ocr_text` so a
-    /// downstream step can borrow `{{ <slug>.full_text }}` without depending
-    /// on the compat alias.
-    pub full_text: String,
-    /// Flattened per-word geometry with normalised bounding boxes, in reading
-    /// order. THIS is what the field→bbox visual-reference cascade consumes
-    /// (`{{ <slug>.words }}`) — without it, downstream bbox resolution has no
-    /// coordinates to union.
-    pub words: Vec<OcrWord>,
-    /// Per-page OCR geometry (pixel dims + per-page word/line lists).
-    pub pages: Vec<OcrPage>,
     /// Page count (count of entries in the wrapper's `pages` array; 0
     /// for non-paginated inputs).
     pub page_count: u32,
@@ -102,9 +91,6 @@ pub async fn ocr_extract(
 
     Ok(Json(OcrExtractResponse {
         ocr_text: response.ocr_text,
-        full_text: response.full_text,
-        words: response.words,
-        pages: response.pages,
         page_count: response.page_count,
         engine: "surya",
         ocr_backend: "surya",
@@ -139,9 +125,6 @@ mod tests {
     fn response_envelope_marks_engine_and_backend_as_surya() {
         let response = OcrExtractResponse {
             ocr_text: "test".to_string(),
-            full_text: "test".to_string(),
-            words: vec![],
-            pages: vec![],
             page_count: 1,
             engine: "surya",
             ocr_backend: "surya",
@@ -154,38 +137,5 @@ mod tests {
         // Surya pool is architecturally distinct from the kreuzberg pool.
         assert_ne!(json["engine"], "kreuzberg");
         assert_ne!(json["ocr_backend"], "paddleocr");
-    }
-
-    /// Regression: the /v1/ocr/extract response MUST surface the per-word
-    /// bounding boxes (`words` + `pages` + `full_text`), not just `ocr_text`.
-    /// Without these the engine's `{{ t_ocr.words }}` borrow resolves empty
-    /// and the field→bbox cascade produces no `visual_ref` (the HITL review
-    /// overlay stays blank). This locks the bbox passthrough at the pool seam.
-    #[test]
-    fn response_surfaces_per_word_bounding_boxes() {
-        use crate::port::BBox;
-        let response = OcrExtractResponse {
-            ocr_text: "Glucose".to_string(),
-            full_text: "Glucose".to_string(),
-            words: vec![OcrWord {
-                text: "Glucose".to_string(),
-                bbox: BBox { x: 0.1, y: 0.2, w: 0.3, h: 0.04 },
-                confidence: 0.97,
-                word_index: 0,
-                page: 1,
-            }],
-            pages: vec![],
-            page_count: 1,
-            engine: "surya",
-            ocr_backend: "surya",
-            mime_type: "image/png".to_string(),
-        };
-        let json = serde_json::to_value(&response).unwrap();
-        assert_eq!(json["words"][0]["text"], "Glucose");
-        assert_eq!(json["words"][0]["bbox"]["x"], 0.1);
-        assert_eq!(json["words"][0]["bbox"]["w"], 0.3);
-        assert_eq!(json["words"][0]["word_index"], 0);
-        assert_eq!(json["words"][0]["page"], 1);
-        assert_eq!(json["full_text"], "Glucose");
     }
 }
