@@ -133,15 +133,33 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     let outputs_rhai = declared_outputs_rhai(*backend_type, output);
 
     let max_retries = retry_policy.max_retries;
+
+    // Rust panic/Result model: a WIRED error handle (`source_handle == "error"`)
+    // means a permanent failure routes to the handler (handled `Result::Err`,
+    // net continues); an UNWIRED handle means a permanent failure crashes the
+    // net (unhandled panic → NetFailed). Read `cx.outgoing_edges` BEFORE the
+    // `&mut *cx.ctx` reborrow below (which mutably borrows `cx`).
+    // An AutomatedStep used as an agent tool has no authored `error` edge, so
+    // force `error_handled = true` (mint `p_error`) so the engine-bridged tool
+    // failure surfaces to the agent's on_tool_error wiring instead of
+    // dead-end-throwing and crashing the agent — same rationale as the
+    // SubWorkflow tool path.
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
+    let panic_label = label.clone();
+
     let ctx = &mut *cx.ctx;
 
-    // Node interface places (outside prefix scope)
+    // Node interface places (outside prefix scope). `p_error` only exists when
+    // the error handle is wired; an unwired node crashes instead of parking.
     let p_input: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    let p_error: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+    let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
+        Some(ctx.state(format!("p_{id}_error"), format!("{label} - Error")))
+    } else {
+        None
+    };
 
     // Streaming side-channel: when `stream_output` is set, mint a Signal place
     // `p_{id}_stream` (intentionally multi-token — one token per executor
@@ -241,7 +259,9 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             &lc.timed_out,
             &exec_inbox_retry,
             &lc.effect_errors,
-            &p_error,
+            p_error.as_ref(),
+            error_handled,
+            &panic_label,
         );
 
         lc
@@ -253,13 +273,28 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         .auto_output("output", &p_output)
         .logic(r#"#{ output: done }"#);
 
-    // Infra-level effect-handler errors (NATS/dispatch) still drain to
-    // the node error output; job-level failures are handled by the
-    // retry topology above.
-    ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+    // Infra-level effect-handler errors (NATS/dispatch) drain to the node
+    // error output when wired; job-level failures are handled by the retry
+    // topology above. When the error handle is UNWIRED, an infra dead-letter
+    // also has no handler — crash the net (panic → NetFailed) for consistency
+    // with the exhausted path rather than stranding the token.
+    if let Some(p_error) = &p_error {
+        ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+            .auto_input("dead", &handles.dead_letter)
+            .auto_output("error", p_error)
+            .logic(r#"#{ error: dead }"#);
+    } else {
+        let msg = format!(
+            "automated step '{label}' dead-lettered (infra failure) and no error handler is wired"
+        );
+        ctx.transition(
+            format!("t_{id}_to_error_deadend"),
+            format!("{label} - Dead-letter (no handler — crash net)"),
+        )
         .auto_input("dead", &handles.dead_letter)
-        .auto_output("error", &p_error)
-        .logic(r#"#{ error: dead }"#);
+        .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+        .done();
+    }
 
     // Foundation split: park the executor result envelope as write-once data,
     // forward only the slim control token on the success path. The error
@@ -283,14 +318,15 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         split_outputs(ctx, id, label, &p_output)
     };
 
-    // Slim control success output + the unchanged named "error" output. An
-    // edge from the node's error handle (source_handle == "error") wires to
-    // `p_error` via `find_output_place`; if no error edge exists `p_error`
-    // simply has no consumer.
-    let mut output_places = vec![
-        (None, p_ctrl),
-        (Some("error".to_string()), p_error),
-    ];
+    // Slim control success output, plus the named "error" output ONLY when the
+    // handle is wired. An edge from the node's error handle (source_handle ==
+    // "error") wires to `p_error` via `find_output_place`. When unwired we omit
+    // the entry entirely (the failure crashes the net instead), so wire.rs never
+    // attaches a consumer to a non-existent port.
+    let mut output_places = vec![(None, p_ctrl)];
+    if let Some(p_error) = p_error {
+        output_places.push((Some("error".to_string()), p_error));
+    }
     // PROTOTYPE — register the "stream" handle → `p_{id}_stream` so a normal
     // edge from that handle (sourceHandle == "stream") wires the Signal place to
     // the downstream transition via `wire_edge`/`find_output_place`. No special
@@ -390,14 +426,23 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let job_template_lit = rhai_str_escape(&job_template);
     let id_lit = rhai_str_escape(&id);
 
+    // Rust panic/Result model (see lower_automated_step). Read outgoing edges
+    // BEFORE the `&mut *cx.ctx` reborrow.
+    // is_agent_tool: see lower_automated_step — a tool child forces p_error so
+    // its failure feeds the agent's on_tool_error wiring, never a crash.
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
+
     let ctx = &mut *cx.ctx;
 
     let p_input: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    let p_error: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+    let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
+        Some(ctx.state(format!("p_{id}_error"), format!("{label} - Error")))
+    } else {
+        None
+    };
 
     // Named reply-channel places the scheduler routes back to.
     let result_place = format!("p_{id}_sched_result");
@@ -440,21 +485,36 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         .auto_output("output", &p_output)
         .logic(r#"#{ output: res }"#);
 
-    ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+    // Scheduler failure → node error when wired; crash the net when unwired.
+    if let Some(p_error) = &p_error {
+        ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+            .auto_input("fail", &sched_failure)
+            .auto_output("error", p_error)
+            .logic(r#"#{ error: fail }"#);
+    } else {
+        let msg = format!(
+            "scheduled step '{label}' failed and no error handler is wired"
+        );
+        ctx.transition(
+            format!("t_{id}_to_error_deadend"),
+            format!("{label} - On Failure (no handler — crash net)"),
+        )
         .auto_input("fail", &sched_failure)
-        .auto_output("error", &p_error)
-        .logic(r#"#{ error: fail }"#);
+        .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+        .done();
+    }
 
     // Same data/control split + port registration tail as the inline path.
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
+    let mut output_places = vec![(None, p_ctrl)];
+    if let Some(p_error) = p_error {
+        output_places.push((Some("error".to_string()), p_error));
+    }
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![
-                (None, p_ctrl),
-                (Some("error".to_string()), p_error),
-            ],
+            output_places,
             input_places: HashMap::new(),
             input_handles: HashMap::new(),
         },
@@ -766,6 +826,15 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     let max_retries = retry_policy.max_retries;
     let id_lit = rhai_str_escape(&id);
 
+    // Rust panic/Result model. The pooled path ALWAYS routes the exhausted
+    // token through the held-consuming release transition (`t_to_error`) so
+    // capacity is freed on every exit (docs/14); the wired/unwired choice only
+    // changes what happens AFTER release — park into `p_error` (wired) or fall
+    // into a throwing panic transition (unwired). Read edges before reborrow.
+    // is_agent_tool: see lower_automated_step — a tool child forces p_error so
+    // its failure feeds the agent's on_tool_error wiring, never a crash.
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
+
     // grant_id literal builder (see the doc comment for the replay-safety
     // argument). Built inside the Rhai logic from `input._instance_id` so it
     // is a pure function of journaled token data.
@@ -790,8 +859,13 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    let p_error: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+    // `p_error` only when the error handle is wired; otherwise the failure
+    // exit releases capacity and then crashes the net via `t_{id}_panic`.
+    let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
+        Some(ctx.state(format!("p_{id}_error"), format!("{label} - Error")))
+    } else {
+        None
+    };
 
     // Grant reply lands here (consumable `state` place w/ bridge_reply_channel,
     // same proven-consumable kind the scheduled path uses for `sched_result`).
@@ -895,6 +969,11 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         // (p_held) persists across retries, so we do NOT re-claim per retry.
         // The retry topology's terminal `exhausted` edge drains to
         // `p_exhausted` (NOT `p_error`) so the hold can be released first.
+        // The pooled exhausted token MUST flow to `p_exhausted` (consumed by
+        // the held-releasing `t_to_error`), regardless of whether the node's
+        // error handle is wired — capacity release is non-negotiable (docs/14).
+        // So pass `error_handled = true` here (route to the sink); the
+        // wired/unwired panic decision is made downstream at `t_to_error`.
         build_retry_topology(
             ctx,
             &retry_policy,
@@ -902,7 +981,9 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             &lc.timed_out,
             &exec_inbox_retry,
             &lc.effect_errors,
-            &p_exhausted,
+            Some(&p_exhausted),
+            true,
+            label.as_str(),
         );
 
         (exec_inbox, lc)
@@ -967,23 +1048,55 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // point — it frees the capacity. The `dead_letter` handle is ignored (no
     // consumer), exactly as in the inline path.
     let _ = &handles.dead_letter;
-    ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
-        .auto_input("err", &p_exhausted)
-        .auto_input("held", &p_held)
-        .auto_output("error", &p_error)
-        .auto_output("release", &p_release_out)
-        .logic(r#"#{ error: err, release: #{ grant_id: held.grant_id } }"#);
+    if let Some(p_error) = &p_error {
+        // Wired: release capacity AND park the error token for the handler.
+        ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+            .auto_input("err", &p_exhausted)
+            .auto_input("held", &p_held)
+            .auto_output("error", p_error)
+            .auto_output("release", &p_release_out)
+            .logic(r#"#{ error: err, release: #{ grant_id: held.grant_id } }"#);
+    } else {
+        // Unwired: release capacity FIRST (every-exit-releases invariant), then
+        // crash the net. `t_to_error` consumes {p_exhausted, p_held}, emits the
+        // release, and parks the error token into `p_{id}_panic_in`; the
+        // separate `t_{id}_panic` then throws (permanent ScriptError → NetFailed).
+        // Park-then-throw keeps the release arc intact — capacity is freed
+        // before the unwind.
+        let p_panic_in: PlaceHandle<DynamicToken> = ctx.state(
+            format!("p_{id}_panic_in"),
+            format!("{label} - Panic (released, awaiting crash)"),
+        );
+        ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
+            .auto_input("err", &p_exhausted)
+            .auto_input("held", &p_held)
+            .auto_output("panic", &p_panic_in)
+            .auto_output("release", &p_release_out)
+            .logic(r#"#{ panic: err, release: #{ grant_id: held.grant_id } }"#);
+
+        let msg = format!(
+            "pooled step '{label}' failed and no error handler is wired"
+        );
+        ctx.transition(
+            format!("t_{id}_panic"),
+            format!("{label} - Crash Net (no handler)"),
+        )
+        .auto_input("panic", &p_panic_in)
+        .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+        .done();
+    }
 
     // Foundation split + port registration tail — identical to the inline path.
     let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
+    let mut output_places = vec![(None, p_ctrl)];
+    if let Some(p_error) = p_error {
+        output_places.push((Some("error".to_string()), p_error));
+    }
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![
-                (None, p_ctrl),
-                (Some("error".to_string()), p_error),
-            ],
+            output_places,
             input_places: HashMap::new(),
             input_handles: HashMap::new(),
         },

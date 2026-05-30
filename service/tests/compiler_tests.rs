@@ -4,10 +4,10 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    default_join_output_port, BranchCondition, DeploymentModel, ExecutionBackendType,
-    ExecutionSpecConfig, JoinMode, MergeStrategy, PhaseUpdateStatus, Port, Position,
-    TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph,
-    WorkflowNode, WorkflowNodeData,
+    default_join_output_port, BranchCondition, ContextStrategy, DeploymentModel,
+    ExecutionBackendType, ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef, PhaseUpdateStatus,
+    Port, Position, TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig,
+    ToolErrorPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -585,14 +585,294 @@ fn automated_step_produces_executor_lifecycle() {
     // failures now propagate upstream via `failure_out`. `dead_letter` is kept as
     // an unreachable terminal place for callers still holding the handle.
 
-    // Bridging transitions from lifecycle to node interface
+    // Bridging transition from lifecycle to node interface (success path).
     assert!(
         has_transition(&air, "t_auto_to_output"),
         "expected to_output transition"
     );
+
+    // UNWIRED error handle (no `source_handle == "error"` edge): under the Rust
+    // panic/Result model a permanent failure must CRASH the net rather than
+    // park a token in a dead-end `p_auto_error`. So:
+    //   (a) there is NO `p_auto_error` place, and
+    //   (b) the retry-exhausted transition `throw`s (permanent ScriptError →
+    //       NetFailed) and has no output arc into any error place.
     assert!(
-        has_transition(&air, "t_auto_to_error"),
-        "expected to_error transition"
+        !has_place(&air, "p_auto_error"),
+        "unwired AutomatedStep must NOT create a dead-end p_auto_error place"
+    );
+    // The exhausted transition is namespaced under the step's scoped prefix.
+    let exhausted = get_transition(&air, "auto/exhausted_deadend")
+        .expect("expected an exhausted_deadend crash transition for the unwired step");
+    assert!(
+        exhausted["logic"].to_string().contains("throw"),
+        "exhausted_deadend must throw to crash the net: {}",
+        exhausted["logic"]
+    );
+    assert!(
+        exhausted
+            .get("outputs")
+            .and_then(|o| o.as_array())
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "exhausted_deadend (panic) must have no output arc: {:?}",
+        exhausted.get("outputs")
+    );
+    // The plain `exhausted` (route-to-p_error) transition must NOT exist when unwired.
+    assert!(
+        !has_transition(&air, "auto/exhausted"),
+        "unwired step must not emit the route-to-error `exhausted` transition"
+    );
+}
+
+/// WIRED error handle: an edge whose `source_handle == "error"` leaves the
+/// AutomatedStep and enters a downstream handler. This is the handled
+/// `Result::Err` — today's topology must be PRESERVED byte-for-byte: the
+/// `p_auto_error` place EXISTS, the named `error` output port is registered,
+/// and the retry-exhausted token routes into `p_auto_error` (which then feeds
+/// the handler). NO panic transition is emitted.
+#[test]
+fn automated_step_wired_error_routes_to_handler() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "auto".to_string(),
+                node_type: "automated_step".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::AutomatedStep {
+                    label: "Run Script".to_string(),
+                    description: None,
+                    execution_spec: ExecutionSpecConfig {
+                        backend_type: ExecutionBackendType::Docker,
+                        entrypoint: None,
+                        config: json!({"image": "alpine:latest"}),
+                    },
+                    input: mekhan_service::models::template::Port::empty_input(),
+                    output: mekhan_service::models::template::default_output_port(
+                        mekhan_service::models::template::ExecutionBackendType::Docker,
+                    ),
+                    retry_policy: Default::default(),
+                    deployment_model: Default::default(),
+                    stream_output: false,
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+            // Downstream error handler — a plain End reached via the error edge.
+            end_node("handler"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "auto"),
+            edge("e2", "auto", "e"),
+            // The wired error path.
+            edge_with_handle("e_err", "auto", "handler", "error"),
+        ],
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "auto_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // The error place EXISTS (today's handled shape preserved).
+    assert!(
+        has_place(&air, "p_auto_error"),
+        "wired AutomatedStep keeps its p_auto_error place"
+    );
+    // The retry-exhausted token routes to p_auto_error (no throw).
+    let exhausted = get_transition(&air, "auto/exhausted")
+        .expect("wired step keeps the route-to-error `exhausted` transition");
+    assert!(
+        !exhausted["logic"].to_string().contains("throw"),
+        "wired exhausted must route, not throw: {}",
+        exhausted["logic"]
+    );
+    assert!(
+        !has_transition(&air, "auto/exhausted_deadend"),
+        "wired step must NOT emit a panic exhausted_deadend transition"
+    );
+    // The error edge wired a consumer onto p_auto_error feeding the handler:
+    // some transition consumes p_auto_error.
+    let consumes_error = transitions(&air).iter().any(|t| {
+        t["inputs"]
+            .as_array()
+            .map(|arcs| arcs.iter().any(|a| a["place"] == "p_auto_error"))
+            .unwrap_or(false)
+    });
+    assert!(
+        consumes_error,
+        "the wired error edge must attach a consumer to p_auto_error"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Start -> AgentNode -> End  (Rust panic/Result failure model)
+// ---------------------------------------------------------------------------
+
+/// Multi-turn (loop-path) AgentNode with no tools. `max_turns > 1` keeps it off
+/// the degenerate single-shot path (which delegates to `lower_automated_step`),
+/// so the agent-loop topology with its own executor-lifecycle failure
+/// transitions (`t_a_call_failed` / `_timed_out` / `_dead`) is exercised.
+fn agent_node(id: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "agent".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Agent {
+            label: "Researcher".to_string(),
+            description: None,
+            model: ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-haiku-4-5-20251001".to_string(),
+                api_key: None,
+                base_url: None,
+                resource_alias: None,
+                temperature: None,
+                max_tokens: None,
+            },
+            system_prompt: Some("You are a research assistant.".to_string()),
+            user_prompt: "Summarize the topic.".to_string(),
+            response_format: None,
+            images: vec![],
+            max_turns: 5,
+            stop_when: None,
+            context_strategy: ContextStrategy::None,
+            on_tool_error: ToolErrorPolicy::Feedback,
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+/// UNWIRED AgentNode error handle: a permanent LLM-call failure must CRASH the
+/// net (Rhai `throw` → permanent ScriptError → NetFailed) rather than strand a
+/// token in a dead-end `p_a_error`. So:
+///   (a) there is NO `p_a_error` place, and
+///   (b) the lifecycle-failure transitions (`t_a_call_failed` etc.) `throw` and
+///       have no output arc into any error place.
+#[test]
+fn agent_unwired_error_crashes_net() {
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), agent_node("a"), end_node("e")],
+        edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "agent_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Confirm we hit the loop path (not the degenerate single-shot delegate).
+    assert!(
+        has_place(&air, "p_a_state"),
+        "expected the agent-loop path (p_a_state); got degenerate?"
+    );
+
+    // (a) No dead-end error place.
+    assert!(
+        !has_place(&air, "p_a_error"),
+        "unwired AgentNode must NOT create a dead-end p_a_error place"
+    );
+
+    // (b) The LLM-call-failed transition throws and has no output arc.
+    let call_failed = get_transition(&air, "t_a_call_failed")
+        .expect("expected the t_a_call_failed lifecycle-failure transition");
+    assert!(
+        call_failed["logic"].to_string().contains("throw"),
+        "unwired t_a_call_failed must throw to crash the net: {}",
+        call_failed["logic"]
+    );
+    assert!(
+        call_failed
+            .get("outputs")
+            .and_then(|o| o.as_array())
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "unwired t_a_call_failed (panic) must have no output arc: {:?}",
+        call_failed.get("outputs")
+    );
+
+    // No transition anywhere produces into a p_a_error place.
+    let produces_error = transitions(&air).iter().any(|t| {
+        t["outputs"]
+            .as_array()
+            .map(|arcs| arcs.iter().any(|a| a["place"] == "p_a_error"))
+            .unwrap_or(false)
+    });
+    assert!(
+        !produces_error,
+        "no transition may produce into a (non-existent) p_a_error when unwired"
+    );
+}
+
+/// WIRED AgentNode error handle: an edge whose `source_handle == "error"` leaves
+/// the agent into a downstream handler. Today's topology is PRESERVED: the
+/// `p_a_error` place EXISTS, the lifecycle-failure transitions route into it
+/// (no throw), and the wired edge attaches a consumer onto `p_a_error`.
+#[test]
+fn agent_wired_error_routes_to_handler() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            agent_node("a"),
+            end_node("handler"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            edge_with_handle("e_err", "a", "handler", "error"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+    };
+
+    let air = compile_to_air(&graph, "agent_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // The error place EXISTS (today's handled shape preserved).
+    assert!(
+        has_place(&air, "p_a_error"),
+        "wired AgentNode keeps its p_a_error place"
+    );
+
+    // The lifecycle-failure transition routes to p_a_error (no throw).
+    let call_failed = get_transition(&air, "t_a_call_failed")
+        .expect("wired agent keeps the t_a_call_failed transition");
+    assert!(
+        !call_failed["logic"].to_string().contains("throw"),
+        "wired t_a_call_failed must route, not throw: {}",
+        call_failed["logic"]
+    );
+    let routes_to_error = call_failed["outputs"]
+        .as_array()
+        .map(|arcs| arcs.iter().any(|a| a["place"] == "p_a_error"))
+        .unwrap_or(false);
+    assert!(
+        routes_to_error,
+        "wired t_a_call_failed must produce into p_a_error: {:?}",
+        call_failed.get("outputs")
+    );
+
+    // The wired error edge attaches a consumer onto p_a_error feeding the handler.
+    let consumes_error = transitions(&air).iter().any(|t| {
+        t["inputs"]
+            .as_array()
+            .map(|arcs| arcs.iter().any(|a| a["place"] == "p_a_error"))
+            .unwrap_or(false)
+    });
+    assert!(
+        consumes_error,
+        "the wired error edge must attach a consumer to p_a_error"
     );
 }
 

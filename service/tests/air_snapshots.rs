@@ -37,6 +37,11 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "05-parallel-fanout",
     // 06-subworkflow: needs publish-time child resolution; intentionally skipped.
     "07-ocr-classify-extract",
+    // 08-failure-handling: wired error handle (handled Result::Err) — not snapshotted.
+    // 08c-unwired-failure: the panic-on-unconnected-failure fixture. Its golden pins
+    // the compiled shape — the exhausted transition `throw`s (permanent ScriptError ->
+    // NetFailed) and NO dead-end `p_risky_step_error` place exists.
+    "08c-unwired-failure",
     "08-failure-handling",
     "10-delay-timeout",
     "11-http-call",
@@ -208,6 +213,11 @@ fn snapshot_07_ocr_classify_extract() {
 #[test]
 fn snapshot_08_failure_handling() {
     run("08-failure-handling");
+}
+
+#[test]
+fn snapshot_08c_unwired_failure() {
+    run("08c-unwired-failure");
 }
 
 #[test]

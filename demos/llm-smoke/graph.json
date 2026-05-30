@@ -20,38 +20,24 @@
     },
     {
       "id": "ask",
-      "type": "automated_step",
+      "type": "agent",
       "position": {
         "x": 320,
         "y": 120
       },
       "data": {
-        "type": "automated_step",
+        "type": "agent",
         "label": "Ask LLM",
-        "description": "Send a fixed prompt to the local Ollama daemon and capture its response. Model must match the one Ollama has pulled (recipe default qwen3.5:9b \u2014 override here AND in `just dev ollama-up`'s OLLAMA_MODEL env var if changed). Qwen3 generates `<think>...</think>` blocks before the answer by default; expect them in the response field.",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "qwen3.5:9b",
-            "base_url": "http://localhost:11434",
-            "prompt": "Write a single sentence that explains what Ollama is to a software engineer.",
-            "max_tokens": 256,
-            "temperature": 0
-          }
+        "description": "Send a fixed prompt to the local Ollama daemon and capture its response. Model must match the one Ollama has pulled (recipe default qwen3.5:9b — override here AND in `just dev ollama-up`'s OLLAMA_MODEL env var if changed). Qwen3 generates `<think>...</think>` blocks before the answer by default; expect them in the response field.",
+        "model": {
+          "provider": "ollama",
+          "model": "qwen3.5:9b",
+          "baseUrl": "http://localhost:11434",
+          "maxTokens": 256,
+          "temperature": 0
         },
-        "output": {
-          "id": "out",
-          "label": "Response",
-          "fields": [
-            {
-              "name": "response",
-              "label": "Response",
-              "kind": "text",
-              "required": true
-            }
-          ]
-        }
+        "userPrompt": "Write a single sentence that explains what Ollama is to a software engineer.",
+        "maxTurns": 1
       }
     },
     {
@@ -86,7 +72,8 @@
       "source": "ask",
       "target": "end",
       "targetHandle": "in",
-      "type": "sequence"
+      "type": "sequence",
+      "sourceHandle": "out"
     }
   ]
 }

@@ -1,0 +1,87 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Parent (wired child)",
+        "initial": {
+          "id": "in",
+          "label": "Caller Input",
+          "fields": [
+            { "name": "payload", "label": "Payload", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "call_child",
+      "type": "sub_workflow",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Call Crashing Child",
+        "description": "Embeds 08c-unwired-failure (always crashes). Error handle WIRED to a Failure node.",
+        "templateId": "00000000-0000-0000-0000-0000000008c0",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "payload", "expression": "input.payload" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Child Result",
+          "fields": [
+            { "name": "summary", "label": "Summary", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "handle_fail",
+      "type": "failure",
+      "position": { "x": 600, "y": 320 },
+      "data": {
+        "type": "failure",
+        "label": "Handle Child Failure",
+        "failureMessage": "Child sub-workflow crashed (handled via wired error path)",
+        "errorResultMapping": [
+          { "targetField": "payload", "expression": "start.payload" }
+        ]
+      }
+    },
+    {
+      "id": "end_ok",
+      "type": "end",
+      "position": { "x": 900, "y": 80 },
+      "data": {
+        "type": "end",
+        "label": "Done (Happy Path)",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "\"ok\"" },
+          { "targetField": "summary", "expression": "call_child.summary" }
+        ]
+      }
+    },
+    {
+      "id": "end_fail",
+      "type": "end",
+      "position": { "x": 900, "y": 320 },
+      "data": {
+        "type": "end",
+        "label": "Done (Failure Path)",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "\"child_failed\"" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_call", "source": "start",      "target": "call_child", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_call_ok",    "source": "call_child", "target": "end_ok",     "targetHandle": "in", "type": "sequence" },
+    { "id": "e_call_fail",  "source": "call_child", "target": "handle_fail","targetHandle": "in", "sourceHandle": "error", "label": "on child failure", "type": "sequence" },
+    { "id": "e_fail_end",   "source": "handle_fail","target": "end_fail",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

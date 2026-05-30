@@ -2204,12 +2204,6 @@
       "type": "state"
     },
     {
-      "id": "p_httpcall_error",
-      "name": "HTTP Call - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_httpcall_output",
       "name": "HTTP Call - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -2476,7 +2470,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "httpcall/exhausted",
+      "id": "httpcall/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2500,32 +2494,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'HTTP Call' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_httpcall_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_6",
@@ -4050,7 +4022,7 @@
       ]
     },
     {
-      "id": "t_httpcall_to_error",
+      "id": "t_httpcall_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4074,32 +4046,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'HTTP Call' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "HTTP Call - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_httpcall_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "HTTP Call - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_httpcall_to_output",

@@ -37,6 +37,21 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     let is_map_body_terminal =
         super::is_map_body_terminal(cx.graph, cx.node.parent_id.as_deref(), cx.outgoing_edges);
 
+    // Rust panic/Result model (see lower_automated_step): a WIRED error handle
+    // routes child failure to a handler; an UNWIRED handle crashes the net
+    // (panic → NetFailed) rather than stranding the failure token in a dead-end
+    // `p_error`. Read outgoing edges before the `&mut *cx.ctx` reborrow.
+    // A SubWorkflow used as an agent tool has no authored `error` edge, so
+    // `error_path_wired` is false — but its failure MUST surface to the agent's
+    // on_tool_error machinery rather than dead-end-throw and crash the agent.
+    // Forcing `error_handled = true` mints the `p_error` output port + a
+    // t_{id}_fail (NOT t_{id}_fail_deadend) that routes the engine-bridged
+    // failure token into it; the agent's existing collect-error wiring
+    // (apply_agent_tool_wirings) then consumes it (Feedback → tool-result-error
+    // into the loop; Bubble → agent error output). Non-tool SubWorkflows are
+    // unaffected (is_agent_tool == false).
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
+
     // The child AIR is resolved + made-callable + frozen by the publish/preview
     // handler. Absent ⇒ this graph was compiled through a path that doesn't
     // resolve sub-workflows (back-compat `compile_to_air`); surface it keyed to
@@ -130,8 +145,11 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    let p_error: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+    let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
+        Some(ctx.state(format!("p_{id}_error"), format!("{label} - Error")))
+    } else {
+        None
+    };
 
     // Spawn request + confirmation.
     let p_request: PlaceHandle<DynamicToken> = ctx.state(
@@ -230,14 +248,28 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
             .logic(join_logic);
     }
 
-    // Failure: child failure → node error output.
-    ctx.transition(
-        format!("t_{id}_fail"),
-        format!("{label} - On Child Failure"),
-    )
-    .auto_input("reply", &p_failure)
-    .auto_output("error", &p_error)
-    .logic(r#"#{ error: reply }"#);
+    // Failure: child failure → node error output when wired; crash the net
+    // (panic → NetFailed) when unwired.
+    if let Some(p_error) = &p_error {
+        ctx.transition(
+            format!("t_{id}_fail"),
+            format!("{label} - On Child Failure"),
+        )
+        .auto_input("reply", &p_failure)
+        .auto_output("error", p_error)
+        .logic(r#"#{ error: reply }"#);
+    } else {
+        let msg = format!(
+            "sub-workflow '{label}' child failed and no error handler is wired"
+        );
+        ctx.transition(
+            format!("t_{id}_fail_deadend"),
+            format!("{label} - Child Failure (no handler — crash net)"),
+        )
+        .auto_input("reply", &p_failure)
+        .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+        .done();
+    }
 
     // Foundation tail. A Map body terminal forks the FULL envelope via
     // park_outputs (so detail.outputs + threaded-back __map_* leaves reach the
@@ -250,14 +282,15 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         split_outputs(ctx, id, label, &p_output)
     };
 
+    let mut output_places = vec![(None, p_ctrl)];
+    if let Some(p_error) = p_error {
+        output_places.push((Some("error".to_string()), p_error));
+    }
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![
-                (None, p_ctrl),
-                (Some("error".to_string()), p_error),
-            ],
+            output_places,
             input_places: HashMap::new(),
             input_handles: HashMap::new(),
         },

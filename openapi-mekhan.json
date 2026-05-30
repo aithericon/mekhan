@@ -6357,6 +6357,7 @@
           "dispatchMode",
           "resourceChannel",
           "schedulable",
+          "userAuthorable",
           "consumesDeclaredOutputs",
           "outputAuthoring",
           "configSchema",
@@ -6407,6 +6408,10 @@
               "type": "string"
             },
             "description": "`config` field names that hold secrets (rendered masked by the\ngeneric form)."
+          },
+          "userAuthorable": {
+            "type": "boolean",
+            "description": "Whether this backend can be selected as an AutomatedStep backend in\nthe node-authoring picker. `GET /api/v1/backends` only returns\nauthorable backends; this field is carried for frontend transparency."
           }
         }
       },
@@ -14249,11 +14254,20 @@
                 "$ref": "#/components/schemas/ContextStrategy",
                 "description": "Context-window management strategy. Defaults to `None` (no\ncompaction). Inert in the degenerate path."
               },
+              "deploymentModel": {
+                "$ref": "#/components/schemas/DeploymentModel",
+                "description": "Where/how each inference turn is dispatched — same field, defaults\nand semantics as `AutomatedStep::deployment_model`. On the\ndegenerate single-shot path it reaches the full\n`Executor{pool}` / `Scheduled{lease}` dispatch in\n`lower_automated_step`. The multi-turn loop path supports\n`Executor { pool: None }` only in v1 and compile-rejects the rest\n(mirrors the `context_strategy` gate); per-turn pooled/scheduled\nadmission is a follow-up (docs/12)."
+              },
               "description": {
                 "type": [
                   "string",
                   "null"
                 ]
+              },
+              "images": {
+                "type": "array",
+                "items": {},
+                "description": "Vision inputs attached to the user message — each `{\"path\":\n\"{{<slug>.<field>}}\", \"media_type\"?: \"...\"}`. Opaque JSON in the\nmodel layer (same as `response_format`); the executor LLM backend\nvalidates it and the compiler's LLM `ref_scanner` walks\n`images[i].path` for `{{<slug>.<field>}}` borrows exactly as it\ndoes for a single-shot LLM step. Empty by default. Carries the\nvision capability that lets the Agent fully subsume the retired\nLLM step."
               },
               "label": {
                 "type": "string"
@@ -14274,6 +14288,10 @@
               },
               "responseFormat": {
                 "description": "Optional response-format constraint (`{\"type\": \"text\"}` or\n`{\"type\": \"json_schema\", \"schema\": {...}}`). Opaque JSON in the\nmodel layer — the executor LLM backend validates it."
+              },
+              "retryPolicy": {
+                "$ref": "#/components/schemas/RetryPolicy",
+                "description": "Retry behaviour on a per-turn inference failure/timeout. Same shape\nand defaults as `AutomatedStep::retry_policy`. On the degenerate\n(single-shot) path this threads straight through to the synthesized\n`AutomatedStep(Llm)`. On the multi-turn loop path it caps the\nexecutor's per-turn `max_retries`."
               },
               "stopWhen": {
                 "type": [

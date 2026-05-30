@@ -204,6 +204,77 @@ fn escape_pointer_token(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
 }
 
+/// Cheap recursive scan: does `value` contain a `{"$ref": …}` anywhere?
+/// Lets the graph-level pass below skip the clone in the common case (no
+/// agent uses a `$ref` response_format).
+fn contains_ref(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.contains_key("$ref") || map.values().any(contains_ref)
+        }
+        serde_json::Value::Array(arr) => arr.iter().any(contains_ref),
+        _ => false,
+    }
+}
+
+/// Inline `#/definitions/<name>` refs in every `Agent` node's
+/// `response_format`, against the graph's own `definitions`.
+///
+/// WHY a graph-level pre-pass: an Agent has NO author-declared output port —
+/// its output is DERIVED from `response_format` at compile + editor time
+/// (`nodes::agent::output_ports` → `derive_output_port`, and the token-shape
+/// analysis that feeds the variable picker / guard scope). Those derivation
+/// entry points get only the node data, never the workflow `definitions`, so a
+/// `{"$ref": "#/definitions/X"}` response_format can't expand and the output
+/// silently collapses to the default `response/usage/...` envelope — making
+/// downstream `<agent>.<schema_field>` borrows dangle (`GuardUnresolved`). A
+/// hand-authored `AutomatedStep(Llm)` dodged this because its output port was
+/// server-derived + cached at authoring time; the Agent has no such cache.
+///
+/// Resolving the refs INTO the node data once, up front, makes every
+/// downstream consumer (token-shape/scope, `output_ports`, publish interface,
+/// lowering) see a self-contained schema with zero signature churn. Returns
+/// `Cow::Borrowed` (no clone) when no agent carries a ref. Strict: an
+/// unresolved ref is a `CompileError` so it surfaces at the same stage an
+/// `AutomatedStep` ref would.
+pub fn inline_agent_response_format_refs(
+    graph: &crate::models::template::WorkflowGraph,
+) -> Result<std::borrow::Cow<'_, crate::models::template::WorkflowGraph>, crate::compiler::error::CompileError>
+{
+    use crate::models::template::WorkflowNodeData;
+
+    let needs_inline = graph.nodes.iter().any(|n| {
+        matches!(
+            &n.data,
+            WorkflowNodeData::Agent { response_format: Some(rf), .. } if contains_ref(rf)
+        )
+    });
+    if !needs_inline {
+        return Ok(std::borrow::Cow::Borrowed(graph));
+    }
+
+    let mut owned = graph.clone();
+    let defs = &graph.definitions;
+    for node in &mut owned.nodes {
+        if let WorkflowNodeData::Agent {
+            response_format: Some(rf),
+            ..
+        } = &mut node.data
+        {
+            if contains_ref(rf) {
+                inline_refs(rf, defs).map_err(|e| {
+                    crate::compiler::error::CompileError::SchemaRefUnresolved {
+                        node_id: node.id.clone(),
+                        path: "response_format".to_string(),
+                        message: e.to_string(),
+                    }
+                })?;
+            }
+        }
+    }
+    Ok(std::borrow::Cow::Owned(owned))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

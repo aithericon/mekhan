@@ -136,7 +136,12 @@ pub(crate) struct AgentToolWiring {
     pub(crate) agent_label: String,
     pub(crate) p_state: PlaceHandle<DynamicToken>,
     pub(crate) p_state_in_tool: PlaceHandle<DynamicToken>,
-    pub(crate) p_error: PlaceHandle<DynamicToken>,
+    /// The agent's error place — `Some` only when the agent's error handle is
+    /// wired to a downstream handler. `None` (unwired) makes the per-tool
+    /// collect-bubble path crash the net (Rhai `throw`) instead of parking a
+    /// dead-end error token. Mirrors the `Option<PlaceHandle>` panic/Result
+    /// model in `lower_automated_step`.
+    pub(crate) p_error: Option<PlaceHandle<DynamicToken>>,
     pub(crate) tools: Vec<AgentToolEntry>,
 }
 
@@ -243,6 +248,15 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// nodes connected by edges, not visually nested children. The orchestrator
     /// builds the index once via `agent_tools_by_id` and passes the slice in.
     pub(crate) agent_tools: &'a [&'a WorkflowNode],
+    /// True when THIS node is the target of some agent's `tools`-handled edge
+    /// (i.e. it is used as an agent tool). A tool child has no authored `error`
+    /// outgoing edge, so without this flag `error_path_wired` would be false and
+    /// the child would lower a dead-end-throw failure path that crashes the
+    /// agent. Lowerings that can be used as tools (SubWorkflow, AutomatedStep)
+    /// OR this into their `error_handled` gate so the child mints a `p_error`
+    /// output port the agent's collect-error wiring consumes. Default false for
+    /// every non-tool node — all existing flows are unaffected.
+    pub(crate) is_agent_tool: bool,
     pub(crate) ctx: &'c mut Context,
     pub(crate) ports: &'c mut HashMap<String, NodePorts>,
     pub(crate) fixups: &'c mut PostProcess,
@@ -373,6 +387,7 @@ pub(crate) fn expand_node<'a>(
     incoming_edges: &'a [&'a WorkflowEdge],
     children: &'a [&'a WorkflowNode],
     agent_tools: &'a [&'a WorkflowNode],
+    is_agent_tool: bool,
     ctx: &mut Context,
     ports: &mut HashMap<String, NodePorts>,
     fixups: &mut PostProcess,
@@ -391,6 +406,7 @@ pub(crate) fn expand_node<'a>(
         incoming_edges,
         children,
         agent_tools,
+        is_agent_tool,
         ctx,
         ports,
         fixups,
@@ -593,6 +609,22 @@ pub(super) fn park_outputs(
 /// reads its body output via the parked `<body>.<field>` borrow once per
 /// iteration, with no K-fan-out correlation.
 ///
+/// True when this node's failure/error handle is WIRED to a downstream
+/// handler — i.e. some outgoing edge carries `source_handle == "error"`. This
+/// is the Rust `Result::Err`-is-handled predicate: a wired handle means the
+/// error token routes to a handler and the net continues; an unwired handle
+/// means a permanent failure must crash the net (a panic that unwinds to the
+/// top → `NetFailed`) rather than strand a token in a dead-end error place.
+///
+/// `outgoing_edges` are the edges whose `source == node_id` (see
+/// `graph::outgoing`), so `e.source == node_id` always holds here — we only
+/// inspect the handle.
+pub(super) fn error_path_wired(outgoing_edges: &[&WorkflowEdge]) -> bool {
+    outgoing_edges
+        .iter()
+        .any(|e| e.source_handle.as_deref() == Some("error"))
+}
+
 /// `outgoing_edges` are the edges whose `source == node_id` (see `graph::outgoing`).
 pub(super) fn is_map_body_terminal(
     graph: &WorkflowGraph,
@@ -736,21 +768,41 @@ pub(crate) fn apply_agent_tool_wirings(
                         .auto_input("state", &wiring.p_state_in_tool)
                         .auto_output("state", &wiring.p_state)
                         .logic_rhai(format!(
-                            r#"let s = state; let msg = if type_of(err) == "map" && "message" in err {{ err.message }} else {{ "tool error" }}; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: "tool '{tn}' failed: " + msg }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                            r#"let s = state; let inner = if type_of(err) == "map" {{ if "error" in err {{ err.error }} else if "err" in err {{ err.err }} else {{ err }} }} else {{ err }}; let msg = if type_of(inner) == "map" {{ if "message" in inner {{ inner.message }} else if "reason" in inner {{ inner.reason }} else {{ "tool error" }} }} else if type_of(inner) == "string" {{ inner }} else {{ "tool error" }}; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: "tool '{tn}' failed: " + msg }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
                         ))
                         .done();
                     }
-                    ToolErrorPolicy::Bubble => {
-                        ctx.transition(
-                            format!("t_{agent_id}_collect_{tn}_bubble"),
-                            format!("{agent_label} - Collect {tn} (error → bubble)"),
-                        )
-                        .auto_input("err", &child_err)
-                        .auto_input("state", &wiring.p_state_in_tool)
-                        .auto_output("error", &wiring.p_error)
-                        .logic_rhai("#{ error: err }".to_string())
-                        .done();
-                    }
+                    ToolErrorPolicy::Bubble => match &wiring.p_error {
+                        // Wired: surface the tool failure on the agent's error
+                        // handle (today's behavior, byte-identical).
+                        Some(p_error) => {
+                            ctx.transition(
+                                format!("t_{agent_id}_collect_{tn}_bubble"),
+                                format!("{agent_label} - Collect {tn} (error → bubble)"),
+                            )
+                            .auto_input("err", &child_err)
+                            .auto_input("state", &wiring.p_state_in_tool)
+                            .auto_output("error", p_error)
+                            .logic_rhai("#{ error: err }".to_string())
+                            .done();
+                        }
+                        // Unwired: the bubbled tool failure has no handler — crash
+                        // the net. Still consume `{err, state}` so nothing strands,
+                        // then `throw` (permanent ScriptError → NetFailed).
+                        None => {
+                            let msg = format!(
+                                "agent '{agent_id}' tool '{tn}' failed (bubble) and no error handler is wired"
+                            );
+                            ctx.transition(
+                                format!("t_{agent_id}_collect_{tn}_bubble"),
+                                format!("{agent_label} - Collect {tn} (error → crash net)"),
+                            )
+                            .auto_input("err", &child_err)
+                            .auto_input("state", &wiring.p_state_in_tool)
+                            .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+                            .done();
+                        }
+                    },
                 }
             }
         }
