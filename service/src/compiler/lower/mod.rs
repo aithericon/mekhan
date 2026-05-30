@@ -452,6 +452,7 @@ pub(crate) mod phase_update;
 pub(crate) mod progress_update;
 pub(crate) mod scope;
 pub(crate) mod start;
+pub(crate) mod stream_consumer;
 pub(crate) mod subworkflow;
 pub(crate) mod timeout;
 

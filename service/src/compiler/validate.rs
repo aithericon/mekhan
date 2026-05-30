@@ -4,7 +4,8 @@
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::models::template::{
-    FieldKind, WorkflowGraph, WorkflowNode, WorkflowNodeData, DEFAULT_BRANCH_HANDLE_ID,
+    FieldKind, StreamReduce, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    DEFAULT_BRANCH_HANDLE_ID,
 };
 use petgraph::visit::Bfs;
 use petgraph::{algo::is_cyclic_directed, Direction};
@@ -270,6 +271,61 @@ pub(crate) fn validate_timeout(
 /// with `targetHandle="body_out"` (same body-attach shape as Loop/Timeout).
 /// The structural body-presence check here is the publish-time mirror of the
 /// `MapEmpty` lowering gate (which counts `parent_id == map.id` children).
+/// Structural validation for a `StreamConsumer`: exactly one inbound `stream`
+/// handle edge + exactly one inbound `control` handle edge (the producer's data
+/// Signal place + its EOS/completion token). A `Custom` reduce expression must
+/// parse as a Rhai expression.
+pub(crate) fn validate_stream_consumer(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::StreamConsumer { reduce, .. } = &node.data else {
+        unreachable!("validate_stream_consumer on non-StreamConsumer variant");
+    };
+
+    // Count inbound edges per target handle — exactly one `stream` and one
+    // `control` are required (a missing/duplicated handle is a wiring bug).
+    let mut stream_edges = 0usize;
+    let mut control_edges = 0usize;
+    for edge in &graph.edges {
+        if edge.target != node.id {
+            continue;
+        }
+        match edge.target_handle.as_deref() {
+            Some("stream") => stream_edges += 1,
+            Some("control") => control_edges += 1,
+            _ => {}
+        }
+    }
+    if stream_edges != 1 {
+        return Err(CompileError::StreamConsumerMissingHandle {
+            node_id: node.id.clone(),
+            handle: "stream",
+        });
+    }
+    if control_edges != 1 {
+        return Err(CompileError::StreamConsumerMissingHandle {
+            node_id: node.id.clone(),
+            handle: "control",
+        });
+    }
+
+    // A `Custom` reduce expr is embedded verbatim into the gather transition's
+    // logic — syntax-check it here so a typo fails at publish, not at runtime.
+    if let StreamReduce::Custom { expr } = reduce {
+        let engine = rhai::Engine::new();
+        if let Err(err) = engine.compile_expression(expr) {
+            return Err(CompileError::StreamConsumerInvalidReduce {
+                node_id: node.id.clone(),
+                expr: expr.clone(),
+                detail: format!("{err}"),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_map(
     node: &WorkflowNode,
     graph: &WorkflowGraph,

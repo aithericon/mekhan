@@ -511,6 +511,19 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
 /// where `<element>` is the declared `output` port shape (or `Any` when no
 /// fields are declared). The `[*]` borrow surface reuses the Repeater Array
 /// machinery (see `is_parked_producer` + `parse_repeater_ref`).
+/// StreamConsumer emits a slim control token downstream (the reduced output is
+/// parked at `p_<id>_data`). Like Map, the gather adds no token leaves, so the
+/// control-token shape is the pre-node inbound shape.
+pub(crate) fn out_shape_stream_consumer(
+    node: &WorkflowNode,
+    in_shape: &TokenShape,
+) -> TokenShape {
+    let WorkflowNodeData::StreamConsumer { .. } = &node.data else {
+        unreachable!("out_shape_stream_consumer on non-StreamConsumer variant");
+    };
+    in_shape.clone()
+}
+
 pub(crate) fn out_shape_map(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
     let WorkflowNodeData::Map { output, .. } = &node.data else {
         unreachable!("out_shape_map on non-Map variant");

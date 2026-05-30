@@ -40,6 +40,7 @@ pub mod phase_update;
 pub mod progress_update;
 pub mod scope;
 pub mod start;
+pub mod stream_consumer;
 pub mod sub_workflow;
 pub mod timeout;
 pub mod trigger;
@@ -172,6 +173,7 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &progress_update::PROGRESS_UPDATE_DECL,
     &scope::SCOPE_DECL,
     &start::START_DECL,
+    &stream_consumer::STREAM_CONSUMER_DECL,
     &sub_workflow::SUB_WORKFLOW_DECL,
     &timeout::TIMEOUT_DECL,
     &trigger::TRIGGER_DECL,
@@ -197,6 +199,7 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::Loop { .. } => "loop",
         WorkflowNodeData::Scope { .. } => "scope",
         WorkflowNodeData::Map { .. } => "map",
+        WorkflowNodeData::StreamConsumer { .. } => "stream_consumer",
         WorkflowNodeData::PhaseUpdate { .. } => "phase_update",
         WorkflowNodeData::ProgressUpdate { .. } => "progress_update",
         WorkflowNodeData::Failure { .. } => "failure",
@@ -252,6 +255,10 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
         | WorkflowNodeData::Join { .. }
         | WorkflowNodeData::Scope { .. }
         | WorkflowNodeData::Map { .. }
+        // StreamConsumer's `reduce` Custom expr is Rhai but operates over the
+        // gathered `__r` array (not `input.<path>`-resolved like guards), so it
+        // is syntax-checked in `validate_stream_consumer`, not here.
+        | WorkflowNodeData::StreamConsumer { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
         | WorkflowNodeData::Trigger { .. }
@@ -547,6 +554,31 @@ mod tests {
         assert!(ins.iter().any(|p| p.id == "body_out"));
         let outs = (decl.output_ports)(&data);
         assert!(outs.iter().any(|p| p.id == "body_in"));
+    }
+
+    #[test]
+    fn lookup_by_variant_finds_stream_consumer() {
+        let data = WorkflowNodeData::StreamConsumer {
+            label: "sc".to_string(),
+            description: None,
+            result_var: "item".to_string(),
+            reduce: Default::default(),
+        };
+        let decl = lookup_by_variant(&data).expect("stream_consumer registered");
+        assert_eq!(decl.wire_name, "stream_consumer");
+        assert_eq!(decl.kind, NodeKind::StreamConsumer);
+        assert!(decl.lowers_to_air);
+        // Parks the reduced output at p_<id>_data, like Map.
+        assert!(decl.parks_data_envelope);
+        assert!(!decl.is_join);
+        assert!(decl.lower.is_some());
+        assert!(decl.validate.is_some());
+        // Two named inbound handles + a single out.
+        let ins = (decl.input_ports)(&data);
+        assert!(ins.iter().any(|p| p.id == "stream"));
+        assert!(ins.iter().any(|p| p.id == "control"));
+        let outs = (decl.output_ports)(&data);
+        assert!(outs.iter().any(|p| p.id == "out"));
     }
 
     #[test]
@@ -881,6 +913,7 @@ mod tests {
             "progress_update",
             "scope",
             "start",
+            "stream_consumer",
             "sub_workflow",
             "timeout",
             "trigger",

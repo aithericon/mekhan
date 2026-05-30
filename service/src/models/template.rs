@@ -429,6 +429,37 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<Port>,
     },
+    /// Drains a streaming producer AutomatedStep's per-call structured output
+    /// (`set_output(name, value)` events landing on the producer's Signal
+    /// place), reduces (folds) them, and gates completion behind an
+    /// end-of-stream counted barrier sized by `completed.detail.stream_count`.
+    ///
+    /// Two named inbound handles: `"stream"` carries the data chunks (one
+    /// token per `output_set` event); `"control"` carries the producer's
+    /// terminal completion token whose `detail.stream_count` is the expected
+    /// chunk count. The gather can't fire until all `N` chunks AND the count
+    /// token are present, so the net stays alive until the stream fully drains
+    /// — mirroring Map's counted-barrier gather, but counting on a runtime
+    /// `stream_count` instead of a scattered collection length. NO engine
+    /// change: the engine's two-pass binding already admits the count
+    /// coordinator arriving after results, and each stream-token injection
+    /// re-kicks the eval loop.
+    #[serde(rename = "stream_consumer")]
+    StreamConsumer {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Name of the field each chunk's value is read as. Documentary for
+        /// v1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);
+        /// a body-per-chunk variant would bind it as the process input.
+        #[serde(rename = "resultVar", default = "default_stream_result_var")]
+        result_var: String,
+        /// How the drained chunks are folded into the single output token.
+        /// Defaults to an ordered `Array` (sort by stream sequence, project
+        /// `.value`).
+        #[serde(default)]
+        reduce: StreamReduce,
+    },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token
     /// unchanged + emits an `executor-phase`-shaped breadcrumb) followed by a
@@ -687,6 +718,7 @@ impl WorkflowNodeData {
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
             | Self::Map { label, .. }
+            | Self::StreamConsumer { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
@@ -719,6 +751,7 @@ impl WorkflowNodeData {
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
             | Self::Map { description, .. }
+            | Self::StreamConsumer { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
@@ -1312,6 +1345,40 @@ fn default_max_turns() -> u32 {
 /// Default `Map.item_var` — body tokens bind the per-element value as `item`.
 fn default_item_var() -> String {
     "item".to_string()
+}
+
+/// Default `StreamConsumer.result_var` — chunks bind their value as `item`.
+fn default_stream_result_var() -> String {
+    "item".to_string()
+}
+
+/// How a `StreamConsumer` folds the drained chunks into its single output
+/// token. Tagged on `kind` (camelCase), mirroring the serde conventions of the
+/// other config enums. Each variant selects the gather barrier's reduce Rhai in
+/// `compiler/lower/stream_consumer.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StreamReduce {
+    /// Ordered array — sort chunks by stream sequence, project each `.value`
+    /// into a `Vec`. The default (matches Map's gather reduce).
+    Array,
+    /// String-join the chunk `.value`s (rendered as strings) in stream order,
+    /// optionally separated by `sep`.
+    Concat {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sep: Option<String>,
+    },
+    /// Numeric sum of the chunk `.value`s, in stream order.
+    Sum,
+    /// Author-supplied Rhai over `__r` (the sorted array of
+    /// `#{ value, __map_idx, __map_id }`), returning the reduced value.
+    Custom { expr: String },
+}
+
+impl Default for StreamReduce {
+    fn default() -> Self {
+        StreamReduce::Array
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
@@ -2811,11 +2878,12 @@ pub mod dsl {
                 | WorkflowNodeData::Failure { .. }
                 | WorkflowNodeData::Delay { .. }
                 | WorkflowNodeData::Timeout { .. }
-                | WorkflowNodeData::Map { .. } => {
+                | WorkflowNodeData::Map { .. }
+                | WorkflowNodeData::StreamConsumer { .. } => {
                     // DSL doesn't model the process-control / container nodes —
                     // GUI-authored for now. Same lossy-drop behaviour as
-                    // triggers. (Map's body sub-graph + itemsRef/resultVar have
-                    // no DSL schema yet.)
+                    // triggers. (Map's body sub-graph + itemsRef/resultVar, and
+                    // StreamConsumer's resultVar/reduce, have no DSL schema yet.)
                 }
                 WorkflowNodeData::Agent {
                     model,
