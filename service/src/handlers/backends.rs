@@ -33,7 +33,16 @@ use crate::models::template::{ExecutionBackendType, Port};
     tag = "backends",
 )]
 pub async fn list_backends() -> Json<Vec<BackendDescriptor>> {
-    Json(descriptors())
+    // Only authorable backends reach the editor's picker. Non-authorable
+    // variants (e.g. `llm`, authored via the Agent node instead) stay
+    // fully compilable/runnable — they're just not offered as a standalone
+    // AutomatedStep backend.
+    Json(
+        descriptors()
+            .into_iter()
+            .filter(|d| d.user_authorable)
+            .collect(),
+    )
 }
 
 /// POST /api/v1/backends/{name}/derive-output

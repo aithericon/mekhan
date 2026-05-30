@@ -32,7 +32,20 @@
                     "string",
                     "null"
                   ]
-                }
+                },
+                "finish_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "usage": {}
               },
               "type": "object"
             }
@@ -2897,7 +2910,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"classify\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_extract_text_content = __pluck(d_extract_text, [\"detail\", \"outputs\", \"content\"]); job_inputs.push(#{ \"name\": \"__borrow_extract_text__content\", \"source\": #{ \"type\": \"inline\", \"value\": __c_extract_text_content } });  d.spec = #{ \"backend\": \"llm\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"document_class\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/classify/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"classify\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_extract_text_content = __pluck(d_extract_text, [\"detail\", \"outputs\", \"content\"]); job_inputs.push(#{ \"name\": \"__borrow_extract_text__content\", \"source\": #{ \"type\": \"inline\", \"value\": __c_extract_text_content } });  d.spec = #{ \"backend\": \"llm\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"document_class\", \"required\": true}, #{\"kind\": \"json\", \"name\": \"usage\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"finish_reason\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"model\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/classify/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
         "type": "rhai"
       },
       "name": "Classify (LLM) - Prepare",

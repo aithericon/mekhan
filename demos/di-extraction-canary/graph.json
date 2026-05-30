@@ -3,7 +3,10 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": { "x": 52, "y": 60 },
+      "position": {
+        "x": 52,
+        "y": 60
+      },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -13,8 +16,14 @@
         },
         "concurrency": "allow",
         "payloadMapping": [
-          { "targetField": "document_file", "expression": "document_file" },
-          { "targetField": "document_id", "expression": "document_id" }
+          {
+            "targetField": "document_file",
+            "expression": "document_file"
+          },
+          {
+            "targetField": "document_id",
+            "expression": "document_id"
+          }
         ],
         "enabled": true
       }
@@ -22,7 +31,10 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 52, "y": 330 },
+      "position": {
+        "x": 52,
+        "y": 330
+      },
       "data": {
         "type": "start",
         "label": "Start",
@@ -50,51 +62,45 @@
     },
     {
       "id": "extract",
-      "type": "automated_step",
-      "position": { "x": 396, "y": 330 },
+      "type": "agent",
+      "position": {
+        "x": 396,
+        "y": 330
+      },
       "data": {
-        "type": "automated_step",
+        "type": "agent",
         "label": "Extract (vision-only, single call)",
         "description": "Classification + extraction in ONE vision call. No OCR layer, no per-field citations, no bbox grounding. Mirrors the clinic's `t_extract` transition (Vision, qwen3.6:35b-a3b). Locally we use llama3.2-vision:11b as the vision substitute — swap to the heavier MoE for parity benchmarks.",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "llama3.2-vision:11b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 4096,
-            "system_prompt": "You are a medical document analyzer. Extract structured fields from the input image. Return JSON conforming to this schema: { document_type, document_date, fields[{key, value, confidence}], suggested_actions[], confidence_score, page_count }. Use snake_case enum variants for document_type: lab_result | referral_letter | prescription | insurance_form | imaging_report | discharge_summary | consultation_note | invoice | consent_form | other. document_date must be YYYY-MM-DD or null. Each field's confidence is a float 0.0-1.0. Return only the JSON object, no commentary.",
-            "prompt": "Analyze this medical document image and return the JSON object as specified.",
-            "images": [
-              { "path": "{{ start.document_file }}" }
-            ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "$ref": "#/definitions/RawExtraction"
-              }
-            }
+        "model": {
+          "provider": "ollama",
+          "model": "llama3.2-vision:11b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 4096
+        },
+        "userPrompt": "Analyze this medical document image and return the JSON object as specified.",
+        "systemPrompt": "You are a medical document analyzer. Extract structured fields from the input image. Return JSON conforming to this schema: { document_type, document_date, fields[{key, value, confidence}], suggested_actions[], confidence_score, page_count }. Use snake_case enum variants for document_type: lab_result | referral_letter | prescription | insurance_form | imaging_report | discharge_summary | consultation_note | invoice | consent_form | other. document_date must be YYYY-MM-DD or null. Each field's confidence is a float 0.0-1.0. Return only the JSON object, no commentary.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "$ref": "#/definitions/RawExtraction"
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Raw extraction",
-          "fields": [
-            { "name": "document_type", "label": "Document type", "kind": "text", "required": false },
-            { "name": "document_date", "label": "Document date", "kind": "text", "required": false },
-            { "name": "fields", "label": "Fields", "kind": "json", "required": false },
-            { "name": "suggested_actions", "label": "Suggested actions", "kind": "json", "required": false },
-            { "name": "confidence_score", "label": "Confidence", "kind": "number", "required": false },
-            { "name": "page_count", "label": "Page count", "kind": "number", "required": false }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
       "id": "validate",
       "type": "automated_step",
-      "position": { "x": 740, "y": 330 },
+      "position": {
+        "x": 740,
+        "y": 330
+      },
       "data": {
         "type": "automated_step",
         "label": "Validate (shape coerce)",
@@ -115,14 +121,54 @@
           "id": "out",
           "label": "ExtractionResult",
           "fields": [
-            { "name": "document_type", "label": "Document type", "kind": "text", "required": true },
-            { "name": "document_date", "label": "Document date", "kind": "text", "required": false },
-            { "name": "fields", "label": "Fields", "kind": "json", "required": true },
-            { "name": "suggested_actions", "label": "Suggested actions", "kind": "json", "required": true },
-            { "name": "confidence_score", "label": "Confidence", "kind": "number", "required": true },
-            { "name": "page_count", "label": "Page count", "kind": "number", "required": true },
-            { "name": "ai_model", "label": "AI model", "kind": "text", "required": true },
-            { "name": "processing_time_ms", "label": "Processing time (ms)", "kind": "number", "required": true }
+            {
+              "name": "document_type",
+              "label": "Document type",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "document_date",
+              "label": "Document date",
+              "kind": "text",
+              "required": false
+            },
+            {
+              "name": "fields",
+              "label": "Fields",
+              "kind": "json",
+              "required": true
+            },
+            {
+              "name": "suggested_actions",
+              "label": "Suggested actions",
+              "kind": "json",
+              "required": true
+            },
+            {
+              "name": "confidence_score",
+              "label": "Confidence",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "page_count",
+              "label": "Page count",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "ai_model",
+              "label": "AI model",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "processing_time_ms",
+              "label": "Processing time (ms)",
+              "kind": "number",
+              "required": true
+            }
           ]
         }
       }
@@ -130,33 +176,88 @@
     {
       "id": "end-ok",
       "type": "end",
-      "position": { "x": 1084, "y": 330 },
+      "position": {
+        "x": 1084,
+        "y": 330
+      },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "document_id", "expression": "start.document_id" },
-          { "targetField": "document_type", "expression": "validate.document_type" },
-          { "targetField": "document_date", "expression": "validate.document_date" },
-          { "targetField": "fields", "expression": "validate.fields" },
-          { "targetField": "suggested_actions", "expression": "validate.suggested_actions" },
-          { "targetField": "confidence_score", "expression": "validate.confidence_score" },
-          { "targetField": "page_count", "expression": "validate.page_count" },
-          { "targetField": "ai_model", "expression": "validate.ai_model" }
+          {
+            "targetField": "document_id",
+            "expression": "start.document_id"
+          },
+          {
+            "targetField": "document_type",
+            "expression": "validate.document_type"
+          },
+          {
+            "targetField": "document_date",
+            "expression": "validate.document_date"
+          },
+          {
+            "targetField": "fields",
+            "expression": "validate.fields"
+          },
+          {
+            "targetField": "suggested_actions",
+            "expression": "validate.suggested_actions"
+          },
+          {
+            "targetField": "confidence_score",
+            "expression": "validate.confidence_score"
+          },
+          {
+            "targetField": "page_count",
+            "expression": "validate.page_count"
+          },
+          {
+            "targetField": "ai_model",
+            "expression": "validate.ai_model"
+          }
         ]
       }
     }
   ],
   "edges": [
-    { "id": "e-trigger-start", "source": "trigger-intake", "target": "start", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-start-extract", "source": "start", "target": "extract", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-extract-validate", "source": "extract", "target": "validate", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-validate-end", "source": "validate", "target": "end-ok", "targetHandle": "in", "type": "sequence" }
+    {
+      "id": "e-trigger-start",
+      "source": "trigger-intake",
+      "target": "start",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-start-extract",
+      "source": "start",
+      "target": "extract",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-extract-validate",
+      "source": "extract",
+      "target": "validate",
+      "targetHandle": "in",
+      "type": "sequence",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e-validate-end",
+      "source": "validate",
+      "target": "end-ok",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
   ],
   "definitions": {
     "RawExtraction": {
       "type": "object",
-      "required": ["document_type", "fields"],
+      "required": [
+        "document_type",
+        "fields"
+      ],
       "properties": {
         "document_type": {
           "type": "string",
@@ -173,26 +274,52 @@
             "other"
           ]
         },
-        "document_date": { "type": ["string", "null"] },
+        "document_date": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "fields": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["key", "value", "confidence"],
+            "required": [
+              "key",
+              "value",
+              "confidence"
+            ],
             "properties": {
-              "key": { "type": "string" },
-              "value": { "type": "string" },
-              "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
             },
             "additionalProperties": false
           }
         },
         "suggested_actions": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
-        "confidence_score": { "type": "number", "minimum": 0, "maximum": 1 },
-        "page_count": { "type": "integer", "minimum": 1 }
+        "confidence_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "page_count": {
+          "type": "integer",
+          "minimum": 1
+        }
       },
       "additionalProperties": false
     }

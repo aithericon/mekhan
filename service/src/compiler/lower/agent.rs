@@ -17,6 +17,7 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         max_turns,
         stop_when,
         context_strategy,
+        deployment_model,
         ..
     } = &cx.node.data
     else {
@@ -71,6 +72,25 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         )));
     }
 
+    // Deployment gate: the multi-turn loop path inlines one plain
+    // `executor_lifecycle` per turn (`Executor { pool: None }`). Pooled
+    // admission (`Executor { pool: Some }`) and external scheduling
+    // (`Scheduled { .. }`) need that lease/claim topology interleaved with
+    // the turn loop — a follow-up (docs/12). The degenerate single-shot path
+    // ALREADY supports all of them (it routes through `lower_automated_step`),
+    // so this gate only bites multi-turn / tool-bearing agents. Reject at
+    // compile so a mis-authored template fails at publish, not mid-loop —
+    // same idiom as the `context_strategy` gate above.
+    if !matches!(deployment_model, DeploymentModel::Executor { pool: None }) {
+        return Err(CompileError::Compilation(format!(
+            "agent node '{}': deployment_model {:?} is not yet supported for \
+             multi-turn / tool-bearing agents (v1 runs loop turns on the plain \
+             executor pool only). Use a single-shot agent (maxTurns=1, no \
+             stopWhen, no tools) for pooled/scheduled inference.",
+            cx.node.id, deployment_model
+        )));
+    }
+
     lower_agent_loop(cx, &tool_children)
 }
 
@@ -87,6 +107,9 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         system_prompt,
         user_prompt,
         response_format,
+        images,
+        retry_policy,
+        deployment_model,
         ..
     } = &cx.node.data
     else {
@@ -98,8 +121,39 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         system_prompt.as_deref(),
         user_prompt,
         response_format.as_ref(),
+        images,
         &[],
     );
+
+    // Derive the output port from the LLM config (response_format) — NOT the
+    // bare `default_output_port`. A `response_format: json_schema` agent must
+    // unpack the schema's fields (e.g. `document_class`), exactly as a
+    // hand-authored LLM step did (its server-derived `output` was cached in
+    // the graph). Mirrors `nodes::agent::output_ports`; without it the
+    // degenerate path emits the default `response/usage/...` envelope and
+    // downstream `<agent>.<schema_field>` borrows dangle. Falls back to the
+    // default envelope when no response_format is set.
+    //
+    // Resolve `{"$ref": "#/definitions/…"}` against the workflow `definitions`
+    // on a COPY before deriving — `derive_output_port` can't see the ref
+    // target otherwise and would silently fall back to the default envelope
+    // (this is exactly what bit `classify-and-group-v1`, whose schema is a
+    // bare `$ref`). The virtual node below keeps the UNRESOLVED config so the
+    // delegated `lower_automated_step` inlines refs the same way a
+    // hand-authored LLM step's config is inlined — preserving the
+    // byte-identical contract. Ref-resolution failures here are non-fatal: the
+    // derive falls back to the default envelope and `lower_automated_step`'s
+    // own `inline_refs` surfaces the real error with a precise JSON path.
+    let derived_output = {
+        let mut resolved = llm_config.clone();
+        let _ = crate::compiler::schema_refs::inline_refs(&mut resolved, cx.definitions);
+        crate::backends::lookup(ExecutionBackendType::Llm)
+            .and_then(|d| d.derive_output_port)
+            .map(|f| f(&resolved))
+            .unwrap_or_else(|| {
+                crate::models::template::default_output_port(ExecutionBackendType::Llm)
+            })
+    };
 
     let virtual_node = WorkflowNode {
         id: cx.node.id.clone(),
@@ -115,9 +169,14 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 config: llm_config,
             },
             input: crate::models::template::Port::empty_input(),
-            output: crate::models::template::default_output_port(ExecutionBackendType::Llm),
-            retry_policy: Default::default(),
-            deployment_model: Default::default(),
+            output: derived_output,
+            // Single-shot agents inherit the full AutomatedStep dispatch — the
+            // author's `deployment_model` (Executor{pool} / Scheduled{lease})
+            // and `retry_policy` flow straight through `lower_automated_step`.
+            // This is what makes the degenerate Agent a complete replacement
+            // for the retired hand-authored LLM step.
+            retry_policy: *retry_policy,
+            deployment_model: deployment_model.clone(),
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,
@@ -200,9 +259,11 @@ fn lower_agent_loop(
         system_prompt,
         user_prompt,
         response_format,
+        images,
         max_turns,
         stop_when,
         on_tool_error,
+        retry_policy,
         ..
     } = &cx.node.data
     else {
@@ -211,6 +272,11 @@ fn lower_agent_loop(
     let id = cx.node.id.clone();
     let max_turns = *max_turns;
     let on_tool_error = *on_tool_error;
+    // Per-turn executor retry budget. The loop's own failure path
+    // (`t_call_failed`/`_timed_out`/`_dead` → p_error) still catches a turn
+    // that exhausts its retries; this just lets a flaky single turn retry
+    // before the whole agent bubbles an error.
+    let per_turn_max_retries = retry_policy.max_retries;
 
     // Map-body-terminal gate: when this agent is the terminal child of a Map
     // body it must fork its FULL envelope (park data AND forward the whole
@@ -301,6 +367,7 @@ fn lower_agent_loop(
         system_prompt.as_deref(),
         user_prompt,
         response_format.as_ref(),
+        images,
         &tool_schemas,
     );
 
@@ -478,7 +545,7 @@ fn lower_agent_loop(
     // clear it on the parked state: the worker folds it into the turn-N blob
     // (which next turn reads as its base), so it must not be re-sent.
     .logic_rhai(format!(
-        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ {overlay_build} d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = {per_turn_max_retries}; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ {overlay_build} d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 

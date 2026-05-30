@@ -213,7 +213,9 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				userPrompt: '',
 				maxTurns: 1,
 				contextStrategy: 'none',
-				onToolError: 'feedback'
+				onToolError: 'feedback',
+				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 },
+				deploymentModel: { mode: 'executor' }
 			};
 	}
 }
