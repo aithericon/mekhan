@@ -1210,6 +1210,24 @@ impl TestScenario {
         scenario
     }
 
+    /// A scenario with a single transition that fails PERMANENTLY when fired:
+    /// its Rhai logic references an undefined variable, raising a ScriptError
+    /// the evaluation layer classifies as permanent (→ `failure_reached` →
+    /// `NetFailed`). `[input] → (boom: throws) → [out]`. The input is pre-seeded
+    /// so a single eval pass reaches the failure. Used to exercise the
+    /// child-NetFailed → parent failure-bridge path.
+    pub fn with_failing_transition() -> Self {
+        let mut ctx = aithericon_sdk::Context::new("failing_scenario");
+        let input = ctx.state::<aithericon_sdk::DynamicToken>("input", "Input");
+        let out = ctx.state::<aithericon_sdk::DynamicToken>("out", "Out");
+        ctx.transition("boom", "Boom")
+            .auto_input("inp", &input)
+            .auto_output("out", &out)
+            .logic("#{ out: undefined_variable }");
+        ctx.seed(&input, vec![aithericon_sdk::DynamicToken::from(serde_json::json!({}))]);
+        Self::from_sdk(ctx.build())
+    }
+
     /// Claim pattern scenario for testing claim-based resource coordination.
     ///
     /// This creates a `ClaimPattern` component with `.with_mock_adapters()`,

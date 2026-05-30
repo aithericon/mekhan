@@ -1,0 +1,59 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Parent (unwired child)",
+        "initial": {
+          "id": "in",
+          "label": "Caller Input",
+          "fields": [
+            { "name": "payload", "label": "Payload", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "call_child",
+      "type": "sub_workflow",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "sub_workflow",
+        "label": "Call Crashing Child",
+        "description": "Embeds 08c-unwired-failure, which always crashes. Error handle intentionally UNWIRED.",
+        "templateId": "00000000-0000-0000-0000-0000000008c0",
+        "versionPin": { "mode": "latest" },
+        "inputMapping": [
+          { "targetField": "payload", "expression": "input.payload" }
+        ],
+        "output": {
+          "id": "out",
+          "label": "Child Result",
+          "fields": [
+            { "name": "summary", "label": "Summary", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 640, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done (never reached)",
+        "resultMapping": [
+          { "targetField": "summary", "expression": "call_child.summary" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_call", "source": "start",      "target": "call_child", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_call_end",   "source": "call_child", "target": "end",        "targetHandle": "in", "type": "sequence" }
+  ]
+}

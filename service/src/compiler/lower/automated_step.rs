@@ -137,7 +137,12 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // net continues); an UNWIRED handle means a permanent failure crashes the
     // net (unhandled panic → NetFailed). Read `cx.outgoing_edges` BEFORE the
     // `&mut *cx.ctx` reborrow below (which mutably borrows `cx`).
-    let error_handled = super::error_path_wired(cx.outgoing_edges);
+    // An AutomatedStep used as an agent tool has no authored `error` edge, so
+    // force `error_handled = true` (mint `p_error`) so the engine-bridged tool
+    // failure surfaces to the agent's on_tool_error wiring instead of
+    // dead-end-throwing and crashing the agent — same rationale as the
+    // SubWorkflow tool path.
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
     let panic_label = label.clone();
 
     let ctx = &mut *cx.ctx;
@@ -372,7 +377,9 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
 
     // Rust panic/Result model (see lower_automated_step). Read outgoing edges
     // BEFORE the `&mut *cx.ctx` reborrow.
-    let error_handled = super::error_path_wired(cx.outgoing_edges);
+    // is_agent_tool: see lower_automated_step — a tool child forces p_error so
+    // its failure feeds the agent's on_tool_error wiring, never a crash.
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
 
     let ctx = &mut *cx.ctx;
 
@@ -773,7 +780,9 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // capacity is freed on every exit (docs/14); the wired/unwired choice only
     // changes what happens AFTER release — park into `p_error` (wired) or fall
     // into a throwing panic transition (unwired). Read edges before reborrow.
-    let error_handled = super::error_path_wired(cx.outgoing_edges);
+    // is_agent_tool: see lower_automated_step — a tool child forces p_error so
+    // its failure feeds the agent's on_tool_error wiring, never a crash.
+    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
 
     // grant_id literal builder (see the doc comment for the replay-safety
     // argument). Built inside the Rhai logic from `input._instance_id` so it

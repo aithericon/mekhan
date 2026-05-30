@@ -248,6 +248,15 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// nodes connected by edges, not visually nested children. The orchestrator
     /// builds the index once via `agent_tools_by_id` and passes the slice in.
     pub(crate) agent_tools: &'a [&'a WorkflowNode],
+    /// True when THIS node is the target of some agent's `tools`-handled edge
+    /// (i.e. it is used as an agent tool). A tool child has no authored `error`
+    /// outgoing edge, so without this flag `error_path_wired` would be false and
+    /// the child would lower a dead-end-throw failure path that crashes the
+    /// agent. Lowerings that can be used as tools (SubWorkflow, AutomatedStep)
+    /// OR this into their `error_handled` gate so the child mints a `p_error`
+    /// output port the agent's collect-error wiring consumes. Default false for
+    /// every non-tool node — all existing flows are unaffected.
+    pub(crate) is_agent_tool: bool,
     pub(crate) ctx: &'c mut Context,
     pub(crate) ports: &'c mut HashMap<String, NodePorts>,
     pub(crate) fixups: &'c mut PostProcess,
@@ -378,6 +387,7 @@ pub(crate) fn expand_node<'a>(
     incoming_edges: &'a [&'a WorkflowEdge],
     children: &'a [&'a WorkflowNode],
     agent_tools: &'a [&'a WorkflowNode],
+    is_agent_tool: bool,
     ctx: &mut Context,
     ports: &mut HashMap<String, NodePorts>,
     fixups: &mut PostProcess,
@@ -396,6 +406,7 @@ pub(crate) fn expand_node<'a>(
         incoming_edges,
         children,
         agent_tools,
+        is_agent_tool,
         ctx,
         ports,
         fixups,
@@ -719,7 +730,7 @@ pub(crate) fn apply_agent_tool_wirings(
                         .auto_input("state", &wiring.p_state_in_tool)
                         .auto_output("state", &wiring.p_state)
                         .logic_rhai(format!(
-                            r#"let s = state; let msg = if type_of(err) == "map" && "message" in err {{ err.message }} else {{ "tool error" }}; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: "tool '{tn}' failed: " + msg }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
+                            r#"let s = state; let inner = if type_of(err) == "map" {{ if "error" in err {{ err.error }} else if "err" in err {{ err.err }} else {{ err }} }} else {{ err }}; let msg = if type_of(inner) == "map" {{ if "message" in inner {{ inner.message }} else if "reason" in inner {{ inner.reason }} else {{ "tool error" }} }} else if type_of(inner) == "string" {{ inner }} else {{ "tool error" }}; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: "tool '{tn}' failed: " + msg }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
                         ))
                         .done();
                     }
