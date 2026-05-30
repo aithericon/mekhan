@@ -69,6 +69,20 @@ export type FieldSpec = {
 	// ── secret / password ─────────────────────────────────────────
 	secret?: boolean;
 	secretPlaceholder?: string;
+
+	// ── mono / testid ─────────────────────────────────────────────
+	/**
+	 * When true, render the `text` input with `font-mono text-sm`.
+	 * Applied only on the 'text' branch; the 'json' branch already has its own
+	 * unconditional font-mono class.
+	 */
+	mono?: boolean;
+	/**
+	 * When set, applied as `data-testid` on the rendered widget element.
+	 * Omitted (not rendered as an attribute) when undefined.
+	 * Applied on at least the `text` and `textarea` branches.
+	 */
+	testid?: string;
 };
 
 // ---------------------------------------------------------------------------

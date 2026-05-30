@@ -131,7 +131,8 @@
 	<Input
 		id={`field-${spec.name}`}
 		type={secret ? 'password' : 'text'}
-		class="text-sm"
+		class={spec.mono ? 'font-mono text-sm' : 'text-sm'}
+		data-testid={spec.testid}
 		value={strVal}
 		placeholder={secret ? (secretPlaceholder ?? spec.placeholder) : spec.placeholder}
 		disabled={readonly}
@@ -141,6 +142,7 @@
 {:else if spec.kind === 'textarea'}
 	<Textarea
 		id={`field-${spec.name}`}
+		data-testid={spec.testid}
 		value={strVal}
 		rows={spec.rows ?? 2}
 		placeholder={spec.placeholder}

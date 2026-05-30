@@ -150,8 +150,13 @@
 			readonly
 		};
 		// Per-kind extras
-		if (spec.kind === 'text' || spec.kind === 'textarea') {
-			return { ...base, placeholder: spec.placeholder, rows: (spec as { rows?: number }).rows };
+		if (spec.kind === 'text') {
+			const t = spec as { placeholder?: string; mono?: boolean; valueDefault?: string };
+			return { ...base, placeholder: t.placeholder, mono: t.mono };
+		}
+		if (spec.kind === 'textarea') {
+			const ta = spec as { rows?: number; placeholder?: string; testid?: string };
+			return { ...base, placeholder: ta.placeholder, rows: ta.rows, testid: ta.testid };
 		}
 		if (spec.kind === 'number') {
 			const n = spec as NumberField;
@@ -178,7 +183,8 @@
 			return { ...base, penColor: (spec as { penColor?: string }).penColor };
 		}
 		if (spec.kind === 'json') {
-			return { ...base, rows: (spec as { rows?: number }).rows };
+			const j = spec as { rows?: number; placeholder?: string };
+			return { ...base, rows: j.rows, placeholder: j.placeholder };
 		}
 		// bool / any other canonical kind — no extra props needed
 		return base;
@@ -350,20 +356,18 @@
 	</div>
 
 {:else if spec.kind === 'textarea'}
-	<!-- Value-input: textarea — rendered directly (not via FieldWidget) so we can
-	     apply data-testid for e2e parity, clearToUndefined coercion, and
-	     InsertRefButton. FieldWidget does not thread data-testid through. -->
+	<!-- Value-input: textarea — delegates to FieldWidget (which now threads
+	     data-testid via fieldWidgetSpec.testid). Config-spec concerns preserved:
+	     - clearToUndefined: wrap onchange to collapse '' → undefined.
+	     - InsertRefButton: rendered below when scope.length > 0. -->
 	{@const clearToUndefined = spec.clearToUndefined ?? false}
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
-		<Textarea
-			id={fieldId}
+		<FieldWidget
+			spec={fieldWidgetSpec}
 			value={(value as string) ?? ''}
-			rows={spec.rows}
-			placeholder={spec.placeholder}
-			disabled={readonly}
-			data-testid={spec.testid}
-			oninput={(e) => {
-				const v = (e.currentTarget as HTMLTextAreaElement).value;
+			{readonly}
+			onchange={(next) => {
+				const v = next as string;
 				onchange(clearToUndefined && v === '' ? undefined : v);
 			}}
 		/>
@@ -423,27 +427,18 @@
 	</FormField>
 
 {:else if spec.kind === 'text'}
-	<!-- Value-input: text with optional mono styling and InsertRef affordance. -->
+	<!-- Value-input: text — delegates to FieldWidget (which now applies font-mono
+	     when fieldWidgetSpec.mono is true). Config-spec concerns preserved:
+	     - valueDefault read-through: value = (data[bind] ?? spec.valueDefault) passed in.
+	     - InsertRefButton: rendered below when scope.length > 0.
+	     - mono class: carried via fieldWidgetSpec.mono → FieldWidget applies it. -->
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
-		{#if spec.mono}
-			<!-- mono text: render Input directly to apply font-mono class -->
-			<Input
-				id={fieldId}
-				type="text"
-				class="font-mono text-sm"
-				value={(value as string | undefined) ?? spec.valueDefault ?? ''}
-				placeholder={spec.placeholder}
-				disabled={readonly}
-				oninput={(e) => onchange((e.currentTarget as HTMLInputElement).value)}
-			/>
-		{:else}
-			<FieldWidget
-				spec={fieldWidgetSpec}
-				value={(value as string | undefined) ?? spec.valueDefault ?? value}
-				{readonly}
-				onchange={(next) => onchange(next)}
-			/>
-		{/if}
+		<FieldWidget
+			spec={fieldWidgetSpec}
+			value={(value as string | undefined) ?? (spec as { valueDefault?: string }).valueDefault ?? ''}
+			{readonly}
+			onchange={(next) => onchange(next)}
+		/>
 		{#if scope.length > 0}
 			<div class="mt-1.5">
 				<InsertRefButton
