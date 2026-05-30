@@ -219,7 +219,8 @@ impl ExecutorSidecar for SidecarService {
         request: Request<proto::SetOutputRequest>,
     ) -> Result<Response<proto::SidecarResponse>, Status> {
         let req = request.into_inner();
-        let (status, error_message) = handle_set_output(&req, &self.state).await;
+        let (status, error_message) =
+            handle_set_output(&req, &self.state, &self.stream_ctx).await;
         Ok(Response::new(make_response(status, error_message)))
     }
 
@@ -1215,24 +1216,46 @@ fn convert_log_level(level: proto::LogLevel) -> LogLevel {
 async fn handle_set_output(
     req: &proto::SetOutputRequest,
     state: &Arc<Mutex<SidecarState>>,
+    stream_ctx: &Option<Arc<StreamContext>>,
 ) -> (proto::ResponseStatus, Option<String>) {
-    let mut state = state.lock().await;
-    state.event_sequence += 1;
-
     let name = req.name.clone();
     let value_json = &req.value_json;
 
-    match serde_json::from_str(value_json) {
-        Ok(value) => {
-            debug!(name = %name, "output set");
-            state.outputs.insert(name, value);
-            (proto::ResponseStatus::Ok, None)
+    let value: serde_json::Value = match serde_json::from_str(value_json) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                proto::ResponseStatus::InvalidArgument,
+                Some(format!("invalid JSON value for output '{}': {}", name, e)),
+            );
         }
-        Err(e) => (
-            proto::ResponseStatus::InvalidArgument,
-            Some(format!("invalid JSON value for output '{}': {}", name, e)),
-        ),
+    };
+
+    {
+        let mut state = state.lock().await;
+        state.event_sequence += 1;
+        debug!(name = %name, "output set");
+        // Store the final value (job-end flush still emits the canonical
+        // terminal OutputSet for every stored output).
+        state.outputs.insert(name.clone(), value.clone());
     }
+    // Lock released before the (async) emit.
+
+    // PROTOTYPE — streaming output: emit an OutputSet event PER set_output CALL,
+    // mid-execution, so a downstream node wired off this step's "stream" port
+    // (compiler `stream_output`) receives each value while this step is still
+    // running — instead of only at job end (which races net completion). Gated
+    // on the `output` category being in the job's `stream_events` allowlist
+    // (the compiler adds it for stream_output steps), so non-streaming steps
+    // are unaffected. The job-end flush remains the source of truth for the
+    // node's parked output; these mid-run events are content-addressably
+    // deduped per output name engine-side, so the terminal re-emit collapses.
+    if let Some(ctx) = stream_ctx {
+        ctx.maybe_emit(EventCategory::Output, StatusDetail::OutputSet { name, value })
+            .await;
+    }
+
+    (proto::ResponseStatus::Ok, None)
 }
 
 async fn handle_log_metrics(

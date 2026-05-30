@@ -190,11 +190,22 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         // so the runtime stages the producer's parked data alongside
         // `input.json` and the runner exposes `<slug>` as a Python global.
         // The sentinel survives a no-op replacement (empty pushes) cleanly.
+        // PROTOTYPE — when `stream_output` is set, opt the executor into
+        // emitting `output` events PER `set_output` CALL (mid-execution) so the
+        // node's "stream" port delivers each value while the step still runs,
+        // instead of only at job end (which races net completion). The executor
+        // gates per-call OutputSet emission on this `output` category being in
+        // `stream_events`; non-streaming steps omit it and are unaffected.
+        let stream_events_rhai = if stream_output {
+            r#"["metric", "progress", "phase", "log", "output"]"#
+        } else {
+            r#"["metric", "progress", "phase", "log"]"#
+        };
         ctx.transition("prepare", format!("{label} - Prepare"))
             .auto_input("input", &p_input)
             .auto_output("job", &exec_inbox)
             .logic(format!(
-                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; #{{ job: d }}"#
             ));
 
         let lc = executor_lifecycle(
