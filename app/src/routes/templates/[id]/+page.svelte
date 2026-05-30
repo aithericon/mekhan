@@ -35,6 +35,7 @@
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import { setWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
+	import { refreshSubworkflowContracts } from '$lib/editor/subworkflow-contracts';
 	import type {
 		WorkflowNodeData,
 		WorkflowNodeType,
@@ -289,6 +290,20 @@
 
 	$effect(() => {
 		load();
+	});
+
+	// Once the Yjs graph has synced, backfill every SubWorkflow node's I/O
+	// contract straight from the compiler's resolver (the same `/io-contract`
+	// the property panel uses), so the canvas advertises what each sub-workflow
+	// consumes/returns without the author opening its panel. Reading
+	// `nodes.length` is the sync gate; the plain (non-rune) `contractsRefreshed`
+	// flag makes this run exactly once per loaded template — the patch writes
+	// back through Yjs but is idempotent (portsEqual), so it can't loop.
+	let contractsRefreshed = false;
+	$effect(() => {
+		if (binding.graph.nodes.length === 0 || contractsRefreshed) return;
+		contractsRefreshed = true;
+		void refreshSubworkflowContracts(binding);
 	});
 
 	$effect(() => {
