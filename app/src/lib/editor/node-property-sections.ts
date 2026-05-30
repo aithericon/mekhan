@@ -32,9 +32,12 @@ import LoopNodeSection from '$lib/components/editor/panels/property-sections/Loo
 import MapNodeSection from '$lib/components/editor/panels/property-sections/MapNodeSection.svelte';
 import ScopeSection from '$lib/components/editor/panels/property-sections/ScopeSection.svelte';
 import PhaseUpdateNodeSection from '$lib/components/editor/panels/property-sections/PhaseUpdateNodeSection.svelte';
-import ProgressUpdateNodeSection from '$lib/components/editor/panels/property-sections/ProgressUpdateNodeSection.svelte';
+// SPIKE: progress_update and delay are now driven by the config-spec layer.
+// The bespoke section files still exist; these wrappers replace the registry
+// entries so the satisfies-check continues to pass over all NodeKind values.
+import ProgressUpdateSpecSection from '$lib/components/editor/panels/config-spec/ProgressUpdateSpecSection.svelte';
 import FailureNodeSection from '$lib/components/editor/panels/property-sections/FailureNodeSection.svelte';
-import DelayNodeSection from '$lib/components/editor/panels/property-sections/DelayNodeSection.svelte';
+import DelaySpecSection from '$lib/components/editor/panels/config-spec/DelaySpecSection.svelte';
 import TimeoutNodeSection from '$lib/components/editor/panels/property-sections/TimeoutNodeSection.svelte';
 import TriggerNodeSection from '$lib/components/editor/panels/property-sections/TriggerNodeSection.svelte';
 import SubWorkflowSection from '$lib/components/editor/panels/property-sections/SubWorkflowSection.svelte';
@@ -80,9 +83,9 @@ const SECTIONS = {
 	map: MapNodeSection,
 	scope: ScopeSection,
 	phase_update: PhaseUpdateNodeSection,
-	progress_update: ProgressUpdateNodeSection,
+	progress_update: ProgressUpdateSpecSection,
 	failure: FailureNodeSection,
-	delay: DelayNodeSection,
+	delay: DelaySpecSection,
 	timeout: TimeoutNodeSection,
 	trigger: TriggerNodeSection,
 	sub_workflow: SubWorkflowSection,
