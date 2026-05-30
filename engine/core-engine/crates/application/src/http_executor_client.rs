@@ -1,8 +1,21 @@
-//! HTTP-sync `EffectHandler` implementation for cap-routed inference dispatch.
+//! HTTP-sync `EffectHandler` implementation for cap-routed dispatch over the
+//! generic `/v1/execute` pool surface.
 //!
 //! Sub-phase 2.3b — implements `HttpInferenceHandler`, the cloud-layer path
 //! that replaces NATS-async dispatch when cap-routing's `HttpPreDispatchHook`
-//! has enriched `EffectInput.config` with `base_url` + `lease_token`.
+//! has enriched `EffectInput.config` with `base_url` + `lease_token` +
+//! `backend`.
+//!
+//! ## Generic `/v1/execute` dispatch (Stage 3)
+//!
+//! The handler is task-agnostic: it forwards the enriched `effect_config` and
+//! the (system-field-stripped) input token to the routed pool's
+//! `POST /v1/execute` endpoint and projects the pool's canonical `outputs`
+//! map back onto the output token. ALL body-shaping — Vision image turns,
+//! Chat/Agent prompt serialization, OCR request mapping — now lives POOL-SIDE
+//! (`executor-llm::execute_handler`, `executor-surya::execute_handler`,
+//! Stage 2). The engine no longer dispatches on `task_kind`; it passes
+//! `task_kind` through on the wire so the pool can shape the call.
 //!
 //! ## Why `EffectHandler`, not `ExecutorClient`
 //!
@@ -17,11 +30,22 @@
 //! these fields into the effect_config before the handler fires:
 //! - `base_url: String` — executor pool HTTP base URL (e.g. `http://host:3301`)
 //! - `lease_token: String` — bearer token for the pool request
+//! - `backend: String` — pool backend selector (e.g. `"llm"`, `"surya"`),
+//!   forwarded as [`ExecuteRequest::backend`]
+//! - `task_kind: String` — task discriminator the pool dispatches on
 //! - `pool_id: String` — cap-routing pool identifier
 //! - `hardware_kind: Option<String>` — present when cap-routing knows it
 //!
 //! The original scenario fields (`required_model`, `system_prompt`, etc.) are
 //! preserved via LWW merge and are also readable from `EffectInput.config`.
+//!
+//! ## No-default-model stays enforced AT THE POOL
+//!
+//! `required_model` is read as an `Option<String>` and forwarded as
+//! [`ExecuteRequest::model`]. The LLM pool 400s on an absent/empty model
+//! (`feedback_no_default_model`), so the engine can carry it as an `Option`
+//! without weakening the rule — surya and other model-free backends are not
+//! forced to invent a model.
 //!
 //! ## Lease-release semantics (deferred)
 //!
@@ -47,13 +71,16 @@ use std::time::Duration;
 use serde_json::Value as JsonValue;
 
 use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput, EffectPortSchemas};
+use crate::execute_contract::{ExecuteRequest, ExecuteResponse};
 
-/// HTTP-sync inference dispatch handler.
+/// HTTP-sync generic `/v1/execute` dispatch handler.
 ///
-/// Reads cap-routing pre-dispatch enrichment (`base_url`, `lease_token`)
-/// from `EffectInput.config`, builds an inference request from the input
-/// token, and POSTs to `{base_url}/v1/inference` — the endpoint implemented
-/// in Item 1 (`executor-llm/src/inference_handler.rs`).
+/// Reads cap-routing pre-dispatch enrichment (`base_url`, `lease_token`,
+/// `backend`, `task_kind`) from `EffectInput.config`, builds a generic
+/// [`ExecuteRequest`] from the enriched config + the (stripped) input token,
+/// and POSTs to `{base_url}/v1/execute` — the shared generic surface every
+/// executor pool serves (`executor-llm` / `executor-surya`). Body-shaping
+/// lives pool-side; this handler is task-agnostic.
 pub struct HttpInferenceHandler {
     http: reqwest::Client,
     input_port: String,
@@ -118,31 +145,21 @@ impl EffectHandler for HttpInferenceHandler {
                 )
             })?;
 
-        // Per feedback_no_default_model: fail closed if required_model absent.
-        let required_model = config
-            .get("required_model")
+        // `backend` selects the pool family (e.g. "llm", "surya"); cap-routing
+        // injects it as `pool_backend` → `backend`. Fail closed if absent: a
+        // missing backend means cap-routing enrichment is malformed.
+        let backend = config
+            .get("backend")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 EffectError::Fatal(
-                    "HttpInferenceHandler requires required_model in effect_config".into(),
+                    "HttpInferenceHandler requires backend in enriched effect_config".into(),
                 )
-            })?;
+            })?
+            .to_string();
 
-        let system_prompt = config.get("system_prompt").and_then(|v| v.as_str());
-
-        // 3. Build the inference request — task_kind-dispatched body-builder
-        //    (#126.3). Replaces the DI-shape-hardcoded prompt at this site
-        //    with a per-task_kind body shape; the prior session's Sections
-        //    D/E/F (letter / patient_qa / context-cite / clinical_validation)
-        //    failed under the hardcoded path because Chat-style scenarios
-        //    were silently fed a DI-extraction prompt + empty images.
-        //
-        //    task_kind values clinic uses (per server/data/petri-nets/*.json
-        //    inventory 2026-05-22): "Vision", "Chat", "Agent",
-        //    "StructuredOutput", "Asr", "Embeddings". The first four route
-        //    through `/v1/inference`; "Asr" and "Embeddings" run on different
-        //    executor handlers (not this dispatch path) and surface as a hard
-        //    Fatal here so misconfigured routing fails loudly.
+        // `task_kind` is forwarded on the wire; the POOL dispatches on it to
+        // shape the call. The engine no longer matches on it.
         let task_kind = config
             .get("task_kind")
             .and_then(|v| v.as_str())
@@ -150,39 +167,39 @@ impl EffectHandler for HttpInferenceHandler {
                 EffectError::Fatal(
                     "HttpInferenceHandler requires task_kind in effect_config".into(),
                 )
-            })?;
+            })?
+            .to_string();
 
-        let mut inference_body = match task_kind {
-            "Vision" => build_vision_body(required_model, job_data),
-            "Chat" | "Agent" | "StructuredOutput" => {
-                build_chat_body(required_model, job_data, config)?
-            }
-            "Embeddings" | "Asr" => {
-                return Err(EffectError::Fatal(format!(
-                    "HttpInferenceHandler: task_kind '{task_kind}' is not served by /v1/inference; \
-                     route to the appropriate executor handler"
-                )));
-            }
-            other => {
-                return Err(EffectError::Fatal(format!(
-                    "HttpInferenceHandler: unrecognized task_kind '{other}'"
-                )));
-            }
+        // `model` is OPTIONAL on the engine side — the no-default-model rule is
+        // enforced AT THE POOL (the LLM pool 400s on absent/empty model). Read
+        // it as Option<String> and pass it through; model-free backends (surya)
+        // simply omit it.
+        let model = config
+            .get("required_model")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // 3. Build the generic ExecuteRequest. Body-shaping lives pool-side:
+        //    we forward the enriched effect_config as `config` and the
+        //    system-field-stripped input token as `input`. The pool reshapes
+        //    these into a provider call keyed on `task_kind`.
+        let input_payload = strip_system_fields(job_data);
+
+        let request = ExecuteRequest {
+            backend,
+            task_kind,
+            model,
+            config: config.clone(),
+            input: input_payload,
         };
 
-        if let Some(sp) = system_prompt {
-            if let Some(obj) = inference_body.as_object_mut() {
-                obj.insert("system_prompt".to_string(), JsonValue::String(sp.to_string()));
-            }
-        }
-
-        // 4. HTTP-dispatch synchronously.
-        let inference_url = format!("{}/v1/inference", base_url);
+        // 4. HTTP-dispatch synchronously to the generic /v1/execute surface.
+        let execute_url = format!("{}/v1/execute", base_url);
         let dispatch_result = self
             .http
-            .post(&inference_url)
+            .post(&execute_url)
             .bearer_auth(lease_token)
-            .json(&inference_body)
+            .json(&request)
             .send()
             .await;
 
@@ -203,16 +220,33 @@ impl EffectHandler for HttpInferenceHandler {
             }
         };
 
-        // 5. Project response into EffectOutput.
-        //    Merge inference response fields into the output token so
-        //    downstream Rhai/transitions can read `output`, `model`, `usage`,
-        //    `structured_output`, etc.
+        // 5. Parse the generic ExecuteResponse and project it into EffectOutput.
+        //    The pool's canonical `outputs` map is nested under the output
+        //    token's `detail.outputs` — clinic Rhai's `outputs_of(tok)` reads
+        //    `tok.detail.outputs` FIRST. The input-token root fields are kept
+        //    for back-compat (downstream transitions that still read root keys).
+        let execute_response: ExecuteResponse = serde_json::from_value(response_body.clone())
+            .map_err(|e| {
+                EffectError::ExecutionFailed(format!(
+                    "ExecuteResponse parse: {e} (body: {response_body})"
+                ))
+            })?;
+
         let mut output_data = job_data.clone();
         if let Some(obj) = output_data.as_object_mut() {
-            if let Some(resp_obj) = response_body.as_object() {
-                for (k, v) in resp_obj {
-                    obj.insert(k.clone(), v.clone());
-                }
+            let detail = obj
+                .entry("detail".to_string())
+                .or_insert_with(|| JsonValue::Object(serde_json::Map::new()));
+            // `detail` may have been carried on the input token as a non-object;
+            // coerce to an object so we can nest `outputs` deterministically.
+            if !detail.is_object() {
+                *detail = JsonValue::Object(serde_json::Map::new());
+            }
+            if let Some(detail_obj) = detail.as_object_mut() {
+                detail_obj.insert(
+                    "outputs".to_string(),
+                    JsonValue::Object(execute_response.outputs.clone()),
+                );
             }
         }
 
@@ -221,6 +255,7 @@ impl EffectHandler for HttpInferenceHandler {
 
         Ok(EffectOutput {
             tokens,
+            // The raw ExecuteResponse json is the opaque replay payload.
             result: response_body,
         })
     }
@@ -245,87 +280,13 @@ impl EffectHandler for HttpInferenceHandler {
     }
 }
 
-/// Build a Vision-style inference body: extracts `file_b64` + `mime_type` +
-/// `document_id` from the input token and authors the DI-extraction prompt.
-/// This is the historical path; #126.3 preserves it verbatim and routes via
-/// `task_kind == "Vision"`.
-fn build_vision_body(required_model: &str, job_data: &JsonValue) -> JsonValue {
-    let file_b64 = job_data.get("file_b64").and_then(|v| v.as_str());
-    let mime_type = job_data
-        .get("mime_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("image/png");
-    let images: JsonValue = if let Some(b64) = file_b64 {
-        serde_json::json!([{ "base64": b64, "mime_type": mime_type }])
-    } else {
-        serde_json::json!([])
-    };
-
-    let document_id = job_data
-        .get("document_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let prompt = if document_id.is_empty() {
-        "Extract structured fields from the attached image.".to_string()
-    } else {
-        format!(
-            "Extract structured fields from the attached image. document_id={}",
-            document_id
-        )
-    };
-
-    serde_json::json!({
-        "model": required_model,
-        "prompt": prompt,
-        "images": images,
-    })
-}
-
-/// Build a Chat-style inference body for `Chat` / `Agent` / `StructuredOutput`
-/// task_kinds. The user prompt is the JSON-serialized input token with
-/// system fields (`_instance_id` / `_template_id` / `_template_version` /
-/// `_created_at` / `_created_by` — injected by `parameterize_*`) stripped so
-/// the LLM sees only the clinical-domain payload. For `Agent`, an optional
-/// `tool_catalogue` in effect_config is forwarded into the request body as
-/// `tools` — executor-llm passes it through to the underlying provider.
-///
-/// No images: Chat/Agent/StructuredOutput scenarios don't bear image inputs;
-/// if a scenario does, it belongs on the Vision branch.
-fn build_chat_body(
-    required_model: &str,
-    job_data: &JsonValue,
-    config: &JsonValue,
-) -> Result<JsonValue, EffectError> {
-    let stripped = strip_system_fields(job_data);
-    let user_prompt = serde_json::to_string(&stripped).map_err(|e| {
-        EffectError::Fatal(format!(
-            "HttpInferenceHandler: failed to serialize input token as prompt JSON: {e}"
-        ))
-    })?;
-    if user_prompt.is_empty() || user_prompt == "{}" || user_prompt == "null" {
-        return Err(EffectError::Fatal(
-            "HttpInferenceHandler: chat-style task_kind requires a non-empty input token \
-             (system fields stripped — token had no domain payload)"
-                .into(),
-        ));
-    }
-
-    let mut body = serde_json::json!({
-        "model": required_model,
-        "prompt": user_prompt,
-    });
-    if let Some(tools) = config.get("tool_catalogue") {
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("tools".to_string(), tools.clone());
-        }
-    }
-    Ok(body)
-}
-
 /// Strip the system fields `parameterize_air` / `parameterize_for_place`
 /// inject into every seeded token. Keep this list in sync with those
 /// functions in mekhan-service's `petri::instance` module.
+///
+/// The stripped token becomes [`ExecuteRequest::input`]; pools that need the
+/// raw domain payload (Chat/Agent prompt serialization, Vision image fields)
+/// read it from there. Body-shaping lives pool-side (Stage 2).
 fn strip_system_fields(token: &JsonValue) -> JsonValue {
     const SYSTEM_FIELDS: &[&str] = &[
         "_instance_id",
@@ -459,32 +420,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_rejects_missing_required_model() {
+    async fn test_handler_rejects_missing_backend() {
+        // `backend` (cap-routing's pool_backend) is required enrichment;
+        // its absence means the enriched effect_config is malformed.
         let handler = HttpInferenceHandler::new("job", "submitted");
         let config = json!({
             "base_url": "http://127.0.0.1:9999",
             "lease_token": "tok",
+            "task_kind": "Chat",
+            "required_model": "test-model-a",
         });
-        let input = make_input_with_config("job", json!({}), Some(config));
+        let input = make_input_with_config("job", json!({"x": 1}), Some(config));
         let err = handler.execute(input).await.unwrap_err();
         assert!(
-            matches!(err, EffectError::Fatal(ref msg) if msg.contains("required_model")),
-            "expected Fatal with required_model mention, got: {:?}",
+            matches!(err, EffectError::Fatal(ref msg) if msg.contains("backend")),
+            "expected Fatal with backend mention, got: {:?}",
             err
         );
     }
 
     #[tokio::test]
-    async fn test_handler_dispatches_with_bearer_auth() {
+    async fn test_handler_model_is_optional_no_default_enforced_at_pool() {
+        // The engine no longer fails closed on a missing model — the pool does
+        // (feedback_no_default_model). With no `required_model` in config, the
+        // handler must still dispatch, omitting `model` from the wire so the
+        // pool can apply its own fail-closed policy.
+        let captured_headers = Arc::new(Mutex::new(Vec::new()));
+        let captured_body = Arc::new(Mutex::new(None::<String>));
+        let canned = r#"{"outputs":{"full_text":"ocr text"}}"#;
+        let addr = spawn_stub_server(200, canned, captured_headers, captured_body.clone());
+
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": format!("http://{}", addr),
+            "lease_token": "tok-surya",
+            "backend": "surya",
+            "task_kind": "Ocr",
+            // no required_model — surya is model-free
+        });
+        let input = make_input_with_config("job", json!({"file_b64": "abc"}), Some(config));
+        let _ = handler.execute(input).await.expect("model-free dispatch must succeed");
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
+        let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
+        assert!(
+            parsed.get("model").is_none(),
+            "None model must be omitted from the wire, got: {:?}",
+            parsed.get("model")
+        );
+        assert_eq!(parsed["backend"], "surya");
+        assert_eq!(parsed["task_kind"], "Ocr");
+    }
+
+    #[tokio::test]
+    async fn test_handler_dispatches_generic_execute_request_with_bearer_auth() {
+        // Asserts the generic /v1/execute wire shape: ExecuteRequest fields
+        // (backend, task_kind, model, config, input) on the POST body, bearer
+        // lease forwarded, and the URL ending in /v1/execute (the stub captures
+        // the request line implicitly via a single accepted connection).
         let captured_headers = Arc::new(Mutex::new(Vec::<String>::new()));
         let captured_body = Arc::new(Mutex::new(None::<String>));
-        let canned = r#"{"output":"test result","model":"test-model-a","usage":{"input_tokens":10,"output_tokens":20}}"#;
+        let canned = r#"{"outputs":{"output":"test result","model":"test-model-a","usage":{"prompt_tokens":10,"completion_tokens":20}}}"#;
         let addr = spawn_stub_server(200, canned, captured_headers.clone(), captured_body.clone());
 
         let handler = HttpInferenceHandler::new("job", "submitted");
         let config = json!({
             "base_url": format!("http://{}", addr),
             "lease_token": "Bearer-test-token-xyz",
+            "backend": "llm",
             "required_model": "test-model-a",
             "task_kind": "Vision",
         });
@@ -505,8 +509,28 @@ mod tests {
             headers
         );
 
+        // Generic ExecuteRequest wire shape.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
+        let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
+        assert_eq!(parsed["backend"], "llm");
+        assert_eq!(parsed["task_kind"], "Vision");
+        assert_eq!(parsed["model"], "test-model-a");
+        // `config` carries the enriched effect_config; `input` the stripped token.
+        assert_eq!(parsed["config"]["task_kind"], "Vision");
+        assert_eq!(parsed["input"]["file_b64"], "aGVsbG8=");
+        assert_eq!(parsed["input"]["document_id"], "doc-001");
+        // Parseable as the typed ExecuteRequest (cross-workspace contract).
+        let typed: ExecuteRequest =
+            serde_json::from_str(&body_str).expect("body must parse as ExecuteRequest");
+        assert_eq!(typed.backend, "llm");
+        assert_eq!(typed.model.as_deref(), Some("test-model-a"));
+
+        // ExecuteResponse.outputs lands under detail.outputs on the output token.
         let submitted = output.tokens.get("submitted").expect("submitted port");
-        assert_eq!(submitted["output"], "test result");
+        assert_eq!(submitted["detail"]["outputs"]["output"], "test result");
+        assert_eq!(submitted["detail"]["outputs"]["model"], "test-model-a");
+        // Input-token root fields preserved for back-compat.
         assert_eq!(submitted["file_b64"], "aGVsbG8=");
         assert_eq!(submitted["document_id"], "doc-001");
     }
@@ -529,6 +553,7 @@ mod tests {
         let config = json!({
             "base_url": format!("http://{}", addr),
             "lease_token": "tok-error",
+            "backend": "llm",
             "required_model": "test-model-b",
             "task_kind": "Vision",
         });
@@ -540,21 +565,25 @@ mod tests {
             err
         );
         // Honest-absence: no release POST — handler defers release to TTL.
-        // The stub only accepted one connection (the inference call); no second
+        // The stub only accepted one connection (the execute call); no second
         // connection means the release endpoint was never contacted.
     }
 
     #[tokio::test]
-    async fn test_handler_uses_input_token_for_images_field() {
+    async fn test_handler_forwards_stripped_input_token_to_pool() {
+        // The engine forwards the system-field-stripped input token as
+        // ExecuteRequest.input; pool-side body-shaping reads file_b64/mime_type
+        // from there. The engine itself no longer builds an `images` array.
         let captured_headers = Arc::new(Mutex::new(Vec::new()));
         let captured_body = Arc::new(Mutex::new(None::<String>));
-        let canned = r#"{"output":"ok","model":"test-model-a"}"#;
+        let canned = r#"{"outputs":{"output":"ok","model":"test-model-a"}}"#;
         let addr = spawn_stub_server(200, canned, captured_headers, captured_body.clone());
 
         let handler = HttpInferenceHandler::new("job", "submitted");
         let config = json!({
             "base_url": format!("http://{}", addr),
             "lease_token": "tok-img",
+            "backend": "llm",
             "required_model": "test-model-a",
             "task_kind": "Vision",
         });
@@ -562,6 +591,7 @@ mod tests {
             "file_b64": "aW1hZ2VkYXRh",
             "mime_type": "image/jpeg",
             "document_id": "doc-img-001",
+            "_instance_id": "instance-strip-me",
         });
         let input = make_input_with_config("job", token, Some(config));
         let _ = handler.execute(input).await.expect("must succeed");
@@ -572,13 +602,21 @@ mod tests {
         let parsed: JsonValue =
             serde_json::from_str(&body_str).expect("request body must be valid JSON");
 
-        let images = parsed.get("images").expect("images field required");
-        let first = images.get(0).expect("at least one image entry");
-        assert_eq!(first["base64"], "aW1hZ2VkYXRh");
-        assert_eq!(first["mime_type"], "image/jpeg");
+        // The raw token fields land under `input` (system fields stripped); the
+        // engine emits no `images` array — that is now pool-side body-shaping.
+        assert_eq!(parsed["input"]["file_b64"], "aW1hZ2VkYXRh");
+        assert_eq!(parsed["input"]["mime_type"], "image/jpeg");
+        assert!(
+            parsed["input"].get("_instance_id").is_none(),
+            "system fields must be stripped from the input payload"
+        );
+        assert!(
+            parsed.get("images").is_none(),
+            "engine no longer builds an images array; body-shaping is pool-side"
+        );
     }
 
-    // ── #126.3 task_kind dispatch tests ──────────────────────────────────────
+    // ── generic /v1/execute dispatch tests (Stage 3) ─────────────────────────
 
     #[tokio::test]
     async fn test_handler_rejects_missing_task_kind() {
@@ -586,6 +624,7 @@ mod tests {
         let config = json!({
             "base_url": "http://127.0.0.1:9999",
             "lease_token": "tok",
+            "backend": "llm",
             "required_model": "test-model-a",
         });
         let input = make_input_with_config("job", json!({}), Some(config));
@@ -598,159 +637,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_rejects_unrecognized_task_kind() {
-        let handler = HttpInferenceHandler::new("job", "submitted");
-        let config = json!({
-            "base_url": "http://127.0.0.1:9999",
-            "lease_token": "tok",
-            "required_model": "test-model-a",
-            "task_kind": "Telepathy",
-        });
-        let input = make_input_with_config("job", json!({"x": 1}), Some(config));
-        let err = handler.execute(input).await.unwrap_err();
-        assert!(
-            matches!(err, EffectError::Fatal(ref msg) if msg.contains("Telepathy")),
-            "expected Fatal naming the bad task_kind, got: {:?}",
-            err
-        );
-    }
-
-    #[tokio::test]
-    async fn test_handler_rejects_embeddings_task_kind() {
-        let handler = HttpInferenceHandler::new("job", "submitted");
-        let config = json!({
-            "base_url": "http://127.0.0.1:9999",
-            "lease_token": "tok",
-            "required_model": "test-model-a",
-            "task_kind": "Embeddings",
-        });
-        let input = make_input_with_config("job", json!({"text": "embed me"}), Some(config));
-        let err = handler.execute(input).await.unwrap_err();
-        assert!(
-            matches!(err, EffectError::Fatal(ref msg)
-                if msg.contains("Embeddings") && msg.contains("/v1/inference")),
-            "expected Fatal flagging the routing mismatch, got: {:?}",
-            err
-        );
-    }
-
-    #[tokio::test]
-    async fn test_handler_chat_serializes_token_as_prompt_without_images() {
+    async fn test_handler_forwards_config_and_task_kind_verbatim() {
+        // The engine no longer dispatches on task_kind, nor interprets
+        // system_prompt / tool_catalogue — it forwards the whole enriched
+        // config (and an arbitrary task_kind) to the pool, which shapes the
+        // call. An exotic task_kind is NOT rejected engine-side.
         let captured_headers = Arc::new(Mutex::new(Vec::new()));
         let captured_body = Arc::new(Mutex::new(None::<String>));
-        let canned = r#"{"output":"letter generated","model":"test-model-a"}"#;
-        let addr = spawn_stub_server(200, canned, captured_headers, captured_body.clone());
-
-        let handler = HttpInferenceHandler::new("job", "submitted");
-        let config = json!({
-            "base_url": format!("http://{}", addr),
-            "lease_token": "tok-chat",
-            "required_model": "test-model-a",
-            "task_kind": "Chat",
-            "system_prompt": "You are a clinical assistant.",
-        });
-        // System fields (_instance_id, etc.) are normally injected by
-        // `parameterize_*`; include them here to verify the handler strips
-        // them before serializing into the user prompt.
-        let token = json!({
-            "letter_type": "discharge",
-            "patient_context": { "id": "p-001", "name": "Test" },
-            "_instance_id": "instance-abc",
-            "_template_id": "template-xyz",
-            "_template_version": 1,
-            "_created_at": "2026-05-22T10:00:00Z",
-            "_created_by": "user-001",
-        });
-        let input = make_input_with_config("job", token, Some(config));
-        let _ = handler.execute(input).await.expect("Chat path must succeed");
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let body_str = captured_body.lock().unwrap().clone().expect("captured body");
-        let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
-
-        // No images: Chat path doesn't bear image inputs.
-        let images = parsed.get("images").and_then(|v| v.as_array());
-        assert!(
-            images.is_none() || images.unwrap().is_empty(),
-            "Chat task_kind must not carry images, got: {:?}",
-            images
-        );
-
-        // The user prompt is the JSON-serialized token with system fields
-        // stripped — letter_type + patient_context survive; _instance_id etc.
-        // are stripped.
-        let prompt = parsed["prompt"].as_str().expect("prompt is a string");
-        assert!(
-            prompt.contains("letter_type") && prompt.contains("discharge"),
-            "prompt must serialize the domain payload; got: {prompt}"
-        );
-        assert!(
-            !prompt.contains("_instance_id") && !prompt.contains("_template_id"),
-            "system fields must be stripped from the prompt; got: {prompt}"
-        );
-        assert_eq!(parsed["system_prompt"], "You are a clinical assistant.");
-    }
-
-    #[tokio::test]
-    async fn test_handler_agent_forwards_tool_catalogue() {
-        let captured_headers = Arc::new(Mutex::new(Vec::new()));
-        let captured_body = Arc::new(Mutex::new(None::<String>));
-        let canned = r#"{"output":"validated","model":"test-model-a"}"#;
+        let canned = r#"{"outputs":{"output":"validated"}}"#;
         let addr = spawn_stub_server(200, canned, captured_headers, captured_body.clone());
 
         let handler = HttpInferenceHandler::new("job", "submitted");
         let config = json!({
             "base_url": format!("http://{}", addr),
             "lease_token": "tok-agent",
+            "backend": "llm",
             "required_model": "test-model-a",
             "task_kind": "Agent",
+            "system_prompt": "You are a clinical assistant.",
             "tool_catalogue": [
-                {
-                    "name": "lookup_drug",
-                    "description": "Look up drug information by name.",
-                    "input_schema": { "type": "object", "properties": { "name": { "type": "string" } } }
-                }
+                { "name": "lookup_drug", "description": "Look up a drug." }
             ],
         });
-        let token = json!({ "claims": [{ "claim": "patient has diabetes" }] });
+        let token = json!({
+            "claims": [{ "claim": "patient has diabetes" }],
+            "_template_id": "strip-me",
+        });
         let input = make_input_with_config("job", token, Some(config));
-        let _ = handler.execute(input).await.expect("Agent path must succeed");
+        let _ = handler.execute(input).await.expect("dispatch must succeed");
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let body_str = captured_body.lock().unwrap().clone().expect("captured body");
         let parsed: JsonValue = serde_json::from_str(&body_str).expect("valid JSON");
 
-        let tools = parsed.get("tools").expect("tools field forwarded for Agent");
-        let arr = tools.as_array().expect("tools is an array");
-        assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["name"], "lookup_drug");
-        // Domain payload survives in the prompt.
-        let prompt = parsed["prompt"].as_str().expect("prompt is a string");
-        assert!(prompt.contains("diabetes"), "got: {prompt}");
+        // task_kind passes through on the wire untouched.
+        assert_eq!(parsed["task_kind"], "Agent");
+        // The enriched config is forwarded verbatim under `config` — the pool
+        // reads system_prompt / tool_catalogue from there.
+        assert_eq!(parsed["config"]["system_prompt"], "You are a clinical assistant.");
+        assert_eq!(parsed["config"]["tool_catalogue"][0]["name"], "lookup_drug");
+        // Domain payload survives under `input`; system fields stripped.
+        assert_eq!(parsed["input"]["claims"][0]["claim"], "patient has diabetes");
+        assert!(parsed["input"].get("_template_id").is_none());
     }
 
     #[tokio::test]
-    async fn test_handler_chat_rejects_empty_domain_token() {
+    async fn test_handler_nests_outputs_under_detail_outputs() {
+        // The core projection contract: ExecuteResponse.outputs lands under the
+        // output token's detail.outputs (clinic Rhai's outputs_of reads
+        // tok.detail.outputs first), while input-token root fields survive.
+        let captured_headers = Arc::new(Mutex::new(Vec::new()));
+        let captured_body = Arc::new(Mutex::new(None::<String>));
+        let canned = r#"{"outputs":{"full_text":"OCR text","words":[{"text":"hello"}],"page_count":1,"engine":"surya"}}"#;
+        let addr = spawn_stub_server(200, canned, captured_headers, captured_body);
+
         let handler = HttpInferenceHandler::new("job", "submitted");
         let config = json!({
-            "base_url": "http://127.0.0.1:9999",
+            "base_url": format!("http://{}", addr),
+            "lease_token": "tok-ocr",
+            "backend": "surya",
+            "task_kind": "Ocr",
+        });
+        let token = json!({ "document_id": "doc-ocr-1", "file_b64": "abc" });
+        let input = make_input_with_config("job", token, Some(config));
+        let output = handler.execute(input).await.expect("must succeed");
+
+        let submitted = output.tokens.get("submitted").expect("submitted port");
+        // outputs nested under detail.outputs by canonical key.
+        assert_eq!(submitted["detail"]["outputs"]["full_text"], "OCR text");
+        assert_eq!(submitted["detail"]["outputs"]["words"][0]["text"], "hello");
+        assert_eq!(submitted["detail"]["outputs"]["page_count"], 1);
+        assert_eq!(submitted["detail"]["outputs"]["engine"], "surya");
+        // Back-compat: input-token root fields preserved.
+        assert_eq!(submitted["document_id"], "doc-ocr-1");
+        assert_eq!(submitted["file_b64"], "abc");
+
+        // EffectOutput.result is the raw ExecuteResponse json.
+        assert_eq!(output.result["outputs"]["full_text"], "OCR text");
+    }
+
+    #[tokio::test]
+    async fn test_handler_rejects_non_execute_response_shape() {
+        // A pool reply that isn't an ExecuteResponse (no `outputs` map) must
+        // surface as ExecutionFailed — guards against a pool returning the old
+        // flat /v1/inference shape on the generic surface.
+        let captured_headers = Arc::new(Mutex::new(Vec::new()));
+        let captured_body = Arc::new(Mutex::new(None));
+        let canned = r#"{"output":"flat shape","model":"m"}"#;
+        let addr = spawn_stub_server(200, canned, captured_headers, captured_body);
+
+        let handler = HttpInferenceHandler::new("job", "submitted");
+        let config = json!({
+            "base_url": format!("http://{}", addr),
             "lease_token": "tok",
+            "backend": "llm",
             "required_model": "test-model-a",
             "task_kind": "Chat",
         });
-        // Only system fields present — domain payload is empty.
-        let token = json!({
-            "_instance_id": "x",
-            "_template_id": "y",
-            "_template_version": 1,
-            "_created_at": "z",
-            "_created_by": "u",
-        });
-        let input = make_input_with_config("job", token, Some(config));
+        let input = make_input_with_config("job", json!({"x": 1}), Some(config));
         let err = handler.execute(input).await.unwrap_err();
         assert!(
-            matches!(err, EffectError::Fatal(ref msg) if msg.contains("non-empty")),
-            "expected Fatal flagging empty domain token, got: {:?}",
+            matches!(err, EffectError::ExecutionFailed(ref msg) if msg.contains("ExecuteResponse")),
+            "expected ExecutionFailed flagging ExecuteResponse parse, got: {:?}",
             err
         );
     }
