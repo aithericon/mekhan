@@ -723,11 +723,26 @@ where
                 )
                 .expect("register HTTP executor_submit effect handler");
 
+            // Compiler-generated nets (graph→AIR) emit an `executor_cancel`
+            // transition for every executor step, and deploy validation
+            // requires the referenced handler to be registered. Under HTTP-sync
+            // dispatch there is no async job to cancel, so register a no-op ack.
+            service
+                .register_effect_handler(
+                    effects::EXECUTOR_CANCEL.handler_id,
+                    Arc::new(
+                        petri_application::http_executor_client::HttpExecutorCancelNoop::new(
+                            effects::EXECUTOR_CANCEL.default_output_port,
+                        ),
+                    ),
+                )
+                .expect("register HTTP executor_cancel no-op effect handler");
+
             tracing::info!(
                 net_id = %net_id,
                 input_port = %hcfg.input_port,
                 output_port = %hcfg.output_port,
-                "Registered HTTP executor_submit handler (cloud-layer dispatch — sub-phase 2.3b; no executor_cancel registered in HTTP-sync mode)"
+                "Registered HTTP executor_submit + no-op executor_cancel handlers (cloud-layer dispatch)"
             );
         }
 

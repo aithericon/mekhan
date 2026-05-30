@@ -280,6 +280,50 @@ impl EffectHandler for HttpInferenceHandler {
     }
 }
 
+/// No-op `executor_cancel` handler for HTTP-sync dispatch.
+///
+/// In HTTP-sync mode every `executor_submit` is a synchronous HTTP round-trip
+/// that has already completed by the time the effect returns, so there is no
+/// async executor job to cancel. But the graph→AIR compiler emits an
+/// `executor_cancel` transition for every executor step, and the engine's
+/// deploy validation requires every referenced effect handler to be
+/// registered. This handler satisfies that contract: on the (rare) cancel
+/// path it acks immediately and makes no remote call. Registered alongside
+/// [`HttpInferenceHandler`] whenever HTTP-dispatch is configured.
+pub struct HttpExecutorCancelNoop {
+    output_port: String,
+}
+
+impl HttpExecutorCancelNoop {
+    pub fn new(output_port: impl Into<String>) -> Self {
+        Self {
+            output_port: output_port.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EffectHandler for HttpExecutorCancelNoop {
+    async fn execute(&self, _input: EffectInput) -> Result<EffectOutput, EffectError> {
+        // Nothing to cancel under synchronous HTTP dispatch — ack and proceed.
+        let mut tokens = HashMap::new();
+        tokens.insert(
+            self.output_port.clone(),
+            serde_json::json!({ "cancelled": true, "mode": "http_sync_noop" }),
+        );
+        Ok(EffectOutput {
+            tokens,
+            result: serde_json::json!({ "cancelled": "http_sync_noop" }),
+        })
+    }
+
+    fn replay(&self, _input: &EffectInput, _stored_result: &JsonValue) {}
+
+    fn name(&self) -> &str {
+        "http_executor_cancel_noop"
+    }
+}
+
 /// Strip the system fields `parameterize_air` / `parameterize_for_place`
 /// inject into every seeded token. Keep this list in sync with those
 /// functions in mekhan-service's `petri::instance` module.
