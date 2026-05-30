@@ -130,7 +130,7 @@ async fn cli_workflow_roundtrip() {
     // 1. LIST — GET /api/v1/templates → template appears in listing
     // -----------------------------------------------------------------------
     let resp = client
-        .get(format!("{server}/api/v1/templates?page=1&per_page=50"))
+        .get(format!("{server}/api/v1/templates?page=0&per_page=50"))
         .send()
         .await
         .unwrap();
