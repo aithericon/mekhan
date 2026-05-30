@@ -82,6 +82,7 @@ fn yjs_encode(
         max_iterations,
         loop_condition,
         accumulators,
+        lease,
         ..
     } = data
     else {
@@ -96,5 +97,16 @@ fn yjs_encode(
         let accs_val =
             serde_json::to_value(accumulators).unwrap_or(serde_json::Value::Array(vec![]));
         config.insert(txn, "accumulators", json_value_to_any(&accs_val));
+    }
+    // L3 loop-scoped lease (datacenter alias + optional request). MUST be
+    // persisted through Yjs or it is silently dropped on publish's
+    // `doc_to_graph` reconstruction (the `..` previously ate it) — offline
+    // `compile_to_air` keeps it directly, which is why `compiler_e2e` passed
+    // but the live published instance lowered as a plain (lease-less) loop.
+    // Key `lease` matches the serde field name so `doc_to_graph`'s generic
+    // config-merge + `from_value::<WorkflowNodeData>` round-trips it back.
+    if let Some(lease) = lease {
+        let lease_val = serde_json::to_value(lease).unwrap_or(serde_json::Value::Null);
+        config.insert(txn, "lease", json_value_to_any(&lease_val));
     }
 }

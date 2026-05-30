@@ -210,6 +210,104 @@ pub async fn ensure_token_pool_net_deployed(
 // R4b — datacenter lease-adapter net (scheduler backend)
 // ===========================================================================
 
+/// The fully-resolved per-cluster connection mekhan threads into the
+/// lease-adapter net's `effect_config`.
+///
+/// mekhan owns Vault + the resolver: it reads the datacenter resource's
+/// `public_config` (non-secret connection fields, inline) and builds
+/// `{{secret:<vault_path>#<field>}}` templates for each secret field. The engine
+/// is the *consumer* — at fire time `firing.rs` runs `resolve_secrets` over the
+/// effect_config, unwrapping each `{{secret:…}}` just-in-time (the secret never
+/// lands in AIR or the event log). The engine's `ClusterRegistry` parses the
+/// resulting object to build a per-`(resource_id, resource_version)` client
+/// lazily on first fire — `scheduler_flavor` picks the leg and the two
+/// correlation keys are the cache key (docs/16 §2; docs/13 option A).
+///
+/// All per-flavor fields are `Option` — the resource carries only the fields its
+/// flavor needs (publish-time flavor-validation in R1 guarantees the required
+/// ones are present before this struct is ever built). [`Self::effect_config`]
+/// emits ONLY the keys the flavor needs, so a slurm cluster's net never carries
+/// (placeholder) `allocator_url`/`nomad_*` keys and vice-versa.
+#[derive(Debug, Clone)]
+pub struct DatacenterConnection {
+    /// Cluster identity — `resource_id` + `resource_version` are the
+    /// `ClusterRegistry` cache key (every flavor carries both, inline/non-secret).
+    pub resource_id: Uuid,
+    pub resource_version: i32,
+    /// Allocator dialect: `"slurm"`, `"nomad"`, or `"http"` — the discriminant.
+    pub scheduler_flavor: String,
+
+    // http leg (unchanged from today)
+    pub allocator_url: Option<String>,
+    /// `{{secret:<vault_path>#token}}` template (http bearer token).
+    pub token_secret_ref: Option<String>,
+
+    // slurm leg
+    pub ssh_host: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub ssh_user: Option<String>,
+    pub ssh_known_hosts: Option<String>,
+    pub template_dir: Option<String>,
+    /// `{{secret:<vault_path>#ssh_key}}` template (inline PEM private key).
+    pub ssh_key_secret_ref: Option<String>,
+
+    // nomad leg
+    pub nomad_addr: Option<String>,
+    pub nomad_region: Option<String>,
+    /// `{{secret:<vault_path>#nomad_token}}` template (optional — omitted if the
+    /// cluster carries no nomad_token).
+    pub nomad_token_secret_ref: Option<String>,
+}
+
+impl DatacenterConnection {
+    /// Emit the flavor-conditional effect_config baked onto both lease effect
+    /// transitions. Only the keys the flavor needs are emitted; every flavor
+    /// carries `scheduler_flavor` + the `resource_id`/`resource_version`
+    /// correlation keys (docs/16 §2.1).
+    pub fn effect_config(&self) -> serde_json::Value {
+        // Correlation keys + discriminant — on EVERY flavor.
+        let mut cfg = json!({
+            "scheduler_flavor": self.scheduler_flavor,
+            "resource_id": self.resource_id.to_string(),
+            "resource_version": self.resource_version,
+        });
+        let obj = cfg.as_object_mut().expect("json! object");
+
+        macro_rules! put {
+            ($key:literal, $opt:expr) => {
+                if let Some(v) = &$opt {
+                    obj.insert($key.to_string(), json!(v));
+                }
+            };
+        }
+
+        match self.scheduler_flavor.as_str() {
+            "slurm" => {
+                put!("ssh_host", self.ssh_host);
+                put!("ssh_port", self.ssh_port);
+                put!("ssh_user", self.ssh_user);
+                put!("ssh_known_hosts", self.ssh_known_hosts);
+                put!("template_dir", self.template_dir);
+                put!("ssh_key", self.ssh_key_secret_ref);
+            }
+            "nomad" => {
+                put!("nomad_addr", self.nomad_addr);
+                put!("nomad_region", self.nomad_region);
+                put!("nomad_token", self.nomad_token_secret_ref);
+            }
+            // "http" + any unknown flavor → the generic HTTP allocator leg
+            // (unchanged from today). The engine's flavor dispatch defaults the
+            // same way.
+            _ => {
+                put!("allocator_url", self.allocator_url);
+                put!("token", self.token_secret_ref);
+            }
+        }
+
+        cfg
+    }
+}
+
 /// Build the AIR `ScenarioDefinition` for a `datacenter` resource's
 /// lease-adapter net — the `scheduler` backend's per-resource net, parallel to
 /// [`build_token_pool_net`].
@@ -258,24 +356,23 @@ pub async fn ensure_token_pool_net_deployed(
 /// `token_secret_ref` is the `{{secret:<vault_path>#token}}` template for the
 /// datacenter's Vault token — the engine resolves it just-in-time at fire time
 /// (`firing.rs` `resolve_secrets`), so the secret never enters the AIR/event log.
-pub fn build_datacenter_lease_adapter_net(
-    resource_id: Uuid,
-    allocator_url: &str,
-    token_secret_ref: &str,
-) -> ScenarioDefinition {
+pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> ScenarioDefinition {
+    let resource_id = conn.resource_id;
     let net_id = well_known::pool_net_id(resource_id);
+    let scheduler_flavor = conn.scheduler_flavor.as_str();
     let mut ctx = Context::new(net_id).description(format!(
-        "Datacenter lease adapter for resource {resource_id} (allocator {allocator_url}). \
-         Holds a lease against an external allocator via the resource_lease engine effects; \
+        "Datacenter lease adapter for resource {resource_id} (flavor {scheduler_flavor}). \
+         Holds a lease against an external cluster via the resource_lease engine effects; \
          grant reply is the typed Lease__datacenter the R2 compiled steps consume."
     ));
 
-    // The connection passed to BOTH effect transitions. `token` is a
-    // `{{secret:…}}` template resolved at fire time by the engine.
-    let effect_config = json!({
-        "allocator_url": allocator_url,
-        "token": token_secret_ref,
-    });
+    // The full per-flavor connection passed to BOTH effect transitions. Secret
+    // fields are `{{secret:…}}` templates resolved at fire time by the engine
+    // (`firing.rs` `resolve_secrets`), so they never enter the AIR/event log.
+    // `scheduler_flavor` + the `resource_id`/`resource_version` correlation keys
+    // let the engine's `ClusterRegistry` build (and cache) the right per-cluster
+    // `ClusterClient` lazily on first fire.
+    let effect_config = conn.effect_config();
 
     // Observable hold + terminal records (all DynamicToken — the adapter net
     // only routes; the typed-lease schema lives on the instance side in R2).
@@ -294,9 +391,29 @@ pub fn build_datacenter_lease_adapter_net(
     let grant_outbox: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.bridge_reply_channel("grant_outbox", "Grant Outbox", "grant");
 
+    // Fail reply channel — `t_lease_died` routes a held-allocation-death token
+    // back to the claiming instance's loop over the SAME claim token's reply
+    // routing (the loop's `claim_out` carries both a "grant" and a "fail"
+    // channel). This is the fail-fast path (docs/16 §7): when the held salloc /
+    // dispatched drain-executor dies mid-lease the watcher signals `lease_failed`
+    // here, and this routes a `{ grant_id }` failure token to the loop's
+    // `p_<loop>_lease_failed` inbox so the loop aborts instead of enqueuing the
+    // next iteration into a now-dead NATS namespace.
+    let fail_outbox: aithericon_sdk::PlaceHandle<DynamicToken> =
+        ctx.bridge_reply_channel("fail_outbox", "Lease-Failed Outbox", "fail");
+
     // Lease-expiry signal (journaled → replay-safe reap).
     let lease_expired: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.signal("lease_expired", "Lease Expired");
+
+    // Held-allocation-death signal. The per-cluster watcher routes the held
+    // alloc's TERMINAL signal here (via the acquire effect's stamped routing
+    // meta — the `failed` status route targets `lease_failed`) when the salloc /
+    // dispatched drain-executor dies mid-lease. Distinct from `lease_expired`
+    // (a clean TTL reap that silently drops the hold): a death must be SURFACED
+    // back to the loop as a failure. Journaled → replay-safe.
+    let lease_failed: aithericon_sdk::PlaceHandle<DynamicToken> =
+        ctx.signal("lease_failed", "Lease Failed (held alloc died)");
 
     // Internal place joining release_inbox + in_use before the release effect.
     let release_prep: aithericon_sdk::PlaceHandle<DynamicToken> =
@@ -371,6 +488,29 @@ pub fn build_datacenter_lease_adapter_net(
             .logic(
                 r#"#{ done: #{ grant_id: held.grant_id, alloc_id: held.alloc_id, outcome: "reaped" } }"#,
             );
+
+        // t_lease_died — held-allocation death (docs/16 §7). The watcher routed
+        // the held alloc's terminal signal to `lease_failed`; consume it + the
+        // matching `in_use` hold (correlate grant_id), DROP the hold (the alloc
+        // is already dead — no release call, like reap), record the death in
+        // `done`, AND route a `{ grant_id }` failure token back to the claiming
+        // loop over the "fail" reply channel so it fails fast. The fail token
+        // carries the hold's reply routing (the `in_use` hold is a CLEAN
+        // PLAIN-bridged register, so it does NOT — instead the routing rides the
+        // lease_failed signal which was injected with the claim's reply meta;
+        // see the loop wiring in `lower_loop`).
+        ctx.transition("t_lease_died", "Lease Died (held alloc failure)")
+            .auto_input("fail", &lease_failed)
+            .auto_input("held", &in_use)
+            .correlate("fail", "held", "grant_id")
+            .auto_output("notify", &fail_outbox)
+            .auto_output("done", &done)
+            .logic(
+                r#"#{
+                    notify: #{ grant_id: held.grant_id, alloc_id: held.alloc_id, outcome: "lease_failed" },
+                    done:   #{ grant_id: held.grant_id, alloc_id: held.alloc_id, outcome: "lease_failed" }
+                }"#,
+            );
     });
 
     ctx.build()
@@ -379,15 +519,15 @@ pub fn build_datacenter_lease_adapter_net(
 /// Idempotently ensure a `datacenter` resource's lease-adapter net is deployed +
 /// running. Parallel to [`ensure_token_pool_net_deployed`]: probe-then-deploy
 /// via [`crate::petri::instance::deploy_instance`], engine-down failures are
-/// logged + SWALLOWED (the resource is durable; the net is re-derivable from
-/// `(resource_id, allocator_url, token_secret_ref)`). Re-deploying is harmless —
-/// the adapter net carries no per-instance seed state.
+/// logged + SWALLOWED (the resource is durable; the net is re-derivable from the
+/// resolved [`DatacenterConnection`]). Re-deploying is harmless — the adapter net
+/// carries no per-instance seed state.
 pub async fn ensure_datacenter_adapter_deployed(
     petri: &crate::petri::client::PetriClient,
-    resource_id: Uuid,
-    allocator_url: &str,
-    token_secret_ref: &str,
+    conn: &DatacenterConnection,
 ) {
+    let resource_id = conn.resource_id;
+    let scheduler_flavor = conn.scheduler_flavor.as_str();
     let net_id = well_known::pool_net_id(resource_id);
 
     if matches!(
@@ -398,11 +538,7 @@ pub async fn ensure_datacenter_adapter_deployed(
         return;
     }
 
-    let air = match serde_json::to_value(build_datacenter_lease_adapter_net(
-        resource_id,
-        allocator_url,
-        token_secret_ref,
-    )) {
+    let air = match serde_json::to_value(build_datacenter_lease_adapter_net(conn)) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(net_id, %e, "failed to serialize datacenter lease-adapter net AIR");
@@ -413,7 +549,7 @@ pub async fn ensure_datacenter_adapter_deployed(
     if let Err(e) = crate::petri::instance::deploy_instance(petri, &net_id, &air).await {
         tracing::warn!(
             net_id,
-            allocator_url,
+            scheduler_flavor,
             %e,
             "failed to deploy datacenter lease-adapter net to the engine — resource CRUD \
              still succeeded; the net will be (re)deployed on the next resource version \
@@ -421,7 +557,7 @@ pub async fn ensure_datacenter_adapter_deployed(
         );
         return;
     }
-    tracing::info!(net_id, allocator_url, "deployed + activated datacenter lease-adapter net");
+    tracing::info!(net_id, scheduler_flavor, "deployed + activated datacenter lease-adapter net");
 }
 
 #[cfg(test)]
@@ -518,13 +654,28 @@ mod tests {
     // R4b — datacenter lease-adapter net
     // -----------------------------------------------------------------------
 
-    fn dc_air(resource_id: Uuid) -> serde_json::Value {
-        serde_json::to_value(build_datacenter_lease_adapter_net(
+    fn http_conn(resource_id: Uuid) -> DatacenterConnection {
+        DatacenterConnection {
             resource_id,
-            "http://allocator.test/leases",
-            "{{secret:resources/ws/dc/v1#token}}",
-        ))
-        .expect("datacenter adapter net serializes to AIR")
+            resource_version: 1,
+            scheduler_flavor: "http".to_string(),
+            allocator_url: Some("http://allocator.test/leases".to_string()),
+            token_secret_ref: Some("{{secret:resources/ws/dc/v1#token}}".to_string()),
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_known_hosts: None,
+            template_dir: None,
+            ssh_key_secret_ref: None,
+            nomad_addr: None,
+            nomad_region: None,
+            nomad_token_secret_ref: None,
+        }
+    }
+
+    fn dc_air(resource_id: Uuid) -> serde_json::Value {
+        serde_json::to_value(build_datacenter_lease_adapter_net(&http_conn(resource_id)))
+            .expect("datacenter adapter net serializes to AIR")
     }
 
     /// The adapter shares the EXACT cross-net contract (inbox names, grant reply
@@ -570,6 +721,15 @@ mod tests {
         assert_eq!(cfg["allocator_url"], "http://allocator.test/leases");
         assert_eq!(cfg["token"], "{{secret:resources/ws/dc/v1#token}}");
 
+        // Discriminant + the two ClusterRegistry cache/correlation keys ride on
+        // EVERY flavor (the http leg uses Uuid::nil here).
+        assert_eq!(cfg["scheduler_flavor"], "http");
+        assert_eq!(cfg["resource_id"], Uuid::nil().to_string());
+        assert_eq!(cfg["resource_version"], 1);
+        // The http flavor emits NO slurm/nomad keys.
+        assert!(cfg.get("ssh_host").is_none());
+        assert!(cfg.get("nomad_addr").is_none());
+
         // Input on "request" (← claim_inbox), output "lease" → grant_outbox.
         let in_ports: Vec<&str> = t["inputs"]
             .as_array()
@@ -582,6 +742,101 @@ mod tests {
             o["port"] == "lease" && o["place"] == "grant_outbox"
         });
         assert!(out_to_grant, "lease output must route to grant_outbox: {t}");
+    }
+
+    /// A slurm cluster's effect_config carries the SSH connection (with the
+    /// inline-PEM secret as a `{{secret:…}}` template) + the correlation keys, and
+    /// NONE of the http/nomad keys.
+    #[test]
+    fn slurm_effect_config_carries_ssh_connection() {
+        let id = Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+        let conn = DatacenterConnection {
+            resource_id: id,
+            resource_version: 7,
+            scheduler_flavor: "slurm".to_string(),
+            allocator_url: None,
+            token_secret_ref: None,
+            ssh_host: Some("login.hpc.test".to_string()),
+            ssh_port: Some(2222),
+            ssh_user: Some("runner".to_string()),
+            ssh_known_hosts: Some("accept".to_string()),
+            template_dir: Some("/opt/jobs".to_string()),
+            ssh_key_secret_ref: Some("{{secret:resources/ws/dc/v7#ssh_key}}".to_string()),
+            nomad_addr: None,
+            nomad_region: None,
+            nomad_token_secret_ref: None,
+        };
+        let cfg = conn.effect_config();
+        assert_eq!(cfg["scheduler_flavor"], "slurm");
+        assert_eq!(cfg["resource_id"], id.to_string());
+        assert_eq!(cfg["resource_version"], 7);
+        assert_eq!(cfg["ssh_host"], "login.hpc.test");
+        assert_eq!(cfg["ssh_port"], 2222);
+        assert_eq!(cfg["ssh_user"], "runner");
+        assert_eq!(cfg["ssh_known_hosts"], "accept");
+        assert_eq!(cfg["template_dir"], "/opt/jobs");
+        assert_eq!(cfg["ssh_key"], "{{secret:resources/ws/dc/v7#ssh_key}}");
+        // No http / nomad leg keys leaked.
+        assert!(cfg.get("allocator_url").is_none());
+        assert!(cfg.get("token").is_none());
+        assert!(cfg.get("nomad_addr").is_none());
+    }
+
+    /// A nomad cluster's effect_config carries the Nomad address/region + the
+    /// optional token template (here present), and NO ssh/http keys.
+    #[test]
+    fn nomad_effect_config_carries_nomad_connection() {
+        let id = Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap();
+        let conn = DatacenterConnection {
+            resource_id: id,
+            resource_version: 3,
+            scheduler_flavor: "nomad".to_string(),
+            allocator_url: None,
+            token_secret_ref: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_known_hosts: None,
+            template_dir: None,
+            ssh_key_secret_ref: None,
+            nomad_addr: Some("http://nomad.test:4646".to_string()),
+            nomad_region: Some("global".to_string()),
+            nomad_token_secret_ref: Some("{{secret:resources/ws/dc/v3#nomad_token}}".to_string()),
+        };
+        let cfg = conn.effect_config();
+        assert_eq!(cfg["scheduler_flavor"], "nomad");
+        assert_eq!(cfg["resource_id"], id.to_string());
+        assert_eq!(cfg["resource_version"], 3);
+        assert_eq!(cfg["nomad_addr"], "http://nomad.test:4646");
+        assert_eq!(cfg["nomad_region"], "global");
+        assert_eq!(cfg["nomad_token"], "{{secret:resources/ws/dc/v3#nomad_token}}");
+        assert!(cfg.get("ssh_host").is_none());
+        assert!(cfg.get("allocator_url").is_none());
+    }
+
+    /// The optional nomad_token is OMITTED entirely when the cluster carries no
+    /// secret (an unauthenticated dev Nomad) — not emitted as null.
+    #[test]
+    fn nomad_effect_config_omits_absent_token() {
+        let conn = DatacenterConnection {
+            resource_id: Uuid::nil(),
+            resource_version: 1,
+            scheduler_flavor: "nomad".to_string(),
+            allocator_url: None,
+            token_secret_ref: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_known_hosts: None,
+            template_dir: None,
+            ssh_key_secret_ref: None,
+            nomad_addr: Some("http://nomad.test:4646".to_string()),
+            nomad_region: None,
+            nomad_token_secret_ref: None,
+        };
+        let cfg = conn.effect_config();
+        assert!(cfg.get("nomad_token").is_none(), "absent token must be omitted, not null");
+        assert!(cfg.get("nomad_region").is_none());
     }
 
     /// t_register keeps alloc_id (+ the rest of the lease) on the in_use hold —
@@ -647,6 +902,48 @@ mod tests {
             .map(|a| a["port"].as_str().unwrap())
             .collect();
         assert!(rel_in.contains(&"release"), "release effect input port: {rel_in:?}");
+    }
+
+    /// Held-allocation death (docs/16 §7): the adapter net has a `lease_failed`
+    /// SIGNAL place + a `fail_outbox` reply-channel ("fail") + a `t_lease_died`
+    /// transition that consumes `{lease_failed, in_use}` (correlate grant_id),
+    /// drops the hold (no release call — the alloc is already dead), and routes a
+    /// failure token over the "fail" channel back to the claiming loop.
+    #[test]
+    fn lease_died_routes_failure_over_fail_channel() {
+        let a = dc_air(Uuid::nil());
+
+        // lease_failed is a journaled signal place (replay-safe), distinct from
+        // lease_expired (the clean TTL reap).
+        assert_eq!(place(&a, "lease_failed").unwrap()["type"], "signal");
+
+        // fail_outbox is a reply-channel ("fail") place.
+        let fail = place(&a, "fail_outbox").expect("fail_outbox");
+        assert_eq!(fail["bridge_reply"], true);
+        assert_eq!(fail["bridge_reply_channel"], "fail");
+
+        // t_lease_died consumes lease_failed + in_use, correlated on grant_id.
+        let died = transition(&a, "t_lease_died").expect("t_lease_died");
+        // It is a plain rhai transition — drops the hold, NO release effect (the
+        // held alloc is already dead, like reap).
+        assert_eq!(died["logic"]["type"], "rhai");
+        let in_places: Vec<&str> = died["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["place"].as_str().unwrap())
+            .collect();
+        assert!(
+            in_places.contains(&"lease_failed") && in_places.contains(&"in_use"),
+            "t_lease_died consumes lease_failed + in_use, got {in_places:?}"
+        );
+        // It routes a notify token to fail_outbox (the fail reply channel).
+        let to_fail = died["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["place"] == "fail_outbox");
+        assert!(to_fail, "t_lease_died must route to fail_outbox: {died}");
     }
 
     /// t_reap drops the expired hold without re-calling release (the allocator

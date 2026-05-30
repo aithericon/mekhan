@@ -49,22 +49,29 @@ fn datacenter_kind_registered() {
     assert_eq!(d.oauth_provider, None);
     assert!(!d.dynamic_fields);
 
-    assert_eq!(
-        d.secret_fields,
-        &["token"],
-        "datacenter secret split drift"
-    );
+    // Discriminated resource: `secret_fields` is the UNION of the per-flavor
+    // secrets across the slurm/nomad/http variants (order-robust assertion).
+    let secret: Vec<&str> = d.secret_fields.to_vec();
+    for s in ["ssh_key", "nomad_token", "token"] {
+        assert!(
+            secret.contains(&s),
+            "datacenter.secret_fields missing `{s}`; got {secret:?}"
+        );
+    }
     let public: Vec<&str> = d.public_fields.to_vec();
-    for required in ["allocator_url", "scheduler_flavor"] {
+    // The serde tag is listed first, then the union of non-secret variant fields.
+    for required in ["scheduler_flavor", "allocator_url", "ssh_host", "nomad_addr"] {
         assert!(
             public.contains(&required),
             "datacenter.public_fields missing `{required}`; got {public:?}"
         );
     }
-    assert!(
-        !public.contains(&"token"),
-        "datacenter.token must NOT be public"
-    );
+    for s in ["token", "ssh_key", "nomad_token"] {
+        assert!(
+            !public.contains(&s),
+            "datacenter secret `{s}` must NOT be public"
+        );
+    }
 }
 
 /// The pool-kind registry maps each kind's wire name to the right backend and

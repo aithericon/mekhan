@@ -185,6 +185,7 @@ async fn publish_resolves_and_splices_known_resources() {
             id: resource_id,
             type_name: "postgres".to_string(),
             latest_version: 1,
+            public_config: serde_json::Value::Null,
         },
     );
 

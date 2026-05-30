@@ -71,6 +71,18 @@ impl EffectHandler for ExecutorSubmitHandler {
             .filter(|s| !s.is_empty())
             .map(String::from);
 
+        // Honour a per-job executor namespace stamped onto the job token by the
+        // compiler (a leased loop body sets `d.executor_namespace =
+        // <loop>.lease.executor_namespace`). When present, the client publishes
+        // to the lease-scoped queue drained by the persistent executor instead
+        // of its construction-time fixed namespace. Read off the job token's
+        // top level (mirrors how `execution_id` is read off `job_data`).
+        let namespace = job_data
+            .get("executor_namespace")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
         // Extract per-job signal routes from effect_config (scoped place names).
         // When the executor lifecycle is inside a scoped_prefix, the SDK embeds
         // the scoped place IDs here so routing metadata matches actual place IDs.
@@ -93,6 +105,7 @@ impl EffectHandler for ExecutorSubmitHandler {
                 signal_routes,
                 event_routes,
                 execution_id,
+                namespace,
             })
             .await
             .map_err(|e| match e {
@@ -235,22 +248,28 @@ mod tests {
     use petri_domain::TransitionId;
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
 
     /// Simple mock executor client for testing.
     struct MockExecutorClient {
         should_fail: AtomicBool,
+        /// Captures the `namespace` of the most recent submit request so tests
+        /// can assert the per-job namespace threads through the handler.
+        last_namespace: Mutex<Option<Option<String>>>,
     }
 
     impl MockExecutorClient {
         fn new() -> Self {
             Self {
                 should_fail: AtomicBool::new(false),
+                last_namespace: Mutex::new(None),
             }
         }
 
         fn always_fail() -> Self {
             Self {
                 should_fail: AtomicBool::new(true),
+                last_namespace: Mutex::new(None),
             }
         }
     }
@@ -261,6 +280,7 @@ mod tests {
             &self,
             _request: ExecutionSubmitRequest,
         ) -> Result<ExecutionSubmitResult, ExecutorError> {
+            *self.last_namespace.lock().unwrap() = Some(_request.namespace.clone());
             if self.should_fail.load(Ordering::Relaxed) {
                 Err(ExecutorError::SubmissionFailed("mock failure".to_string()))
             } else {
@@ -322,6 +342,44 @@ mod tests {
         assert!(result.result["execution_id"].as_str().is_some());
         // signal_key is now a UUID, not "{job_id}:{run}"
         assert!(result.result["signal_key"].as_str().unwrap().len() == 36);
+    }
+
+    #[tokio::test]
+    async fn test_submit_handler_threads_executor_namespace() {
+        // A leased loop body stamps `executor_namespace` on the job token's top
+        // level; the handler must read it off `job_data` (mirroring how it reads
+        // `execution_id`) and thread it into the submit request.
+        let client = Arc::new(MockExecutorClient::new());
+        let handler = ExecutorSubmitHandler::new(client.clone(), "job", "submitted");
+
+        let input = make_input(
+            "job",
+            json!({
+                "job_id": "train-alpha",
+                "run": 0,
+                "executor_namespace": "lease-inst1-node2",
+                "backend": "process",
+                "config": { "command": "python3" }
+            }),
+        );
+
+        handler.execute(input).await.unwrap();
+        assert_eq!(
+            *client.last_namespace.lock().unwrap(),
+            Some(Some("lease-inst1-node2".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_handler_no_executor_namespace_is_none() {
+        // Absent `executor_namespace` (the fixed-namespace daemon path) → None,
+        // so the client falls back to its construction-time namespace.
+        let client = Arc::new(MockExecutorClient::new());
+        let handler = ExecutorSubmitHandler::new(client.clone(), "job", "submitted");
+
+        let input = make_input("job", json!({ "job_id": "x", "run": 0 }));
+        handler.execute(input).await.unwrap();
+        assert_eq!(*client.last_namespace.lock().unwrap(), Some(None));
     }
 
     #[tokio::test]

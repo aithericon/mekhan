@@ -39,10 +39,22 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         return lower_automated_step_scheduled_lease(cx);
     }
 
+    // `Scheduled { operation: Submit, run_on_lease: true }` is NO LONGER a
+    // scheduler-net submit. The rework retargets a leased-loop body to the
+    // EXECUTOR enqueue path with a per-job `executor_namespace` borrowed from
+    // the enclosing loop lease — the held alloc runs ONE persistent drain
+    // executor on the lease namespace, and the body just enqueues to it. So a
+    // `run_on_lease` Submit body FALLS THROUGH to the plain executor lowering
+    // below (which stamps `d.executor_namespace`), NOT `lower_automated_step_scheduled`.
+    //
+    // A non-lease `Scheduled` body still bridges to the scheduler-net. `Lease`
+    // was already routed above, so this arm only ever sees `Submit` here — the
+    // `run_on_lease: false` gate is what distinguishes the scheduler-net submit
+    // from the retargeted enqueue.
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled { .. },
+            deployment_model: DeploymentModel::Scheduled { run_on_lease: false, .. },
             ..
         }
     ) {
@@ -134,6 +146,38 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
 
     let max_retries = retry_policy.max_retries;
 
+    // ── Lease retarget seam ─────────────────────────────────────────────────
+    // A `Scheduled { Submit, run_on_lease: true }` body lowers HERE (the plain
+    // executor lifecycle), NOT through the scheduler-net. When it sits inside a
+    // leased Loop we stamp a per-job `executor_namespace` onto the TOP of the
+    // job token `d` (NOT inside `d.spec`) — the engine's `ExecutorSubmitHandler`
+    // reads `d.executor_namespace` off `job_data` and publishes to the
+    // lease-scoped NATS queue (`lease-<grant_id>`) that the held alloc's
+    // persistent drain executor is consuming. The dotted
+    // `<loop_slug>.lease.executor_namespace` is a RAW borrow ref: the matching
+    // arm in `guard_readarc_plan` registers the same-shaped Guard borrow, so the
+    // standard read-arc pipeline (`apply_guard_borrows`) wires a read-arc into
+    // the loop's parked `p_<loop>_data` and word-boundary-rewrites the dotted
+    // text to `d_<loop>.lease.executor_namespace`. No enclosing leased loop ⇒
+    // no fragment (an authoring concern, surfaced by the editor/lint).
+    let run_on_lease = matches!(
+        &cx.node.data,
+        WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Scheduled {
+                run_on_lease: true,
+                ..
+            },
+            ..
+        }
+    );
+    let ns_frag = if run_on_lease {
+        enclosing_leased_loop_slug(cx.node, cx.graph)
+            .map(|loop_slug| format!(r#" d.executor_namespace = {loop_slug}.lease.executor_namespace;"#))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     // Rust panic/Result model: a WIRED error handle (`source_handle == "error"`)
     // means a permanent failure routes to the handler (handled `Result::Err`,
     // net continues); an UNWIRED handle means a permanent failure crashes the
@@ -219,12 +263,28 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         } else {
             r#"["metric", "progress", "phase", "log"]"#
         };
-        ctx.transition("prepare", format!("{label} - Prepare"))
+        let prepare_logic = format!(
+            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }};{ns_frag} #{{ job: d }}"#
+        );
+        let prepare = ctx
+            .transition("prepare", format!("{label} - Prepare"))
             .auto_input("input", &p_input)
-            .auto_output("job", &exec_inbox)
-            .logic(format!(
-                r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; #{{ job: d }}"#
-            ));
+            .auto_output("job", &exec_inbox);
+        if ns_frag.is_empty() {
+            // Common path: fail-fast build-time script validation (no borrowed
+            // refs in the literal, so `logic()` can validate variable bindings).
+            prepare.logic(prepare_logic);
+        } else {
+            // run_on_lease: the literal carries the RAW
+            // `<loop>.lease.executor_namespace` borrow, which the post-build
+            // read-arc pipeline (`apply_guard_borrows`) rewrites to
+            // `d_<loop>.lease.executor_namespace` and binds via a synthesized
+            // read-arc into `p_<loop>_data`. `logic()`'s build-time validation
+            // would reject the not-yet-bound `<loop>` root var, so use
+            // `logic_rhai` (the same deferral every Loop/Decision guard relies
+            // on — the engine validates the final rewritten Rhai at load).
+            prepare.logic_rhai(prepare_logic).done();
+        }
 
         let lc = executor_lifecycle(
             ctx,
@@ -376,16 +436,20 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         job_template,
         resources,
         operation,
+        run_on_lease,
         ..
     } = deployment_model
     else {
         unreachable!("lower_automated_step_scheduled on non-Scheduled step")
     };
-    // This entry handles `operation: Submit` only — the dispatcher routes
-    // `operation: Lease` to `lower_automated_step_scheduled_lease` (R4).
+    // This entry handles a NON-lease `operation: Submit` only. The dispatcher
+    // routes `operation: Lease` to `lower_automated_step_scheduled_lease` (R4)
+    // and a `run_on_lease: true` Submit to the EXECUTOR enqueue path
+    // (`lower_automated_step`, stamping `d.executor_namespace`) — neither
+    // reaches here.
     debug_assert!(
-        matches!(operation, ScheduledOperation::Submit),
-        "lower_automated_step_scheduled must only see operation: submit"
+        matches!(operation, ScheduledOperation::Submit) && !*run_on_lease,
+        "lower_automated_step_scheduled must only see a non-lease operation: submit"
     );
     // `scheduler` binds a `datacenter` resource (docs/13) for the LEASE path;
     // for SUBMIT it is unused — the env-global scheduler-net services the submit
@@ -426,6 +490,14 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let job_template_lit = rhai_str_escape(&job_template);
     let id_lit = rhai_str_escape(&id);
 
+    // NOTE: `runOnLease` no longer reaches this scheduler-net path. A
+    // `Scheduled { Submit, run_on_lease: true }` body now lowers via the
+    // EXECUTOR enqueue path (`lower_automated_step`), where it stamps a per-job
+    // `d.executor_namespace` borrowed from the enclosing loop lease and the
+    // held alloc's persistent drain executor pulls it. The old `spec.alloc_id`
+    // srun-onto-the-alloc seam (and the engine's `SlurmClient::submit_into_alloc`
+    // branch) are gone. This function only services a plain, non-lease Submit.
+    //
     // Rust panic/Result model (see lower_automated_step). Read outgoing edges
     // BEFORE the `&mut *cx.ctx` reborrow.
     // is_agent_tool: see lower_automated_step — a tool child forces p_error so
@@ -473,12 +545,15 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     // job_template_id, spec{ backend, inputs, outputs, config, resources } }.
     // See `lower_automated_step` for the `/*__BORROWED_INPUTS__*/` marker —
     // same Python-slug staging story for the scheduled lifecycle.
+    let prepare_logic = format!(
+        r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
+    );
+    // No borrowed refs in the literal (run_on_lease no longer routes here), so
+    // `logic()` can fail-fast on build-time variable-binding validation.
     ctx.transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
         .auto_input("input", &p_input)
         .auto_output("job", &sched_out)
-        .logic(format!(
-            r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
-        ));
+        .logic(prepare_logic);
 
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
         .auto_input("res", &sched_result)
@@ -525,17 +600,17 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
 
 /// Everything the pooled lowering needs once `Inline.pool.alias` has been
 /// resolved to a `token_pool` resource.
-struct PoolBinding {
+pub(super) struct PoolBinding {
     /// Deterministic backing net id (`pool-<resource_id>`) the claim/register/
     /// release bridges target.
-    backing_net_id: String,
+    pub(super) backing_net_id: String,
     /// `Lease__<kind>` — the AIR definition name for the typed grant/lease.
-    lease_def_name: String,
+    pub(super) lease_def_name: String,
     /// The kind's lease JSON Schema, registered into `scenario.definitions`.
-    lease_schema: serde_json::Value,
+    pub(super) lease_schema: serde_json::Value,
     /// The validated `request` params rendered as a Rhai literal (`()` when
     /// `binding.request` is absent).
-    request_rhai: String,
+    pub(super) request_rhai: String,
 }
 
 /// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to a
@@ -556,7 +631,7 @@ struct PoolBinding {
 ///   for datacenter) steering the author to the right deployment model.
 /// - `request` fails validation against the kind's `claim_schema` →
 ///   `ResourcePoolRequestInvalid`.
-fn resolve_binding(
+pub(super) fn resolve_binding(
     node_id: &str,
     alias: &str,
     request: Option<&serde_json::Value>,
@@ -593,6 +668,25 @@ fn resolve_binding(
     let pool_desc = aithericon_resources::pool::pool_kind(&kind).ok_or_else(wrong_kind)?;
     if kind != expected_kind {
         return Err(wrong_kind());
+    }
+
+    // Flavor-gated connection validation for datacenters. Both the per-step
+    // `Scheduled.scheduler` lease path and the loop `Loop.lease.scheduler`
+    // path funnel through here, so this is the single choke point. We assert
+    // the PUBLIC connection fields the flavor needs are present; the required
+    // SECRET (slurm `ssh_key`) is structurally guaranteed by the resource-create
+    // validator. Hard-fail with no fallback.
+    if kind == "datacenter" {
+        if let Some(missing) =
+            datacenter_missing_connection_fields(&resource.public_config)
+        {
+            return Err(CompileError::DatacenterConnectionIncomplete {
+                node_id: node_id.to_string(),
+                alias: alias.to_string(),
+                flavor: missing.0,
+                missing: missing.1,
+            });
+        }
     }
 
     // Validate `request` against the kind's claim_schema before we bake it into
@@ -632,6 +726,55 @@ fn resolve_binding(
         lease_schema: sanitize_definition_schema((pool_desc.lease_schema)()),
         request_rhai,
     })
+}
+
+/// Validate a `datacenter` resource's public connection config against its
+/// declared `scheduler_flavor`. Returns `Some((flavor, missing_fields))` when
+/// a flavor's required PUBLIC fields are absent, else `None`.
+///
+/// Required public fields per flavor (the matching secret is enforced by the
+/// resource-create validator, not here):
+/// - `slurm` → `ssh_host`, `ssh_user`, `template_dir`
+/// - `nomad` → `nomad_addr`
+/// - `http`  → `allocator_url`
+///
+/// An unknown/absent flavor is treated as "http" (the default leg). A field
+/// counts as present when it's a non-null, non-empty-string JSON value.
+pub(super) fn datacenter_missing_connection_fields(
+    public_config: &serde_json::Value,
+) -> Option<(String, Vec<String>)> {
+    let present = |key: &str| -> bool {
+        match public_config.get(key) {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+            Some(_) => true,
+        }
+    };
+
+    let flavor = public_config
+        .get("scheduler_flavor")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http")
+        .to_string();
+
+    let required: &[&str] = match flavor.as_str() {
+        "slurm" => &["ssh_host", "ssh_user", "template_dir"],
+        "nomad" => &["nomad_addr"],
+        // "http" and any unrecognized flavor fall back to the HTTP leg.
+        _ => &["allocator_url"],
+    };
+
+    let missing: Vec<String> = required
+        .iter()
+        .filter(|k| !present(k))
+        .map(|k| (*k).to_string())
+        .collect();
+
+    if missing.is_empty() {
+        None
+    } else {
+        Some((flavor, missing))
+    }
 }
 
 /// Drop schemars' root-only envelope keys (`$schema`, `title`) so a
@@ -1208,4 +1351,89 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
     );
     cx.publish_interface().data_port = Some(data_place_id);
     Ok(())
+}
+
+/// Resolve the slug of the Loop that ENCLOSES `node` (`node.parent_id ==
+/// loop.id`) **iff** that loop carries a `lease`. Returns the loop's
+/// `slug()` — the exact key the borrow pipeline + `out_shape_loop` use for
+/// `<loop>.lease.<field>` — so the injected
+/// `<loop_slug>.lease.executor_namespace` ref lines up with the read-arc the
+/// matching `guard_readarc_plan` arm registers.
+///
+/// `None` when the body has no parent, the parent isn't a Loop, or the loop
+/// holds no lease. A `runOnLease` body in any of those cases simply enqueues
+/// to the daemon namespace (no `executor_namespace` injected) — the misuse is
+/// an authoring concern, not a hard compile error here.
+fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
+    let parent_id = node.parent_id.as_deref()?;
+    graph.nodes.iter().find_map(|n| {
+        if n.id != parent_id {
+            return None;
+        }
+        match &n.data {
+            WorkflowNodeData::Loop {
+                lease: Some(_), ..
+            } => Some(n.slug()),
+            _ => None,
+        }
+    })
+}
+
+#[cfg(test)]
+mod datacenter_connection_tests {
+    use super::datacenter_missing_connection_fields;
+    use serde_json::json;
+
+    #[test]
+    fn slurm_complete_is_ok() {
+        let cfg = json!({
+            "scheduler_flavor": "slurm",
+            "ssh_host": "login.test",
+            "ssh_user": "runner",
+            "template_dir": "/opt/jobs",
+        });
+        assert!(datacenter_missing_connection_fields(&cfg).is_none());
+    }
+
+    #[test]
+    fn slurm_missing_host_and_dir() {
+        let cfg = json!({ "scheduler_flavor": "slurm", "ssh_user": "runner" });
+        let (flavor, missing) = datacenter_missing_connection_fields(&cfg).expect("incomplete");
+        assert_eq!(flavor, "slurm");
+        assert_eq!(missing, vec!["ssh_host".to_string(), "template_dir".to_string()]);
+    }
+
+    #[test]
+    fn slurm_empty_string_counts_as_missing() {
+        let cfg = json!({
+            "scheduler_flavor": "slurm",
+            "ssh_host": "   ",
+            "ssh_user": "runner",
+            "template_dir": "/opt/jobs",
+        });
+        let (_, missing) = datacenter_missing_connection_fields(&cfg).expect("blank is missing");
+        assert_eq!(missing, vec!["ssh_host".to_string()]);
+    }
+
+    #[test]
+    fn nomad_needs_addr() {
+        let ok = json!({ "scheduler_flavor": "nomad", "nomad_addr": "http://nomad:4646" });
+        assert!(datacenter_missing_connection_fields(&ok).is_none());
+        let bad = json!({ "scheduler_flavor": "nomad" });
+        let (flavor, missing) = datacenter_missing_connection_fields(&bad).expect("incomplete");
+        assert_eq!(flavor, "nomad");
+        assert_eq!(missing, vec!["nomad_addr".to_string()]);
+    }
+
+    #[test]
+    fn http_default_needs_allocator_url() {
+        // Absent flavor falls back to the http leg.
+        let bad = json!({});
+        let (flavor, missing) = datacenter_missing_connection_fields(&bad).expect("incomplete");
+        assert_eq!(flavor, "http");
+        assert_eq!(missing, vec!["allocator_url".to_string()]);
+
+        let ok = json!({ "scheduler_flavor": "http", "allocator_url": "http://a.test" });
+        assert!(datacenter_missing_connection_fields(&ok).is_none());
+    }
 }

@@ -478,7 +478,12 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
 /// as `input.<slug>.iteration` (or `<slug>.iteration` for the
 /// slug-borrow rewrite path).
 pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
-    let WorkflowNodeData::Loop { accumulators, .. } = &node.data else {
+    let WorkflowNodeData::Loop {
+        accumulators,
+        lease,
+        ..
+    } = &node.data
+    else {
         unreachable!("out_shape_loop on non-Loop variant");
     };
     let mut o = in_shape.clone();
@@ -495,6 +500,17 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
             &acc.var,
             TokenShape::Any,
             Provenance::new(node, "loop accumulator (declared producer field)"),
+        );
+    }
+    // L3: a loop-scoped lease parks the held grant under `lease` (incl.
+    // `alloc_id`/`gpu_uuid`/…) in the same parked envelope. Declared `Any` so
+    // body iterations + downstream blocks borrow `<slug>.lease.<field>` (e.g.
+    // `<slug>.lease.alloc_id`) through the standard read-arc pipeline.
+    if lease.is_some() {
+        ns.insert(
+            "lease",
+            TokenShape::Any,
+            Provenance::new(node, "loop-scoped held lease (`<slug>.lease.<field>`)"),
         );
     }
     o.insert(

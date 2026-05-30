@@ -31,6 +31,7 @@ use petri_application::{
     TopologyRepository,
 };
 use petri_application::resource_lease_handlers::AllocatorClient;
+use crate::slurm_allocator::FlavorDispatchAllocatorClient;
 #[cfg(feature = "catalogue")]
 use petri_application::{
     CatalogueLookupHandler, CatalogueRegisterHandler, CatalogueSubscribeHandler,
@@ -263,6 +264,14 @@ where
     /// to call `terminate`, which creates a one-way cycle resolved at use
     /// time). See `set_subworkflow_cancellor` and [`RegistryCancellor`].
     subworkflow_cancellor: RwLock<Option<Arc<dyn SubWorkflowCancellor>>>,
+    /// The multi-cluster `ClusterRegistry` (docs/16). When set, the per-net
+    /// `ResourceLease{Acquire,Release}` handlers are registered with a client
+    /// that delegates to it (lazy per-cluster build + idle-teardown) instead of
+    /// the boot-singleton `FlavorDispatchAllocatorClient`. Wrapped in `RwLock<
+    /// Option<>>` + set via `&self` so main.rs can install it after the registry
+    /// is `Arc`-wrapped (mirroring `subworkflow_cancellor`).
+    #[cfg(any(feature = "slurm", feature = "nomad"))]
+    cluster_registry: RwLock<Option<Arc<crate::cluster_registry::ClusterRegistry>>>,
     #[cfg(feature = "executor")]
     executor_config: Option<ExecutorIntegrationConfig>,
     human_config: Option<HumanIntegrationConfig>,
@@ -297,6 +306,8 @@ where
             scheduler_config: None,
             timer_client: None,
             subworkflow_cancellor: RwLock::new(None),
+            #[cfg(any(feature = "slurm", feature = "nomad"))]
+            cluster_registry: RwLock::new(None),
             #[cfg(feature = "executor")]
             executor_config: None,
             human_config: None,
@@ -441,6 +452,22 @@ where
     /// to use the handler is created.
     pub fn set_subworkflow_cancellor(&self, cancellor: Arc<dyn SubWorkflowCancellor>) {
         *self.subworkflow_cancellor.write() = Some(cancellor);
+    }
+
+    /// Install the multi-cluster `ClusterRegistry` (docs/16). After this, every
+    /// new net's `resource_lease_acquire`/`resource_lease_release` handlers route
+    /// through a registry-backed `ClusterRegistryAllocatorClient` (lazy
+    /// per-cluster build + idle-teardown) instead of the boot-singleton
+    /// `FlavorDispatchAllocatorClient`. Takes `&self` so main.rs can call it
+    /// after the registry is `Arc`-wrapped; must be set before the first
+    /// `get_or_create`. The registry is also held by main.rs for the
+    /// `GET /api/clusters` management surface.
+    #[cfg(any(feature = "slurm", feature = "nomad"))]
+    pub fn set_cluster_registry(
+        &self,
+        registry: Arc<crate::cluster_registry::ClusterRegistry>,
+    ) {
+        *self.cluster_registry.write() = Some(registry);
     }
 
     /// Set a callback to run after each new net instance is created.
@@ -638,6 +665,31 @@ where
     /// handler sets. Feature-gated registrations (`nomad`, `slurm`,
     /// `executor`, `executor-vault-secrets`, `catalogue`) are preserved
     /// exactly. Process lifecycle handlers are always registered.
+    /// Build the legacy env-driven `FlavorDispatchAllocatorClient` (the
+    /// fallback when no `ClusterRegistry` is installed): http + the optional
+    /// `SLURM_*`/`NOMAD_*` env legs. Preserves the single-cluster dev recipes
+    /// (`just dev slurm-up`/`scheduler-up`) that configure env, not a resource.
+    fn build_env_flavor_dispatch() -> Arc<dyn AllocatorClient> {
+        let http_allocator: Arc<dyn AllocatorClient> = Arc::new(HttpAllocatorClient::new());
+        #[cfg(feature = "slurm")]
+        let slurm_allocator: Option<Arc<dyn AllocatorClient>> =
+            crate::slurm_allocator::SlurmAllocatorClient::from_env()
+                .map(|c| Arc::new(c) as Arc<dyn AllocatorClient>);
+        #[cfg(not(feature = "slurm"))]
+        let slurm_allocator: Option<Arc<dyn AllocatorClient>> = None;
+        #[cfg(feature = "nomad")]
+        let nomad_allocator: Option<Arc<dyn AllocatorClient>> =
+            crate::nomad_allocator::NomadAllocatorClient::from_env()
+                .map(|c| Arc::new(c) as Arc<dyn AllocatorClient>);
+        #[cfg(not(feature = "nomad"))]
+        let nomad_allocator: Option<Arc<dyn AllocatorClient>> = None;
+        Arc::new(FlavorDispatchAllocatorClient::new(
+            http_allocator,
+            slurm_allocator,
+            nomad_allocator,
+        ))
+    }
+
     fn register_effect_handlers(
         &self,
         service: &std::sync::Arc<PetriNetService<E, T, S>>,
@@ -729,7 +781,21 @@ where
             #[cfg(feature = "executor-vault-secrets")]
             if let (Some(store), Some(wrapper)) = (&ecfg.secret_store, &ecfg.secret_wrapper) {
                 executor_nats_client.set_secret_wrapping(store.clone(), wrapper.clone());
-                tracing::info!(net_id = %net_id, "Executor secret wrapping enabled");
+                // ALSO wire the Vault store into this net's evaluation service so
+                // firing-time `resolve_secrets` (firing.rs) substitutes
+                // `{{secret:<vault_path>#field}}` placeholders in an effect's
+                // `effect_config` before the handler runs. This is what a
+                // datacenter lease needs: the cluster CONNECTION (e.g. a Slurm
+                // datacenter's inline `ssh_key` PEM) rides the
+                // `resource_lease_acquire` effect_config as a secret template and
+                // must be resolved to plaintext so the ClusterRegistry can write
+                // the real key to its 0600 temp file. Without this the template
+                // passes through LITERAL and the allocator's SSH fails with
+                // "failed to connect" (a garbage key file). Nomad datacenters
+                // dodge this — `nomad_addr` is non-secret public config — which is
+                // why only the Slurm leg surfaced it.
+                service.set_secret_store(store.clone());
+                tracing::info!(net_id = %net_id, "Executor secret wrapping + firing-time secret resolution enabled");
             }
 
             let executor_client: Arc<dyn ExecutorClient> = Arc::new(executor_nats_client);
@@ -856,10 +922,37 @@ where
         // backend's `lease` operation). The allocator connection
         // (url + token) arrives per-FIRE via the transition's `effect_config`
         // (resolved from the datacenter resource secret just-in-time), NOT at
-        // net-create — so one stateless `HttpAllocatorClient` serves every
-        // datacenter, no per-net connection state. Mirror the process-lifecycle
-        // always-on block.
-        let allocator_client: Arc<dyn AllocatorClient> = Arc::new(HttpAllocatorClient::new());
+        // net-create — so one stateless allocator serves every datacenter, no
+        // per-net connection state. Mirror the process-lifecycle always-on
+        // block.
+        //
+        // The registered client is a `FlavorDispatchAllocatorClient` that routes
+        // each fire on the `scheduler_flavor` the handler reads off the resolved
+        // `effect_config` (default `"http"` → the generic HTTP allocator;
+        // `"slurm"` → the SSH/salloc-backed `SlurmAllocatorClient`). The Slurm
+        // leg is built from the `SLURM_*` env only when the `slurm` feature is on
+        // AND `SLURM_SSH_HOST` is set; otherwise it is absent and a
+        // `scheduler_flavor=slurm` fire fails loudly.
+        // Multi-cluster (docs/16): when a `ClusterRegistry` is installed, route
+        // lease acquire/release through a registry-backed client that lazily
+        // builds a per-`(resource_id, version)` `ClusterClient` from the
+        // connection riding the per-fire effect_config (and idle-tears-down when
+        // a cluster has no held leases). This REPLACES the boot-singleton
+        // `FlavorDispatchAllocatorClient` (folded into the registry's
+        // `get_or_build` flavor match). When no registry is installed (e.g. a
+        // plain http-allocator dev stack), fall back to the legacy dispatcher
+        // built from the `SLURM_*`/`NOMAD_*` env.
+        #[cfg(any(feature = "slurm", feature = "nomad"))]
+        let cluster_registry = self.cluster_registry.read().clone();
+        #[cfg(any(feature = "slurm", feature = "nomad"))]
+        let allocator_client: Arc<dyn AllocatorClient> = match cluster_registry {
+            Some(reg) => Arc::new(
+                crate::cluster_registry::ClusterRegistryAllocatorClient::new(reg),
+            ),
+            None => Self::build_env_flavor_dispatch(),
+        };
+        #[cfg(not(any(feature = "slurm", feature = "nomad")))]
+        let allocator_client: Arc<dyn AllocatorClient> = Self::build_env_flavor_dispatch();
         service
             .register_effect_handler(
                 effects::RESOURCE_LEASE_ACQUIRE.handler_id,
@@ -1014,6 +1107,123 @@ where
                 Ok(())
             }
             None => Err(format!("Net '{}' not found", net_id)),
+        }
+    }
+
+    /// Pre-terminate hook (docs/16 §8) — release any cluster lease HELD on
+    /// behalf of the instance `net_id` being cancelled, so a `scancel` /
+    /// `nomad job stop` frees the held salloc + its persistent drain executor
+    /// instead of leaking them.
+    ///
+    /// ## The leak this fixes
+    ///
+    /// `terminate` emits `NetCancelled` + hibernate, tearing down the eval loop
+    /// BEFORE the leased loop reaches its `t_exit` (the natural-release path).
+    /// So `t_release` never fires and the held salloc / dispatched drain job +
+    /// its persistent executor + the cluster's watcher + the SSH ControlMaster
+    /// socket all leak. This hook performs the forced release the torn-down loop
+    /// would otherwise have done.
+    ///
+    /// ## How it finds the held lease
+    ///
+    /// The held lease lives on the lease-adapter pool-net (`pool-<resource_id>`),
+    /// not on the instance net: its `in_use` place holds `{ grant_id, alloc_id,
+    /// … }` and the connection `effect_config` is baked on its `t_request`
+    /// effect transition. The grant_id is `<instance_id>:<loop_id>` (minted in
+    /// `lower_loop`), so a held lease BELONGS to this instance iff its grant_id
+    /// starts with `"<net_id>:"`. For each such hold we route a best-effort,
+    /// idempotent `release_with_connection(effect_config, alloc_id)` through the
+    /// installed allocator client (the same `ClusterRegistryAllocatorClient` the
+    /// lease handlers use) — a cache HIT on `(resource_id, version)` reuses the
+    /// already-built `ClusterClient` (SSH session intact; no secret
+    /// re-resolution needed), `release_with_flavor` issues the `scancel` /
+    /// `nomad job stop`, and the registry decrement arms idle-teardown when the
+    /// cluster's active count hits 0 — freeing the watcher + SSH socket.
+    ///
+    /// ## Idempotency
+    ///
+    /// The marking is scanned ONCE; if the loop already released naturally there
+    /// is no `in_use` hold to find → no-op. The allocator release is
+    /// 404-tolerant, so a double-cancel (or a cancel racing a natural release)
+    /// `scancel`s twice harmlessly.
+    #[cfg(any(feature = "slurm", feature = "nomad"))]
+    pub async fn release_held_leases_for_instance(&self, net_id: &str) {
+        use petri_application::token_color_to_json;
+
+        let Some(registry) = self.cluster_registry.read().clone() else {
+            return; // no multi-cluster registry installed (plain http dev stack)
+        };
+        let allocator: Arc<dyn AllocatorClient> = Arc::new(
+            crate::cluster_registry::ClusterRegistryAllocatorClient::new(registry),
+        );
+
+        // grant_id is `<instance_id>:<loop_id>` where `<instance_id>` is the BARE
+        // workflow-instance UUID (`loop_.rs`: `input._instance_id + ":<loop_id>"`),
+        // NOT the engine net_id. The instance net_id is `mekhan-<uuid>`, so strip
+        // the `mekhan-` prefix before matching — otherwise the prefix never
+        // matches any held grant and the cancel leaks an orphan allocation.
+        let instance_id = net_id.strip_prefix("mekhan-").unwrap_or(net_id);
+        let grant_prefix = format!("{instance_id}:");
+
+        // Scan every live lease-adapter pool-net for in_use holds owned by this
+        // instance. The held alloc_id + the net's effect_config are all we need.
+        let net_ids: Vec<String> = self.nets.read().keys().cloned().collect();
+        for pool_net_id in net_ids {
+            if !pool_net_id.starts_with("pool-") {
+                continue;
+            }
+            let Some(instance) = self.get(&pool_net_id) else {
+                continue;
+            };
+
+            // The connection effect_config is baked on the acquire effect
+            // (`t_request`) — both lease transitions carry the SAME config.
+            let Some(topology) = instance.service.get_topology() else {
+                continue;
+            };
+            let effect_config = topology
+                .get_transition(&petri_domain::TransitionId::named("t_request"))
+                .and_then(|t| t.effect_config.clone());
+            let Some(effect_config) = effect_config else {
+                continue; // not a datacenter lease-adapter net (e.g. a token pool)
+            };
+
+            let marking = instance.service.get_marking().await;
+            let in_use = petri_domain::PlaceId::named("in_use");
+            for token in marking.tokens_at(&in_use) {
+                let data = token_color_to_json(&token.color);
+                let grant_id = data.get("grant_id").and_then(|v| v.as_str());
+                let alloc_id = data.get("alloc_id").and_then(|v| v.as_str());
+                let (Some(grant_id), Some(alloc_id)) = (grant_id, alloc_id) else {
+                    continue;
+                };
+                if !grant_id.starts_with(&grant_prefix) {
+                    continue; // a different instance's held lease
+                }
+                tracing::info!(
+                    net_id = %net_id,
+                    pool_net_id = %pool_net_id,
+                    grant_id = %grant_id,
+                    alloc_id = %alloc_id,
+                    "cancel: releasing held cluster lease (forced scancel / job-stop)"
+                );
+                // Best-effort, idempotent. A cache hit reuses the built client;
+                // a 404 (already gone) is tolerated by the allocator contract.
+                if let Err(e) = allocator
+                    .release_with_connection(&effect_config, alloc_id)
+                    .await
+                {
+                    tracing::warn!(
+                        net_id = %net_id,
+                        grant_id = %grant_id,
+                        alloc_id = %alloc_id,
+                        error = %e,
+                        "cancel: forced lease release failed (best-effort) — the allocator may \
+                         already have reclaimed it, or the cluster client is not cached (cold \
+                         engine); the salloc's own TTL / scancel-on-job-end is the backstop"
+                    );
+                }
+            }
         }
     }
 

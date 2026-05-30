@@ -1,9 +1,20 @@
 pub mod artifact_store;
+/// Per-cluster connection manager (multi-cluster scheduling, docs/16). Gated on
+/// the scheduler legs — it owns the per-cluster watchers + idle-teardown.
+#[cfg(any(feature = "slurm", feature = "nomad"))]
+pub mod cluster_registry;
+/// First-class cluster/watcher management API (docs/16 §9). `GET /api/clusters`
+/// + force-reconnect/drain over the live `ClusterRegistry`. Gated on the
+/// scheduler legs (the registry only exists then).
+#[cfg(any(feature = "slurm", feature = "nomad"))]
+pub mod cluster_routes;
 pub mod dto;
 pub mod handlers;
 pub mod net_registry;
+pub mod nomad_allocator;
 pub mod router;
 pub mod scenario_bridge;
+pub mod slurm_allocator;
 
 pub use artifact_store::ArtifactStoreState;
 #[cfg(feature = "catalogue")]

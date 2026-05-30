@@ -124,6 +124,11 @@ fn map_ssh_err(context: &str) -> impl FnOnce(SshError) -> SchedulerError + '_ {
 #[async_trait::async_trait]
 impl SchedulerClient for SlurmClient {
     async fn submit(&self, request: SubmitRequest) -> Result<SubmitResult, SchedulerError> {
+        // The leased-loop body no longer srun's onto a held allocation through
+        // this `submit` (the old `spec.alloc_id` seam is gone). A `run_on_lease`
+        // body now ENQUEUES to a lease-scoped NATS namespace drained by ONE
+        // persistent executor the acquire path launched on the held alloc — so
+        // every `submit` here is a plain `sbatch` of a fresh queued job.
         let comment_json = self.build_comment_json(&request.signal_key);
 
         // Build the sbatch command

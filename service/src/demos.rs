@@ -1737,6 +1737,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 type_name: "smtp".to_string(),
                 latest_version: 1,
+                public_config: serde_json::Value::Null,
             },
         );
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();

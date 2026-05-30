@@ -1,0 +1,9 @@
+{
+  "path": "nomad_dc",
+  "resource_type": "datacenter",
+  "display_name": "Nomad (dev agent)",
+  "config": {
+    "scheduler_flavor": "nomad",
+    "nomad_addr": "http://localhost:4646"
+  }
+}

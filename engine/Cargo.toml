@@ -73,6 +73,9 @@ async-stream = "0.3"
 # Concurrency
 parking_lot = "0.12"
 
+# Temp files (0600 PEM materialisation for the per-cluster SSH key)
+tempfile = "3"
+
 # Testing
 rstest = "0.18"
 testcontainers = "0.23"

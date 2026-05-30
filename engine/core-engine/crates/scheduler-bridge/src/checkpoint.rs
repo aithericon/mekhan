@@ -2,9 +2,51 @@
 //!
 //! Scheduler watchers use [`CheckpointStore`] to persist their cursor position
 //! so they can resume from the last processed event after a restart.
+//!
+//! # Per-cluster keying (multi-cluster correctness)
+//!
+//! All cluster watchers in one engine share the single [`KV_BUCKET`] KV bucket.
+//! Each watcher therefore MUST namespace its checkpoint keys by the cluster it
+//! observes, or two clusters of the same flavor clobber each other's cursor and
+//! the next restart skips or replays events (the dup-seq failure class).
+//!
+//! The namespace is the datacenter `resource_id` (a UUID), or the reserved
+//! [`DEV_BOOTSTRAP_CLUSTER_KEY`] literal for the env/dev-bootstrap watcher. The
+//! key builders below ([`slurm_poll_cursor_key`], [`slurm_tracked_jobs_key`],
+//! [`nomad_event_index_key`]) are the SINGLE source of truth for the scheme so
+//! the Slurm and Nomad watchers cannot drift, and so the cluster-scoping is
+//! unit-testable without standing up a watcher (which needs NATS).
 
 /// NATS KV bucket name for watcher checkpoints.
 pub const KV_BUCKET: &str = "PETRI_WATCHER";
+
+/// Reserved cluster key for the env/dev-bootstrap watcher (the single
+/// `from_env`-built client). A real datacenter `resource_id` is a UUID and can
+/// never collide with this literal, so the dev-bootstrap cursor stays disjoint
+/// from every resource-driven cluster's cursor.
+pub const DEV_BOOTSTRAP_CLUSTER_KEY: &str = "_env";
+
+/// Per-cluster KV key for a Slurm watcher's last-polled sacct cursor (ISO ts).
+///
+/// `cluster_key` is the datacenter `resource_id` (or [`DEV_BOOTSTRAP_CLUSTER_KEY`]).
+pub fn slurm_poll_cursor_key(cluster_key: &str) -> String {
+    format!("slurm.{}.poll_cursor", cluster_key)
+}
+
+/// Per-cluster KV key for a Slurm watcher's persisted tracked-jobs map.
+///
+/// Distinct from [`slurm_poll_cursor_key`] under the SAME `cluster_key` so the
+/// cursor and the tracked-jobs map are namespaced independently per cluster.
+pub fn slurm_tracked_jobs_key(cluster_key: &str) -> String {
+    format!("slurm.{}.tracked_jobs", cluster_key)
+}
+
+/// Per-cluster KV key for a Nomad watcher's last-processed event-stream index.
+///
+/// `cluster_key` is the datacenter `resource_id` (or [`DEV_BOOTSTRAP_CLUSTER_KEY`]).
+pub fn nomad_event_index_key(cluster_key: &str) -> String {
+    format!("nomad.{}.event_index", cluster_key)
+}
 
 /// Persists and loads watcher cursor positions from NATS KV.
 ///
@@ -100,5 +142,69 @@ impl CheckpointStore {
         if let Err(e) = kv.purge(key).await {
             tracing::warn!(error = %e, key = key, "Failed to clear checkpoint");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slurm_keys_are_cluster_scoped() {
+        let a = "11111111-2222-3333-4444-555555555555";
+        let b = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        // Two distinct clusters never share a poll-cursor key. A shared key is
+        // the dup-seq failure: one cluster's cursor would clobber the other's,
+        // and the next restart would skip or replay events on both.
+        assert_ne!(slurm_poll_cursor_key(a), slurm_poll_cursor_key(b));
+        assert_ne!(slurm_tracked_jobs_key(a), slurm_tracked_jobs_key(b));
+
+        // The cluster_key threads into BOTH the cursor key AND the tracked-jobs
+        // key (design doc §5.2 adversarial note) — neither falls back to a global.
+        assert!(slurm_poll_cursor_key(a).contains(a));
+        assert!(slurm_tracked_jobs_key(a).contains(a));
+    }
+
+    #[test]
+    fn nomad_key_is_cluster_scoped() {
+        let a = "11111111-2222-3333-4444-555555555555";
+        let b = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        assert_ne!(nomad_event_index_key(a), nomad_event_index_key(b));
+        assert!(nomad_event_index_key(a).contains(a));
+    }
+
+    #[test]
+    fn cursor_and_tracked_jobs_keys_are_disjoint() {
+        // Within ONE cluster the cursor and the tracked-jobs map must use
+        // distinct keys, or saving the tracked-jobs blob overwrites the cursor.
+        let c = "11111111-2222-3333-4444-555555555555";
+        assert_ne!(slurm_poll_cursor_key(c), slurm_tracked_jobs_key(c));
+    }
+
+    #[test]
+    fn flavor_prefixes_are_disjoint() {
+        // A slurm cluster and a nomad cluster could in principle carry the same
+        // resource_id namespace (they won't — one resource is one flavor — but
+        // the keys are still disjoint by the flavor prefix, defence in depth).
+        let c = "11111111-2222-3333-4444-555555555555";
+        assert_ne!(slurm_poll_cursor_key(c), nomad_event_index_key(c));
+    }
+
+    #[test]
+    fn dev_bootstrap_key_never_collides_with_a_uuid() {
+        // The dev-bootstrap watcher uses the reserved "_env" namespace. A real
+        // datacenter resource_id is a UUID, which can never equal the literal,
+        // so the env cursor stays disjoint from every resource-driven cluster.
+        let uuid = "11111111-2222-3333-4444-555555555555";
+        assert_ne!(DEV_BOOTSTRAP_CLUSTER_KEY, uuid);
+        assert_ne!(
+            slurm_poll_cursor_key(DEV_BOOTSTRAP_CLUSTER_KEY),
+            slurm_poll_cursor_key(uuid)
+        );
+        assert_ne!(
+            nomad_event_index_key(DEV_BOOTSTRAP_CLUSTER_KEY),
+            nomad_event_index_key(uuid)
+        );
     }
 }

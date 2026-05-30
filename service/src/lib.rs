@@ -163,6 +163,12 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // Admin: remove / reseed built-in demos
         .routes(routes!(handlers::demos::reset_demos))
         .routes(routes!(handlers::demos::reseed_demos))
+        // Cluster/watcher management — read-through of the engine's
+        // multi-cluster `ClusterRegistry` (docs/16 §9): list live clusters +
+        // force-reconnect / drain a cluster.
+        .routes(routes!(handlers::clusters::list_clusters))
+        .routes(routes!(handlers::clusters::reconnect_cluster))
+        .routes(routes!(handlers::clusters::drain_cluster))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,

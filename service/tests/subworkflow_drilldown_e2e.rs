@@ -123,7 +123,7 @@ fn child_graph(tag: &str) -> WorkflowGraph {
         edges: vec![edge("ce", &s, &e)],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     }
 }
 
@@ -140,7 +140,7 @@ fn parent_graph(child_family: Uuid, pin: VersionPin) -> WorkflowGraph {
         edges: vec![edge("pe1", "pstart", "sub"), edge("pe2", "sub", "pend")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(),
+        definitions: Default::default(), default_scheduler: None,
     }
 }
 

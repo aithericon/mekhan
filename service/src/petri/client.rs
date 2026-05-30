@@ -121,4 +121,42 @@ impl PetriClient {
     pub fn events_stream_url(&self, net_id: &str) -> String {
         format!("{}/api/nets/{}/events/stream", self.base_url, net_id)
     }
+
+    /// List every live cluster client from the engine's multi-cluster
+    /// `ClusterRegistry` (docs/16 — `GET /api/clusters`). Returns the raw engine
+    /// payload so the mekhan handler can join human names + re-serialize.
+    pub async fn list_clusters(&self) -> Result<Value, PetriError> {
+        let url = format!("{}/api/clusters", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(PetriError::Response { status, body });
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Force-reconnect a cluster (`POST /api/clusters/{resource_id}/reconnect`).
+    pub async fn reconnect_cluster(&self, resource_id: &str) -> Result<Value, PetriError> {
+        let url = format!("{}/api/clusters/{}/reconnect", self.base_url, resource_id);
+        let resp = self.client.post(&url).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(PetriError::Response { status, body });
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Drain a cluster (`POST /api/clusters/{resource_id}/drain`).
+    pub async fn drain_cluster(&self, resource_id: &str) -> Result<Value, PetriError> {
+        let url = format!("{}/api/clusters/{}/drain", self.base_url, resource_id);
+        let resp = self.client.post(&url).send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(PetriError::Response { status, body });
+        }
+        Ok(resp.json().await?)
+    }
 }

@@ -128,6 +128,7 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                         resources: None,
                         operation: ScheduledOperation::Submit,
                         request: None,
+                        run_on_lease: false,
                     },
                     stream_output: false,
                 },
@@ -157,7 +158,7 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
     }
 }
 

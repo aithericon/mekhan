@@ -534,6 +534,22 @@ pub enum CompileError {
         kind: String,
     },
 
+    /// A `datacenter` resource declares `scheduler_flavor = "<flavor>"` but is
+    /// missing a connection field that flavor requires (slurm needs
+    /// `ssh_host` + `ssh_user` + `template_dir`; nomad needs `nomad_addr`;
+    /// http needs `allocator_url`). Hard-fail at publish so a half-configured
+    /// cluster can't reach a fire.
+    #[error(
+        "datacenter resource '{alias}' (flavor '{flavor}') is missing required \
+         connection field(s): {missing:?}"
+    )]
+    DatacenterConnectionIncomplete {
+        node_id: String,
+        alias: String,
+        flavor: String,
+        missing: Vec<String>,
+    },
+
     /// `resourcePool.request` failed validation against the pool kind's
     /// `claim_schema`. `message` carries the first jsonschema error.
     #[error(
@@ -544,6 +560,21 @@ pub enum CompileError {
         alias: String,
         message: String,
     },
+
+    /// A `Scheduled`/leased step resolved to NO datacenter through the whole
+    /// selection chain (`node.scheduler ?? template.default_scheduler ??
+    /// workspace.default_datacenter`; see `docs/16-multi-cluster-scheduling.md`
+    /// §6). Hard-fail at publish — there is no implicit env fallback for
+    /// multi-cluster selection. Fires for `operation: Lease` unconditionally
+    /// (a lease REQUIRES a concrete cluster); for `operation: Submit` only when
+    /// the dev-bootstrap env path is also absent (so `just dev scheduler-up`'s
+    /// env-global submit still resolves). Mirrors `WorkspaceResourceUnknown` /
+    /// `SchedulerNotADatacenter`.
+    #[error(
+        "node '{node_id}': Scheduled/leased step has no datacenter — set a scheduler on \
+         the node, a template default_scheduler, or a workspace default_datacenter"
+    )]
+    SchedulerUnresolved { node_id: String },
 
     /// `executionSpec.config` (or a nested value) carries a
     /// `{"$ref": "#/definitions/<name>"}` that the workflow-level
@@ -754,6 +785,8 @@ impl CompileError {
             Self::WorkspaceResourceUnknown { .. } => "workspace_resource_unknown",
             Self::ResourcePoolNotAPool { .. } => "resource_pool_not_a_pool",
             Self::SchedulerNotADatacenter { .. } => "scheduler_not_a_datacenter",
+            Self::DatacenterConnectionIncomplete { .. } => "datacenter_connection_incomplete",
+            Self::SchedulerUnresolved { .. } => "scheduler_unresolved",
             Self::ResourcePoolRequestInvalid { .. } => "resource_pool_request_invalid",
             Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
             Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
@@ -840,6 +873,8 @@ impl CompileError {
             | Self::WorkspaceResourceUnknown { node_id, .. }
             | Self::ResourcePoolNotAPool { node_id, .. }
             | Self::SchedulerNotADatacenter { node_id, .. }
+            | Self::DatacenterConnectionIncomplete { node_id, .. }
+            | Self::SchedulerUnresolved { node_id }
             | Self::ResourcePoolRequestInvalid { node_id, .. } => Some(node_id),
             _ => None,
         }

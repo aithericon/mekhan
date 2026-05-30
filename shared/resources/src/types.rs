@@ -253,18 +253,69 @@ pub struct TokenPool {
 /// HTTP API. See `docs/13` (datacenter-as-resource) and `docs/14` (the lease
 /// lifecycle). The scheduler backend (R4) builds its client from the resolved
 /// secret per the docs/13 "engine is the consumer" design.
+///
+/// **Discriminated resource.** `scheduler_flavor` is the serde tag: it selects
+/// the engine leg (R4) AND the connection variant. As an internally-tagged enum
+/// it serializes to the SAME flat JSON the engine consumes
+/// (`{ "scheduler_flavor": "slurm", "ssh_host": …, "ssh_key": … }`), and makes
+/// schemars emit a discriminated `oneOf` so the resource editor renders ONLY the
+/// chosen flavor's fields (and the schema enforces per-flavor required-ness
+/// instead of a flat "everything optional" struct). The `#[resource(secret)]`
+/// fields (`ssh_key` / `nomad_token` / `token`) are unioned across variants for
+/// the Vault split — `split_config` keys off the field name, not the variant.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "datacenter", display_name = "Datacenter", icon = "lucide-server")]
-pub struct Datacenter {
-    /// Base URL of the allocator's lease API (claim → POST, release → DELETE).
-    pub allocator_url: String,
-    /// Allocator dialect, e.g. `"slurm"`, `"nomad"`, `"http"`. Selects the
-    /// concrete adapter the engine effect uses (R4); `"http"` is the generic
-    /// lease API the mock-allocator slice proves against.
-    pub scheduler_flavor: String,
-    /// Bearer/API token presented to the allocator. The only Vault-stored field.
-    #[resource(secret)]
-    pub token: String,
+#[resource(
+    name = "datacenter",
+    display_name = "Datacenter",
+    icon = "lucide-server",
+    tag = "scheduler_flavor"
+)]
+#[serde(tag = "scheduler_flavor", rename_all = "lowercase")]
+pub enum Datacenter {
+    /// Slurm cluster reached over SSH (salloc / srun / scancel + squeue/sacct).
+    Slurm {
+        /// SSH host of the Slurm login node.
+        ssh_host: String,
+        /// SSH port. Engine defaults to `22` if absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_port: Option<u16>,
+        /// SSH user.
+        ssh_user: String,
+        /// Known-hosts policy: `"strict"` | `"add"` | `"accept"`. Engine
+        /// defaults to `"accept"` if absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_known_hosts: Option<String>,
+        /// Job-script dir on the login node (the lease executor script lives
+        /// here).
+        template_dir: String,
+        /// Inline PEM private key (NOT a path). The engine writes a 0600 temp
+        /// file at use. Vault-stored.
+        #[resource(secret)]
+        ssh_key: String,
+    },
+    /// Nomad cluster (HTTP dispatch + allocation event stream).
+    Nomad {
+        /// Nomad HTTP API address.
+        nomad_addr: String,
+        /// Nomad region. Engine defaults to `"global"` if absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nomad_region: Option<String>,
+        /// Nomad ACL token. Vault-stored. Optional (Nomad without ACLs needs
+        /// none).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[resource(secret)]
+        nomad_token: Option<String>,
+    },
+    /// Generic HTTP allocator — the mock-allocator slice / a custom lease API.
+    Http {
+        /// Base URL of the HTTP allocator's lease API (claim → POST, release →
+        /// DELETE).
+        allocator_url: String,
+        /// Bearer/API token presented to the HTTP allocator. Vault-stored.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[resource(secret)]
+        token: Option<String>,
+    },
 }
 
 // ─── Kv — the dynamic-fields escape hatch ────────────────────────────────────

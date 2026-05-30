@@ -54,46 +54,140 @@
 		return 'unknown';
 	}
 
+	/** Build a single `FieldSpec` from a JSON-Schema property node. */
+	function specFromProp(
+		name: string,
+		p: Record<string, unknown>,
+		secretFields: string[],
+		required: string[]
+	): FieldSpec {
+		const jsonType = pickPrimitive(p.type);
+		let itemType: JsonType = 'unknown';
+		if (jsonType === 'array') {
+			const items = (p.items ?? {}) as Record<string, unknown>;
+			itemType = pickPrimitive(items.type);
+		}
+		let objectSchema: Record<string, unknown> | null = null;
+		if (jsonType === 'object') {
+			objectSchema = p as Record<string, unknown>;
+		}
+		return {
+			name,
+			label: name,
+			jsonType,
+			isSecret: secretFields.includes(name),
+			isRequired: required.includes(name),
+			enumOptions: Array.isArray(p.enum) ? (p.enum as string[]) : null,
+			description: typeof p.description === 'string' ? p.description : null,
+			itemType,
+			objectSchema,
+			default: 'default' in p ? p.default : undefined
+		};
+	}
+
+	type Variant = { props: Record<string, Record<string, unknown>>; required: string[] };
+
+	function variantsOf(schema: Record<string, unknown>): Variant[] | null {
+		const oneOf = schema.oneOf ?? schema.anyOf;
+		if (!Array.isArray(oneOf) || oneOf.length === 0) return null;
+		return oneOf.map((v) => ({
+			props: ((v as Record<string, unknown>).properties ?? {}) as Record<
+				string,
+				Record<string, unknown>
+			>,
+			required: (((v as Record<string, unknown>).required ?? []) as string[]) ?? []
+		}));
+	}
+
+	/**
+	 * The discriminator field of a `oneOf`/`anyOf` schema, or `null` for a plain
+	 * object schema. The discriminator is the property present in EVERY variant
+	 * with a single-value `enum` (the serde internally-tagged-enum shape — e.g. a
+	 * datacenter's `scheduler_flavor`).
+	 */
+	export function discriminatorOf(
+		schema: Record<string, unknown> | null | undefined
+	): string | null {
+		if (!schema) return null;
+		const variants = variantsOf(schema);
+		if (!variants) return null;
+		for (const name of Object.keys(variants[0].props)) {
+			const constInAll = variants.every((v) => {
+				const q = v.props[name];
+				return Array.isArray(q?.enum) && (q.enum as unknown[]).length === 1;
+			});
+			if (constInAll) return name;
+		}
+		return null;
+	}
+
 	/**
 	 * Derive an ordered list of field specs from a JSON Schema object.
-	 * `fieldOrder`, when supplied, fixes the iteration order (the resource
-	 * modal passes `[...public_fields, ...secret_fields]`); otherwise the
-	 * schema's own `properties` insertion order is used.
+	 *
+	 * Plain object schema: one spec per `properties` entry. `fieldOrder`, when
+	 * supplied, fixes the iteration order (the resource modal passes
+	 * `[...public_fields, ...secret_fields]`).
+	 *
+	 * DISCRIMINATED schema (`oneOf`/`anyOf` of variants tagged by a const-enum
+	 * discriminator — a serde internally-tagged enum like the datacenter's
+	 * slurm/nomad/http): render the discriminator as a `<select>` first, then
+	 * ONLY the fields of the variant matching `discriminatorValue` (with that
+	 * variant's `required`). Nothing else is shown, so a Slurm datacenter never
+	 * surfaces the Nomad/HTTP fields. `discriminatorValue` unset ⇒ just the
+	 * select (pick a flavor first).
 	 */
 	export function deriveFieldSpecs(
 		schema: Record<string, unknown> | null | undefined,
 		secretFields: string[],
-		fieldOrder?: string[]
+		fieldOrder?: string[],
+		discriminatorValue?: string
 	): FieldSpec[] {
 		if (!schema) return [];
+
+		const disc = discriminatorOf(schema);
+		if (disc) {
+			const variants = variantsOf(schema)!;
+			const options = variants
+				.map((v) => (v.props[disc]?.enum as string[] | undefined)?.[0])
+				.filter((x): x is string => typeof x === 'string');
+			const discSpec: FieldSpec = {
+				name: disc,
+				label: disc,
+				jsonType: 'string',
+				isSecret: false,
+				isRequired: true,
+				enumOptions: options,
+				description: typeof schema.title === 'string' ? null : null,
+				itemType: 'unknown',
+				objectSchema: null,
+				default: undefined
+			};
+			const out: FieldSpec[] = [discSpec];
+			const active = variants.find(
+				(v) => (v.props[disc]?.enum as string[] | undefined)?.[0] === discriminatorValue
+			);
+			if (active) {
+				// Honour the caller's preferred order, then any remaining variant
+				// fields, skipping the discriminator itself (rendered above).
+				const present = Object.keys(active.props).filter((n) => n !== disc);
+				const ordered = [
+					...(fieldOrder ?? []).filter((n) => present.includes(n)),
+					...present.filter((n) => !(fieldOrder ?? []).includes(n))
+				];
+				for (const name of ordered) {
+					out.push(specFromProp(name, active.props[name] ?? {}, secretFields, active.required));
+				}
+			}
+			return out;
+		}
+
 		const props = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
 		const required = (schema.required ?? []) as string[];
 		const order = fieldOrder ?? Object.keys(props);
 		const out: FieldSpec[] = [];
 		for (const name of order) {
-			const p = props[name] ?? {};
-			const jsonType = pickPrimitive(p.type);
-			let itemType: JsonType = 'unknown';
-			if (jsonType === 'array') {
-				const items = (p.items ?? {}) as Record<string, unknown>;
-				itemType = pickPrimitive(items.type);
-			}
-			let objectSchema: Record<string, unknown> | null = null;
-			if (jsonType === 'object') {
-				objectSchema = p as Record<string, unknown>;
-			}
-			out.push({
-				name,
-				label: name,
-				jsonType,
-				isSecret: secretFields.includes(name),
-				isRequired: required.includes(name),
-				enumOptions: Array.isArray(p.enum) ? (p.enum as string[]) : null,
-				description: typeof p.description === 'string' ? p.description : null,
-				itemType,
-				objectSchema,
-				default: 'default' in p ? p.default : undefined
-			});
+			if (!props[name]) continue;
+			out.push(specFromProp(name, props[name] ?? {}, secretFields, required));
 		}
 		return out;
 	}
@@ -144,7 +238,22 @@
 		onchange
 	}: Props = $props();
 
-	const fieldSpecs = $derived(deriveFieldSpecs(schema, secretFields, fieldOrder));
+	// Discriminator field for a `oneOf` schema (e.g. a datacenter's
+	// `scheduler_flavor`); `null` for a plain object schema.
+	const discriminator = $derived(discriminatorOf(schema));
+	// Thread the CURRENT discriminator value so a discriminated schema renders
+	// the discriminator select + only the matching variant's fields, and
+	// re-derives reactively when the user switches it.
+	const fieldSpecs = $derived(
+		deriveFieldSpecs(
+			schema,
+			secretFields,
+			fieldOrder,
+			discriminator && value[discriminator] != null
+				? String(value[discriminator])
+				: undefined
+		)
+	);
 
 	function set(name: string, raw: unknown) {
 		onchange({ ...value, [name]: raw });

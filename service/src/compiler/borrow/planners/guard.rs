@@ -127,6 +127,28 @@ pub(crate) enum RefResolution {
     MapMissingStar { map_slug: String },
 }
 
+/// True when some proper prefix of `path` resolves to an `Any`/`Opaque`
+/// (compiler-opaque) shape — i.e. the remaining tail addresses INTO an opaque
+/// namespace, which the borrow model treats permissively (the runtime value is
+/// a free-form JSON map). Used for a loop-scoped lease parked under
+/// `<slug>.lease` (declared `Any`): `<slug>.lease.alloc_id` cannot resolve
+/// exactly (the `Any` boundary stops `TokenShape::resolve`), but the access is
+/// sound — it mirrors the parked-producer `find_by_leaf` path for AutomatedStep
+/// lease borrows (`<step>.lease.gpu_uuid`).
+fn resolves_under_opaque(shape: &TokenShape, path: &[String]) -> bool {
+    // Walk growing prefixes; if any prefix lands on an opaque node, the tail is
+    // permissive. Stop before the full path (a full-path Any leaf is handled by
+    // the exact `resolve` check the caller already ran).
+    for n in 1..path.len() {
+        if let Some((sub, _)) = shape.resolve(&path[..n]) {
+            if matches!(sub, TokenShape::Any | TokenShape::Opaque(_)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// The single resolver shared by `reachable_scope`, `check_guard` and
 /// `guard_readarc_plan` — the picker offers exactly what this binds, and no
 /// diagnostic contradicts it.
@@ -241,7 +263,14 @@ pub(crate) fn resolve_ref(
                 };
                 let mut full: Vec<String> = vec![root.clone()];
                 full.extend(gref.segs.iter().cloned());
-                if shape.resolve(&full).is_none() {
+                // Resolve the full path. A loop-scoped lease parks an `Any`
+                // namespace under `<slug>.lease` (the held grant is opaque to
+                // the compiler), so an exact resolve of `<slug>.lease.alloc_id`
+                // fails at the `Any` boundary. Accept it when SOME prefix of the
+                // path resolves to an `Any`/`Opaque` shape — sub-access into an
+                // opaque namespace is permissive, mirroring the parked-producer
+                // `find_by_leaf` path below (`<step>.lease.gpu_uuid`).
+                if shape.resolve(&full).is_none() && !resolves_under_opaque(shape, &full) {
                     return RefResolution::Unresolved;
                 }
                 let prov = shape
@@ -569,6 +598,7 @@ pub(crate) fn guard_readarc_plan(
             WorkflowNodeData::Loop {
                 loop_condition,
                 accumulators,
+                lease,
                 ..
             } => {
                 // loop_condition borrows resolve into the loop's own parked
@@ -583,6 +613,21 @@ pub(crate) fn guard_readarc_plan(
                 // `init` is intentionally NOT scanned — v1 keeps it simple
                 // (no upstream borrows), evaluated in the enter scope.
                 let mut srcs: Vec<String> = Vec::new();
+                // The continue/exit guards ALWAYS reference `<slug>.iteration`
+                // (`{slug}.iteration < {max}`, independent of loop_condition), so
+                // the counter MUST get the read-arc rewrite `<slug>.iteration` →
+                // `d_<id>.iteration` to match its input port. Without this source
+                // a loop whose `loop_condition` is a constant (e.g. `"true"`, a
+                // maxIterations-only loop) with no accumulators was skipped
+                // entirely → the unbound `<slug>.iteration` made the guard
+                // un-evaluable and the loop wedged after iteration 0.
+                let slug = node.slug();
+                srcs.push(format!("{slug}.iteration"));
+                // A leased loop's `t_continue` re-folds `lease: {slug}.lease`
+                // forward — rewrite that ref onto the parked envelope too.
+                if lease.is_some() {
+                    srcs.push(format!("{slug}.lease"));
+                }
                 if !loop_condition.trim().is_empty() {
                     srcs.push(loop_condition.clone());
                 }
@@ -590,9 +635,6 @@ pub(crate) fn guard_readarc_plan(
                     if !a.merge_expr.trim().is_empty() {
                         srcs.push(a.merge_expr.clone());
                     }
-                }
-                if srcs.is_empty() {
-                    continue;
                 }
                 srcs
             }
@@ -634,6 +676,32 @@ pub(crate) fn guard_readarc_plan(
             WorkflowNodeData::Map { items_ref, .. } if !items_ref.trim().is_empty() => {
                 vec![items_ref.clone()]
             }
+            // A `Scheduled { operation: Submit, run_on_lease: true }`
+            // AutomatedStep nested in a leased Loop now ENQUEUES to the lease
+            // namespace (it lowers via the EXECUTOR path, not scheduler-net).
+            // `lower_automated_step` injects
+            // `d.executor_namespace = <loop_slug>.lease.executor_namespace;` into
+            // the `t_<id>_prepare` logic; we synthesize the SAME dotted source
+            // here so the standard read-arc pipeline wires a read-arc into the
+            // loop's parked `p_<loop>_data` and rewrites the dotted text to
+            // `d_<loop>.lease.executor_namespace`. `resolve_ref`'s `is_loop_node`
+            // branch resolves `<loop>.lease.executor_namespace` via
+            // `resolves_under_opaque` (the parked `<loop>.lease` is `Any`),
+            // returning a `Borrow` — no new BorrowSource, no new apply arm.
+            // Without an enclosing leased loop the lowering injects nothing, so
+            // we emit nothing.
+            WorkflowNodeData::AutomatedStep {
+                deployment_model:
+                    crate::models::template::DeploymentModel::Scheduled {
+                        operation: crate::models::template::ScheduledOperation::Submit,
+                        run_on_lease: true,
+                        ..
+                    },
+                ..
+            } => match enclosing_leased_loop_slug(node, graph) {
+                Some(loop_slug) => vec![format!("{loop_slug}.lease.executor_namespace")],
+                None => continue,
+            },
             _ => continue,
         };
         let in_shape = report.node_in.get(&node.id);
@@ -699,6 +767,28 @@ pub(crate) fn guard_readarc_plan(
 
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
 use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
+
+/// Slug of the Loop that ENCLOSES `node` (`node.parent_id == loop.id`)
+/// iff that loop carries a `lease`. Mirrors the identically-named helper in
+/// `lower::automated_step` (both call `WorkflowNode::slug()`) so the dotted
+/// `<loop_slug>.lease.executor_namespace` synthesized here is byte-identical to
+/// the one injected into the `t_<id>_prepare` logic — `apply_guard_borrows`
+/// relies on the literal match to find + rewrite the ref. Loops are exempt from
+/// slug suffixing, so `slug()` == the `SlugIndex` key.
+fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
+    let parent_id = node.parent_id.as_deref()?;
+    graph.nodes.iter().find_map(|n| {
+        if n.id != parent_id {
+            return None;
+        }
+        match &n.data {
+            WorkflowNodeData::Loop {
+                lease: Some(_), ..
+            } => Some(n.slug()),
+            _ => None,
+        }
+    })
+}
 
 pub(crate) struct GuardSource;
 

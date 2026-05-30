@@ -72,7 +72,46 @@ impl Default for NomadConfig {
     }
 }
 
+/// Resolved Nomad connection parameters parsed from a datacenter resource's
+/// `effect_config` (NOT process env).
+///
+/// The multi-cluster analogue of [`NomadConfig::from_env`]: the `ClusterRegistry`
+/// parses the resolved effect_config into one of these and hands it to
+/// [`NomadConfig::from_connection`]. Only connection-shaping fields are carried;
+/// `task_name` keeps its default (the resource models a *cluster connection*).
+///
+/// `token` is the ACL token the registry already unwrapped from Vault; an empty
+/// or absent token means unauthenticated (`-dev` mode).
+#[derive(Clone, Debug, Default)]
+pub struct NomadConnectionParams {
+    /// Nomad HTTP address *(required)*, e.g. `http://nomad.local:4646`.
+    pub addr: String,
+    /// ACL token (optional; empty/absent → unauthenticated).
+    pub token: Option<String>,
+    /// Nomad region (default `global` when `None`).
+    pub region: Option<String>,
+    /// Optional CA-cert PATH for TLS.
+    pub ca_cert: Option<String>,
+}
+
 impl NomadConfig {
+    /// Build configuration from an explicit resolved connection (the datacenter
+    /// resource's `effect_config`), NOT env.
+    ///
+    /// Connection-shaping fields come from `params`; `task_name` keeps the
+    /// [`NomadConfig::default`] value. An empty `token`/`ca_cert` collapses to
+    /// `None` (mirrors [`NomadConfig::from_env`]'s empty-string handling).
+    pub fn from_connection(params: NomadConnectionParams) -> Self {
+        let defaults = NomadConfig::default();
+        NomadConfig {
+            addr: params.addr,
+            token: filter_empty(params.token),
+            region: params.region.unwrap_or(defaults.region),
+            task_name: defaults.task_name,
+            ca_cert: filter_empty(params.ca_cert),
+        }
+    }
+
     /// Create configuration from environment variables.
     ///
     /// Returns `None` if `NOMAD_ADDR` is not set, indicating Nomad is not configured.
@@ -238,5 +277,37 @@ mod tests {
         let config = NomadConfig::default();
         let client = config.build_http_client();
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_from_connection_full() {
+        let config = NomadConfig::from_connection(NomadConnectionParams {
+            addr: "https://nomad.cluster:4646".to_string(),
+            token: Some("acl-token".to_string()),
+            region: Some("eu-central-1".to_string()),
+            ca_cert: Some("/tmp/ca.pem".to_string()),
+        });
+        assert_eq!(config.addr, "https://nomad.cluster:4646");
+        assert_eq!(config.token.as_deref(), Some("acl-token"));
+        assert_eq!(config.region, "eu-central-1");
+        assert_eq!(config.ca_cert.as_deref(), Some("/tmp/ca.pem"));
+        // task_name keeps its default (connection-only, not a watcher knob).
+        assert_eq!(config.task_name, "petri-worker");
+    }
+
+    #[test]
+    fn test_from_connection_defaults_and_empty_token() {
+        // Required addr only; empty token + absent region/cacert collapse to
+        // None / default (mirrors from_env's empty-string handling).
+        let config = NomadConfig::from_connection(NomadConnectionParams {
+            addr: "http://localhost:4646".to_string(),
+            token: Some(String::new()),
+            ..Default::default()
+        });
+        assert_eq!(config.addr, "http://localhost:4646");
+        assert!(config.token.is_none());
+        assert_eq!(config.region, "global");
+        assert!(config.ca_cert.is_none());
+        assert_eq!(config.task_name, "petri-worker");
     }
 }

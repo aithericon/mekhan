@@ -22,7 +22,10 @@ use tokio::sync::RwLock;
 use tokio_util::io::StreamReader;
 
 use petri_domain::ExternalSignal;
-use petri_scheduler_bridge::{signal_subject, CheckpointStore, RoutingMeta, SignalPublisher};
+use petri_scheduler_bridge::{
+    nomad_event_index_key, signal_subject, CheckpointStore, RoutingMeta, SignalPublisher,
+    DEV_BOOTSTRAP_CLUSTER_KEY,
+};
 
 use crate::config::NomadConfig;
 use crate::models::{Allocation, EventStreamData, Job};
@@ -52,9 +55,6 @@ pub enum WatcherError {
     Nats(String),
 }
 
-/// KV key for the last-processed Nomad event stream Raft index.
-const CHECKPOINT_KEY: &str = "nomad.event_index";
-
 /// Nomad event stream watcher.
 ///
 /// Connects to Nomad's event stream, extracts allocation lifecycle events,
@@ -65,16 +65,21 @@ pub struct NomadWatcher {
     http_client: reqwest::Client,
     signal_publisher: SignalPublisher,
     checkpoint: CheckpointStore,
+    /// Per-cluster checkpoint namespace (= the datacenter `resource_id`, or
+    /// [`DEV_BOOTSTRAP_CLUSTER_KEY`] for the env-built client). Prefixes the
+    /// checkpoint key so N clusters sharing the one `PETRI_WATCHER` KV bucket
+    /// never clobber each other's event-index cursor.
+    cluster_key: String,
     /// Cache of job_id -> Petri routing meta. `None` means "fetched but not a Petri job".
     meta_cache: RwLock<HashMap<String, Option<RoutingMeta>>>,
 }
 
 impl NomadWatcher {
-    /// Create a new watcher.
+    /// Create a new watcher from the env/dev-bootstrap config.
     ///
-    /// Initializes the checkpoint KV bucket for restart resilience.
-    /// If KV initialization fails, the watcher still works but without
-    /// persisted checkpoints (logs a warning).
+    /// Initializes the checkpoint KV bucket for restart resilience. Uses the
+    /// reserved [`DEV_BOOTSTRAP_CLUSTER_KEY`] namespace — for a resource-driven
+    /// cluster, use [`NomadWatcher::from_connection`] with the `resource_id`.
     ///
     /// # Arguments
     /// * `config` - Nomad connection configuration
@@ -82,6 +87,19 @@ impl NomadWatcher {
     pub async fn new(
         config: NomadConfig,
         nats: async_nats::jetstream::Context,
+    ) -> Result<Self, WatcherError> {
+        Self::from_connection(config, nats, DEV_BOOTSTRAP_CLUSTER_KEY).await
+    }
+
+    /// Create a watcher for a specific cluster from a resolved connection.
+    ///
+    /// `cluster_key` (the datacenter `resource_id`) namespaces this watcher's
+    /// checkpoint cursor so concurrent clusters on the one KV bucket resume their
+    /// OWN event-stream index after a restart (no cross-contamination).
+    pub async fn from_connection(
+        config: NomadConfig,
+        nats: async_nats::jetstream::Context,
+        cluster_key: impl Into<String>,
     ) -> Result<Self, WatcherError> {
         // Build a streaming-specific HTTP client: no overall timeout (event streams
         // stay open indefinitely), TCP keepalive, and conservative pool settings.
@@ -110,14 +128,23 @@ impl NomadWatcher {
             config,
             http_client,
             signal_publisher,
+            cluster_key: cluster_key.into(),
             meta_cache: RwLock::new(HashMap::new()),
             checkpoint,
         })
     }
 
+    /// Per-cluster KV key for the last-processed Nomad event stream Raft index.
+    ///
+    /// Delegates to the shared key builder in `petri-scheduler-bridge` so the
+    /// per-cluster scheme is single-sourced (and unit-tested there).
+    fn checkpoint_key(&self) -> String {
+        nomad_event_index_key(&self.cluster_key)
+    }
+
     /// Load the last checkpointed Nomad event stream Raft index.
     async fn load_checkpoint_index(&self) -> Option<u64> {
-        let value = self.checkpoint.load(CHECKPOINT_KEY).await?;
+        let value = self.checkpoint.load(&self.checkpoint_key()).await?;
         let index: u64 = value.parse().ok()?;
         tracing::info!(index = index, "Loaded checkpoint index from NATS KV");
         Some(index)
@@ -126,13 +153,13 @@ impl NomadWatcher {
     /// Save the current Nomad event stream Raft index.
     async fn save_checkpoint_index(&self, index: u64) {
         self.checkpoint
-            .save(CHECKPOINT_KEY, &index.to_string())
+            .save(&self.checkpoint_key(), &index.to_string())
             .await;
     }
 
     /// Clear the saved checkpoint (e.g., when the saved index is stale).
     async fn clear_checkpoint_index(&self) {
-        self.checkpoint.clear(CHECKPOINT_KEY).await;
+        self.checkpoint.clear(&self.checkpoint_key()).await;
     }
 
     /// Run the watcher loop with automatic reconnection.

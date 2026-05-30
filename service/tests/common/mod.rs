@@ -82,7 +82,8 @@ pub fn test_config() -> AppConfig {
         host: "127.0.0.1".to_string(),
         port: 0,
         database_url: String::new(),
-        petri_lab_url: "http://localhost:13030".to_string(),
+        petri_lab_url: std::env::var("TEST_PETRI_URL")
+            .unwrap_or_else(|_| "http://localhost:13030".to_string()),
         nats_url: nats_url(),
         nats_creds: None,
         cleanup: CleanupConfig::default(),
@@ -100,6 +101,23 @@ pub fn test_config() -> AppConfig {
         // Tests publish demos explicitly through the API; the startup
         // seeder is off so each test owns its template ids.
         demos: mekhan_service::config::DemosConfig::default(),
+    }
+}
+
+/// Resource secret store for the test `AppState`. When `VAULT_ADDR`/`VAULT_TOKEN`
+/// are set — e.g. an executor-backed e2e driven against a live `just dev` stack
+/// whose ENGINE reads the SAME Vault — use the Vault-backed store so resource
+/// SECRET fields (a datacenter's inline `ssh_key` PEM, an `nomad_token`, …) land
+/// exactly where the engine resolves `{{secret:<vault_path>#<field>}}` at fire
+/// time. Without this, secrets would go to a process-local in-memory store and
+/// the engine's secret-template resolution would come up empty (a slurm lease
+/// then fails with "ssh: failed to connect" — a malformed/empty key). Offline
+/// unit/integration tests leave the env unset and get the in-memory fallback.
+/// Mirrors `main.rs`'s selection.
+fn default_resource_store() -> Arc<dyn aithericon_resources::ResourceSecretStore> {
+    match aithericon_resources::VaultResourceStore::from_env() {
+        Some(vrs) => Arc::new(vrs),
+        None => Arc::new(aithericon_resources::InMemoryResourceStore::new()),
     }
 }
 
@@ -152,7 +170,7 @@ pub async fn test_app_with_authenticator(
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -201,7 +219,7 @@ pub async fn test_app_with_introspection(
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -248,7 +266,7 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         zitadel_mgmt: Some(mgmt),
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -297,7 +315,7 @@ pub async fn test_app() -> (Router, PgPool) {
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -345,7 +363,7 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -395,7 +413,7 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -459,7 +477,7 @@ pub async fn test_app_waiters(
         zitadel_mgmt: None,
         triggers,
         result_waiters: result_waiters.clone(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
@@ -519,7 +537,7 @@ pub async fn test_app_with_petri_url_and_triggers(
         zitadel_mgmt: None,
         triggers: triggers.clone(),
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: std::sync::Arc::new(aithericon_resources::InMemoryResourceStore::new()),
+        resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),

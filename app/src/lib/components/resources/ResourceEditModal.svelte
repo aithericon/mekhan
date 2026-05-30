@@ -12,6 +12,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import SchemaForm, {
 		deriveFieldSpecs,
+		discriminatorOf,
 		type FieldSpec as SchemaFieldSpec
 	} from '$lib/components/editor/panels/shared/SchemaForm.svelte';
 	import X from '@lucide/svelte/icons/x';
@@ -59,12 +60,22 @@
 	// JSON Schema property entries — derived from `descriptor.schema` via the
 	// shared `deriveFieldSpecs` (same logic SchemaForm renders with). The
 	// field order is the resource type's public-then-secret listing.
+	// Discriminator field (e.g. a datacenter's `scheduler_flavor`) for a
+	// `oneOf`-discriminated resource schema; `null` for a plain object schema.
+	const discriminator = $derived(
+		descriptor ? discriminatorOf(descriptor.schema as Record<string, unknown>) : null
+	);
+
 	const fieldSpecs = $derived.by<SchemaFieldSpec[]>(() => {
 		if (!descriptor) return [];
+		// Pass the CURRENT discriminator value so a discriminated schema renders
+		// the flavor select + only that flavor's fields (reactively re-derives
+		// when the user switches flavor).
 		return deriveFieldSpecs(
 			(descriptor.schema ?? {}) as Record<string, unknown>,
 			descriptor.secret_fields,
-			[...descriptor.public_fields, ...descriptor.secret_fields]
+			[...descriptor.public_fields, ...descriptor.secret_fields],
+			discriminator ? fieldValues[discriminator] : undefined
 		);
 	});
 

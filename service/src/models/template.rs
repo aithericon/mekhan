@@ -95,6 +95,14 @@ pub struct WorkflowGraph {
     /// rejected at validation. BTreeMap for byte-stable compile output.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub definitions: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Template-level default `datacenter` resource alias. A
+    /// `Scheduled`/leased node whose own `scheduler` is absent inherits this
+    /// (the second rung of the selection chain — node ?? template ??
+    /// workspace ?? error; see `docs/16-multi-cluster-scheduling.md` §6). Lives
+    /// on the graph JSON so it travels with the template + the Yjs doc.
+    /// `None` = no template default (fall through to the workspace default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_scheduler: Option<String>,
 }
 
 fn is_default_instance_concurrency(c: &InstanceConcurrencyPolicy) -> bool {
@@ -389,6 +397,18 @@ pub enum WorkflowNodeData {
         /// Downstream blocks read them via `<loop_slug>.<var>` borrows.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         accumulators: Vec<LoopAccumulator>,
+        /// Optional datacenter lease held for the WHOLE loop (acquire once at
+        /// enter, reuse across every iteration, release once on exit). Declared,
+        /// not inferred — a Loop holds a lease only when the author explicitly
+        /// binds one. When set, `lower_loop` hoists the
+        /// claim/grant/register/release handshake to loop scope (the same
+        /// machinery `lower_pooled_body` uses per-step) so ONE allocation backs
+        /// all iterations; the held lease (incl. `alloc_id`) is parked into the
+        /// loop's `p_<id>_data` envelope under a `lease` key, so body iterations
+        /// and downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.
+        /// `<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<LeaseBinding>,
     },
     #[serde(rename = "scope")]
     Scope {
@@ -1265,6 +1285,27 @@ pub enum DeploymentModel {
         /// `Submit` wire shape round-trips byte-identically.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request: Option<serde_json::Value>,
+        /// Opt-in: ENQUEUE this body to the enclosing leased loop's lease
+        /// namespace instead of submitting a fresh scheduler job. The body
+        /// step ALWAYS sits inside the leasing loop (`parent_id == loop.id`)
+        /// and there is exactly one loop lease in scope — no ambiguity. When
+        /// set (and the enclosing Loop carries a `lease`), the body lowers via
+        /// the EXECUTOR enqueue path (NOT the scheduler-net) and the compiler
+        /// injects `d.executor_namespace = <loop_slug>.lease.executor_namespace`
+        /// onto the job token via the standard read-arc borrow pipeline. The
+        /// engine's `ExecutorSubmitHandler` reads that per-job namespace and
+        /// publishes to the lease-scoped NATS queue (`lease-<grant_id>`) drained
+        /// by the ONE persistent executor the acquire path launched on the held
+        /// allocation — so every iteration's body runs WARM on the same held
+        /// instance (venv/model/GPU state persists). `false` (default) = an
+        /// independent scheduler submit. The namespace rides the job token's
+        /// top-level `executor_namespace` key — no typed engine field.
+        #[serde(
+            default,
+            rename = "runOnLease",
+            skip_serializing_if = "std::ops::Not::not"
+        )]
+        run_on_lease: bool,
     },
 }
 
@@ -1326,6 +1367,32 @@ pub struct ResourcePoolBinding {
     /// `aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`
     /// and validated against the kind's `claim_schema`. `None` ⇒ the kind's
     /// default placement (e.g. one token).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<serde_json::Value>,
+}
+
+/// A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives
+/// under [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`
+/// hoist the claim/grant/register/release handshake to loop scope — ONE
+/// allocation held across all iterations, released exactly once on exit.
+///
+/// Mirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +
+/// `request: Option<Value>` and [`ResourcePoolBinding`] so the existing
+/// `resolve_binding(..., "datacenter", ...)` + lease-definition machinery
+/// applies unchanged. The field is named `scheduler` (not `alias`) for symmetry
+/// with the `Scheduled` lease path the loop body would otherwise inherit
+/// per-step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaseBinding {
+    /// `datacenter` resource alias (workspace alias) the loop holds a lease
+    /// against. Resolved at publish to `pool-<resource_id>` + the
+    /// `Lease__datacenter` schema, the same path as `Scheduled.scheduler`
+    /// (`resolve_binding("datacenter")`).
+    pub scheduler: String,
+    /// Claim-schema-shaped request params (`gpu_count`/`gpu_type`/
+    /// `max_duration_secs`); validated against the datacenter kind's
+    /// `claim_schema`. `None` ⇒ the allocator's default placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<serde_json::Value>,
 }
@@ -2390,7 +2457,7 @@ impl WorkflowGraph {
             }],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         }
     }
 }
@@ -2406,8 +2473,9 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef, Port, RetryPolicy,
-        TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode, WorkflowNodeData,
+        ExecutionSpecConfig, JoinMode, LeaseBinding, LoopAccumulator, MergeStrategy, ModelRef, Port,
+        RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
+        WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
 
@@ -2477,6 +2545,9 @@ pub mod dsl {
 
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub accumulators: Vec<LoopAccumulator>,
+
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lease: Option<LeaseBinding>,
 
         // scope
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2789,6 +2860,7 @@ pub mod dsl {
                         max_iterations: max_iter,
                         loop_condition: condition,
                         accumulators: step.accumulators.clone(),
+                        lease: step.lease.clone(),
                     })
                 }
                 "scope" => Ok(WorkflowNodeData::Scope {
@@ -2833,6 +2905,7 @@ pub mod dsl {
                 max_iterations: None,
                 loop_condition: None,
                 accumulators: Vec::new(),
+                lease: None,
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
@@ -2960,11 +3033,13 @@ pub mod dsl {
                     max_iterations,
                     loop_condition,
                     accumulators,
+                    lease,
                     ..
                 } => {
                     step.max_iterations = Some(*max_iterations);
                     step.loop_condition = Some(loop_condition.clone());
                     step.accumulators = accumulators.clone();
+                    step.lease = lease.clone();
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }
@@ -3178,6 +3253,7 @@ mod tests {
             viewport: None,
             instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
             definitions: defs,
+            default_scheduler: None,
         };
         let s = serde_json::to_string(&graph).unwrap();
         let parsed: WorkflowGraph = serde_json::from_str(&s).unwrap();
@@ -3194,6 +3270,7 @@ mod tests {
             viewport: None,
             instance_concurrency: InstanceConcurrencyPolicy::Unlimited,
             definitions: std::collections::BTreeMap::new(),
+            default_scheduler: None,
         };
         let s2 = serde_json::to_string(&empty).unwrap();
         assert!(!s2.contains("definitions"));

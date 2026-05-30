@@ -182,6 +182,20 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         })
         .unwrap_or_default();
 
+    // -- default_scheduler: read the top-level Y.Map written by
+    // graph_to_doc_with_files (`{ alias }`). Absent → None.
+    let default_scheduler = txn.get_map("defaultScheduler").and_then(|m| match m.get(&txn, "alias") {
+        Some(yrs::Out::Any(Any::String(s))) => {
+            let s = s.to_string();
+            if s.trim().is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        _ => None,
+    });
+
     Ok(WorkflowGraph {
         nodes,
         edges,
@@ -192,6 +206,7 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
         // need definitions are loaded from JSON-on-disk via the demo
         // seeder — that path uses serde and populates the field correctly.
         definitions: Default::default(),
+        default_scheduler,
     })
 }
 
@@ -385,6 +400,19 @@ pub fn graph_to_doc_with_files(
                 }
             }
         }
+
+        // -- default_scheduler: top-level Y.Map -------------------------
+        // Round-trips the template-level default datacenter alias (the
+        // second rung of the multi-cluster selection chain, docs/16 §6) so
+        // publish (which reads the graph back via doc_to_graph) sees the
+        // author's template default. Stored under `defaultScheduler` as a
+        // single-key map (`{ alias }`) — yrs has no top-level scalar root,
+        // and a map mirrors the `viewport`/`instanceConcurrency` convention.
+        // Absent when `None` so legacy docs keep parsing unchanged.
+        if let Some(ref sched) = graph.default_scheduler {
+            let ds_map = txn.get_or_insert_map("defaultScheduler");
+            ds_map.insert(&mut txn, "alias", sched.clone());
+        }
     }
     doc
 }
@@ -444,7 +472,7 @@ mod tests {
                 },
             ],
             edges: vec![],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
         };
 
         let doc = graph_to_doc(&graph);
@@ -480,6 +508,25 @@ mod tests {
         assert_eq!(start.width, None);
     }
 
+    // Template-level `default_scheduler` (multi-cluster selection chain, docs/16
+    // §6) must survive graph→Y.Doc→graph so publish (which reads back via
+    // doc_to_graph) sees the author's template default. Same failure class as
+    // the loop-lease Yjs drop — an encoder that forgets the field silently
+    // downgrades selection to the workspace/error rung.
+    #[test]
+    fn default_scheduler_survives_ydoc_roundtrip() {
+        let mut graph = WorkflowGraph::default_graph();
+        graph.default_scheduler = Some("prod_dc".to_string());
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        assert_eq!(rt.default_scheduler.as_deref(), Some("prod_dc"));
+
+        // None → stays None (opt-out: no stray map written/read back).
+        let mut bare = WorkflowGraph::default_graph();
+        bare.default_scheduler = None;
+        let rt_none = doc_to_graph(&graph_to_doc(&bare)).expect("parse Y.Doc");
+        assert_eq!(rt_none.default_scheduler, None);
+    }
+
     #[test]
     fn start_process_name_survives_ydoc_roundtrip() {
         fn start_with(process_name: Option<&str>) -> WorkflowGraph {
@@ -504,7 +551,7 @@ mod tests {
                     height: None,
                 }],
                 edges: vec![],
-                viewport: None, instance_concurrency: Default::default(), definitions: Default::default(),
+                viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
             }
         }
 
@@ -597,7 +644,7 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
@@ -612,6 +659,100 @@ mod tests {
                 assert_eq!(names, vec!["vendor", "amount"]);
             }
             other => panic!("expected AutomatedStep, got {other:?}"),
+        }
+    }
+
+    /// L3/L4 regression: the loop-scoped `lease` (and the body's
+    /// `Scheduled { run_on_lease }`) MUST survive the Y.Doc round-trip publish
+    /// runs (`reconstruct_graph_from_ydoc` → `doc_to_graph`). The loop's
+    /// `yjs_encode` previously `..`-dropped `lease`, so the live published
+    /// instance lowered as a PLAIN loop (no salloc; body sbatch'd) even though
+    /// offline `compile_to_air` kept it. Same silent-default-drop class as
+    /// `automated_step_input_output_survive_ydoc_roundtrip`.
+    #[test]
+    fn loop_lease_and_run_on_lease_survive_ydoc_roundtrip() {
+        use crate::models::template::{
+            DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding, Port,
+            RetryPolicy, ScheduledOperation, WorkflowEdge, WorkflowNode,
+        };
+
+        let graph = WorkflowGraph {
+            nodes: vec![
+                WorkflowNode {
+                    id: "lp".to_string(),
+                    node_type: "loop".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::Loop {
+                        label: "Leased Loop".to_string(),
+                        description: None,
+                        max_iterations: 3,
+                        loop_condition: "true".to_string(),
+                        accumulators: vec![],
+                        lease: Some(LeaseBinding {
+                            scheduler: "slurm_dc".to_string(),
+                            request: None,
+                        }),
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                },
+                WorkflowNode {
+                    id: "body".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Body".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Python,
+                            entrypoint: Some("main.py".to_string()),
+                            config: serde_json::json!({"python": "python3"}),
+                        },
+                        input: Port::empty_input(),
+                        output: Port::empty_input(),
+                        retry_policy: RetryPolicy::default(),
+                        stream_output: false,
+                        deployment_model: DeploymentModel::Scheduled {
+                            scheduler: None,
+                            job_template: "mekhan-executor-worker".to_string(),
+                            resources: None,
+                            operation: ScheduledOperation::Submit,
+                            request: None,
+                            run_on_lease: true,
+                        },
+                    },
+                    parent_id: Some("lp".to_string()),
+                    width: None,
+                    height: None,
+                },
+            ],
+            edges: Vec::<WorkflowEdge>::new(),
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        // Y.Doc nodes round-trip via a Y.Map, so order is not preserved — look up by id.
+        let find = |id: &str| &rt.nodes.iter().find(|n| n.id == id).expect("node present").data;
+        match find("lp") {
+            WorkflowNodeData::Loop { lease, .. } => {
+                let lease = lease
+                    .as_ref()
+                    .expect("loop lease must survive Y.Doc round-trip");
+                assert_eq!(lease.scheduler, "slurm_dc");
+            }
+            other => panic!("expected Loop, got {other:?}"),
+        }
+        match find("body") {
+            WorkflowNodeData::AutomatedStep {
+                deployment_model: DeploymentModel::Scheduled { run_on_lease, .. },
+                ..
+            } => assert!(*run_on_lease, "run_on_lease must survive Y.Doc round-trip"),
+            other => panic!("expected Scheduled AutomatedStep, got {other:?}"),
         }
     }
 
@@ -666,7 +807,7 @@ mod tests {
             edges: vec![],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");

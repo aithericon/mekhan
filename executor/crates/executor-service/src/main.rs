@@ -201,6 +201,7 @@ fn build_apalis_nats_config(config: &ExecutorConfig) -> apalis_nats::Config {
         namespace: config.namespace.clone(),
         max_deliver: config.max_deliver,
         ack_wait: config.ack_wait(),
+        max_ack_pending: config.max_ack_pending,
         num_replicas: 1,
         enable_dlq: true,
         consumer_mode,

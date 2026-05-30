@@ -711,6 +711,37 @@ scheduler-up:
       | curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @- >/dev/null
     echo "  ✓ petri-executor-worker registered (binary: $exec_bin)"
 
+    # 3b. Register the petri-lease-executor parameterized job (the LEASE path —
+    #     the Nomad analogue of mekhan-lease-executor.sh). Unlike the worker
+    #     above (PerJob, one-shot via EXECUTOR_TARGET_EXEC_ID), the dispatched
+    #     child is ONE persistent Pool/drain executor: NO TARGET_EXEC_ID, so it
+    #     opens a durable consumer on the lease-scoped namespace (lease-<grant>,
+    #     from dispatch Meta) and drains EVERY job the leased loop enqueues there
+    #     — keeping warm state across iterations. NomadAllocatorClient::acquire
+    #     dispatches this; release = `nomad job stop`. Serial drain hardening:
+    #     EXECUTOR_MAX_ACK_PENDING=1 + a stable shared venv cache so each lease's
+    #     first job is warm (a cold venv build blows the ack window → redelivery).
+    echo "▶ registering petri-lease-executor Nomad job template…"
+    jq --arg bin "$exec_bin" --arg ep "{{s3_endpoint}}" \
+       --arg nats "{{nats_url}}" --arg sdk "$PWD/executor/packages/aithericon-sdk" \
+       '.Job.TaskGroups[0].Tasks[0].Config.command = $bin
+        | .Job.TaskGroups[0].Tasks[0].Env += {
+            "EXECUTOR_NATS_URL": $nats,
+            "EXECUTOR_STORAGE__BACKEND": "s3",
+            "EXECUTOR_STORAGE__ENDPOINT": $ep,
+            "EXECUTOR_STORAGE__BUCKET": "mekhan-artifacts",
+            "EXECUTOR_STORAGE__REGION": "us-east-1",
+            "EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY": "rustfsadmin",
+            "EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY": "rustfsadmin",
+            "AITHERICON_SDK_PATH": $sdk,
+            "EXECUTOR_PYTHON__ENABLED": "true",
+            "EXECUTOR_PYTHON__PREFER_UV": "true",
+            "EXECUTOR_PYTHON__CACHE_DIR": "/tmp/aithericon-nomad-lease-venvs",
+            "EXECUTOR_MAX_ACK_PENDING": "1"
+          }' engine/infra/nomad/lease-executor-job-template.json \
+      | curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @- >/dev/null
+    echo "  ✓ petri-lease-executor registered (drain/Pool parameterized job)"
+
     # 4. Pause the dev daemon — both it and the Nomad-spawned worker would
     #    consume the same `executor` namespace; the warm daemon races and
     #    wins, leaving the Nomad worker provably inert. Stopping it makes
@@ -977,6 +1008,63 @@ slurm-up:
     docker exec "$container" chmod 0755 /opt/petri/templates/mekhan-executor-worker.sh
     rm -f "$tpl"
     echo "  ✓ mekhan-executor-worker.sh installed (binary: /opt/petri/bin/executor)"
+
+    # 3b. Install the PERSISTENT DRAIN executor template (the lease path),
+    #     ALONGSIDE the PerJob worker above (which stays for the `submit` path).
+    #     `slurm_allocator.rs::acquire_lease` srun's this onto the held alloc on
+    #     lease acquire; it runs ONE long-lived executor in Pool/drain mode that
+    #     consumes the lease-scoped namespace and pulls EVERY job the leased loop
+    #     enqueues there — keeping warm state (venv/model/GPU) across iterations.
+    #     The single load-bearing diff from the worker template: NO
+    #     EXECUTOR_TARGET_EXEC_ID (its ABSENCE selects Pool mode — a durable
+    #     shared consumer on `{ns}_{prio}` with a wildcard `{ns}.{prio}.>`
+    #     filter). NAMESPACE/MAX_JOBS/IDLE_TIMEOUT come from the `srun --export`
+    #     the acquire path stamps (LEASE_NAMESPACE=lease-<grant_id> etc); the
+    #     long idle timeout lets the executor survive inter-iteration gaps but
+    #     self-exit if the loop wedges. scancel on release SIGTERMs it → graceful
+    #     drain → exit, freeing the nodes.
+    tpl2="$(mktemp)"
+    cat > "$tpl2" <<'TEMPLATE'
+    #!/bin/bash
+    #SBATCH --output=/tmp/petri-lease-executor-%j.out
+    export EXECUTOR_NATS_URL=nats://host.docker.internal:{{nats_port}}
+    export EXECUTOR_NAMESPACE="${LEASE_NAMESPACE}"
+    export EXECUTOR_SOURCE=nats_queue
+    export EXECUTOR_LIFETIME=run_to_completion
+    export EXECUTOR_MAX_JOBS="${LEASE_MAX_JOBS}"
+    export EXECUTOR_CONCURRENCY=1
+    # Serial drain: deliver at most one un-acked message at a time. Without this
+    # the durable Pool consumer hands the whole queue to a concurrency=1 worker;
+    # messages queued behind a slow job (cold venv build) exceed their ack window
+    # and get redelivered → the same iteration re-runs. Bound to the worker's
+    # parallelism (1) so JetStream never over-delivers.
+    export EXECUTOR_MAX_ACK_PENDING=1
+    export EXECUTOR_NAME="lease-executor-${SLURM_JOB_ID}"
+    export EXECUTOR_BASE_DIR=/tmp/aithericon-executor-lease/${SLURM_JOB_ID}
+    # Share the venv cache ACROSS lease executors (stable, not under the
+    # per-job base_dir). Otherwise every new lease cold-builds its first venv
+    # (~8s) — which, on a 275ms job, blows the message's ack window and the
+    # consumer redelivers the same iteration. A stable cache makes the first job
+    # of each lease warm too, so each iteration runs exactly once.
+    export EXECUTOR_PYTHON__CACHE_DIR=/tmp/aithericon-lease-venvs
+    export EXECUTOR_DEFAULT_TIMEOUT_SECS=60
+    export EXECUTOR_IDLE_TIMEOUT_SECS="${LEASE_IDLE_TIMEOUT:-300}"
+    export AITHERICON_SDK_PATH=/opt/petri/aithericon-sdk
+    export EXECUTOR_STORAGE__BACKEND=s3
+    export EXECUTOR_STORAGE__ENDPOINT=http://host.docker.internal:{{s3_port}}
+    export EXECUTOR_STORAGE__BUCKET=mekhan-artifacts
+    export EXECUTOR_STORAGE__REGION=us-east-1
+    export EXECUTOR_STORAGE__CREDENTIALS__ACCESS_KEY=rustfsadmin
+    export EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY=rustfsadmin
+    export EXECUTOR_PYTHON__ENABLED=true
+    export EXECUTOR_PYTHON__PREFER_UV=true
+    echo "Starting lease drain executor (SLURM job ${SLURM_JOB_ID}) ns=${LEASE_NAMESPACE} max_jobs=${LEASE_MAX_JOBS} idle=${LEASE_IDLE_TIMEOUT:-300}"
+    /opt/petri/bin/executor
+    TEMPLATE
+    docker cp "$tpl2" "$container:/opt/petri/templates/mekhan-lease-executor.sh"
+    docker exec "$container" chmod 0755 /opt/petri/templates/mekhan-lease-executor.sh
+    rm -f "$tpl2"
+    echo "  ✓ mekhan-lease-executor.sh installed (drain/Pool template for the lease path)"
 
     # 4. Pause the dev daemon — same reason as scheduler-up (Nomad): both it
     #    and the Slurm-spawned worker would consume the same `executor`

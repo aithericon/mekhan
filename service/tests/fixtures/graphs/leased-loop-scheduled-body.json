@@ -1,0 +1,103 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 100 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "aloop",
+			"type": "loop",
+			"slug": "aloop",
+			"position": { "x": 250, "y": 250 },
+			"width": 420,
+			"height": 220,
+			"data": {
+				"type": "loop",
+				"label": "BO Loop",
+				"description": "Hold one datacenter allocation across every iteration; the Scheduled body srun's onto it",
+				"maxIterations": 3,
+				"loopCondition": "aloop.iteration < 3",
+				"lease": {
+					"scheduler": "prod_dc",
+					"request": { "gpu_count": 1, "gpu_type": "a100" }
+				}
+			}
+		},
+		{
+			"id": "body",
+			"type": "automated_step",
+			"slug": "body",
+			"parentId": "aloop",
+			"position": { "x": 60, "y": 60 },
+			"data": {
+				"type": "automated_step",
+				"label": "Run on held alloc",
+				"description": "Scheduled Submit that runs ON the loop's held allocation",
+				"executionSpec": {
+					"backendType": "python",
+					"entrypoint": "main.py",
+					"config": {
+						"python": "python3",
+						"requirements": [],
+						"virtualenv": false,
+						"sdk": true,
+						"inherit_env": true,
+						"env": {}
+					}
+				},
+				"deploymentModel": {
+					"mode": "scheduled",
+					"operation": "submit",
+					"jobTemplate": "mekhan-executor-worker",
+					"runOnLease": true
+				},
+				"output": {
+					"id": "out",
+					"label": "Iter",
+					"fields": [
+						{ "name": "score", "label": "Score", "kind": "number", "required": true }
+					]
+				}
+			}
+		},
+		{
+			"id": "end-1",
+			"type": "end",
+			"position": { "x": 250, "y": 620 },
+			"data": { "type": "end", "label": "End" }
+		}
+	],
+	"edges": [
+		{
+			"id": "e1",
+			"source": "start-1",
+			"target": "aloop",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e-body-in",
+			"source": "aloop",
+			"sourceHandle": "body_in",
+			"target": "body",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e-body-out",
+			"source": "body",
+			"target": "aloop",
+			"targetHandle": "body_out",
+			"type": "sequence"
+		},
+		{
+			"id": "e2",
+			"source": "aloop",
+			"target": "end-1",
+			"targetHandle": "in",
+			"type": "sequence"
+		}
+	]
+}

@@ -47,6 +47,12 @@ pub struct KnownResource {
     /// version in the AIR so post-publish rotations don't silently change
     /// what an already-running workflow sees.
     pub latest_version: i32,
+    /// The resource version's non-secret config blob
+    /// (`resource_versions.public_config`). The compiler reads it to inspect
+    /// flavor-discriminated connection fields (e.g. a `datacenter`'s
+    /// `scheduler_flavor` + which `ssh_*`/`nomad_*` fields are present) for
+    /// publish-time validation. Secrets never appear here.
+    pub public_config: serde_json::Value,
 }
 
 /// Per-workspace resource map handed to the compiler at publish time.
@@ -146,7 +152,7 @@ mod tests {
 
     fn minimal_graph() -> WorkflowGraph {
         WorkflowGraph {
-            definitions: Default::default(),
+            definitions: Default::default(), default_scheduler: None,
             nodes: vec![
                 WorkflowNode {
                     id: "n_start".to_string(),
@@ -202,6 +208,7 @@ mod tests {
                     id: Uuid::new_v4(),
                     type_name: (*type_name).to_string(),
                     latest_version: 1,
+                    public_config: serde_json::Value::Null,
                 },
             );
         }

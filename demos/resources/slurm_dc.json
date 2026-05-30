@@ -1,0 +1,14 @@
+{
+  "path": "slurm_dc",
+  "resource_type": "datacenter",
+  "display_name": "Slurm (dev docker cluster)",
+  "config": {
+    "scheduler_flavor": "slurm",
+    "ssh_host": "localhost",
+    "ssh_port": 2222,
+    "ssh_user": "testuser",
+    "ssh_known_hosts": "accept",
+    "template_dir": "/opt/petri/templates",
+    "ssh_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACBmHQXHUU1ijJ/zSmT8jf+HbE2FEJGiLp+LLsLwTw92MQAAAJjl41ck5eNX\nJAAAAAtzc2gtZWQyNTUxOQAAACBmHQXHUU1ijJ/zSmT8jf+HbE2FEJGiLp+LLsLwTw92MQ\nAAAECVXVU/kaxCXvVmlSeOWqo2f0fw7fjAlihmoVvI4dCQoWYdBcdRTWKMn/NKZPyN/4ds\nTYUQkaIun4suwvBPD3YxAAAAEHBldHJpLXNsdXJtLXRlc3QBAgMEBQ==\n-----END OPENSSH PRIVATE KEY-----\n"
+  }
+}

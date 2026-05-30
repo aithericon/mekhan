@@ -85,6 +85,13 @@ pub struct DatacenterLease {
     pub alloc_id: String,
     /// Lease expiry as the allocator reports it (ISO 8601 / RFC 3339 string).
     pub expiry: String,
+    /// The lease-scoped NATS namespace a persistent drain executor (launched on
+    /// the held allocation at acquire) consumes. A leased loop body enqueues its
+    /// job to `{executor_namespace}.{prio}.{exec_id}` and the warm executor
+    /// pulls + runs it. `lease-<grant_id>` for the slurm/nomad drain model; `""`
+    /// for the HTTP allocator leg (no persistent executor — empty, not null, so
+    /// the required-String `Lease__datacenter` schema still validates).
+    pub executor_namespace: String,
 }
 
 // ─── Descriptor + registry ───────────────────────────────────────────────────

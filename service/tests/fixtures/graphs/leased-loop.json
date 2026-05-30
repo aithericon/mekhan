@@ -1,0 +1,136 @@
+{
+	"nodes": [
+		{
+			"id": "start-1",
+			"type": "start",
+			"position": { "x": 250, "y": 100 },
+			"data": { "type": "start", "label": "Start" }
+		},
+		{
+			"id": "aloop",
+			"type": "loop",
+			"slug": "aloop",
+			"position": { "x": 250, "y": 250 },
+			"width": 420,
+			"height": 220,
+			"data": {
+				"type": "loop",
+				"label": "BO Loop",
+				"description": "Hold one datacenter allocation across every iteration",
+				"maxIterations": 5,
+				"loopCondition": "aloop.iteration < 5",
+				"lease": {
+					"scheduler": "prod_dc",
+					"request": { "gpu_count": 1, "gpu_type": "a100" }
+				}
+			}
+		},
+		{
+			"id": "step",
+			"type": "automated_step",
+			"slug": "step",
+			"parentId": "aloop",
+			"position": { "x": 60, "y": 60 },
+			"data": {
+				"type": "automated_step",
+				"label": "Iterate on alloc",
+				"executionSpec": {
+					"backendType": "python",
+					"entrypoint": "main.py",
+					"config": {
+						"python": "python3",
+						"requirements": [],
+						"virtualenv": false,
+						"sdk": true,
+						"inherit_env": true,
+						"env": {}
+					}
+				},
+				"output": {
+					"id": "out",
+					"label": "Iter",
+					"fields": [
+						{ "name": "score", "label": "Score", "kind": "number", "required": true }
+					]
+				}
+			}
+		},
+		{
+			"id": "route",
+			"type": "decision",
+			"slug": "route",
+			"position": { "x": 250, "y": 460 },
+			"data": {
+				"type": "decision",
+				"label": "Route on lease",
+				"conditions": [
+					{
+						"edgeId": "have-alloc",
+						"label": "Have alloc",
+						"guard": "aloop.lease.alloc_id != \"\""
+					}
+				],
+				"defaultBranch": "default"
+			}
+		},
+		{
+			"id": "end-ok",
+			"type": "end",
+			"position": { "x": 120, "y": 620 },
+			"data": { "type": "end", "label": "End (have alloc)" }
+		},
+		{
+			"id": "end-default",
+			"type": "end",
+			"position": { "x": 400, "y": 620 },
+			"data": { "type": "end", "label": "End (default)" }
+		}
+	],
+	"edges": [
+		{
+			"id": "e1",
+			"source": "start-1",
+			"target": "aloop",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e-body-in",
+			"source": "aloop",
+			"sourceHandle": "body_in",
+			"target": "step",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e-body-out",
+			"source": "step",
+			"target": "aloop",
+			"targetHandle": "body_out",
+			"type": "sequence"
+		},
+		{
+			"id": "e2",
+			"source": "aloop",
+			"target": "route",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e3",
+			"source": "route",
+			"sourceHandle": "have-alloc",
+			"target": "end-ok",
+			"targetHandle": "in",
+			"type": "sequence"
+		},
+		{
+			"id": "e4",
+			"source": "route",
+			"sourceHandle": "default",
+			"target": "end-default",
+			"targetHandle": "in",
+			"type": "sequence"
+		}
+	]
+}

@@ -56,6 +56,7 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // showcase is an R5 dogfood step.
     "13-resource-pool",
     "13-dynamic-form",
+    "14-streaming-output",
 ];
 
 fn repo_root() -> PathBuf {
@@ -243,6 +244,11 @@ fn snapshot_13_resource_pool() {
 #[test]
 fn snapshot_13_dynamic_form() {
     run("13-dynamic-form");
+}
+
+#[test]
+fn snapshot_14_streaming_output() {
+    run("14-streaming-output");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
