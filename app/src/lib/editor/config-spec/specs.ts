@@ -8,6 +8,7 @@
 
 import type { NodeConfigSpec } from './types';
 
+
 // ---------------------------------------------------------------------------
 // delay
 //
@@ -240,6 +241,66 @@ export const MAP_SPEC: NodeConfigSpec = {
 			emptyHint:
 				'No element fields declared. The gathered collection borrows as an untyped array — declare fields to expose typed <map>[*].<field> refs downstream.',
 			default: { id: 'out', label: 'Element', fields: [] }
+		}
+	]
+};
+
+// ---------------------------------------------------------------------------
+// failure
+//
+// Original: FailureNodeSection.svelte — two fields:
+//   failureMessage  string optional, clear-to-undefined, InsertRefButton,
+//                   {{ ref }} template interpolation.
+//   errorResultMapping  FieldMapping[] optional — the new mapping slot.
+//
+// Quirks preserved:
+//   - failureMessage: clearToUndefined:true (empty string → undefined, never
+//     persisted as '').  InsertRefButton is wired by the textarea branch in
+//     FieldRenderer when scope.length > 0.
+//   - errorResultMapping: mapping slot; absent === empty (defaults via ?? []);
+//     new-row expression pre-seeded to literal "input" (NOT "" and NOT the
+//     placeholder "input.code"); target = free-text Input; source = Textarea
+//     + RefPicker INSERT helper (appendSnippet of e.qualified) gated on
+//     scope.length > 0; per-row Trash + header Add hidden when readonly;
+//     dashed empty-state; index-keyed; live commit; no reordering; no
+//     per-row type/kind selector.
+//
+// The trailing italic advisory ("Marks the process failed but the workflow
+// continues…") is folded into the failureMessage field.description tail to
+// match the precedent from progress_update / phase_update.
+// ---------------------------------------------------------------------------
+export const FAILURE_SPEC: NodeConfigSpec = {
+	fields: [
+		{
+			kind: 'textarea',
+			bind: 'failureMessage',
+			label: 'Failure message (optional)',
+			rows: 2,
+			placeholder: 'e.g. Validation failed for invoice {{ invoice_id }}',
+			clearToUndefined: true,
+			testid: 'input-failure-message',
+			description:
+				"{{ ref }} placeholders interpolate fields from this node's input scope — use the picker above for the in-scope set.\n\nMarks the process failed but the workflow continues to its End. Effective only within a named process (a Start with a Process Name upstream); outside one this node passes the token through with no effect."
+		},
+		{
+			kind: 'mapping',
+			bind: 'errorResultMapping',
+			label: 'Error result',
+			addTestid: 'btn-add-error-result-mapping',
+			target: {
+				placeholder: 'error_field',
+				testid: 'input-error-result-target'
+			},
+			source: {
+				widget: 'textarea',
+				rows: 2,
+				placeholder: 'input.code',
+				testid: 'input-error-result-expr',
+				allowArrayBoundary: false
+			},
+			newRow: { targetField: '', expression: 'input' },
+			emptyHint:
+				'The error envelope still carries the failure message as error.reason; adding fields attaches a structured error.value.'
 		}
 	]
 };

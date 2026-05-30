@@ -30,7 +30,7 @@ import ParallelSplitSection from '$lib/components/editor/panels/property-section
 import JoinSection from '$lib/components/editor/panels/property-sections/JoinSection.svelte';
 import LoopNodeSection from '$lib/components/editor/panels/property-sections/LoopNodeSection.svelte';
 import ScopeSection from '$lib/components/editor/panels/property-sections/ScopeSection.svelte';
-import FailureNodeSection from '$lib/components/editor/panels/property-sections/FailureNodeSection.svelte';
+import FailureSpecSection from '$lib/components/editor/panels/config-spec/FailureSpecSection.svelte';
 import TriggerNodeSection from '$lib/components/editor/panels/property-sections/TriggerNodeSection.svelte';
 import SubWorkflowSection from '$lib/components/editor/panels/property-sections/SubWorkflowSection.svelte';
 import AgentNodeSection from '$lib/components/editor/panels/property-sections/AgentNodeSection.svelte';
@@ -84,7 +84,7 @@ const SECTIONS = {
 	scope: ScopeSection,
 	phase_update: PhaseUpdateSpecSection,
 	progress_update: ProgressUpdateSpecSection,
-	failure: FailureNodeSection,
+	failure: FailureSpecSection,
 	delay: DelaySpecSection,
 	timeout: TimeoutSpecSection,
 	trigger: TriggerNodeSection,

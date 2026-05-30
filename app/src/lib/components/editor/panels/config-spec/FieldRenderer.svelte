@@ -16,12 +16,16 @@
 	 *   - Code field: RefPicker for Rhai snippets.
 	 */
 
-	import type { ConfigFieldSpec, NumberField, SelectField, Port } from '$lib/editor/config-spec/types';
+	import type { ConfigFieldSpec, NumberField, SelectField, Port, MappingField, FieldMapping } from '$lib/editor/config-spec/types';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import type { FieldSpec } from '$lib/fields/spec';
 
 	import { FormField } from '$lib/components/ui/form-field';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
+	import { Button } from '$lib/components/ui/button';
+	import Plus from '@lucide/svelte/icons/plus';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import FieldWidget from '$lib/fields/FieldWidget.svelte';
 	import CodeEditor from '../shared/CodeEditor.svelte';
 	import RefPicker from '../property-sections/RefPicker.svelte';
@@ -46,7 +50,7 @@
 	let {
 		spec,
 		value,
-		data: _data,
+		data,
 		scope = [],
 		resourceScope = [],
 		readonly = false,
@@ -85,6 +89,36 @@
 		} else {
 			onchange(rawStr === '' ? undefined : parseFloat(rawStr));
 		}
+	}
+
+	// ---------------------------------------------------------------------------
+	// Mapping slot helpers — mirror FailureNodeSection 1:1.
+	// Only active when spec.kind === 'mapping'; narrowing is safe because the
+	// helpers are only ever called from the mapping branch.
+	// ---------------------------------------------------------------------------
+
+	function mappingRows(): FieldMapping[] {
+		if (spec.kind !== 'mapping') return [];
+		return (data[(spec as MappingField).bind] as FieldMapping[] | undefined) ?? [];
+	}
+
+	function setMappingRows(next: FieldMapping[]) {
+		if (spec.kind !== 'mapping') return;
+		onchange(next);
+	}
+
+	function addMappingRow() {
+		if (spec.kind !== 'mapping') return;
+		const field = spec as MappingField;
+		setMappingRows([...mappingRows(), { ...field.newRow }]);
+	}
+
+	function updateMappingRow(i: number, patch: Partial<FieldMapping>) {
+		setMappingRows(mappingRows().map((r, j) => (j === i ? { ...r, ...patch } : r)));
+	}
+
+	function removeMappingRow(i: number) {
+		setMappingRows(mappingRows().filter((_, j) => j !== i));
 	}
 
 	// ---------------------------------------------------------------------------
@@ -219,15 +253,119 @@
 		onchange={(next) => onchange(next)}
 	/>
 
+{:else if spec.kind === 'mapping'}
+	<!-- Authoring-slot: inline FieldMapping[] list editor (mirrors FailureNodeSection). -->
+	{@const mappingSpec = spec as MappingField}
+	{@const rows = (data[mappingSpec.bind] as FieldMapping[] | undefined) ?? []}
+	<div class="space-y-1.5">
+		<div class="flex items-center justify-between">
+			<span class="text-sm font-medium text-muted-foreground">{mappingSpec.label}</span>
+			{#if !readonly}
+				<Button
+					variant="ghost"
+					size="sm"
+					onclick={addMappingRow}
+					data-testid={mappingSpec.addTestid}
+				>
+					<Plus class="size-3.5" />
+					Add
+				</Button>
+			{/if}
+		</div>
+		{#if rows.length === 0}
+			<p class="rounded-md border border-dashed border-border/50 p-2 text-sm text-muted-foreground">
+				{mappingSpec.emptyHint}
+			</p>
+		{:else}
+			{#each rows as row, i (i)}
+				<div class="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
+					<div class="flex items-center gap-2">
+						<Input
+							type="text"
+							value={row.targetField}
+							disabled={readonly}
+							placeholder={mappingSpec.target.placeholder}
+							data-testid={mappingSpec.target.testid}
+							oninput={(e) =>
+								updateMappingRow(i, {
+									targetField: (e.currentTarget as HTMLInputElement).value
+								})}
+						/>
+						{#if !readonly}
+							<Button
+								variant="ghost"
+								size="sm"
+								onclick={() => removeMappingRow(i)}
+								aria-label="Remove"
+							>
+								<Trash2 class="size-3.5" />
+							</Button>
+						{/if}
+					</div>
+					{#if mappingSpec.source.widget === 'textarea'}
+						<Textarea
+							value={row.expression}
+							disabled={readonly}
+							rows={mappingSpec.source.rows ?? 2}
+							placeholder={mappingSpec.source.placeholder}
+							data-testid={mappingSpec.source.testid}
+							oninput={(e) =>
+								updateMappingRow(i, {
+									expression: (e.currentTarget as HTMLTextAreaElement).value
+								})}
+						/>
+						{#if scope.length > 0}
+							<RefPicker
+								{scope}
+								disabled={readonly}
+								placeholder="Insert ref…"
+								allowArrayBoundary={mappingSpec.source.allowArrayBoundary ?? false}
+								onpick={(e) => {
+									updateMappingRow(i, {
+										expression: appendSnippet(row.expression, e.qualified)
+									});
+								}}
+							/>
+						{/if}
+					{:else}
+						<!-- refpicker: primary widget, replaces expression; auto-fills targetField when blank -->
+						<RefPicker
+							{scope}
+							disabled={readonly}
+							selected={row.expression || undefined}
+							placeholder={mappingSpec.source.placeholder}
+							allowArrayBoundary={mappingSpec.source.allowArrayBoundary ?? false}
+							onpick={(e) =>
+								updateMappingRow(i, {
+									expression: e.qualified,
+									...(mappingSpec.source.autoFillTargetWhenBlank && !row.targetField
+										? { targetField: e.field }
+										: {})
+								})}
+						/>
+					{/if}
+				</div>
+			{/each}
+		{/if}
+	</div>
+
 {:else if spec.kind === 'textarea'}
-	<!-- Value-input: textarea needs the InsertRefButton + optional clearToUndefined. -->
+	<!-- Value-input: textarea — rendered directly (not via FieldWidget) so we can
+	     apply data-testid for e2e parity, clearToUndefined coercion, and
+	     InsertRefButton. FieldWidget does not thread data-testid through. -->
 	{@const clearToUndefined = spec.clearToUndefined ?? false}
 	<FormField label={fieldLabel} for={fieldId} description={spec.description}>
-		<FieldWidget
-			spec={fieldWidgetSpec}
-			{value}
-			{readonly}
-			onchange={(next) => onchange(clearToUndefined && next === '' ? undefined : next)}
+		<Textarea
+			id={fieldId}
+			value={(value as string) ?? ''}
+			rows={spec.rows}
+			placeholder={spec.placeholder}
+			disabled={readonly}
+			data-testid={spec.testid}
+			oninput={(e) => {
+				const v = (e.currentTarget as HTMLTextAreaElement).value;
+				onchange(clearToUndefined && v === '' ? undefined : v);
+			}}
 		/>
 		{#if scope.length > 0}
 			<div class="mt-1.5">

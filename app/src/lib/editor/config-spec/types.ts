@@ -22,6 +22,9 @@ import type { components } from '$lib/api/schema';
 /** The Port schema type from the generated OpenAPI schema. */
 export type Port = components['schemas']['Port'];
 
+/** The FieldMapping schema type from the generated OpenAPI schema. */
+export type FieldMapping = components['schemas']['FieldMapping'];
+
 // ---------------------------------------------------------------------------
 // AuthoringSlotKind — four authoring-only slots (NOT value-input kinds)
 // ---------------------------------------------------------------------------
@@ -29,10 +32,10 @@ export type Port = components['schemas']['Port'];
 /**
  * Authoring-only slot kinds that pick WHERE a value comes from, not what
  * widget to render for a data type. FieldRenderer handles these itself
- * (RefPicker / ResourcePicker / CodeEditor / PortsSection); they are never
- * passed to FieldWidget.
+ * (RefPicker / ResourcePicker / CodeEditor / PortsSection / inline mapping);
+ * they are never passed to FieldWidget.
  */
-export type AuthoringSlotKind = 'ref' | 'resource' | 'code' | 'port';
+export type AuthoringSlotKind = 'ref' | 'resource' | 'code' | 'port' | 'mapping';
 
 // ---------------------------------------------------------------------------
 // ConfigFieldKind — the full config-spec vocabulary
@@ -91,6 +94,14 @@ export type TextareaField = FieldBase & {
 	 * Matches the bespoke `v === '' ? undefined : v` guard.
 	 */
 	clearToUndefined?: boolean;
+	/**
+	 * Optional data-testid placed directly on the rendered <textarea> element.
+	 * Required for e2e compatibility when migrating bespoke sections that had
+	 * explicit testids (e.g. failureMessage → "input-failure-message").
+	 * FieldRenderer renders the textarea directly (bypassing FieldWidget) when
+	 * this is set, to ensure the attribute is applied to the element.
+	 */
+	testid?: string;
 };
 export type NumberField = FieldBase & {
 	kind: 'number';
@@ -178,6 +189,56 @@ export type PortField = FieldBase & {
 	default?: Port;
 };
 
+/**
+ * Authoring-slot: renders an inline FieldMapping[] list editor.
+ *
+ * Each row has a free-text `targetField` Input and an expression widget
+ * (Textarea + optional RefPicker insert-helper, or a full RefPicker as
+ * the primary widget). The whole array is written back verbatim via
+ * onchange on every keystroke — no draft/blur.
+ *
+ * Used by FAILURE_SPEC for errorResultMapping.  The spec is intentionally
+ * rich enough (source.widget, newRow, autoFillTargetWhenBlank) that a
+ * later step can drive End.resultMapping from it and extract a shared
+ * MappingListEditor — explicitly out of scope here.
+ */
+export type MappingField = FieldBase & {
+	kind: 'mapping';
+	/** Data key holding FieldMapping[] (e.g. "errorResultMapping"). */
+	bind: string;
+	/** Header label (e.g. "Error result"). */
+	label: string;
+	/** data-testid for the header "Add" button. */
+	addTestid?: string;
+	/** Per-row target field (targetField: free-text name Input). */
+	target: {
+		placeholder: string;
+		testid?: string;
+	};
+	/** Per-row source / expression authoring. */
+	source: {
+		/**
+		 * "textarea" = <Textarea> primary widget + RefPicker INSERT helper below.
+		 * "refpicker" = <RefPicker> as the primary widget (future End migration).
+		 */
+		widget: 'textarea' | 'refpicker';
+		placeholder: string;
+		rows?: number;
+		testid?: string;
+		/** Forwarded to RefPicker allowArrayBoundary (textarea insert + refpicker primary). */
+		allowArrayBoundary?: boolean;
+		/**
+		 * refpicker variant only: when true, auto-fill targetField=entry.field
+		 * if targetField is currently blank on pick (End rename-preserve policy).
+		 */
+		autoFillTargetWhenBlank?: boolean;
+	};
+	/** Literal used when adding a new row. */
+	newRow: { targetField: string; expression: string };
+	/** Copy shown in the dashed empty-state <p> when the array is empty. */
+	emptyHint: string;
+};
+
 export type ConfigFieldSpec =
 	// value-input kinds (12)
 	| TextField
@@ -192,11 +253,12 @@ export type ConfigFieldSpec =
 	| FileField
 	| SignatureField
 	| JsonField
-	// authoring-slot kinds (4)
+	// authoring-slot kinds (5)
 	| RefField
 	| ResourceField
 	| CodeField
-	| PortField;
+	| PortField
+	| MappingField;
 
 // ---------------------------------------------------------------------------
 // NodeConfigSpec — the full spec for one node type
