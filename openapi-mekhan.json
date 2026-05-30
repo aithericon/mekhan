@@ -11879,6 +11879,81 @@
           }
         }
       },
+      "StreamReduce": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Ordered array — sort chunks by stream sequence, project each `.value`\ninto a `Vec`. The default (matches Map's gather reduce).",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "array"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "String-join the chunk `.value`s (rendered as strings) in stream order,\noptionally separated by `sep`.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "concat"
+                ]
+              },
+              "sep": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Numeric sum of the chunk `.value`s, in stream order.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "sum"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Author-supplied Rhai over `__r` (the sorted array of\n`#{ value, __map_idx, __map_id }`), returning the reduced value.",
+            "required": [
+              "expr",
+              "kind"
+            ],
+            "properties": {
+              "expr": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "custom"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "How a `StreamConsumer` folds the drained chunks into its single output\ntoken. Tagged on `kind` (camelCase), mirroring the serde conventions of the\nother config enums. Each variant selects the gather barrier's reduce Rhai in\n`compiler/lower/stream_consumer.rs`."
+      },
       "TaskBlockConfig": {
         "oneOf": [
           {
@@ -13875,6 +13950,39 @@
                 "type": "string",
                 "enum": [
                   "map"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Drains a streaming producer AutomatedStep's per-call structured output\n(`set_output(name, value)` events landing on the producer's Signal\nplace), reduces (folds) them, and gates completion behind an\nend-of-stream counted barrier sized by `completed.detail.stream_count`.\n\nTwo named inbound handles: `\"stream\"` carries the data chunks (one\ntoken per `output_set` event); `\"control\"` carries the producer's\nterminal completion token whose `detail.stream_count` is the expected\nchunk count. The gather can't fire until all `N` chunks AND the count\ntoken are present, so the net stays alive until the stream fully drains\n— mirroring Map's counted-barrier gather, but counting on a runtime\n`stream_count` instead of a scattered collection length. NO engine\nchange: the engine's two-pass binding already admits the count\ncoordinator arriving after results, and each stream-token injection\nre-kicks the eval loop.",
+            "required": [
+              "label",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "reduce": {
+                "$ref": "#/components/schemas/StreamReduce",
+                "description": "How the drained chunks are folded into the single output token.\nDefaults to an ordered `Array` (sort by stream sequence, project\n`.value`)."
+              },
+              "resultVar": {
+                "type": "string",
+                "description": "Name of the field each chunk's value is read as. Documentary for\nv1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);\na body-per-chunk variant would bind it as the process input."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stream_consumer"
                 ]
               }
             }

@@ -4644,6 +4644,27 @@ export interface components {
             /** @description Secret key (S3 secret access key, GCS HMAC secret, Azure account key). */
             secret_key?: string;
         };
+        /**
+         * @description How a `StreamConsumer` folds the drained chunks into its single output
+         *     token. Tagged on `kind` (camelCase), mirroring the serde conventions of the
+         *     other config enums. Each variant selects the gather barrier's reduce Rhai in
+         *     `compiler/lower/stream_consumer.rs`.
+         */
+        StreamReduce: {
+            /** @enum {string} */
+            kind: "array";
+        } | {
+            /** @enum {string} */
+            kind: "concat";
+            sep?: string | null;
+        } | {
+            /** @enum {string} */
+            kind: "sum";
+        } | {
+            expr: string;
+            /** @enum {string} */
+            kind: "custom";
+        };
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
             /** @enum {string} */
@@ -5480,6 +5501,23 @@ export interface components {
             resultVar: string;
             /** @enum {string} */
             type: "map";
+        } | {
+            description?: string | null;
+            label: string;
+            /**
+             * @description How the drained chunks are folded into the single output token.
+             *     Defaults to an ordered `Array` (sort by stream sequence, project
+             *     `.value`).
+             */
+            reduce?: components["schemas"]["StreamReduce"];
+            /**
+             * @description Name of the field each chunk's value is read as. Documentary for
+             *     v1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);
+             *     a body-per-chunk variant would bind it as the process input.
+             */
+            resultVar?: string;
+            /** @enum {string} */
+            type: "stream_consumer";
         } | {
             description?: string | null;
             label: string;
