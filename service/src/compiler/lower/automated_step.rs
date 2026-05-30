@@ -143,14 +143,17 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     let p_error: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
 
-    // PROTOTYPE — streaming side-channel: when `stream_output` is set, mint a
-    // Signal place `p_{id}_stream` (intentionally multi-token — one token per
-    // executor Log event) at NODE scope and hand it to the lifecycle's
-    // `stream_log` bridge below. The lifecycle's fanout copies each log token
-    // here AND keeps hpi_logs intact. A downstream edge from the node's "stream"
-    // handle consumes from here (registered in `output_places`). Leftover stream
-    // tokens never block `NetCompleted` (Signal is never terminal); the slim
-    // control token still governs completion.
+    // Streaming side-channel: when `stream_output` is set, mint a Signal place
+    // `p_{id}_stream` (intentionally multi-token — one token per executor
+    // Output event, i.e. per `set_output(name, value)` the job produces) at
+    // NODE scope and hand it to the lifecycle's `stream_output` bridge below.
+    // The lifecycle's `log_output` transition grows a second output arc onto
+    // this place, copying each Output event here AND onto `output_log`. A
+    // downstream edge from the node's "stream" handle consumes from here
+    // (registered in `output_places`) and reads `{ name, value }` off the
+    // token's `.detail`. Leftover stream tokens never block `NetCompleted`
+    // (Signal is never terminal); the slim control token still governs
+    // completion.
     let p_stream: Option<PlaceHandle<DynamicToken>> = if stream_output {
         Some(ctx.signal(format!("p_{id}_stream"), format!("{label} - Stream")))
     } else {
@@ -208,10 +211,11 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
                 // causality consumer projects them into hpi_metrics /
                 // hpi_logs against the causality-discovered process.
                 process: true,
-                // PROTOTYPE — when set, the lifecycle ALSO copies each Log
-                // event onto this place (one token per `log_info()` call) so
-                // the node's "stream" handle fires the downstream once per log.
-                stream_log: p_stream_bridge,
+                // When set, the lifecycle's `log_output` transition ALSO copies
+                // each Output event onto this place (one token per
+                // `set_output(name, value)`) so the node's "stream" handle fires
+                // the downstream once per output.
+                stream_output: p_stream_bridge,
             },
         );
 
@@ -860,13 +864,13 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
                 process_step: None,
                 catalogue: true,
                 process: true,
-                // TODO(streaming-output prototype): the `stream_output` "stream"
-                // handle is wired only on the plain inline executor path
+                // TODO(streaming-output): the `stream_output` "stream" handle is
+                // wired only on the plain inline executor path
                 // (`lower_automated_step`). Pooled/leased steps do not yet
                 // expose the stream side-channel — `None` keeps this path
                 // byte-identical. Plumbing `p_{id}_stream` through here would
                 // mirror the inline path exactly.
-                stream_log: None,
+                stream_output: None,
             },
         );
 

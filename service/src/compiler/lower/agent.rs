@@ -505,7 +505,7 @@ fn lower_agent_loop(
                 catalogue: false,
                 process: false,
                 // Agent body has no `stream_output` side-channel.
-                stream_log: None,
+                stream_output: None,
             },
         )
     });

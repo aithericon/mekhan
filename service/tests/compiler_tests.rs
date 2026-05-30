@@ -177,21 +177,50 @@ fn transition_consumes_place(transition: &Value, place_id: &str) -> bool {
     false
 }
 
+/// True if `transition` has any OUTBOUND arc whose referenced place id ==
+/// `place_id`. Same serialization tolerance as `transition_consumes_place`,
+/// scanning the output-arc collections. Used to assert the lifecycle's
+/// `log_output` transition feeds the synthesized stream place.
+fn transition_produces_place(transition: &Value, place_id: &str) -> bool {
+    let arc_refs_place = |arc: &Value| -> bool {
+        if let Some(s) = arc.as_str() {
+            return s == place_id;
+        }
+        for key in ["place", "place_id", "id", "target", "to"] {
+            if arc.get(key).map(|v| v == place_id).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    };
+    for coll_key in ["outputs", "output_arcs", "output"] {
+        if let Some(arr) = transition.get(coll_key).and_then(|v| v.as_array()) {
+            if arr.iter().any(arc_refs_place) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
-// PROTOTYPE — stream_output side-channel on AutomatedStep
+// PROTOTYPE — stream_output side-channel on AutomatedStep (OUTPUT channel)
 //
 // When `stream_output: true`, the compiler mints a Signal-kind place
-// `p_{id}_stream` (intentionally multi-token — one token per executor Log
-// event), registers it under the node's "stream" output handle, and an edge
-// from that handle wires it into the downstream transition via the standard
-// `wire_edge`/`find_output_place` path. The actual log-event→place routing
-// (`petri_event_log` / `event_routes["log"]`) is constructed ENGINE-SIDE
-// inside the SDK `executor_lifecycle` component (passed via the
-// `executor_submit_to(..., event_routes)` effect) and is NOT surfaced as a
-// distinct service-emitted AIR field — so assertion (2) below asserts the
-// observable contract (the producer's `executor_submit` effect transition is
-// present, which is what carries the SDK-baked routing) and documents the
-// engine-side piece.
+// `p_{id}_stream` (intentionally multi-token — one token per `set_output`
+// value the step emits), registers it under the node's "stream" output handle,
+// and an edge from that handle wires it into the downstream transition via the
+// standard `wire_edge`/`find_output_place` path.
+//
+// The data source is the executor's OUTPUT channel: each `set_output(name,
+// value)` becomes an `EventCategory::Output` / `StatusDetail::OutputSet { name,
+// value }` event, routed by the SDK `executor_lifecycle` into the lifecycle's
+// `output_log` place via its `log_output` transition. When `stream_output` is
+// set, that `log_output` transition grows a SECOND output arc onto the user's
+// stream place (one producer, two output arcs — no token-stealing). So the
+// stream token carries structured `{ ..., detail: { name, value } }` data the
+// consumer reads — NOT a log string. Assertion (2) verifies the `log_output`
+// transition actually produces the stream place.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -233,26 +262,23 @@ fn test_automated_step_stream_output_synthesizes_signal_place() {
         .expect("p_producer_stream must be present");
     assert_eq!(
         stream_place["type"], "signal",
-        "p_producer_stream must be a Signal-kind place (multi-token log side-channel), got {:?}",
+        "p_producer_stream must be a Signal-kind place (multi-token output side-channel), got {:?}",
         stream_place["type"]
     );
 
-    // (2) The producer's executor lifecycle is present. The Log→stream-place
-    //     routing (`petri_event_log` => p_producer_stream) is baked into the
-    //     SDK `executor_lifecycle` component via `executor_submit_to(...,
-    //     event_routes)` and resolved engine-side at submit time — it is NOT a
-    //     standalone service-emitted AIR field, so we assert the observable
-    //     anchor: the producer's scoped `executor_submit` effect transition,
-    //     which is the transition that carries the SDK-baked event routing.
+    // (2) The producer's lifecycle `log_output` transition (which consumes the
+    //     executor OUTPUT-event signal place) feeds the synthesized stream
+    //     place: when stream_output is set, the SDK grows a SECOND output arc
+    //     from `log_output` onto `p_producer_stream`. This is the load-bearing
+    //     assertion — it proves the stream is wired to the structured OUTPUT
+    //     (`set_output`) channel, not the log-message channel. The transition
+    //     id is lifecycle-scoped under the node prefix (`producer/log_output`).
+    let log_output = get_transition(&air, "producer/log_output")
+        .expect("expected producer's scoped `log_output` lifecycle transition");
     assert!(
-        has_transition(&air, "producer/submit"),
-        "expected producer's scoped executor submit transition"
-    );
-    let submit = get_transition(&air, "producer/submit")
-        .expect("producer/submit must exist");
-    assert_eq!(
-        submit["logic"]["handler_id"], "executor_submit",
-        "producer/submit must be the executor_submit effect (carrier of the SDK-baked log event route)"
+        transition_produces_place(log_output, "p_producer_stream"),
+        "the `log_output` transition must produce p_producer_stream when \
+         stream_output is set (the OUTPUT-channel tap); transition: {log_output:?}"
     );
 
     // (3) A consuming arc exists from p_producer_stream into the consumer's

@@ -1,36 +1,39 @@
-# Producer — streaming-output prototype.
+# Producer — streaming-output prototype (OUTPUT channel).
 #
 # This AutomatedStep has `streamOutput: true` in graph.json, so the compiler
-# synthesizes a Signal place `p_producer_stream` and stamps the job metadata
-# `petri_event_log = p_producer_stream`. The engine then routes every
-# EventCategory::Log event this step emits (the log_info() calls below) into
-# that place as ONE token per event. An edge from this node's "stream" handle
-# taps those tokens into the downstream `consumer` step.
+# synthesizes a Signal place `p_producer_stream` and the executor lifecycle's
+# `log_output` transition grows a second arc onto it. Every `set_output(name,
+# value)` this step makes becomes a structured `OutputSet { name, value }`
+# event on the executor's OUTPUT channel (EventCategory::Output), routed into
+# `p_producer_stream` as ONE token per output. An edge from this node's
+# "stream" handle taps those tokens into the downstream `consumer`, which reads
+# each `{ name, value }` as real DATA (not a log string).
 #
-# The control path is unchanged: `produced` / `count` are parked write-once on
-# the normal output port and ride the control token to End. Streaming is a
-# purely additive side-channel — completion is governed by the control "out"
-# token, NOT by how many stream tokens are produced/consumed.
+# Each token's wire shape (built by the engine watcher) is:
+#   { execution_id, category: "output",
+#     detail: { event_type: "output_set", name: "chunk_0", value: {...} }, ... }
+# so the consumer reads `input.detail.value`.
+#
+# DISTINCT names matter: the stream token's dedup id is content-addressable per
+# output name (`{exec}-output-{name}`), so re-using a name would be deduped.
+# That's why each chunk has a unique name. Phase A emits all outputs at job end
+# (terminal flush); per-`set_output`-call real-time streaming is a follow-up.
+#
+# The control path is unchanged: `produced` / `count` are the node's declared
+# output fields and ride the control token to End. Streaming is purely additive.
 
-import time
+from aithericon import set_output
 
-from aithericon import log_info, set_output
+# Structured per-chunk data on the stream side-channel — distinct names.
+chunks = [
+    {"idx": 0, "text": "the"},
+    {"idx": 1, "text": "quick"},
+    {"idx": 2, "text": "brown"},
+    {"idx": 3, "text": "fox"},
+]
+for c in chunks:
+    set_output(f"chunk_{c['idx']}", c)
 
-# Default to 8 chunks; `start.chunks` is an optional Start field (kind:number,
-# required:false) injected as a producer-namespaced global that rides the
-# control token — same access form as demo 12b's `start.a/d/z`. Keep the count
-# small — this is a prototype with no stream backpressure or end-of-stream
-# sentinel.
-n = int(start.chunks) if start.chunks is not None else 8
-
-for i in range(n):
-    # Each log_info() is an EventCategory::Log event → one token in
-    # p_producer_stream → one consumer firing.
-    log_info(f"chunk {i}", idx=str(i))
-    time.sleep(0.05)
-
-log_info("producer done", count=str(n))
-
-# Final parked output on the control path — governs termination via End.
+# Final declared outputs on the control path — govern termination via End.
 set_output("produced", True)
-set_output("count", n)
+set_output("count", len(chunks))

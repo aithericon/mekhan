@@ -50,22 +50,23 @@ pub struct ExecutorBridges {
     /// `hpi_logs`, attached to the causality-discovered process.
     pub process: bool,
 
-    /// Optional user-facing **stream** place for log events (PROTOTYPE —
-    /// `stream_output` on AutomatedStep). When `Some`, the executor's
-    /// `EventCategory::Log` events (one token per `log_info()/log_debug()/…`
-    /// call) are ALSO delivered to this place, so a downstream node wired off
-    /// the node's "stream" handle fires once per log token.
+    /// Optional user-facing **stream** place for OUTPUT events
+    /// (`stream_output` on AutomatedStep). When `Some`, the executor's
+    /// `EventCategory::Output` events — one token per `set_output(name, value)`
+    /// the job produces (`StatusDetail::OutputSet { name, value }`) — are ALSO
+    /// delivered to this place, so a downstream node wired off the node's
+    /// "stream" handle fires once per output token and can read the structured
+    /// `{ name, value }` payload off its incoming token's `.detail`.
     ///
-    /// Mechanism (no engine change): the `log:` event route is repointed to a
-    /// dedicated internal inbox signal place; a single fanout transition then
-    /// consumes each log token and produces TWO clean copies — one back onto
-    /// the lifecycle's `sig_log` (so the existing `log_message`/hpi_logs
-    /// projection is unaffected) and one onto this `stream_log` place. Routing
-    /// a category to ONE place is a hard constraint of the executor's
-    /// `event_routes` map, hence the fanout rather than a second route. The
-    /// stream place is a Signal place (intentionally multi-token); leftover
-    /// tokens never block `NetCompleted` (the control path governs completion).
-    pub stream_log: Option<PlaceHandle<DynamicToken>>,
+    /// Mechanism (no engine change): Output events already flow onto the
+    /// lifecycle's `sig_output` signal place and through the `log_output`
+    /// transition into the `output_log` place. When this bridge is `Some`, the
+    /// `log_output` transition simply grows a SECOND output arc onto this
+    /// place — one producer, two output arcs (no token-stealing: the events
+    /// are not split between competing consumers). The stream place is a Signal
+    /// place (intentionally multi-token); leftover tokens never block
+    /// `NetCompleted` (the slim control path governs completion).
+    pub stream_output: Option<PlaceHandle<DynamicToken>>,
 }
 
 /// Handles to key places created by the lifecycle builder.
@@ -119,21 +120,6 @@ pub fn executor_lifecycle(
     let sig_output = ctx.signal::<DynamicToken>("sig_output", "Output Events");
     let sig_log = ctx.signal::<DynamicToken>("sig_log", "Log Events");
 
-    // Stream tap (PROTOTYPE): when a `stream_log` place is provided, the `log:`
-    // route is repointed to this dedicated inbox and a fanout transition (built
-    // in the Events scope below) copies each log token onto BOTH `sig_log`
-    // (preserving hpi_logs) and the user-facing stream place. When `stream_log`
-    // is `None` the route stays on `sig_log` directly (byte-identical to before).
-    let sig_log_in = bridges
-        .stream_log
-        .as_ref()
-        .map(|_| ctx.signal::<DynamicToken>("sig_log_in", "Log Events (stream inbox)"));
-    // The place stamped into `event_routes["log"]` — the inbox (cloned, so the
-    // submit call below doesn't hold a long-lived borrow of `sig_log_in` while
-    // the Events scope later moves it) if streaming, else the historical
-    // `sig_log`.
-    let log_route = sig_log_in.clone().unwrap_or_else(|| sig_log.clone());
-
     // ── Submission ────────────────────────────────────────────────────────
 
     let submitted = ctx.scope("Submission", |ctx| {
@@ -155,7 +141,7 @@ pub fn executor_lifecycle(
                 metric: Some(&sig_metric),
                 phase: Some(&sig_phase),
                 output: Some(&sig_output),
-                log: Some(&log_route),
+                log: Some(&sig_log),
                 process_id: bridges.process_id.as_deref(),
                 process_step: bridges.process_step.as_deref(),
             });
@@ -466,10 +452,22 @@ pub fn executor_lifecycle(
                 .logic(r#"#{ log: evt }"#);
         }
 
-        ctx.transition("log_output", "Log Output")
+        // Output events flow onto `output_log` AND (when a user stream place is
+        // wired via `stream_output`) onto that place too. One producer, two
+        // output arcs — the Output token is copied to both, not split between
+        // competing consumers. The downstream node reads each `{ name, value }`
+        // off its incoming token's `.detail`.
+        let log_output_t = ctx
+            .transition("log_output", "Log Output")
             .auto_input("evt", &sig_output)
-            .auto_output("log", &output_log)
-            .logic(r#"#{ log: evt }"#);
+            .auto_output("log", &output_log);
+        if let Some(stream_out) = bridges.stream_output.as_ref() {
+            log_output_t
+                .auto_output("stream", stream_out)
+                .logic(r#"#{ log: evt, stream: evt }"#);
+        } else {
+            log_output_t.logic(r#"#{ log: evt }"#);
+        }
 
         if bridges.process {
             ctx.transition("log_message", "Log Message")
@@ -481,22 +479,6 @@ pub fn executor_lifecycle(
                 .auto_input("evt", &sig_log)
                 .auto_output("log", &message_log)
                 .logic(r#"#{ log: evt }"#);
-        }
-
-        // Stream fanout (PROTOTYPE): when a `stream_log` place is wired, the
-        // `log:` route was repointed to `sig_log_in` above. This single
-        // transition is the ONLY consumer of `sig_log_in`, so the log token is
-        // never split (the `event_routes` map can only target one place per
-        // category). It produces TWO clean copies: one back onto `sig_log` (so
-        // the `log_message` transition above still drives hpi_logs) and one
-        // onto the user-facing stream place (which a downstream node consumes
-        // via the node's "stream" output handle).
-        if let (Some(inbox), Some(stream_out)) = (sig_log_in.as_ref(), bridges.stream_log.as_ref()) {
-            ctx.transition("log_stream_tap", "Log Stream Tap")
-                .auto_input("evt", inbox)
-                .auto_output("sig_log", &sig_log)
-                .auto_output("stream", stream_out)
-                .logic(r#"#{ sig_log: evt, stream: evt }"#);
         }
     });
 

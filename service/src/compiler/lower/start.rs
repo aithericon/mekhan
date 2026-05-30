@@ -263,7 +263,7 @@ let eid = dd.artifact_id;
                             catalogue: false,
                             process: false,
                             // file-metadata helper job: no streaming handle.
-                            stream_log: None,
+                            stream_output: None,
                         },
                     )
                     .dead_letter
