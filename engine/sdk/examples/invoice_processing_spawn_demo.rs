@@ -168,6 +168,7 @@ fn executor_child_net(child: &mut Context, io: SpawnChildIO) {
             process_step: None,
             catalogue: true,
             process: false,
+            stream_output: None,
         },
     );
 }

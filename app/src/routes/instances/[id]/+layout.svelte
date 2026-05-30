@@ -3,8 +3,11 @@
 	import {
 		getInstance,
 		cancelInstance,
-		listProcessesByInstance
+		listProcessesByInstance,
+		instanceStreamUrl
 	} from '$lib/api/client';
+	import { authFetch } from '$lib/auth/fetch';
+	import { connectSse, type SseConnection } from '$lib/net/sse';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -57,8 +60,11 @@
 	const primaryProcess = $derived(ctx.processes[0] ?? null);
 	const processName = $derived(primaryProcess?.name ?? null);
 
-	async function reload() {
-		ctx.loading = true;
+	// `silent` refetches (driven by the live SSE stream below) update
+	// instance/processes in place without toggling `ctx.loading`, so the live
+	// status updates never flash the page-level loading spinner.
+	async function reload({ silent = false }: { silent?: boolean } = {}) {
+		if (!silent) ctx.loading = true;
 		ctx.error = null;
 		try {
 			ctx.instance = await getInstance(ctx.instanceId);
@@ -70,8 +76,58 @@
 		} catch (e) {
 			ctx.error = e instanceof Error ? e.message : 'Failed to load instance';
 		} finally {
-			ctx.loading = false;
+			if (!silent) ctx.loading = false;
 		}
+	}
+
+	// ── Live instance state ─────────────────────────────────────────────────
+	// The per-tab panels stream/poll their own data, but the always-visible
+	// header summary (status badge, timestamps, current_step) and the process
+	// header live on `ctx`, which used to load only once. Subscribe to the
+	// instance's domain-event SSE stream and treat any event as a debounced
+	// "something changed → refetch ctx" trigger. The stream replays from the
+	// start (no resume cursor), so the debounce coalesces that burst — and any
+	// live burst — into a single refetch, keeping us decoupled from the
+	// domain-event taxonomy. Mirrors the pattern in stores/tasks.svelte.ts.
+	let sseConnection: SseConnection | null = null;
+	let refetchTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function scheduleRefetch() {
+		if (refetchTimer !== null) return;
+		refetchTimer = setTimeout(() => {
+			refetchTimer = null;
+			reload({ silent: true });
+		}, 250);
+	}
+
+	function closeStream() {
+		sseConnection?.close();
+		sseConnection = null;
+		if (refetchTimer !== null) {
+			clearTimeout(refetchTimer);
+			refetchTimer = null;
+		}
+	}
+
+	function openStream(id: string) {
+		closeStream();
+		sseConnection = connectSse(instanceStreamUrl(id), {
+			fetchImpl: authFetch,
+			maxRetries: 5,
+			initialRetryMs: 1000,
+			// 404/4xx (e.g. instance not found): retrying can never succeed.
+			onTerminal: () => closeStream(),
+			onEvent: ({ event }) => {
+				if (event === 'result') {
+					// Terminal: one final refetch to land the terminal status /
+					// completed_at, then close (the server closes its side too).
+					reload({ silent: true });
+					closeStream();
+				} else if (event !== 'connected') {
+					scheduleRefetch();
+				}
+			}
+		});
 	}
 
 	async function handleCancel() {
@@ -87,6 +143,10 @@
 	$effect(() => {
 		ctx.instanceId = instanceId;
 		reload();
+		openStream(instanceId);
+		// Re-run on instanceId change tears down the old stream and opens the
+		// new one; unmount closes it.
+		return () => closeStream();
 	});
 
 	type TabDef = {

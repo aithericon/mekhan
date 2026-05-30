@@ -1404,12 +1404,6 @@
       "type": "state"
     },
     {
-      "id": "p_work_a_error",
-      "name": "Branch A — Uppercase - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_work_a_output",
       "name": "Branch A — Uppercase - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -1425,12 +1419,6 @@
       "id": "p_work_b_data",
       "name": "Branch B — Reverse - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__work_b",
-      "type": "state"
-    },
-    {
-      "id": "p_work_b_error",
-      "name": "Branch B — Reverse - Error",
-      "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
@@ -2396,7 +2384,7 @@
       ]
     },
     {
-      "id": "t_work_a_to_error",
+      "id": "t_work_a_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2420,32 +2408,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Branch A — Uppercase' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Branch A — Uppercase - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_work_a_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Branch A — Uppercase - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_work_a_to_output",
@@ -2562,7 +2528,7 @@
       ]
     },
     {
-      "id": "t_work_b_to_error",
+      "id": "t_work_b_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2586,32 +2552,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Branch B — Reverse' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Branch B — Reverse - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_work_b_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Branch B — Reverse - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_work_b_to_output",
@@ -2876,7 +2820,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "work_a/exhausted",
+      "id": "work_a/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2900,32 +2844,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Branch A — Uppercase' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_work_a_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_13",
@@ -4409,7 +4331,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "work_b/exhausted",
+      "id": "work_b/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -4433,32 +4355,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Branch B — Reverse' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_work_b_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_6",

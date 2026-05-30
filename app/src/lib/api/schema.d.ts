@@ -2288,6 +2288,12 @@ export interface components {
              *     generic form).
              */
             secretFields: string[];
+            /**
+             * @description Whether this backend can be selected as an AutomatedStep backend in
+             *     the node-authoring picker. `GET /api/v1/backends` only returns
+             *     authorable backends; this field is carried for frontend transparency.
+             */
+            userAuthorable: boolean;
         };
         /**
          * @description Delay applied between automated-step retry attempts.
@@ -4817,6 +4823,27 @@ export interface components {
             /** @description Secret key (S3 secret access key, GCS HMAC secret, Azure account key). */
             secret_key?: string;
         };
+        /**
+         * @description How a `StreamConsumer` folds the drained chunks into its single output
+         *     token. Tagged on `kind` (camelCase), mirroring the serde conventions of the
+         *     other config enums. Each variant selects the gather barrier's reduce Rhai in
+         *     `compiler/lower/stream_consumer.rs`.
+         */
+        StreamReduce: {
+            /** @enum {string} */
+            kind: "array";
+        } | {
+            /** @enum {string} */
+            kind: "concat";
+            sep?: string | null;
+        } | {
+            /** @enum {string} */
+            kind: "sum";
+        } | {
+            expr: string;
+            /** @enum {string} */
+            kind: "custom";
+        };
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
             /** @enum {string} */
@@ -5567,6 +5594,18 @@ export interface components {
              *     templates keep their prior semantics without re-authoring.
              */
             retryPolicy?: components["schemas"]["RetryPolicy"];
+            /**
+             * @description PROTOTYPE — opt-in streaming side-channel. When `true`, the node
+             *     exposes a second output port "stream" and the compiler synthesizes a
+             *     Signal place `p_{id}_stream` that receives ONE token per executor
+             *     `EventCategory::Log` event (Python `log_info()/log_debug()/…`). An
+             *     edge from the "stream" handle fires the downstream node once per log
+             *     token; the normal "out" control token still governs termination.
+             *     Plain `bool` + `#[serde(default)]` ⇒ existing templates (field
+             *     absent → `false`) round-trip unchanged (same precedent as
+             *     `retry_policy`/`deployment_model`).
+             */
+            streamOutput?: boolean;
             /** @enum {string} */
             type: "automated_step";
         } | {
@@ -5651,6 +5690,23 @@ export interface components {
             resultVar: string;
             /** @enum {string} */
             type: "map";
+        } | {
+            description?: string | null;
+            label: string;
+            /**
+             * @description How the drained chunks are folded into the single output token.
+             *     Defaults to an ordered `Array` (sort by stream sequence, project
+             *     `.value`).
+             */
+            reduce?: components["schemas"]["StreamReduce"];
+            /**
+             * @description Name of the field each chunk's value is read as. Documentary for
+             *     v1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);
+             *     a body-per-chunk variant would bind it as the process input.
+             */
+            resultVar?: string;
+            /** @enum {string} */
+            type: "stream_consumer";
         } | {
             description?: string | null;
             label: string;
@@ -5744,7 +5800,29 @@ export interface components {
              *     compaction). Inert in the degenerate path.
              */
             contextStrategy?: components["schemas"]["ContextStrategy"];
+            /**
+             * @description Where/how each inference turn is dispatched — same field, defaults
+             *     and semantics as `AutomatedStep::deployment_model`. On the
+             *     degenerate single-shot path it reaches the full
+             *     `Executor{pool}` / `Scheduled{lease}` dispatch in
+             *     `lower_automated_step`. The multi-turn loop path supports
+             *     `Executor { pool: None }` only in v1 and compile-rejects the rest
+             *     (mirrors the `context_strategy` gate); per-turn pooled/scheduled
+             *     admission is a follow-up (docs/12).
+             */
+            deploymentModel?: components["schemas"]["DeploymentModel"];
             description?: string | null;
+            /**
+             * @description Vision inputs attached to the user message — each `{"path":
+             *     "{{<slug>.<field>}}", "media_type"?: "..."}`. Opaque JSON in the
+             *     model layer (same as `response_format`); the executor LLM backend
+             *     validates it and the compiler's LLM `ref_scanner` walks
+             *     `images[i].path` for `{{<slug>.<field>}}` borrows exactly as it
+             *     does for a single-shot LLM step. Empty by default. Carries the
+             *     vision capability that lets the Agent fully subsume the retired
+             *     LLM step.
+             */
+            images?: unknown[];
             label: string;
             /**
              * Format: int32
@@ -5772,6 +5850,14 @@ export interface components {
              */
             responseFormat?: unknown;
             /**
+             * @description Retry behaviour on a per-turn inference failure/timeout. Same shape
+             *     and defaults as `AutomatedStep::retry_policy`. On the degenerate
+             *     (single-shot) path this threads straight through to the synthesized
+             *     `AutomatedStep(Llm)`. On the multi-turn loop path it caps the
+             *     executor's per-turn `max_retries`.
+             */
+            retryPolicy?: components["schemas"]["RetryPolicy"];
+            /**
              * @description Optional terminal Rhai guard. When `Some`, the agent loop exits
              *     once this expression evaluates true on the parked agent state.
              *     Inert in the degenerate (single-turn) path.
@@ -5791,6 +5877,17 @@ export interface components {
             userPrompt: string;
         } | {
             description?: string | null;
+            /**
+             * @description Display-only snapshot of the child's **input** contract — its
+             *     `Start { initial }` port. Reconciled at publish from the resolved
+             *     child and refreshed by the editor's `/io-contract` fetch, exactly
+             *     like `output`. The compiler re-derives the real child input from the
+             *     frozen child, so this field never feeds compilation: it exists so the
+             *     canvas can show "what this sub-workflow consumes" (the way a Start
+             *     node shows its declared fields) without opening the property panel.
+             *     Empty `in` port ⇒ not yet resolved / child declares no Start fields.
+             */
+            inputContract?: components["schemas"]["Port"];
             /**
              * @description Parent upstream token → child Start `initial` port fields. Each
              *     entry's `expression` is a Rhai expression over the inbound token;

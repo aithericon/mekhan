@@ -2151,12 +2151,6 @@
       "type": "state"
     },
     {
-      "id": "p_design_error",
-      "name": "Design Form - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_design_output",
       "name": "Design Form - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -2435,7 +2429,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "design/exhausted",
+      "id": "design/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2459,32 +2453,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Design Form' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_design_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_6",
@@ -3820,7 +3792,7 @@
       ]
     },
     {
-      "id": "t_design_to_error",
+      "id": "t_design_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3844,32 +3816,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Design Form' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Design Form - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_design_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Design Form - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_design_to_output",

@@ -261,6 +261,7 @@ mod tests {
                 output: crate::models::template::default_automated_output_port(),
                 retry_policy: Default::default(),
                 deployment_model: Default::default(),
+                stream_output: false,
             },
             parent_id: None,
             width: None,

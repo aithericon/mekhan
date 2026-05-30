@@ -53,17 +53,34 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // to any handler/End type-checks. The compiler maps `error` to
     // `p_{id}_error`. Matches the central `WorkflowNodeData::output_ports`
     // arm.
-    let WorkflowNodeData::AutomatedStep { output, .. } = data else {
+    let WorkflowNodeData::AutomatedStep {
+        output,
+        stream_output,
+        ..
+    } = data
+    else {
         unreachable!("automated_step::output_ports on non-AutomatedStep variant");
     };
-    vec![
+    let mut ports = vec![
         output.clone(),
         Port {
             id: "error".to_string(),
             label: "On error".to_string(),
             fields: vec![],
         },
-    ]
+    ];
+    // PROTOTYPE — `stream_output` exposes a SECOND output handle "stream"
+    // alongside the control "out" and the "error" port. The compiler maps it to
+    // the Signal place `p_{id}_stream` (one token per executor Log event). Empty
+    // `fields` ⇒ pass-through so wiring it to any downstream node type-checks.
+    if *stream_output {
+        ports.push(Port {
+            id: "stream".to_string(),
+            label: "Stream".to_string(),
+            fields: vec![],
+        });
+    }
+    ports
 }
 
 fn yjs_encode(
@@ -78,6 +95,7 @@ fn yjs_encode(
         output,
         retry_policy,
         deployment_model,
+        stream_output,
         ..
     } = data
     else {
@@ -105,4 +123,12 @@ fn yjs_encode(
     config.insert(txn, "retryPolicy", json_value_to_any(&retry_val));
     let dm_val = serde_json::to_value(deployment_model).unwrap_or_default();
     config.insert(txn, "deploymentModel", json_value_to_any(&dm_val));
+    // `stream_output` is `#[serde(default)]`; like the other fields above it must
+    // be written explicitly or the graph→Y.Doc seed + Y.Doc→graph reconstruction
+    // would silently reset the prototype streaming flag to `false`.
+    config.insert(
+        txn,
+        "streamOutput",
+        json_value_to_any(&serde_json::Value::Bool(*stream_output)),
+    );
 }

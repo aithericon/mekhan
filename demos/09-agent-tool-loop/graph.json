@@ -102,7 +102,7 @@
   ],
   "edges": [
     { "id": "e_start_agent", "source": "start", "target": "agent", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_agent_end",   "source": "agent", "target": "end",   "targetHandle": "in", "type": "sequence" },
+    { "id": "e_agent_end",   "source": "agent", "sourceHandle": "out", "target": "end",   "targetHandle": "in", "type": "sequence" },
     { "id": "e_agent_lookup_tool", "source": "agent", "sourceHandle": "tools", "target": "lookup_order", "targetHandle": "in", "type": "tools" },
     { "id": "e_agent_feedback_tool", "source": "agent", "sourceHandle": "tools", "target": "collect_feedback", "targetHandle": "in", "type": "tools" }
   ]

@@ -64,6 +64,23 @@ pub struct DemoMetadata {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Catalogue visibility for the seeded row. Absent ⇒ `public` — the
+    /// historical default, so every existing demo keeps showing up in the
+    /// root catalogue cross-workspace. Set `"private"` for a sub-workflow /
+    /// agent-tool child (e.g. `08a`, `09b`) that should be hidden from the
+    /// catalogue and embeddable only by its owning parent demo. A `private`
+    /// demo MUST also declare `ownerTemplateId` (mirrors the
+    /// `workflow_templates` CHECK that pairs `visibility='private'` with a
+    /// non-null owner); `workspace`/`public` MUST NOT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    /// Owning parent family base id — the `templateId` of the parent demo
+    /// whose graph embeds this one as a SubWorkflow node. Required iff
+    /// `visibility == "private"`. Seeded demos are born v1 with
+    /// `base_template_id = id`, so the parent's family base IS its own
+    /// `templateId` — paste it here verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_template_id: Option<String>,
 }
 
 /// One parsed demo directory.
@@ -463,6 +480,14 @@ pub enum DemoSeedError {
     Load(#[from] DemoLoadError),
     #[error("metadata templateId `{0}` is not a valid UUID")]
     InvalidTemplateId(String),
+    #[error("metadata ownerTemplateId `{0}` is not a valid UUID")]
+    InvalidOwnerTemplateId(String),
+    #[error("visibility `{0}` is invalid — must be `workspace`, `public`, or `private`")]
+    InvalidVisibility(String),
+    #[error("visibility `private` requires `ownerTemplateId` (the embedding parent demo's templateId)")]
+    PrivateMissingOwner,
+    #[error("`ownerTemplateId` is only valid with `visibility: private`")]
+    OwnerOnNonPrivate,
     #[error("db error: {0}")]
     Db(#[from] sqlx::Error),
     #[error("compile failed: {0}")]
@@ -548,6 +573,104 @@ async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, Demo
 /// or a non-recoverable DB / S3 error surfaces. The caller (service main)
 /// treats the return value as advisory: the demo not being seeded must
 /// not prevent the service from accepting requests.
+/// Make the demo seeder principal an `owner` of the demo workspace. The
+/// publish-time resource resolver gates reads on `workspace_members`
+/// membership (the `resource_acl` table is auto-granted on create but not
+/// consulted on the read path), so without this the seeder — publishing as
+/// [`DEMO_SEEDER_AUTHOR_ID`], which never flows through the BFF
+/// `ensure_default_workspace_membership` path that real users do — cannot
+/// resolve any workspace resource a demo references. Idempotent.
+async fn ensure_seeder_workspace_membership(
+    state: &crate::AppState,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO workspace_members (workspace_id, user_id, role) \
+         VALUES ($1, $2, 'owner') \
+         ON CONFLICT (workspace_id, user_id) DO NOTHING",
+    )
+    .bind(DEMO_WORKSPACE_ID)
+    .bind(DEMO_SEEDER_AUTHOR_ID)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+/// Provision the resource fixtures demos bind, from `<root>/resources/*.json`.
+/// Each file is a [`CreateResourceRequest`] (path + resource_type + config);
+/// the workspace is forced to the demo workspace and the resource is created
+/// as the seeder principal (Vault secret + ACL + audit, identical to the HTTP
+/// CRUD path). Idempotent: a resource whose `path` already exists in the
+/// workspace is left as-is — mirrors the template seeder, never clobbers a
+/// user-edited resource or rewrites Vault every boot.
+///
+/// Runs BEFORE the demo loop so a demo that binds a workspace resource (e.g.
+/// `email-welcome`'s `send` step → the `mail` SMTP relay) can resolve it at
+/// publish time. Best-effort: a fixture failure is logged, never fatal — the
+/// dependent demo simply won't seed, like any other compile failure.
+async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
+    use crate::models::resource::CreateResourceRequest;
+    let dir = root.join("resources");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return, // no fixtures directory — nothing to provision
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo resource: read failed");
+                continue;
+            }
+        };
+        let req: CreateResourceRequest = match serde_json::from_str(&raw) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo resource: parse failed");
+                continue;
+            }
+        };
+        let existing: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
+            "SELECT id FROM resources \
+             WHERE workspace_id = $1 AND path = $2 AND deleted_at IS NULL",
+        )
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(&req.path)
+        .fetch_optional(&state.db)
+        .await;
+        match existing {
+            Ok(Some(_)) => {
+                tracing::info!(resource = %req.path, "demo resource already present — leaving as-is");
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(resource = %req.path, error = %e, "demo resource: existence check failed");
+                continue;
+            }
+        }
+        match crate::handlers::resources::create_resource_internal(
+            state,
+            &req,
+            DEMO_WORKSPACE_ID,
+            DEMO_SEEDER_AUTHOR_ID,
+        )
+        .await
+        {
+            Ok(s) => {
+                tracing::info!(resource = %s.path, resource_type = %s.resource_type, "demo resource seeded")
+            }
+            Err(e) => {
+                tracing::warn!(resource = %req.path, "demo resource seed failed: {e:?}")
+            }
+        }
+    }
+}
+
 pub async fn seed_all(
     state: &crate::AppState,
     root: &Path,
@@ -558,32 +681,71 @@ pub async fn seed_all(
         tracing::info!(root = %root.display(), "no demos found");
         return Ok(results);
     }
-    for dir in dirs {
-        let name = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| dir.display().to_string());
-        match seed_one(state, &dir).await {
-            Ok(outcome) => {
-                match outcome {
-                    SeedOutcome::AlreadyPresent => tracing::info!(
-                        demo = %name,
-                        "demo already present — leaving as-is"
-                    ),
-                    SeedOutcome::Seeded => tracing::info!(
-                        demo = %name,
-                        "demo seeded"
-                    ),
+
+    // Workspace prerequisites, before any demo compiles: the seeder must be a
+    // member of the demo workspace (so the resource resolver resolves), and
+    // resource fixtures a demo binds must already exist. Both best-effort —
+    // a failure here only blocks the resource-dependent demos, never startup.
+    if let Err(e) = ensure_seeder_workspace_membership(state).await {
+        tracing::warn!(error = %e, "demo seeder: ensure workspace membership failed");
+    }
+    seed_demo_resources(state, root).await;
+    // A SubWorkflow demo can reference a CHILD demo whose directory sorts
+    // AFTER it (e.g. `09-agent-tool-loop` -> `09b-collect-feedback`: `-` <
+    // `b`, so the parent is attempted first and its child isn't published
+    // yet -> `subworkflow_unresolved`). A single in-order pass would skip
+    // such a parent forever. Instead, re-attempt the demos that failed as
+    // long as each pass resolves at least one more — child/parent directory
+    // ordering then stops mattering, no topological sort needed. The loop
+    // terminates when nothing is pending or a full pass makes no progress
+    // (the remaining failures are genuine, e.g. a missing workspace
+    // resource), at which point those are logged best-effort.
+    let mut pending: Vec<std::path::PathBuf> = dirs;
+    loop {
+        let mut still_failed: Vec<std::path::PathBuf> = Vec::new();
+        let mut last_errs: Vec<(String, String)> = Vec::new();
+        let mut progressed = false;
+        for dir in pending {
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| dir.display().to_string());
+            match seed_one(state, &dir).await {
+                Ok(outcome) => {
+                    match outcome {
+                        SeedOutcome::AlreadyPresent => tracing::info!(
+                            demo = %name,
+                            "demo already present — leaving as-is"
+                        ),
+                        SeedOutcome::Seeded => tracing::info!(
+                            demo = %name,
+                            "demo seeded"
+                        ),
+                    }
+                    results.push((name, outcome));
+                    progressed = true;
                 }
-                results.push((name, outcome));
-            }
-            Err(e) => {
-                // Best-effort: log and continue with the next demo. The
-                // failure mode is "demo button on the frontend won't
-                // work for this one" — not "service can't start".
-                tracing::warn!(demo = %name, error = %e, "demo seed failed");
+                Err(e) => {
+                    // Hold the failure for a possible retry next pass — a
+                    // child demo published later in THIS pass may unblock it.
+                    last_errs.push((name, e.to_string()));
+                    still_failed.push(dir);
+                }
             }
         }
+        if still_failed.is_empty() {
+            break;
+        }
+        if !progressed {
+            // No demo resolved this pass — the remaining failures won't be
+            // helped by another retry. Log them best-effort and stop: a
+            // demo not seeding must not prevent the service from serving.
+            for (name, err) in last_errs {
+                tracing::warn!(demo = %name, error = %err, "demo seed failed");
+            }
+            break;
+        }
+        pending = still_failed;
     }
     Ok(results)
 }
@@ -600,6 +762,25 @@ pub async fn seed_one(
         .template_id
         .parse()
         .map_err(|_| DemoSeedError::InvalidTemplateId(demo.metadata.template_id.clone()))?;
+
+    // Resolve + validate the declared visibility against the same invariant
+    // the DB CHECK enforces (`private` ⇔ owner present). Absent ⇒ `public`,
+    // the historical seed default. Doing it here turns a malformed demo.json
+    // into an actionable seed-error line instead of an opaque constraint
+    // violation on INSERT.
+    let visibility = demo.metadata.visibility.as_deref().unwrap_or("public");
+    let owner_template_id: Option<uuid::Uuid> = match (visibility, &demo.metadata.owner_template_id)
+    {
+        ("workspace" | "public", None) => None,
+        ("workspace" | "public", Some(_)) => return Err(DemoSeedError::OwnerOnNonPrivate),
+        ("private", None) => return Err(DemoSeedError::PrivateMissingOwner),
+        ("private", Some(owner)) => Some(
+            owner
+                .parse()
+                .map_err(|_| DemoSeedError::InvalidOwnerTemplateId(owner.clone()))?,
+        ),
+        (other, _) => return Err(DemoSeedError::InvalidVisibility(other.to_string())),
+    };
 
     // Idempotency: the stable id is the contract with the rest of the
     // platform (frontend lookup, e2e tests, hand-edited copies). If a
@@ -657,8 +838,8 @@ pub async fn seed_one(
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
-             interface_json, author_id, workspace_id, visibility)
-        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, 'public')
+             interface_json, author_id, workspace_id, visibility, owner_template_id)
+        VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
         "#,
     )
@@ -670,6 +851,8 @@ pub async fn seed_one(
     .bind(&interface_json)
     .bind(DEMO_SEEDER_AUTHOR_ID)
     .bind(DEMO_WORKSPACE_ID)
+    .bind(visibility)
+    .bind(owner_template_id)
     .fetch_one(&state.db)
     .await?;
 
@@ -677,24 +860,31 @@ pub async fn seed_one(
     // `base_template_id` (= `template_id` here, since this is v1), so the
     // attachment follows the live `is_latest` version automatically.
     // Best-effort: a grouping failure must not fail the seed.
-    match ensure_demo_project(state).await {
-        Ok(project_id) => {
-            if let Err(e) = sqlx::query(
-                "INSERT INTO project_templates (project_id, base_template_id, added_by) \
-                      VALUES ($1, $2, $3) \
-                 ON CONFLICT (project_id, base_template_id) DO NOTHING",
-            )
-            .bind(project_id)
-            .bind(template_id)
-            .bind(DEMO_SEEDER_AUTHOR_ID)
-            .execute(&state.db)
-            .await
-            {
-                tracing::warn!(template_id = %template_id, error = %e, "attach demo to project failed (skipped)");
+    //
+    // Private children are skipped: they're hidden from the catalogue (and
+    // the project listing already filters `visibility <> 'private'`), so a
+    // `project_templates` row for them would be dead weight, not a demo a
+    // user can open from the project view.
+    if visibility != "private" {
+        match ensure_demo_project(state).await {
+            Ok(project_id) => {
+                if let Err(e) = sqlx::query(
+                    "INSERT INTO project_templates (project_id, base_template_id, added_by) \
+                          VALUES ($1, $2, $3) \
+                     ON CONFLICT (project_id, base_template_id) DO NOTHING",
+                )
+                .bind(project_id)
+                .bind(template_id)
+                .bind(DEMO_SEEDER_AUTHOR_ID)
+                .execute(&state.db)
+                .await
+                {
+                    tracing::warn!(template_id = %template_id, error = %e, "attach demo to project failed (skipped)");
+                }
             }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "ensure demo project failed — demo seeded without project grouping");
+            Err(e) => {
+                tracing::warn!(error = %e, "ensure demo project failed — demo seeded without project grouping");
+            }
         }
     }
 
@@ -2505,10 +2695,10 @@ mod tests {
 
     #[test]
     fn demos_without_tests_dir_yield_empty_tests_vec() {
-        // 02-human-form has no tests/ directory — must not error, must
-        // return an empty Vec rather than e.g. `None`.
-        let demo = load_demo(&repo_root().join("demos/02-human-form"))
-            .expect("02-human-form must load");
+        // 07-ocr-classify-extract has no tests/ directory — must not error,
+        // must return an empty Vec rather than e.g. `None`.
+        let demo = load_demo(&repo_root().join("demos/07-ocr-classify-extract"))
+            .expect("07-ocr-classify-extract must load");
         assert!(demo.tests.is_empty());
     }
 }

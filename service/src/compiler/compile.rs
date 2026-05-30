@@ -441,6 +441,18 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     ),
     CompileError,
 > {
+    // 0. Normalize Agent `response_format` `$ref`s against the workflow
+    //    `definitions` up front. An Agent's output is DERIVED from its
+    //    response_format (no cached output port), and the derivation /
+    //    token-shape paths don't carry `definitions` — so a bare `$ref`
+    //    schema would collapse to the default envelope and dangle downstream
+    //    `<agent>.<field>` borrows. Resolving into the node data here means
+    //    lowering, publish-interface AND token-shape analysis all see a
+    //    self-contained schema. Borrows the graph unchanged when no agent
+    //    carries a ref. See `schema_refs::inline_agent_response_format_refs`.
+    let normalized = crate::compiler::schema_refs::inline_agent_response_format_refs(graph)?;
+    let graph = normalized.as_ref();
+
     // 1. Build directed graph
     let wg = WorkflowDiGraph::build(graph)?;
 
@@ -697,6 +709,16 @@ fn lower_nodes_topologically<'a>(
     let node_by_id: HashMap<&str, &WorkflowNode> =
         graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut agent_tools_by_id: HashMap<&str, Vec<&WorkflowNode>> = HashMap::new();
+    // Reverse of the above: the set of node ids that are SOMEONE's agent tool
+    // (the target of a `tools`-handled edge). A tool-child node has no normal
+    // outgoing sequence edges (its `error` handle is never authored), so its
+    // failure path would dead-end-throw and crash the agent. The lowering reads
+    // this set via `LoweringCtx::is_agent_tool` to force `error_handled = true`
+    // so the child mints a `p_error` output port the agent's collect-error
+    // wiring consumes — turning a tool-net failure into a tool-result-error fed
+    // back into the agent loop (Feedback) instead of a hard crash.
+    let mut agent_tool_child_ids: std::collections::HashSet<&str> =
+        std::collections::HashSet::new();
     for edge in &graph.edges {
         if edge.source_handle.as_deref() == Some("tools") {
             if let Some(&target) = node_by_id.get(edge.target.as_str()) {
@@ -704,6 +726,7 @@ fn lower_nodes_topologically<'a>(
                     .entry(edge.source.as_str())
                     .or_default()
                     .push(target);
+                agent_tool_child_ids.insert(edge.target.as_str());
             }
         }
     }
@@ -721,6 +744,7 @@ fn lower_nodes_topologically<'a>(
         let agent_tools = agent_tools_by_id
             .get(node.id.as_str())
             .unwrap_or(&empty_children);
+        let is_agent_tool = agent_tool_child_ids.contains(node.id.as_str());
         expand_node(
             node,
             graph,
@@ -728,6 +752,7 @@ fn lower_nodes_topologically<'a>(
             &incoming,
             children,
             agent_tools,
+            is_agent_tool,
             ctx,
             node_ports,
             fixups,
@@ -2185,6 +2210,7 @@ mod tests {
                     base_delay_ms: 0,
                 },
                 deployment_model: Default::default(),
+                stream_output: false,
             },
             parent_id: None,
             width: None,
@@ -2308,6 +2334,7 @@ mod tests {
                     base_delay_ms: 0,
                 },
                 deployment_model: Default::default(),
+                stream_output: false,
             },
             parent_id: None,
             width: None,
@@ -2364,6 +2391,7 @@ mod tests {
                 output: default_output_port(ExecutionBackendType::Docker),
                 retry_policy: policy,
                 deployment_model: Default::default(),
+                stream_output: false,
             },
             parent_id: None,
             width: None,
@@ -3227,8 +3255,13 @@ mod tests {
 
     #[test]
     fn test_automated_step_without_error_edge_still_compiles() {
-        // Default (no error edge): p_a_error has no consumer — the prior
-        // dead-end-on-failure behaviour is preserved, compilation succeeds.
+        // No error edge: instead of a dead-end `p_a_error` place (which used
+        // to strand the failure token and wedge the net at 'running'), the
+        // exhausted/dead-letter transitions now `throw` → permanent
+        // ScriptError → NetFailed (the unhandled-panic path). Compilation
+        // still succeeds; the runtime behaviour is the crash, not a strand.
+        // The compiled topology is asserted by
+        // `automated_step_produces_executor_lifecycle` in compiler_tests.rs.
         let graph = WorkflowGraph {
             nodes: vec![
                 start_node("s"),
@@ -3277,6 +3310,7 @@ mod tests {
                 output: default_output_port(ExecutionBackendType::CatalogueQuery),
                 retry_policy: RetryPolicy::default(),
                 deployment_model: Default::default(),
+                stream_output: false,
             },
             parent_id: None,
             width: None,
@@ -4046,6 +4080,7 @@ mod tests {
                         accept: None,
                     }],
                 },
+                input_contract: crate::models::template::Port::empty_input(),
             },
             parent_id: None,
             width: None,
@@ -4527,6 +4562,7 @@ mod tests {
                         output: default_output_port(ExecutionBackendType::Llm),
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
+                        stream_output: false,
                     },
                     parent_id: None,
                     width: None,
@@ -4592,6 +4628,7 @@ mod tests {
                         output: default_output_port(ExecutionBackendType::Llm),
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
+                        stream_output: false,
                     },
                     parent_id: None,
                     width: None,
@@ -4707,6 +4744,7 @@ mod tests {
                         output: default_output_port(ExecutionBackendType::Llm),
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
+                        stream_output: false,
                     },
                     parent_id: None,
                     width: None,

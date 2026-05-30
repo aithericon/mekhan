@@ -32,7 +32,20 @@
                     "string",
                     "null"
                   ]
-                }
+                },
+                "finish_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "usage": {}
               },
               "type": "object"
             }
@@ -1796,12 +1809,6 @@
       "type": "state"
     },
     {
-      "id": "p_classify_error",
-      "name": "Classify (LLM) - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_classify_output",
       "name": "Classify (LLM) - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -1829,12 +1836,6 @@
       "id": "p_extract_text_data",
       "name": "Extract text (Kreuzberg) - Parked Data (write-once)",
       "token_schema": "#/definitions/Data__extract_text",
-      "type": "state"
-    },
-    {
-      "id": "p_extract_text_error",
-      "name": "Extract text (Kreuzberg) - Error",
-      "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
     {
@@ -2312,7 +2313,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "classify/exhausted",
+      "id": "classify/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2336,32 +2337,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Classify (LLM)' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_21",
@@ -2897,7 +2876,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"classify\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_extract_text_content = __pluck(d_extract_text, [\"detail\", \"outputs\", \"content\"]); job_inputs.push(#{ \"name\": \"__borrow_extract_text__content\", \"source\": #{ \"type\": \"inline\", \"value\": __c_extract_text_content } });  d.spec = #{ \"backend\": \"llm\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"document_class\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/classify/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"classify\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = []; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } }); let __c_extract_text_content = __pluck(d_extract_text, [\"detail\", \"outputs\", \"content\"]); job_inputs.push(#{ \"name\": \"__borrow_extract_text__content\", \"source\": #{ \"type\": \"inline\", \"value\": __c_extract_text_content } });  d.spec = #{ \"backend\": \"llm\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"document_class\", \"required\": true}, #{\"kind\": \"json\", \"name\": \"usage\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"finish_reason\", \"required\": false}, #{\"kind\": \"text\", \"name\": \"model\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/classify/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
         "type": "rhai"
       },
       "name": "Classify (LLM) - Prepare",
@@ -3856,7 +3835,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "extract_text/exhausted",
+      "id": "extract_text/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3880,32 +3859,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Extract text (Kreuzberg)' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_extract_text_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_14",
@@ -6598,7 +6555,7 @@
       ]
     },
     {
-      "id": "t_classify_to_error",
+      "id": "t_classify_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6622,32 +6579,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Classify (LLM)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Classify (LLM) - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Classify (LLM) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_classify_to_output",
@@ -6901,7 +6836,7 @@
       ]
     },
     {
-      "id": "t_extract_text_to_error",
+      "id": "t_extract_text_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -6925,32 +6860,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Extract text (Kreuzberg)' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Extract text (Kreuzberg) - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_extract_text_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Extract text (Kreuzberg) - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_extract_text_to_output",

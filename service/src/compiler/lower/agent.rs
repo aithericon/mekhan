@@ -17,6 +17,7 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         max_turns,
         stop_when,
         context_strategy,
+        deployment_model,
         ..
     } = &cx.node.data
     else {
@@ -71,6 +72,25 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         )));
     }
 
+    // Deployment gate: the multi-turn loop path inlines one plain
+    // `executor_lifecycle` per turn (`Executor { pool: None }`). Pooled
+    // admission (`Executor { pool: Some }`) and external scheduling
+    // (`Scheduled { .. }`) need that lease/claim topology interleaved with
+    // the turn loop — a follow-up (docs/12). The degenerate single-shot path
+    // ALREADY supports all of them (it routes through `lower_automated_step`),
+    // so this gate only bites multi-turn / tool-bearing agents. Reject at
+    // compile so a mis-authored template fails at publish, not mid-loop —
+    // same idiom as the `context_strategy` gate above.
+    if !matches!(deployment_model, DeploymentModel::Executor { pool: None }) {
+        return Err(CompileError::Compilation(format!(
+            "agent node '{}': deployment_model {:?} is not yet supported for \
+             multi-turn / tool-bearing agents (v1 runs loop turns on the plain \
+             executor pool only). Use a single-shot agent (maxTurns=1, no \
+             stopWhen, no tools) for pooled/scheduled inference.",
+            cx.node.id, deployment_model
+        )));
+    }
+
     lower_agent_loop(cx, &tool_children)
 }
 
@@ -87,19 +107,52 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         system_prompt,
         user_prompt,
         response_format,
+        images,
+        retry_policy,
+        deployment_model,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_agent_degenerate on non-Agent node")
     };
 
+    // Clone/copy the fields we forward to the synthesized AutomatedStep into
+    // owned locals up front so the immutable borrow of `cx.node.data` ends
+    // before we reborrow `cx.ctx` mutably into `virtual_cx` below (LoweringCtx
+    // is invariant over its lifetime, so a lingering `&cx` borrow held by
+    // `deployment_model`/`retry_policy` would clash with the `&mut *cx.*`
+    // reborrows).
+    let retry_policy = *retry_policy;
+    let deployment_model = deployment_model.clone();
+
     let llm_config = crate::models::template::agent_to_llm_config(
         model,
         system_prompt.as_deref(),
         user_prompt,
         response_format.as_ref(),
+        images,
         &[],
     );
+
+    // Derive the output port from the LLM config (response_format) — NOT the
+    // bare `default_output_port`. A `response_format: json_schema` agent must
+    // unpack the schema's fields (e.g. `document_class`), exactly as a
+    // hand-authored LLM step did (its server-derived `output` was cached in
+    // the graph). Mirrors `nodes::agent::output_ports`; without it the
+    // degenerate path emits the default `response/usage/...` envelope and
+    // downstream `<agent>.<schema_field>` borrows dangle. Falls back to the
+    // default envelope when no response_format is set.
+    //
+    // `{"$ref": …}` schemas are already inlined into the node data up front by
+    // the compile-entry pass (`schema_refs::inline_agent_response_format_refs`),
+    // so `response_format` / `llm_config` here is self-contained — no per-site
+    // ref resolution needed (that pass is the single normalization source).
+    let derived_output = crate::backends::lookup(ExecutionBackendType::Llm)
+        .and_then(|d| d.derive_output_port)
+        .map(|f| f(&llm_config))
+        .unwrap_or_else(|| {
+            crate::models::template::default_output_port(ExecutionBackendType::Llm)
+        });
 
     let virtual_node = WorkflowNode {
         id: cx.node.id.clone(),
@@ -115,9 +168,17 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                 config: llm_config,
             },
             input: crate::models::template::Port::empty_input(),
-            output: crate::models::template::default_output_port(ExecutionBackendType::Llm),
-            retry_policy: Default::default(),
-            deployment_model: Default::default(),
+            output: derived_output,
+            // Single-shot agents inherit the full AutomatedStep dispatch — the
+            // author's `deployment_model` (Executor{pool} / Scheduled{lease})
+            // and `retry_policy` flow straight through `lower_automated_step`.
+            // This is what makes the degenerate Agent a complete replacement
+            // for the retired hand-authored LLM step.
+            retry_policy,
+            deployment_model,
+            // Agent's degenerate single-shot LLM body does not expose the
+            // prototype streaming side-channel.
+            stream_output: false,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,
@@ -131,6 +192,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         incoming_edges: cx.incoming_edges,
         children: cx.children,
         agent_tools: cx.agent_tools,
+        is_agent_tool: cx.is_agent_tool,
         ctx: &mut *cx.ctx,
         ports: &mut *cx.ports,
         fixups: &mut *cx.fixups,
@@ -200,9 +262,11 @@ fn lower_agent_loop(
         system_prompt,
         user_prompt,
         response_format,
+        images,
         max_turns,
         stop_when,
         on_tool_error,
+        retry_policy,
         ..
     } = &cx.node.data
     else {
@@ -211,6 +275,25 @@ fn lower_agent_loop(
     let id = cx.node.id.clone();
     let max_turns = *max_turns;
     let on_tool_error = *on_tool_error;
+    // Per-turn executor retry budget. The loop's own failure path
+    // (`t_call_failed`/`_timed_out`/`_dead` → p_error) still catches a turn
+    // that exhausts its retries; this just lets a flaky single turn retry
+    // before the whole agent bubbles an error.
+    let per_turn_max_retries = retry_policy.max_retries;
+
+    // Rust panic/Result model (mirrors `lower_automated_step`): a WIRED error
+    // handle (`source_handle == "error"`) routes every agent failure/bubble
+    // token to a downstream handler (today's behavior, byte-identical); an
+    // UNWIRED handle means a permanent failure must CRASH the net (Rhai `throw`
+    // → permanent ScriptError → `NetFailed`) rather than strand a token in a
+    // dead-end `p_{id}_error` place (which wedges the instance at 'running'
+    // forever). Computed BEFORE the `&mut *cx.ctx` reborrow below. The agent's
+    // failure surfaces are: the executor-lifecycle hard-failure transitions
+    // (`t_call_failed`/`t_call_timed_out`/`t_call_dead`), the unknown-tool
+    // Bubble route, and the per-tool collect-bubble (wired in
+    // `apply_agent_tool_wirings`). All of them produce into `p_error` when
+    // wired; when unwired they `throw` and `p_error` is never created.
+    let error_handled = super::error_path_wired(cx.outgoing_edges);
 
     // Map-body-terminal gate: when this agent is the terminal child of a Map
     // body it must fork its FULL envelope (park data AND forward the whole
@@ -301,6 +384,7 @@ fn lower_agent_loop(
         system_prompt.as_deref(),
         user_prompt,
         response_format.as_ref(),
+        images,
         &tool_schemas,
     );
 
@@ -392,8 +476,13 @@ fn lower_agent_loop(
         ctx.state(format!("p_{id}_final"), format!("{label} - Final"));
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    let p_error: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_error"), format!("{label} - Error"));
+    // `p_error` only exists when the error handle is wired; an unwired agent
+    // crashes (throws) on failure instead of parking a dead-end token.
+    let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
+        Some(ctx.state(format!("p_{id}_error"), format!("{label} - Error")))
+    } else {
+        None
+    };
 
     // One dispatch place per declared tool. Stage the tool wiring data
     // here; the post-traversal `apply_agent_tool_wirings` fixup mints
@@ -478,7 +567,7 @@ fn lower_agent_loop(
     // clear it on the parked state: the worker folds it into the turn-N blob
     // (which next turn reads as its base), so it must not be re-sent.
     .logic_rhai(format!(
-        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = 0; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ {overlay_build} d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
+        r#"let s = state; let d = #{{ }}; d.job_id = "{id}"; d.run = s.turn; d.retries = 0; d.max_retries = {per_turn_max_retries}; let job_inputs = []; if s.turn > 0 {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "storage_path", "path": "instances/__INSTANCE_ID__/{id}/turn-" + (s.turn - 1) + ".json" }} }}); }} else {{ job_inputs.push(#{{ "name": "history", "source": #{{ "type": "inline", "value": [] }} }}); }} job_inputs.push(#{{ "name": "pending", "source": #{{ "type": "inline", "value": s.pending }} }}); /*__BORROWED_INPUTS__*/ {overlay_build} d.spec = #{{ "backend": "llm", "inputs": job_inputs, "outputs": [], "config_ref": {config_ref_rhai}, "stream_events": ["agent_turn", "metric", "log"] }}; d.metadata = #{{ "agent_node_id": "{id}" }}; s.pending = []; #{{ job: d, state_in_flight: s }}"#
     ))
     .done();
 
@@ -501,6 +590,8 @@ fn lower_agent_loop(
                 process_step: None,
                 catalogue: false,
                 process: false,
+                // Agent body has no `stream_output` side-channel.
+                stream_output: None,
             },
         )
     });
@@ -530,24 +621,34 @@ fn lower_agent_loop(
     // too — otherwise it'd stay parked forever and block any retry path
     // a wrapping workflow might author. State is discarded on hard
     // executor failure (no good way to surface partial state).
-    ctx.transition(format!("t_{id}_call_failed"), format!("{label} - LLM Call Failed"))
-        .auto_input("dead", &lc.failed)
-        .auto_input("state", &p_state_in_flight)
-        .auto_output("error", &p_error)
-        .logic_rhai("#{ error: dead }".to_string())
-        .done();
-    ctx.transition(format!("t_{id}_call_timed_out"), format!("{label} - LLM Call Timed Out"))
-        .auto_input("dead", &lc.timed_out)
-        .auto_input("state", &p_state_in_flight)
-        .auto_output("error", &p_error)
-        .logic_rhai("#{ error: dead }".to_string())
-        .done();
-    ctx.transition(format!("t_{id}_call_dead"), format!("{label} - LLM Call Dead Letter"))
-        .auto_input("dead", &lc.dead_letter)
-        .auto_input("state", &p_state_in_flight)
-        .auto_output("error", &p_error)
-        .logic_rhai("#{ error: dead }".to_string())
-        .done();
+    //
+    // Rust panic/Result model: when the error handle is WIRED these route the
+    // failure envelope to `p_error` (today's behavior, byte-identical); when
+    // UNWIRED they `throw` (still consuming both `lc.*` terminal AND the parked
+    // `p_state_in_flight`, so nothing strands) — a permanent ScriptError that
+    // unwinds to `NetFailed`. The dead-letter terminal is an unreachable
+    // lifecycle sink today, but we keep its transition symmetric.
+    let panic_msg = format!("agent '{label}' LLM call failed and no error handler is wired");
+    let mut call_fail_transition = |suffix: &str, human: &str, src: &PlaceHandle<DynamicToken>| {
+        let t = ctx
+            .transition(format!("t_{id}_{suffix}"), format!("{label} - {human}"))
+            .auto_input("dead", src)
+            .auto_input("state", &p_state_in_flight);
+        match &p_error {
+            Some(p_error) => {
+                t.auto_output("error", p_error)
+                    .logic_rhai("#{ error: dead }".to_string())
+                    .done();
+            }
+            None => {
+                t.logic_rhai(format!("throw \"{}\"", rhai_str_escape(&panic_msg)))
+                    .done();
+            }
+        }
+    };
+    call_fail_transition("call_failed", "LLM Call Failed", &lc.failed);
+    call_fail_transition("call_timed_out", "LLM Call Timed Out", &lc.timed_out);
+    call_fail_transition("call_dead", "LLM Call Dead Letter", &lc.dead_letter);
 
     // ----- Route transitions: one per branch, each guarded -----
     //
@@ -672,19 +773,40 @@ fn lower_agent_loop(
                 .done();
             }
             ToolErrorPolicy::Bubble => {
-                ctx.transition(
-                    format!("t_{id}_route_unknown"),
-                    format!("{label} - Route: Unknown Tool (bubble to error)"),
-                )
-                .auto_input("response", &p_response)
-                .auto_output("error", &p_error)
-                .guard_rhai(format!(
+                let guard = format!(
                     r#"let s = response.state; {extract_tr} let tc = if type_of(tr.tool_calls) == "array" {{ tr.tool_calls }} else {{ [] }}; let known = {known_names_rhai}; tc.len() > 0 && !(known.contains(tc[0].name)) && s.turn + 1 < {max_turns} && !({stop_when_expr})"#
-                ))
-                .logic_rhai(format!(
-                    r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let msg = "agent picked unknown tool '" + tcall.name + "' (known: " + {known_names_rhai} + ")"; #{{ error: #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "failed", source: "agent_loop", detail: #{{ outputs: #{{}}, exit_code: 1, error: #{{ kind: "unknown_tool", message: msg, tool_name: tcall.name }} }} }} }}"#
-                ))
-                .done();
+                );
+                match &p_error {
+                    // Wired: surface the failure envelope on the error handle.
+                    Some(p_error) => {
+                        ctx.transition(
+                            format!("t_{id}_route_unknown"),
+                            format!("{label} - Route: Unknown Tool (bubble to error)"),
+                        )
+                        .auto_input("response", &p_response)
+                        .auto_output("error", p_error)
+                        .guard_rhai(guard)
+                        .logic_rhai(format!(
+                            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let msg = "agent picked unknown tool '" + tcall.name + "' (known: " + {known_names_rhai} + ")"; #{{ error: #{{ execution_id: "agent-{id}", job_id: "{id}", run: s.turn, status: "failed", source: "agent_loop", detail: #{{ outputs: #{{}}, exit_code: 1, error: #{{ kind: "unknown_tool", message: msg, tool_name: tcall.name }} }} }} }}"#
+                        ))
+                        .done();
+                    }
+                    // Unwired: the unknown-tool failure has no handler — crash
+                    // the net. Consume `p_response` (so it never strands), build
+                    // the same diagnostic message, and `throw` it.
+                    None => {
+                        ctx.transition(
+                            format!("t_{id}_route_unknown"),
+                            format!("{label} - Route: Unknown Tool (no handler — crash net)"),
+                        )
+                        .auto_input("response", &p_response)
+                        .guard_rhai(guard)
+                        .logic_rhai(format!(
+                            r#"let s = response.state; {extract_tr} let tcall = tr.tool_calls[0]; let msg = "agent picked unknown tool '" + tcall.name + "' (known: " + {known_names_rhai} + ") and no error handler is wired"; throw msg"#
+                        ))
+                        .done();
+                    }
+                }
             }
         }
     }
@@ -716,19 +838,26 @@ fn lower_agent_loop(
             agent_label: label.clone(),
             p_state: p_state.clone(),
             p_state_in_tool: p_state_in_tool.clone(),
+            // `None` when the agent's error handle is unwired: the per-tool
+            // collect-bubble path then crashes the net (throws) instead of
+            // parking into a dead-end error place.
             p_error: p_error.clone(),
             tools: tool_entries,
         });
     }
 
+    // Slim control success output, plus the named "error" output ONLY when the
+    // handle is wired (mirrors `lower_automated_step`). When unwired, the entry
+    // is omitted so `wire.rs` never attaches a consumer to a non-existent port.
+    let mut output_places = vec![(None, p_ctrl)];
+    if let Some(p_error) = p_error {
+        output_places.push((Some("error".to_string()), p_error));
+    }
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![
-                (None, p_ctrl),
-                (Some("error".to_string()), p_error),
-            ],
+            output_places,
             input_places: HashMap::new(),
             input_handles: HashMap::new(),
         },

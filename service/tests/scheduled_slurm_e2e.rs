@@ -130,6 +130,7 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                         request: None,
                         run_on_lease: false,
                     },
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,

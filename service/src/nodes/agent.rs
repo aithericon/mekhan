@@ -82,6 +82,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
         system_prompt,
         user_prompt,
         response_format,
+        images,
         max_turns,
         stop_when,
         ..
@@ -94,6 +95,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
         system_prompt.as_deref(),
         user_prompt,
         response_format.as_ref(),
+        images,
         &[],
     );
     let mut success = crate::backends::lookup(ExecutionBackendType::Llm)
@@ -125,10 +127,13 @@ fn yjs_encode(
         system_prompt,
         user_prompt,
         response_format,
+        images,
         max_turns,
         stop_when,
         context_strategy,
         on_tool_error,
+        retry_policy,
+        deployment_model,
         ..
     } = data
     else {
@@ -143,6 +148,10 @@ fn yjs_encode(
     if let Some(rf) = response_format {
         config.insert(txn, "responseFormat", json_value_to_any(rf));
     }
+    if !images.is_empty() {
+        let imgs_val = serde_json::Value::Array(images.clone());
+        config.insert(txn, "images", json_value_to_any(&imgs_val));
+    }
     config.insert(txn, "maxTurns", *max_turns as f64);
     if let Some(sw) = stop_when {
         config.insert(txn, "stopWhen", sw.clone());
@@ -151,4 +160,11 @@ fn yjs_encode(
     config.insert(txn, "contextStrategy", json_value_to_any(&cs_val));
     let te_val = serde_json::to_value(on_tool_error).unwrap_or_default();
     config.insert(txn, "onToolError", json_value_to_any(&te_val));
+    // Seed retry/deployment so the editor round-trips them through Yjs —
+    // mirrors `automated_step::yjs_encode`. Without this, a demo authored with
+    // a non-default deployment would lose it on the first collaborative save.
+    let retry_val = serde_json::to_value(retry_policy).unwrap_or_default();
+    config.insert(txn, "retryPolicy", json_value_to_any(&retry_val));
+    let dm_val = serde_json::to_value(deployment_model).unwrap_or_default();
+    config.insert(txn, "deploymentModel", json_value_to_any(&dm_val));
 }

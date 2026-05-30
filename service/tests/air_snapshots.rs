@@ -37,6 +37,11 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "05-parallel-fanout",
     // 06-subworkflow: needs publish-time child resolution; intentionally skipped.
     "07-ocr-classify-extract",
+    // 08-failure-handling: wired error handle (handled Result::Err) — not snapshotted.
+    // 08c-unwired-failure: the panic-on-unconnected-failure fixture. Its golden pins
+    // the compiled shape — the exhausted transition `throw`s (permanent ScriptError ->
+    // NetFailed) and NO dead-end `p_risky_step_error` place exists.
+    "08c-unwired-failure",
     "08-failure-handling",
     "10-delay-timeout",
     "11-http-call",
@@ -51,6 +56,7 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     // showcase is an R5 dogfood step.
     "13-resource-pool",
     "13-dynamic-form",
+    "14-streaming-output",
 ];
 
 fn repo_root() -> PathBuf {
@@ -211,6 +217,11 @@ fn snapshot_08_failure_handling() {
 }
 
 #[test]
+fn snapshot_08c_unwired_failure() {
+    run("08c-unwired-failure");
+}
+
+#[test]
 fn snapshot_10_delay_timeout() {
     run("10-delay-timeout");
 }
@@ -233,6 +244,11 @@ fn snapshot_13_resource_pool() {
 #[test]
 fn snapshot_13_dynamic_form() {
     run("13-dynamic-form");
+}
+
+#[test]
+fn snapshot_14_streaming_output() {
+    run("14-streaming-output");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire

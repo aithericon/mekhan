@@ -1401,12 +1401,6 @@
       "type": "state"
     },
     {
-      "id": "p_classify_error",
-      "name": "Double the Score - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_classify_output",
       "name": "Double the Score - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -1666,7 +1660,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "classify/exhausted",
+      "id": "classify/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -1690,32 +1684,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Double the Score' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_6",
@@ -3051,7 +3023,7 @@
       ]
     },
     {
-      "id": "t_classify_to_error",
+      "id": "t_classify_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -3075,32 +3047,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Double the Score' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Double the Score - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_classify_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Double the Score - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_classify_to_output",

@@ -4,10 +4,10 @@
 
 use mekhan_service::compiler::compile_to_air;
 use mekhan_service::models::template::{
-    default_join_output_port, BranchCondition, DeploymentModel, ExecutionBackendType,
-    ExecutionSpecConfig, JoinMode, MergeStrategy, PhaseUpdateStatus, Port, Position,
-    TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig, WorkflowEdge, WorkflowGraph,
-    WorkflowNode, WorkflowNodeData,
+    default_join_output_port, BranchCondition, ContextStrategy, DeploymentModel,
+    ExecutionBackendType, ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef, PhaseUpdateStatus,
+    Port, Position, TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig,
+    ToolErrorPolicy, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use serde_json::{json, Value};
 
@@ -116,6 +116,222 @@ fn _count_places_of_type(air: &Value, place_type: &str) -> usize {
         .iter()
         .filter(|p| p["type"] == place_type)
         .count()
+}
+
+/// Build an AutomatedStep (Python/executor inline path) with `stream_output`
+/// toggleable. Mirrors the `auto_node` shape used elsewhere in this file but
+/// lets the streaming flag be set per-test.
+fn automated_step_node_streaming(id: &str, label: &str, stream_output: bool) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "automated_step".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::AutomatedStep {
+            label: label.to_string(),
+            description: None,
+            execution_spec: ExecutionSpecConfig {
+                backend_type: ExecutionBackendType::Docker,
+                entrypoint: None,
+                config: json!({"image": "alpine:latest"}),
+            },
+            input: Port::empty_input(),
+            output: mekhan_service::models::template::default_output_port(
+                ExecutionBackendType::Docker,
+            ),
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+            stream_output,
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+/// True if `transition` has any INBOUND arc (plain input or read-arc) whose
+/// referenced place id == `place_id`. Tolerant of the AIR serialization:
+/// arcs may live under `inputs` / `input_arcs` / `read_arcs`, and each arc
+/// may be a bare place-id string or an object carrying a `place` (or `id`)
+/// field. We scan all candidate arc collections so the assertion does not
+/// hinge on one exact field name.
+fn transition_consumes_place(transition: &Value, place_id: &str) -> bool {
+    let arc_refs_place = |arc: &Value| -> bool {
+        if let Some(s) = arc.as_str() {
+            return s == place_id;
+        }
+        for key in ["place", "place_id", "id", "source", "from"] {
+            if arc.get(key).map(|v| v == place_id).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    };
+    for coll_key in ["inputs", "input_arcs", "read_arcs", "input"] {
+        if let Some(arr) = transition.get(coll_key).and_then(|v| v.as_array()) {
+            if arr.iter().any(arc_refs_place) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// True if `transition` has any OUTBOUND arc whose referenced place id ==
+/// `place_id`. Same serialization tolerance as `transition_consumes_place`,
+/// scanning the output-arc collections. Used to assert the lifecycle's
+/// `log_output` transition feeds the synthesized stream place.
+fn transition_produces_place(transition: &Value, place_id: &str) -> bool {
+    let arc_refs_place = |arc: &Value| -> bool {
+        if let Some(s) = arc.as_str() {
+            return s == place_id;
+        }
+        for key in ["place", "place_id", "id", "target", "to"] {
+            if arc.get(key).map(|v| v == place_id).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    };
+    for coll_key in ["outputs", "output_arcs", "output"] {
+        if let Some(arr) = transition.get(coll_key).and_then(|v| v.as_array()) {
+            if arr.iter().any(arc_refs_place) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// PROTOTYPE — stream_output side-channel on AutomatedStep (OUTPUT channel)
+//
+// When `stream_output: true`, the compiler mints a Signal-kind place
+// `p_{id}_stream` (intentionally multi-token — one token per `set_output`
+// value the step emits), registers it under the node's "stream" output handle,
+// and an edge from that handle wires it into the downstream transition via the
+// standard `wire_edge`/`find_output_place` path.
+//
+// The data source is the executor's OUTPUT channel: each `set_output(name,
+// value)` becomes an `EventCategory::Output` / `StatusDetail::OutputSet { name,
+// value }` event, routed by the SDK `executor_lifecycle` into the lifecycle's
+// `output_log` place via its `log_output` transition. When `stream_output` is
+// set, that `log_output` transition grows a SECOND output arc onto the user's
+// stream place (one producer, two output arcs — no token-stealing). So the
+// stream token carries structured `{ ..., detail: { name, value } }` data the
+// consumer reads — NOT a log string. Assertion (2) verifies the `log_output`
+// transition actually produces the stream place.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_automated_step_stream_output_synthesizes_signal_place() {
+    // Start → producer(stream_output=true); producer."out" → End AND
+    // producer."stream" → consumer(automated_step).
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_step_node_streaming("producer", "Producer", true),
+            automated_step_node_streaming("consumer", "Consumer", false),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e_s", "s", "producer"),
+            // Control/termination path: producer's "out" governs completion.
+            edge("e_out", "producer", "e"),
+            // Streaming side-channel: producer's "stream" handle → consumer.
+            edge_with_handle("e_stream", "producer", "consumer", "stream"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+
+    let air = compile_to_air(&graph, "stream_test", "", &std::collections::HashMap::new())
+        .expect("Start→AutomatedStep(stream)→End + stream→consumer should compile");
+
+    // (1) The Signal-kind stream place exists with the exact id the backend
+    //     mints (`p_{id}_stream`, raw node-scoped id) and serializes as
+    //     "type":"signal" (PlaceKind::Signal).
+    assert!(
+        has_place(&air, "p_producer_stream"),
+        "expected the synthesized stream place p_producer_stream"
+    );
+    let stream_place = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_producer_stream")
+        .expect("p_producer_stream must be present");
+    assert_eq!(
+        stream_place["type"], "signal",
+        "p_producer_stream must be a Signal-kind place (multi-token output side-channel), got {:?}",
+        stream_place["type"]
+    );
+
+    // (2) The producer's lifecycle `log_output` transition (which consumes the
+    //     executor OUTPUT-event signal place) feeds the synthesized stream
+    //     place: when stream_output is set, the SDK grows a SECOND output arc
+    //     from `log_output` onto `p_producer_stream`. This is the load-bearing
+    //     assertion — it proves the stream is wired to the structured OUTPUT
+    //     (`set_output`) channel, not the log-message channel. The transition
+    //     id is lifecycle-scoped under the node prefix (`producer/log_output`).
+    let log_output = get_transition(&air, "producer/log_output")
+        .expect("expected producer's scoped `log_output` lifecycle transition");
+    assert!(
+        transition_produces_place(log_output, "p_producer_stream"),
+        "the `log_output` transition must produce p_producer_stream when \
+         stream_output is set (the OUTPUT-channel tap); transition: {log_output:?}"
+    );
+
+    // (3) A consuming arc exists from p_producer_stream into the consumer's
+    //     transition: the "stream" edge wires the Signal place to a downstream
+    //     transition via the standard wire path. Find ANY transition that has
+    //     an inbound arc referencing the stream place.
+    let consumes_stream = transitions(&air)
+        .iter()
+        .any(|t| transition_consumes_place(t, "p_producer_stream"));
+    assert!(
+        consumes_stream,
+        "expected some downstream transition to consume p_producer_stream \
+         (the 'stream' handle edge → consumer); transitions: {:?}",
+        transitions(&air)
+            .iter()
+            .map(|t| t["id"].clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_automated_step_without_stream_output_has_no_stream_place() {
+    // NEGATIVE control: stream_output=false → no p_*_stream place is minted
+    // and no "stream" port/handle exists to wire. A plain Start→AutomatedStep
+    // →End must be byte-shape-identical to the pre-feature lowering.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_step_node_streaming("producer", "Producer", false),
+            end_node("e"),
+        ],
+        edges: vec![edge("e_s", "s", "producer"), edge("e_out", "producer", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+
+    let air = compile_to_air(&graph, "no_stream_test", "", &std::collections::HashMap::new())
+        .expect("plain Start→AutomatedStep→End should compile");
+
+    assert!(
+        !has_place(&air, "p_producer_stream"),
+        "stream_output=false must NOT mint p_producer_stream"
+    );
+    // Defensive: no place at all carries the `_stream` suffix when disabled.
+    assert!(
+        !places(&air)
+            .iter()
+            .any(|p| p["id"].as_str().map(|s| s.ends_with("_stream")).unwrap_or(false)),
+        "no *_stream place should exist when stream_output is disabled"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +536,7 @@ fn automated_step_produces_executor_lifecycle() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
@@ -370,14 +587,296 @@ fn automated_step_produces_executor_lifecycle() {
     // failures now propagate upstream via `failure_out`. `dead_letter` is kept as
     // an unreachable terminal place for callers still holding the handle.
 
-    // Bridging transitions from lifecycle to node interface
+    // Bridging transition from lifecycle to node interface (success path).
     assert!(
         has_transition(&air, "t_auto_to_output"),
         "expected to_output transition"
     );
+
+    // UNWIRED error handle (no `source_handle == "error"` edge): under the Rust
+    // panic/Result model a permanent failure must CRASH the net rather than
+    // park a token in a dead-end `p_auto_error`. So:
+    //   (a) there is NO `p_auto_error` place, and
+    //   (b) the retry-exhausted transition `throw`s (permanent ScriptError →
+    //       NetFailed) and has no output arc into any error place.
     assert!(
-        has_transition(&air, "t_auto_to_error"),
-        "expected to_error transition"
+        !has_place(&air, "p_auto_error"),
+        "unwired AutomatedStep must NOT create a dead-end p_auto_error place"
+    );
+    // The exhausted transition is namespaced under the step's scoped prefix.
+    let exhausted = get_transition(&air, "auto/exhausted_deadend")
+        .expect("expected an exhausted_deadend crash transition for the unwired step");
+    assert!(
+        exhausted["logic"].to_string().contains("throw"),
+        "exhausted_deadend must throw to crash the net: {}",
+        exhausted["logic"]
+    );
+    assert!(
+        exhausted
+            .get("outputs")
+            .and_then(|o| o.as_array())
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "exhausted_deadend (panic) must have no output arc: {:?}",
+        exhausted.get("outputs")
+    );
+    // The plain `exhausted` (route-to-p_error) transition must NOT exist when unwired.
+    assert!(
+        !has_transition(&air, "auto/exhausted"),
+        "unwired step must not emit the route-to-error `exhausted` transition"
+    );
+}
+
+/// WIRED error handle: an edge whose `source_handle == "error"` leaves the
+/// AutomatedStep and enters a downstream handler. This is the handled
+/// `Result::Err` — today's topology must be PRESERVED byte-for-byte: the
+/// `p_auto_error` place EXISTS, the named `error` output port is registered,
+/// and the retry-exhausted token routes into `p_auto_error` (which then feeds
+/// the handler). NO panic transition is emitted.
+#[test]
+fn automated_step_wired_error_routes_to_handler() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            WorkflowNode {
+                id: "auto".to_string(),
+                node_type: "automated_step".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::AutomatedStep {
+                    label: "Run Script".to_string(),
+                    description: None,
+                    execution_spec: ExecutionSpecConfig {
+                        backend_type: ExecutionBackendType::Docker,
+                        entrypoint: None,
+                        config: json!({"image": "alpine:latest"}),
+                    },
+                    input: mekhan_service::models::template::Port::empty_input(),
+                    output: mekhan_service::models::template::default_output_port(
+                        mekhan_service::models::template::ExecutionBackendType::Docker,
+                    ),
+                    retry_policy: Default::default(),
+                    deployment_model: Default::default(),
+                    stream_output: false,
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
+            // Downstream error handler — a plain End reached via the error edge.
+            end_node("handler"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "auto"),
+            edge("e2", "auto", "e"),
+            // The wired error path.
+            edge_with_handle("e_err", "auto", "handler", "error"),
+        ],
+        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+    };
+
+    let air = compile_to_air(&graph, "auto_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // The error place EXISTS (today's handled shape preserved).
+    assert!(
+        has_place(&air, "p_auto_error"),
+        "wired AutomatedStep keeps its p_auto_error place"
+    );
+    // The retry-exhausted token routes to p_auto_error (no throw).
+    let exhausted = get_transition(&air, "auto/exhausted")
+        .expect("wired step keeps the route-to-error `exhausted` transition");
+    assert!(
+        !exhausted["logic"].to_string().contains("throw"),
+        "wired exhausted must route, not throw: {}",
+        exhausted["logic"]
+    );
+    assert!(
+        !has_transition(&air, "auto/exhausted_deadend"),
+        "wired step must NOT emit a panic exhausted_deadend transition"
+    );
+    // The error edge wired a consumer onto p_auto_error feeding the handler:
+    // some transition consumes p_auto_error.
+    let consumes_error = transitions(&air).iter().any(|t| {
+        t["inputs"]
+            .as_array()
+            .map(|arcs| arcs.iter().any(|a| a["place"] == "p_auto_error"))
+            .unwrap_or(false)
+    });
+    assert!(
+        consumes_error,
+        "the wired error edge must attach a consumer to p_auto_error"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Start -> AgentNode -> End  (Rust panic/Result failure model)
+// ---------------------------------------------------------------------------
+
+/// Multi-turn (loop-path) AgentNode with no tools. `max_turns > 1` keeps it off
+/// the degenerate single-shot path (which delegates to `lower_automated_step`),
+/// so the agent-loop topology with its own executor-lifecycle failure
+/// transitions (`t_a_call_failed` / `_timed_out` / `_dead`) is exercised.
+fn agent_node(id: &str) -> WorkflowNode {
+    WorkflowNode {
+        id: id.to_string(),
+        node_type: "agent".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::Agent {
+            label: "Researcher".to_string(),
+            description: None,
+            model: ModelRef {
+                provider: "anthropic".to_string(),
+                model: "claude-haiku-4-5-20251001".to_string(),
+                api_key: None,
+                base_url: None,
+                resource_alias: None,
+                temperature: None,
+                max_tokens: None,
+            },
+            system_prompt: Some("You are a research assistant.".to_string()),
+            user_prompt: "Summarize the topic.".to_string(),
+            response_format: None,
+            images: vec![],
+            max_turns: 5,
+            stop_when: None,
+            context_strategy: ContextStrategy::None,
+            on_tool_error: ToolErrorPolicy::Feedback,
+            retry_policy: Default::default(),
+            deployment_model: Default::default(),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    }
+}
+
+/// UNWIRED AgentNode error handle: a permanent LLM-call failure must CRASH the
+/// net (Rhai `throw` → permanent ScriptError → NetFailed) rather than strand a
+/// token in a dead-end `p_a_error`. So:
+///   (a) there is NO `p_a_error` place, and
+///   (b) the lifecycle-failure transitions (`t_a_call_failed` etc.) `throw` and
+///       have no output arc into any error place.
+#[test]
+fn agent_unwired_error_crashes_net() {
+    let graph = WorkflowGraph {
+        nodes: vec![start_node("s"), agent_node("a"), end_node("e")],
+        edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+
+    let air = compile_to_air(&graph, "agent_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // Confirm we hit the loop path (not the degenerate single-shot delegate).
+    assert!(
+        has_place(&air, "p_a_state"),
+        "expected the agent-loop path (p_a_state); got degenerate?"
+    );
+
+    // (a) No dead-end error place.
+    assert!(
+        !has_place(&air, "p_a_error"),
+        "unwired AgentNode must NOT create a dead-end p_a_error place"
+    );
+
+    // (b) The LLM-call-failed transition throws and has no output arc.
+    let call_failed = get_transition(&air, "t_a_call_failed")
+        .expect("expected the t_a_call_failed lifecycle-failure transition");
+    assert!(
+        call_failed["logic"].to_string().contains("throw"),
+        "unwired t_a_call_failed must throw to crash the net: {}",
+        call_failed["logic"]
+    );
+    assert!(
+        call_failed
+            .get("outputs")
+            .and_then(|o| o.as_array())
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "unwired t_a_call_failed (panic) must have no output arc: {:?}",
+        call_failed.get("outputs")
+    );
+
+    // No transition anywhere produces into a p_a_error place.
+    let produces_error = transitions(&air).iter().any(|t| {
+        t["outputs"]
+            .as_array()
+            .map(|arcs| arcs.iter().any(|a| a["place"] == "p_a_error"))
+            .unwrap_or(false)
+    });
+    assert!(
+        !produces_error,
+        "no transition may produce into a (non-existent) p_a_error when unwired"
+    );
+}
+
+/// WIRED AgentNode error handle: an edge whose `source_handle == "error"` leaves
+/// the agent into a downstream handler. Today's topology is PRESERVED: the
+/// `p_a_error` place EXISTS, the lifecycle-failure transitions route into it
+/// (no throw), and the wired edge attaches a consumer onto `p_a_error`.
+#[test]
+fn agent_wired_error_routes_to_handler() {
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            agent_node("a"),
+            end_node("handler"),
+            end_node("e"),
+        ],
+        edges: vec![
+            edge("e1", "s", "a"),
+            edge("e2", "a", "e"),
+            edge_with_handle("e_err", "a", "handler", "error"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+
+    let air = compile_to_air(&graph, "agent_test", "", &std::collections::HashMap::new())
+        .expect("should compile");
+
+    // The error place EXISTS (today's handled shape preserved).
+    assert!(
+        has_place(&air, "p_a_error"),
+        "wired AgentNode keeps its p_a_error place"
+    );
+
+    // The lifecycle-failure transition routes to p_a_error (no throw).
+    let call_failed = get_transition(&air, "t_a_call_failed")
+        .expect("wired agent keeps the t_a_call_failed transition");
+    assert!(
+        !call_failed["logic"].to_string().contains("throw"),
+        "wired t_a_call_failed must route, not throw: {}",
+        call_failed["logic"]
+    );
+    let routes_to_error = call_failed["outputs"]
+        .as_array()
+        .map(|arcs| arcs.iter().any(|a| a["place"] == "p_a_error"))
+        .unwrap_or(false);
+    assert!(
+        routes_to_error,
+        "wired t_a_call_failed must produce into p_a_error: {:?}",
+        call_failed.get("outputs")
+    );
+
+    // The wired error edge attaches a consumer onto p_a_error feeding the handler.
+    let consumes_error = transitions(&air).iter().any(|t| {
+        t["inputs"]
+            .as_array()
+            .map(|arcs| arcs.iter().any(|a| a["place"] == "p_a_error"))
+            .unwrap_or(false)
+    });
+    assert!(
+        consumes_error,
+        "the wired error edge must attach a consumer to p_a_error"
     );
 }
 
@@ -1133,6 +1632,7 @@ fn automated_step_has_scoped_effect_errors() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
@@ -1177,6 +1677,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
             ),
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: None,
         width: None,
@@ -2056,6 +2557,7 @@ fn guard_multi_hop_scope_walk() {
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: None,
         width: None,
@@ -2265,6 +2767,7 @@ fn loop_with_accumulators_graph(
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: Some("lp".to_string()),
         width: None,
@@ -3950,6 +4453,7 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
             ),
             retry_policy: Default::default(),
             deployment_model: dm,
+            stream_output: false,
         },
         parent_id: None,
         width: None,
@@ -4069,6 +4573,7 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                     ),
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
+                    stream_output: false,
                 },
                 parent_id: None,
                 width: None,
@@ -5145,6 +5650,7 @@ fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
             },
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            stream_output: false,
         },
         parent_id: Some(parent.to_string()),
         width: None,
@@ -5498,4 +6004,108 @@ fn pool_resource_kinds_and_pool_registry() {
     );
     // A non-pool kind is not in the pool registry.
     assert!(pool_kind("postgres").is_none());
+}
+
+
+// ---------------------------------------------------------------------------
+// StreamConsumer: `<slug>.output` borrow resolution (parked-producer namespace)
+// ---------------------------------------------------------------------------
+
+/// A `WorkflowEdge` with explicit source AND target handles (the StreamConsumer
+/// wiring needs distinct `stream` / `control` TARGET handles, which the shared
+/// `edge_with_handle` helper can't express — it hard-codes `target_handle:
+/// "in"`).
+fn edge_src_tgt(
+    id: &str,
+    source: &str,
+    source_handle: Option<&str>,
+    target: &str,
+    target_handle: &str,
+) -> WorkflowEdge {
+    WorkflowEdge {
+        id: id.to_string(),
+        source: source.to_string(),
+        target: target.to_string(),
+        source_handle: source_handle.map(str::to_string),
+        target_handle: Some(target_handle.to_string()),
+        label: None,
+        edge_type: "sequence".to_string(),
+    }
+}
+
+/// Regression for the `input.output` borrow bug: a `StreamConsumer` parks its
+/// reduced value at `p_<id>_data` and must expose it as the qualified
+/// `<slug>.output` (NOT collapse into the generic `input` control-token scope).
+/// Mirrors demo 14: start → producer(stream_output) ==stream==> consumer
+/// (StreamConsumer, Concat), producer ==control==> consumer, consumer → End
+/// whose `resultMapping` borrows `consumer.output`. The fix is two-fold —
+/// `is_parked_producer` recognizes StreamConsumer, and `out_shape_stream_consumer`
+/// returns a FLAT `{ output }` so the slug namespacing applies externally.
+#[test]
+fn stream_consumer_output_is_borrowable_as_slug_output() {
+    let consumer = WorkflowNode {
+        id: "consumer".to_string(),
+        node_type: "stream_consumer".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::StreamConsumer {
+            label: "Consumer".to_string(),
+            description: None,
+            result_var: "item".to_string(),
+            reduce: mekhan_service::models::template::StreamReduce::Concat {
+                sep: Some(" ".to_string()),
+            },
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+    let end = WorkflowNode {
+        id: "end".to_string(),
+        node_type: "end".to_string(),
+        slug: None,
+        position: pos(),
+        data: WorkflowNodeData::End {
+            label: "Done".to_string(),
+            description: None,
+            terminal: mekhan_service::models::template::default_terminal_port(),
+            result_mapping: vec![mekhan_service::models::template::FieldMapping {
+                target_field: "transcript".to_string(),
+                expression: "consumer.output".to_string(),
+            }],
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_step_node_streaming("producer", "Producer", true),
+            consumer,
+            end,
+        ],
+        edges: vec![
+            edge("e_s", "s", "producer"),
+            // producer's `stream` source handle → consumer's `stream` target.
+            edge_src_tgt("e_stream", "producer", Some("stream"), "consumer", "stream"),
+            // producer's default `out` → consumer's `control` target.
+            edge_src_tgt("e_control", "producer", None, "consumer", "control"),
+            // consumer → End.
+            edge("e_ce", "consumer", "end"),
+        ],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+
+    let air = compile_to_air(&graph, "stream_borrow_test", "", &std::collections::HashMap::new());
+    assert!(
+        air.is_ok(),
+        "End mapping `transcript <- consumer.output` must resolve the StreamConsumer's \
+         parked `<slug>.output` (regression for the `input.output` bug): {:?}",
+        air.err()
+    );
 }

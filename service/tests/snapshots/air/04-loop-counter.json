@@ -1280,12 +1280,6 @@
       "type": "state"
     },
     {
-      "id": "p_tick_error",
-      "name": "Body — print iteration - Error",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_tick_output",
       "name": "Body — print iteration - Output",
       "token_schema": "#/definitions/DynamicToken",
@@ -2181,7 +2175,7 @@
       ]
     },
     {
-      "id": "t_tick_to_error",
+      "id": "t_tick_to_error_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2205,32 +2199,10 @@
         }
       ],
       "logic": {
-        "source": "#{ error: dead }",
+        "source": "throw \"automated step 'Body — print iteration' dead-lettered (infra failure) and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Body — print iteration - To Error",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "error",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_tick_error",
-          "port": "error",
-          "weight": 1
-        }
-      ]
+      "name": "Body — print iteration - Dead-letter (no handler — crash net)"
     },
     {
       "id": "t_tick_to_output",
@@ -2495,7 +2467,7 @@
         "source": "f.retries >= f.max_retries",
         "type": "rhai"
       },
-      "id": "tick/exhausted",
+      "id": "tick/exhausted_deadend",
       "input_ports": [
         {
           "cardinality": "single",
@@ -2519,32 +2491,10 @@
         }
       ],
       "logic": {
-        "source": "#{ err: f }",
+        "source": "throw \"automated step 'Body — print iteration' failed and no error handler is wired\"",
         "type": "rhai"
       },
-      "name": "Retries Exhausted",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "err",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_tick_error",
-          "port": "err",
-          "weight": 1
-        }
-      ]
+      "name": "Retries Exhausted (no handler — crash net)"
     },
     {
       "group_id": "group_6",

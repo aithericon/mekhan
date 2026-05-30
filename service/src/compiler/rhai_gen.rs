@@ -329,11 +329,28 @@ pub(crate) fn json_to_rhai_interpolated(value: &Value) -> String {
 /// new executor dispatch, valid for Mekhan's long-lived worker backends).
 /// `Immediate` re-dispatches at once; `Fixed`/`Exponential` route through the
 /// durable `timer_schedule` effect first (`delay = base` / `base << attempt`).
-/// Once retries are exhausted the token is routed to `p_error` (the node's
-/// error output), making failures observable / wirable into the graph.
+/// Once retries are exhausted the disposition depends on `error_handled`:
+///
+/// - `error_handled == true` — the node's `error` handle is wired to a
+///   downstream handler (or this is the pooled path, which ALWAYS routes the
+///   exhausted token through a held-consuming release transition). The
+///   `exhausted` transition routes the failure token to `p_error` (the node's
+///   error output), making the failure observable / wirable into the graph.
+///   This is the handled `Result::Err`.
+/// - `error_handled == false` — the node's `error` handle is NOT wired. A
+///   permanent, retries-exhausted failure must crash the whole net rather than
+///   strand a token in a dead-end `p_error` place (which quiesces the net at
+///   'running' forever). The `exhausted` transition instead `throw`s — a Rhai
+///   `throw` maps to a permanent `ScriptError`, which the engine surfaces as
+///   `NetFailed`, flipping the instance to 'failed'. This is the unhandled
+///   panic unwinding to the top. `p_error` is unused in this branch (the
+///   caller does not even create the place).
 ///
 /// Called inside the step's `scoped_prefix`, so every id here is namespaced
 /// per step and can't collide across automated steps.
+///
+/// `node_label` is embedded into the panic message so an operator sees which
+/// step crashed the net.
 pub(crate) fn build_retry_topology(
     ctx: &mut Context,
     policy: &RetryPolicy,
@@ -341,7 +358,9 @@ pub(crate) fn build_retry_topology(
     timed_out: &PlaceHandle<DynamicToken>,
     exec_inbox: &PlaceHandle<ExecutorSubmitInput>,
     effect_errors: &PlaceHandle<EffectError>,
-    p_error: &PlaceHandle<DynamicToken>,
+    p_error: Option<&PlaceHandle<DynamicToken>>,
+    error_handled: bool,
+    node_label: &str,
 ) {
     let failure = ctx.state::<DynamicToken>("failure", "Failure");
 
@@ -444,12 +463,36 @@ pub(crate) fn build_retry_topology(
         }
     }
 
-    // Retries exhausted (or max_retries == 0): surface as the node error.
-    ctx.transition("exhausted", "Retries Exhausted")
-        .auto_input("f", &failure)
-        .auto_output("err", p_error)
-        .guard_rhai("f.retries >= f.max_retries")
-        .logic(r#"#{ err: f }"#);
+    // Retries exhausted (or max_retries == 0). Two dispositions:
+    if error_handled {
+        // Handled: surface as the node error output (routes to the wired
+        // handler — or, on the pooled path, to the held-consuming release
+        // transition). Byte-identical to the historical behavior.
+        let p_error = p_error
+            .expect("error_handled == true requires a p_error sink for the exhausted token");
+        ctx.transition("exhausted", "Retries Exhausted")
+            .auto_input("f", &failure)
+            .auto_output("err", p_error)
+            .guard_rhai("f.retries >= f.max_retries")
+            .logic(r#"#{ err: f }"#);
+    } else {
+        // Unhandled: no error handler is wired, so a permanent failure must
+        // crash the net (panic → NetFailed → instance 'failed') instead of
+        // stranding a token in a dead-end `p_error`. A Rhai `throw` is a
+        // permanent ScriptError. The rich exit-code/stderr detail is already
+        // projected to hpi_logs via the parallel `log_failure` branch above
+        // (which still fires), so observability is preserved before the crash.
+        // No output port — `_deadend` suffix exempts it from the
+        // every-transition-wired structural check (mirrors Decision's sink).
+        let msg = format!(
+            "automated step '{node_label}' failed and no error handler is wired"
+        );
+        ctx.transition("exhausted_deadend", "Retries Exhausted (no handler — crash net)")
+            .auto_input("f", &failure)
+            .guard_rhai("f.retries >= f.max_retries")
+            .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+            .done();
+    }
 }
 
 pub(crate) fn build_merge_logic(state_var: &str, signal_var: &str) -> String {

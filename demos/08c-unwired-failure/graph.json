@@ -1,0 +1,69 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 200 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Unwired Failure Demo",
+        "initial": {
+          "id": "in",
+          "label": "Run Config",
+          "fields": [
+            { "name": "payload", "label": "Payload Text", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "risky_step",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 200 },
+      "data": {
+        "type": "automated_step",
+        "label": "Risky Step",
+        "description": "Always raises. Its `error` handle is intentionally NOT wired to anything — so an unhandled, retries-exhausted failure must crash the whole net (panic → NetFailed → instance 'failed'), not strand a token.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Result",
+          "fields": [
+            { "name": "summary", "label": "Summary", "kind": "text", "required": true }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate", "baseDelayMs": 0 },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "end_ok",
+      "type": "end",
+      "position": { "x": 620, "y": 200 },
+      "data": {
+        "type": "end",
+        "label": "Done (never reached)",
+        "resultMapping": [
+          { "targetField": "outcome", "expression": "\"ok\"" },
+          { "targetField": "summary", "expression": "risky_step.summary" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_risky", "source": "start",      "target": "risky_step", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_risky_ok",    "source": "risky_step", "target": "end_ok",     "targetHandle": "in", "type": "sequence" }
+  ]
+}

@@ -1276,7 +1276,7 @@ fn spawn_net_evaluation_loop<E, T, S>(
     S: StateProjection + 'static,
 {
     use petri_application::token_color_to_json;
-    use petri_domain::DomainEvent;
+    use petri_domain::{DomainEvent, PlaceId, Token, TokenColor};
 
     tokio::spawn(async move {
         // Track last broadcast sequence so we can catch ALL new events
@@ -1398,6 +1398,11 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                         event_tx.send(SseSignal::Event(Box::new(event.clone())));
                                 }
                             }
+                            // Advance the cursor so the failure-bridge
+                            // re-broadcast below doesn't re-send NetFailed.
+                            if let Some(last) = all_events.last() {
+                                last_broadcast_seq = last.sequence;
+                            }
 
                             tracing::warn!(
                                 net_id = %net_id,
@@ -1405,6 +1410,69 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                 reason = %failure.reason,
                                 "Net failed permanently — stopping eval loop"
                             );
+
+                            // If this net was spawned as a child (SubWorkflow /
+                            // agent tool), propagate the failure UP to the
+                            // parent by bridging a failure token into the
+                            // parent's failure_place — symmetric with the
+                            // success reply bridge. The parent's SubWorkflow
+                            // node consumes it (t_fail wired / t_fail_deadend
+                            // unwired); an unwired deadend throws → the parent's
+                            // OWN NetFailed → recurses up to the root. Root nets
+                            // (no parent_net_id/failure_place params) take no
+                            // branch here, so the success path and root
+                            // lifecycle are untouched.
+                            if let Some(params) = service.net_parameters() {
+                                let parent =
+                                    params.get("parent_net_id").and_then(|v| v.as_str());
+                                let fplace =
+                                    params.get("failure_place").and_then(|v| v.as_str());
+                                if let (Some(parent_net_id), Some(failure_place)) =
+                                    (parent, fplace)
+                                {
+                                    let payload = serde_json::json!({
+                                        "reason":        failure.reason,
+                                        // alias: agent tool-error Feedback codegen reads err.message
+                                        "message":       failure.reason,
+                                        "transition_id": failure.transition_id.to_string(),
+                                        "child_net_id":  net_id,
+                                        "retryable":     failure.retryable,
+                                    });
+                                    let bridge_event = DomainEvent::TokenBridgedOut {
+                                        token: Token::new(TokenColor::Data(payload)),
+                                        // audit-only: routing is driven by the
+                                        // target_* fields, not the source.
+                                        source_place_id: PlaceId::named("__net_failure"),
+                                        source_place_name: "__net_failure".to_string(),
+                                        target_net_id: parent_net_id.to_string(),
+                                        target_place_name: failure_place.to_string(),
+                                        transition_id: failure.transition_id.clone(),
+                                        signal_key: uuid::Uuid::new_v4().to_string(),
+                                        // synthetic teardown — no producing TransitionFired
+                                        produced_by_event: None,
+                                        // one-way bridge — the parent does not reply
+                                        reply_to_place_name: None,
+                                        reply_channels: None,
+                                    };
+                                    if let Err(e) = service.append_event(bridge_event).await {
+                                        tracing::error!(
+                                            net_id = %net_id,
+                                            error = %e,
+                                            "Failed to emit failure bridge to parent"
+                                        );
+                                    } else {
+                                        // Broadcast the bridge event to SSE too.
+                                        let all_events = service.get_events().await;
+                                        for event in &all_events {
+                                            if event.sequence > last_broadcast_seq {
+                                                let _ = event_tx.send(SseSignal::Event(
+                                                    Box::new(event.clone()),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             // Cancel all per-net tasks (listeners, etc.)
                             cancel_token.cancel();
@@ -1750,6 +1818,157 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// A net spawned as a child (net_parameters carry `parent_net_id` +
+    /// `failure_place`) must, on permanent NetFailed, emit a TokenBridgedOut
+    /// routing a failure token to the parent's failure_place — symmetric with
+    /// the success reply bridge. This is what wakes a stuck SubWorkflow/agent
+    /// parent instead of leaving it waiting on its reply bridge forever.
+    #[tokio::test]
+    async fn test_eval_loop_emits_failure_bridge_on_net_failed() {
+        use petri_test_harness::fixtures::TestScenario;
+
+        let registry = new_registry();
+        let inst = registry.get_or_create("child-1");
+
+        // A net whose single transition fails permanently (undefined var →
+        // permanent ScriptError → failure_reached).
+        let scenario = TestScenario::with_failing_transition();
+
+        inst.service
+            .initialize(scenario.net)
+            .await
+            .expect("initialize");
+        for (place_id, token) in &scenario.initial_tokens {
+            inst.service
+                .create_token(place_id.clone(), token.color.clone())
+                .await
+                .expect("create token");
+        }
+
+        // Mark this net as a SubWorkflow child of "parent-xyz".
+        inst.service.set_net_parameters(serde_json::json!({
+            "parent_net_id": "parent-xyz",
+            "failure_place": "p_sub_failure",
+        }));
+
+        *inst.run_mode.write() = RunMode::Running;
+        inst.eval_notify.notify_one();
+
+        // Wait for NetFailed to land.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let events = inst.service.get_events().await;
+            if events
+                .iter()
+                .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetFailed { .. }))
+            {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "Timed out waiting for NetFailed. Events: {:?}",
+                    events.iter().map(|e| format!("{:?}", e.event)).collect::<Vec<_>>()
+                );
+            }
+        }
+
+        // A failure-bridge TokenBridgedOut must target the parent's failure_place.
+        let events = inst.service.get_events().await;
+        let bridged = events
+            .iter()
+            .find_map(|e| match &e.event {
+                petri_domain::DomainEvent::TokenBridgedOut {
+                    token,
+                    target_net_id,
+                    target_place_name,
+                    ..
+                } if target_net_id == "parent-xyz"
+                    && target_place_name == "p_sub_failure" =>
+                {
+                    Some(token.clone())
+                }
+                _ => None,
+            })
+            .expect("a failure-bridge TokenBridgedOut to the parent should exist");
+
+        match &bridged.color {
+            petri_domain::TokenColor::Data(v) => {
+                assert!(
+                    v.get("reason").and_then(|r| r.as_str()).is_some(),
+                    "failure payload must carry a `reason` string, got {v:?}"
+                );
+                assert!(
+                    v.get("message").and_then(|r| r.as_str()).is_some(),
+                    "failure payload must carry a `message` alias (agent codegen reads err.message), got {v:?}"
+                );
+                assert_eq!(
+                    v.get("child_net_id").and_then(|r| r.as_str()),
+                    Some("child-1"),
+                    "failure payload must name the failing child net"
+                );
+                assert!(
+                    v.get("retryable").map(|r| r.is_boolean()).unwrap_or(false),
+                    "failure payload must carry a `retryable` bool, got {v:?}"
+                );
+            }
+            other => panic!("expected TokenColor::Data failure payload, got {other:?}"),
+        }
+    }
+
+    /// A ROOT net (no parent_net_id/failure_place params) must NOT bridge any
+    /// failure on NetFailed — only NetFailed itself. Guards the (Some,Some)
+    /// gate so the success path and root lifecycle stay untouched.
+    #[tokio::test]
+    async fn test_eval_loop_no_failure_bridge_for_root_net() {
+        use petri_test_harness::fixtures::TestScenario;
+
+        let registry = new_registry();
+        let inst = registry.get_or_create("root-1");
+
+        let scenario = TestScenario::with_failing_transition();
+
+        inst.service
+            .initialize(scenario.net)
+            .await
+            .expect("initialize");
+        for (place_id, token) in &scenario.initial_tokens {
+            inst.service
+                .create_token(place_id.clone(), token.color.clone())
+                .await
+                .expect("create token");
+        }
+
+        // NO set_net_parameters → this is a root net.
+
+        *inst.run_mode.write() = RunMode::Running;
+        inst.eval_notify.notify_one();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let events = inst.service.get_events().await;
+            if events
+                .iter()
+                .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetFailed { .. }))
+            {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!("Timed out waiting for NetFailed on root net");
+            }
+        }
+
+        let events = inst.service.get_events().await;
+        let has_bridge = events
+            .iter()
+            .any(|e| matches!(&e.event, petri_domain::DomainEvent::TokenBridgedOut { .. }));
+        assert!(
+            !has_bridge,
+            "a root net (no parent params) must NOT emit a failure bridge on NetFailed"
+        );
     }
 
     #[tokio::test]

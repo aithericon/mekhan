@@ -198,6 +198,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     input: Port::empty_input(),
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
+                    stream_output: false,
                     // Drain seam: Scheduled Submit + `runOnLease`. Because the
                     // body's parent is the leased Loop, the compiler RE-ROUTES it
                     // off the scheduler-net onto the executor lifecycle and stamps

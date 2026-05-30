@@ -177,13 +177,6 @@ fn demo_dir() -> std::path::PathBuf {
         .join("demos/09-agent-tool-loop")
 }
 
-fn hello_world_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("service crate has a parent")
-        .join("demos/01-hello-world")
-}
-
 fn order_lookup_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -776,6 +769,79 @@ async fn fire_customer_message(app: &axum::Router, template_id: Uuid, message: &
     inst["id"].as_str().unwrap().parse().unwrap()
 }
 
+/// Opaque token the greet child embeds in its greeting. It is NOT derivable
+/// from the input name and appears NOWHERE in the agent's prompts, so the only
+/// way a final reply can contain it is if the SubWorkflow tool actually ran and
+/// its result flowed back into the LLM's last turn. This turns "did the tool
+/// fire" from a guessable turn-count heuristic (a temp-0 model can shortcut a
+/// predictable `Hello, {name}!`) into a content proof the model cannot fake.
+const GREET_CHILD_TOKEN: &str = "ZX9QF7K";
+
+/// Inline `Start{name} → greet → End{greeting}` child for the SubWorkflow-tool
+/// test. Mirrors `01-hello-world`'s shape but its greeting embeds
+/// [`GREET_CHILD_TOKEN`] so the parent assertion can verify the tool result
+/// genuinely propagated (rather than reusing the shared hello-world fixture,
+/// whose deterministic greeting the LLM can guess without calling the tool).
+fn greet_child_with_token() -> (Value, Value) {
+    let graph = json!({
+        "nodes": [
+            {
+                "id": "start", "type": "start", "position": { "x": 40, "y": 120 },
+                "data": {
+                    "type": "start", "label": "Start",
+                    "processName": "Greet {{ name }}",
+                    "initial": { "id": "in", "label": "Greeting Input", "fields": [
+                        { "name": "name", "label": "Your Name", "kind": "text",
+                          "required": true }
+                    ] }
+                }
+            },
+            {
+                "id": "greet", "type": "automated_step", "position": { "x": 320, "y": 120 },
+                "data": {
+                    "type": "automated_step", "label": "Build Greeting",
+                    "description": "Compose a token-stamped greeting from the inbound name.",
+                    "executionSpec": {
+                        "backendType": "python", "entrypoint": "main.py",
+                        "config": { "python": "python3", "requirements": [],
+                                    "virtualenv": false, "sdk": true,
+                                    "inherit_env": true, "env": {} }
+                    },
+                    "output": { "id": "out", "label": "Greeting", "fields": [
+                        { "name": "greeting", "label": "Greeting", "kind": "text",
+                          "required": true }
+                    ] }
+                }
+            },
+            {
+                "id": "end", "type": "end", "position": { "x": 620, "y": 120 },
+                "data": {
+                    "type": "end", "label": "Done",
+                    "resultMapping": [
+                        { "targetField": "greeting", "expression": "greet.greeting" }
+                    ]
+                }
+            }
+        ],
+        "edges": [
+            { "id": "e_start_greet", "source": "start", "target": "greet",
+              "targetHandle": "in", "type": "sequence" },
+            { "id": "e_greet_end", "source": "greet", "target": "end",
+              "targetHandle": "in", "type": "sequence" }
+        ]
+    });
+    let files = json!({
+        "greet": {
+            "main.py": format!(
+                "greeting = f\"Hello, {{input.name}}! [{token}]\"\n\
+                 log_info(\"greeted user\", name=input.name)\n",
+                token = GREET_CHILD_TOKEN
+            )
+        }
+    });
+    (graph, files)
+}
+
 /// Parent agent graph whose `tools` handle targets a SubWorkflow node
 /// referencing `child_template_id` (a published `Start{name} → … → End`
 /// child). The agent has no per-node input declaration of its own — the
@@ -804,10 +870,12 @@ fn parent_agent_with_subworkflow_tool(child_template_id: Uuid) -> Value {
                         "provider": "ollama", "model": "qwen3.5:9b",
                         "baseUrl": "http://localhost:11434", "temperature": 0
                     },
-                    "systemPrompt": "You are a helpful assistant. To greet a person, \
-                        call the `greet` tool with their name. After the tool returns \
-                        a greeting, reply to the user with that greeting in one short \
-                        sentence.",
+                    "systemPrompt": "You are a greeting assistant. You do NOT know how \
+                        to greet anyone on your own — the official greeting text is \
+                        produced ONLY by the `greet` tool. You MUST call the `greet` \
+                        tool with the person's name, then reply to the user with \
+                        EXACTLY the greeting string the tool returns. Never invent, \
+                        guess, paraphrase, or shorten the greeting.",
                     "userPrompt": "{{ start.customer_message }}",
                     "maxTurns": 4,
                     "onToolError": "feedback"
@@ -864,16 +932,23 @@ fn parent_agent_with_subworkflow_tool(child_template_id: Uuid) -> Value {
 ///     → resolve_subworkflow_air extracts it into ResolvedChild.input_contract
 ///       → agent tool schema `{ name }` → LLM tool_call greet({name: …})
 ///         → t_agent_invoke_greet deposits args at the SubWorkflow input
-///           → spawn_net spawns the hello-world child net, which greets
+///           → spawn_net spawns the child net, which greets (token-stamped)
 ///             → child reply → t_agent_collect_greet feeds it back into p_agent_state
-///               → turn 2: the LLM produces a final reply
+///               → the LLM produces a final reply quoting the greeting
 ///
-/// Assertion mirrors the loop test: `completed` + `turns_used >= 2`. Two
-/// turns means the LLM emitted a tool call (turn 1), the child sub-workflow
-/// spawned + ran + replied (otherwise collect never fires and the loop
-/// stalls → caught by the timeout), and the LLM produced a final answer
-/// (turn 2). A subworkflow that failed to spawn or never replied would
-/// hang the instance, not complete it.
+/// Two assertions, in order of strength:
+///   1. The final reply CONTAINS [`GREET_CHILD_TOKEN`] — the token lives only
+///      in the child's greeting, never in the prompts, so its presence proves
+///      the SubWorkflow tool actually ran AND its result flowed back into the
+///      LLM's final turn. This is the real proof; a model that invents a
+///      greeting cannot reproduce the opaque token.
+///   2. `turns_used >= 1` — mirrors the corrected loop-test threshold: the
+///      dispatch counter (mapped to `agent.turn` → `turns_used`) is bumped
+///      ONLY by `t_route_dispatch_<tn>`, NOT by `t_route_final`, so a single
+///      tool round-trip is `turns_used == 1` (the old `>= 2` here was the same
+///      inadvertent off-by-one already fixed on the sibling loop test). A
+///      subworkflow that failed to spawn or never replied would hang the
+///      instance (caught by the 300s timeout), not complete it.
 #[tokio::test]
 async fn agent_subworkflow_tool_loop_completes() {
     if !engine_available().await {
@@ -901,13 +976,15 @@ async fn agent_subworkflow_tool_loop_completes() {
 
     // Publish the tool child first (Start{name} → greet → End{greeting}), so
     // the parent's publish-time SubWorkflow resolution can find it + read its
-    // Start contract. Reuses the shipped 01-hello-world fixture as the child.
-    let child = demos::load_demo(&hello_world_dir()).expect("load demos/01-hello-world");
+    // Start contract. Uses a token-stamped inline child (not the shared
+    // hello-world fixture) so the final-reply assertion below proves the tool
+    // result actually flowed back rather than being guessed by the model.
+    let (child_graph, child_files) = greet_child_with_token();
     let child_id = create_and_publish(
         &app,
         &format!("Greet Child E2E {}", Uuid::new_v4().simple()),
-        &child.graph,
-        &child.files,
+        &child_graph,
+        &child_files,
     )
     .await;
 
@@ -943,23 +1020,40 @@ async fn agent_subworkflow_tool_loop_completes() {
     );
     let payload = result.get("value").unwrap_or(&result);
 
-    let turns_used = payload
-        .get("turns_used")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    assert!(
-        turns_used >= 2,
-        "agent completed in {turns_used} turn(s) — the SubWorkflow tool was never \
-         called. Either the Ollama adapter dropped the tool plumbing, the LLM \
-         ignored the tool, or the agent compiler did not route a tools edge to a \
-         SubWorkflow callee. Full result: {result}"
-    );
-
     let reply = payload.get("reply").and_then(|v| v.as_str()).unwrap_or("");
     assert!(
         !reply.trim().is_empty(),
         "agent reply was empty — the final response did not propagate through the \
          End node's `agent.response` resultMapping. Result: {result}"
+    );
+    // PRIMARY proof (content, not turn-count): the opaque token lives ONLY in
+    // the child's greeting, never in the prompts, so its presence in the final
+    // reply means the SubWorkflow tool ran AND its result fed the LLM's last
+    // turn. This is what a guessable `Hello, {name}!` could not establish — the
+    // model cannot reproduce the token without genuinely calling the tool.
+    assert!(
+        reply.contains(GREET_CHILD_TOKEN),
+        "agent reply `{reply}` is missing the greet token `{GREET_CHILD_TOKEN}` — the \
+         SubWorkflow tool result did not reach the final answer (the model likely \
+         invented a greeting instead of calling the tool, or the collected tool \
+         output never flowed back into p_agent_state). Result: {result}"
+    );
+    // SECONDARY: the dispatch counter. `agent.turn` is bumped only on tool
+    // dispatch (not on the final turn), so one tool round-trip is exactly 1 —
+    // matching the corrected loop-test threshold (the old `>= 2` was an
+    // off-by-one). The token check above is the real proof; this just pins the
+    // counter semantics so a regression to 0 (tool never dispatched) is caught.
+    let turns_used = payload
+        .get("turns_used")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    assert!(
+        turns_used >= 1,
+        "agent completed in {turns_used} turn(s) — the SubWorkflow tool was never \
+         dispatched (the dispatch counter never incremented). Either the Ollama \
+         adapter dropped the tool plumbing, the LLM ignored the tool, or the agent \
+         compiler did not route a tools edge to a SubWorkflow callee. \
+         Full result: {result}"
     );
 
     cleanup_durables(&cleanup_nats).await;

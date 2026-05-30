@@ -22,6 +22,7 @@
 		type Template
 	} from '$lib/api/client';
 	import { fetchNodeScopes, type ScopeEntry } from '$lib/editor/guard-scope';
+	import { setWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 	import type { CodeEditorApi } from '$lib/components/editor/panels/shared/CollabCodeEditor.svelte';
 	import type { components } from '$lib/api/schema';
 
@@ -96,6 +97,12 @@
 	async function load() {
 		try {
 			template = await getTemplate(templateId);
+			// Stash workflow `definitions` so the derived-port twin can resolve
+			// `$ref` response_formats (they're absent from the Yjs doc).
+			setWorkflowDefinitions(
+				(template?.graph as { definitions?: Record<string, unknown> } | undefined)?.definitions ??
+					null
+			);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
 		}

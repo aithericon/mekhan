@@ -118,3 +118,15 @@
 	style="background:#ef4444;border-color:#b91c1c;"
 	title="On error (retries exhausted)"
 />
+{#if data.streamOutput}
+	<!-- Streaming side-channel: emits one token per runner log event. Offset
+	     below the "out" handle on the right edge so it doesn't overlap it.
+	     Wire this to a downstream node to fire it once per log token. -->
+	<Handle
+		id="stream"
+		type="source"
+		position={Position.Right}
+		style="top:75%;background:#a855f7;border-color:#7e22ce;"
+		title="Stream output (log_output tokens)"
+	/>
+{/if}

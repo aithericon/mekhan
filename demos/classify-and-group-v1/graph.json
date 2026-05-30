@@ -3,7 +3,10 @@
     {
       "id": "trigger-intake",
       "type": "trigger",
-      "position": { "x": 52, "y": 60 },
+      "position": {
+        "x": 52,
+        "y": 60
+      },
       "data": {
         "type": "trigger",
         "label": "Intake API",
@@ -13,8 +16,14 @@
         },
         "concurrency": "allow",
         "payloadMapping": [
-          { "targetField": "document_file", "expression": "document_file" },
-          { "targetField": "patient_id", "expression": "patient_id" }
+          {
+            "targetField": "document_file",
+            "expression": "document_file"
+          },
+          {
+            "targetField": "patient_id",
+            "expression": "patient_id"
+          }
         ],
         "enabled": true
       }
@@ -22,7 +31,10 @@
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 52, "y": 330 },
+      "position": {
+        "x": 52,
+        "y": 330
+      },
       "data": {
         "type": "start",
         "label": "Start",
@@ -51,7 +63,10 @@
     {
       "id": "ocr",
       "type": "automated_step",
-      "position": { "x": 364, "y": 330 },
+      "position": {
+        "x": 364,
+        "y": 330
+      },
       "data": {
         "type": "automated_step",
         "label": "OCR (kreuzberg)",
@@ -76,85 +91,143 @@
           "id": "out",
           "label": "OCR result",
           "fields": [
-            { "name": "content", "label": "Content", "kind": "text", "required": true },
-            { "name": "tables", "label": "Tables", "kind": "json", "required": false },
-            { "name": "metadata", "label": "Metadata", "kind": "json", "required": false }
+            {
+              "name": "content",
+              "label": "Content",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "tables",
+              "label": "Tables",
+              "kind": "json",
+              "required": false
+            },
+            {
+              "name": "metadata",
+              "label": "Metadata",
+              "kind": "json",
+              "required": false
+            }
           ]
         }
       }
     },
     {
       "id": "classify",
-      "type": "automated_step",
-      "position": { "x": 702, "y": 330 },
+      "type": "agent",
+      "position": {
+        "x": 702,
+        "y": 330
+      },
       "data": {
-        "type": "automated_step",
+        "type": "agent",
         "label": "Group & classify (vision LLM)",
         "description": "Vision MoE looks at the document image and the OCR text together. Groups pages into logical documents and assigns each group one of the canonical document classes. Single LLM call — the model owns both the grouping decision and the per-group classification (mirrors online-clinic's `assemble_and_classify`).",
-        "executionSpec": {
-          "backendType": "llm",
-          "config": {
-            "provider": "ollama",
-            "model": "llama3.2-vision:11b",
-            "base_url": "http://localhost:11434",
-            "temperature": 0,
-            "max_tokens": 1024,
-            "system_prompt": "Du bist ein Klassifizierungsassistent fuer medizinische Dokumente. Eine Sammlung von Seitenbildern wird dir gegeben; gruppiere Seiten in logische Dokumente und klassifiziere jede Gruppe. Jede Seite gehoert genau zu einer Gruppe; die Reihenfolge innerhalb einer Gruppe spiegelt die Lesereihenfolge wider.",
-            "prompt": "Analyze this document and group its pages into logical sub-documents. For each group, classify the document type into ONE of: lab_result, referral_letter, prescription, insurance_form, imaging_report, discharge_summary, consultation_note, invoice, consent_form, other.\n\nOCR text (supplementary, may be truncated):\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {groups: [{doc_id, class, page_ids, order, confidence, reasoning}]}.\n- doc_id: short stable id like \"g1\", \"g2\", …\n- page_ids: list of 1-indexed page numbers belonging to this group\n- order: same page_ids in reading order\n- confidence: 0..1\n- reasoning: one short sentence explaining the classification",
-            "images": [
-              { "path": "{{ start.document_file }}" }
-            ],
-            "response_format": {
-              "type": "json_schema",
-              "schema": {
-                "$ref": "#/definitions/GroupedClassification"
-              }
-            }
+        "model": {
+          "provider": "ollama",
+          "model": "llama3.2-vision:11b",
+          "baseUrl": "http://localhost:11434",
+          "temperature": 0,
+          "maxTokens": 1024
+        },
+        "userPrompt": "Analyze this document and group its pages into logical sub-documents. For each group, classify the document type into ONE of: lab_result, referral_letter, prescription, insurance_form, imaging_report, discharge_summary, consultation_note, invoice, consent_form, other.\n\nOCR text (supplementary, may be truncated):\n---\n{{ ocr.content }}\n---\n\nReturn JSON: {groups: [{doc_id, class, page_ids, order, confidence, reasoning}]}.\n- doc_id: short stable id like \"g1\", \"g2\", …\n- page_ids: list of 1-indexed page numbers belonging to this group\n- order: same page_ids in reading order\n- confidence: 0..1\n- reasoning: one short sentence explaining the classification",
+        "systemPrompt": "Du bist ein Klassifizierungsassistent fuer medizinische Dokumente. Eine Sammlung von Seitenbildern wird dir gegeben; gruppiere Seiten in logische Dokumente und klassifiziere jede Gruppe. Jede Seite gehoert genau zu einer Gruppe; die Reihenfolge innerhalb einer Gruppe spiegelt die Lesereihenfolge wider.",
+        "responseFormat": {
+          "type": "json_schema",
+          "schema": {
+            "$ref": "#/definitions/GroupedClassification"
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Groups",
-          "fields": [
-            { "name": "groups", "label": "Groups", "kind": "json", "required": true }
-          ]
-        }
+        "images": [
+          {
+            "path": "{{ start.document_file }}"
+          }
+        ],
+        "maxTurns": 1
       }
     },
     {
       "id": "end-ok",
       "type": "end",
-      "position": { "x": 1066, "y": 330 },
+      "position": {
+        "x": 1066,
+        "y": 330
+      },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "patient_id", "expression": "start.patient_id" },
-          { "targetField": "groups", "expression": "classify.groups" },
-          { "targetField": "ocr_chars", "expression": "ocr.content" }
+          {
+            "targetField": "patient_id",
+            "expression": "start.patient_id"
+          },
+          {
+            "targetField": "groups",
+            "expression": "classify.groups"
+          },
+          {
+            "targetField": "ocr_chars",
+            "expression": "ocr.content"
+          }
         ]
       }
     }
   ],
   "edges": [
-    { "id": "e-trigger-start", "source": "trigger-intake", "target": "start", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-start-ocr", "source": "start", "target": "ocr", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-ocr-classify", "source": "ocr", "target": "classify", "targetHandle": "in", "type": "sequence" },
-    { "id": "e-classify-end", "source": "classify", "target": "end-ok", "targetHandle": "in", "type": "sequence" }
+    {
+      "id": "e-trigger-start",
+      "source": "trigger-intake",
+      "target": "start",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-start-ocr",
+      "source": "start",
+      "target": "ocr",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-ocr-classify",
+      "source": "ocr",
+      "target": "classify",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-classify-end",
+      "source": "classify",
+      "target": "end-ok",
+      "targetHandle": "in",
+      "type": "sequence",
+      "sourceHandle": "out"
+    }
   ],
   "definitions": {
     "GroupedClassification": {
       "type": "object",
-      "required": ["groups"],
+      "required": [
+        "groups"
+      ],
       "properties": {
         "groups": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["doc_id", "class", "page_ids", "order", "confidence"],
+            "required": [
+              "doc_id",
+              "class",
+              "page_ids",
+              "order",
+              "confidence"
+            ],
             "properties": {
-              "doc_id": { "type": "string" },
+              "doc_id": {
+                "type": "string"
+              },
               "class": {
                 "type": "string",
                 "enum": [
@@ -172,18 +245,26 @@
               },
               "page_ids": {
                 "type": "array",
-                "items": { "type": "integer", "minimum": 1 }
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
               },
               "order": {
                 "type": "array",
-                "items": { "type": "integer", "minimum": 1 }
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
               },
               "confidence": {
                 "type": "number",
                 "minimum": 0,
                 "maximum": 1
               },
-              "reasoning": { "type": "string" }
+              "reasoning": {
+                "type": "string"
+              }
             },
             "additionalProperties": false
           }

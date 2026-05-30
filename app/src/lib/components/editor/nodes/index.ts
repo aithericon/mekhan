@@ -19,10 +19,11 @@ import TimeoutNode from './TimeoutNode.svelte';
 import TriggerNode from './TriggerNode.svelte';
 import SubWorkflowNode from './SubWorkflowNode.svelte';
 import AgentNode from './AgentNode.svelte';
+import StreamConsumerNode from './StreamConsumerNode.svelte';
 
 // Compile-time exhaustiveness: `satisfies Record<NodeKind, Component>` makes a
 // missing or spurious node kind a build error (NodeKind is the canonical
-// 17-kind union derived from the generated OpenAPI schema). The trailing
+// 18-kind union derived from the generated OpenAPI schema). The trailing
 // `as NodeTypes` cast hands xyflow its own (looser, internal-node-typed)
 // registry shape without losing the key-level exhaustiveness check.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -44,6 +45,7 @@ export const nodeTypes = {
 	timeout: TimeoutNode,
 	trigger: TriggerNode,
 	sub_workflow: SubWorkflowNode,
-	agent: AgentNode
+	agent: AgentNode,
+	stream_consumer: StreamConsumerNode
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 } satisfies Record<NodeKind, Component<any>> as unknown as NodeTypes;

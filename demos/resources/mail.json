@@ -1,0 +1,12 @@
+{
+  "path": "mail",
+  "resource_type": "smtp",
+  "display_name": "Mail (dev SMTP relay)",
+  "config": {
+    "host": "localhost",
+    "port": 1025,
+    "username": "",
+    "password": "",
+    "from_address": "demos@aithericon.local"
+  }
+}

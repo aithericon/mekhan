@@ -182,6 +182,14 @@
 					if (!portsEqual(data.output, c.output)) {
 						patch.output = c.output;
 					}
+					// Snapshot the child's input contract onto the node so the
+					// canvas can show "what this sub-workflow consumes" (the way a
+					// Start node shows its fields) without the panel open —
+					// symmetric with the `output` snapshot above. Display-only:
+					// publish re-derives the real input from the frozen child.
+					if (!portsEqual(data.inputContract, c.input)) {
+						patch.inputContract = c.input;
+					}
 					if (!readonly) {
 						const valid = new Set(inputFields.map((f) => f.name));
 						const pruned = mappings.filter((m) => valid.has(m.targetField));
