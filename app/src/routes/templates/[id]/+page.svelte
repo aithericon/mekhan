@@ -34,6 +34,7 @@
 	import { buildAssertionScope } from '$lib/editor/assertion-scope';
 	import { getSession, releaseSession } from '$lib/yjs/session-store';
 	import { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
+	import { setWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 	import type {
 		WorkflowNodeData,
 		WorkflowNodeType,
@@ -63,6 +64,7 @@
 	async function load() {
 		if (templateId === 'new') {
 			template = null;
+			setWorkflowDefinitions(null);
 			loading = false;
 			return;
 		}
@@ -71,6 +73,12 @@
 		error = null;
 		try {
 			template = await getTemplate(templateId);
+			// Stash the workflow `definitions` for the client-side derived-port
+			// twin to resolve `$ref` response_formats (absent from the Yjs doc).
+			setWorkflowDefinitions(
+				(template?.graph as { definitions?: Record<string, unknown> } | undefined)?.definitions ??
+					null
+			);
 			// Private sub-workflows carry an owner; resolve its name for the
 			// breadcrumb back to the parent workflow.
 			ownerName = null;
