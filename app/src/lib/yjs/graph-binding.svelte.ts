@@ -350,6 +350,17 @@ export class YjsGraphBinding {
 									config.inputMapping as SubWorkflowNodeData['inputMapping']
 							}
 						: {}),
+					// Child input-contract snapshot (display-only: drives the node-face
+					// "consumes" preview). MUST round-trip — the SubWorkflowSection
+					// contract effect reconciles it via onchange and compares against
+					// the persisted value; if it never persists, that comparison stays
+					// false forever and the effect re-fetches in an infinite loop.
+					...(config?.inputContract
+						? {
+								inputContract:
+									config.inputContract as SubWorkflowNodeData['inputContract']
+							}
+						: {}),
 					output:
 						(config?.output as SubWorkflowNodeData['output']) ?? {
 							id: 'out',
@@ -851,6 +862,16 @@ export class YjsGraphBinding {
 					config.set('inputMapping', data.inputMapping);
 				} else {
 					config.delete('inputMapping');
+				}
+				// Persist the child's input-contract snapshot symmetric with `output`
+				// below. Without this the SubWorkflowSection contract effect's
+				// `portsEqual(data.inputContract, c.input)` never settles true and it
+				// re-fetches the io-contract on a loop (the "picker refreshes forever"
+				// bug). Delete the key when cleared so it round-trips as unset.
+				if (data.inputContract) {
+					config.set('inputContract', data.inputContract);
+				} else {
+					config.delete('inputContract');
 				}
 				config.set(
 					'output',
