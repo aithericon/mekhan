@@ -20,6 +20,13 @@ use kreuzberg::KreuzbergError;
 use aithericon_executor_surya::adapters::surya::SuryaAdapter;
 use aithericon_executor_surya::plugin::{register, unregister, SuryaOcrPlugin, BACKEND_NAME};
 
+// The kreuzberg OCR-backend registry is process-global. The registry-touching
+// tests below (register / unregister / honest-absence assertions) observe each
+// other's entries under a default parallel `cargo test`, so they must run
+// serially. This guard enforces that without requiring `--test-threads=1`.
+// Poison-tolerant: a panicking test must not cascade-fail the siblings.
+static REGISTRY_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // ---------------------------------------------------------------------------
 // Mock-HTTP server (parallel to tests/backend.rs shape).
 // ---------------------------------------------------------------------------
@@ -165,6 +172,7 @@ async fn process_image_upstream_500_maps_to_kreuzberg_ocr_error() {
 
 #[tokio::test]
 async fn registration_adds_surya_to_global_registry() {
+    let _serial = REGISTRY_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     // Defensive: clear any stale registration from a prior run.
     let _ = unregister();
 
@@ -194,6 +202,7 @@ async fn registration_adds_surya_to_global_registry() {
 
 #[tokio::test]
 async fn double_registration_returns_err_or_replaces() {
+    let _serial = REGISTRY_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     // Defensive cleanup.
     let _ = unregister();
 
@@ -225,6 +234,7 @@ async fn double_registration_returns_err_or_replaces() {
 
 #[tokio::test]
 async fn plugin_does_not_bleed_through_to_kreuzberg_built_in_names() {
+    let _serial = REGISTRY_GUARD.lock().unwrap_or_else(|e| e.into_inner());
     // Honest-absence: registering Surya plugin MUST NOT add anything
     // under the names of kreuzberg's built-in OCR-backend types.
     let _ = unregister();
