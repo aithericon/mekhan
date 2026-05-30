@@ -393,11 +393,15 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
 
     // ── (1) Create the datacenter resource. `create_resource` auto-deploys its
     //    backing lease-adapter net `pool-<resource_id>` (the loop's
-    //    claim/grant/register/release bridges target it). For
-    //    `scheduler_flavor = "slurm"` the actual allocation goes over SSH from
-    //    ENGINE env (`SLURM_SSH_HOST` etc.) via `SlurmAllocatorClient`, so
-    //    `allocator_url` / `token` are placeholders on the slurm leg — they are
-    //    only load-bearing for the generic `"http"` flavor.
+    //    claim/grant/register/release bridges target it). Multi-cluster: the
+    //    cluster CONNECTION lives on the RESOURCE (not engine env). The engine's
+    //    ClusterRegistry lazily builds a `SlurmAllocatorClient::from_connection`
+    //    (ssh_host/port/user/known_hosts/template_dir + the inline `ssh_key` PEM,
+    //    written to a 0600 tempfile) from the effect_config this resource threads.
+    let ssh_key_pem = std::fs::read_to_string(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../engine/infra/slurm/ssh/slurm_test"),
+    )
+    .expect("read engine/infra/slurm/ssh/slurm_test private key");
     let resp = app
         .clone()
         .oneshot(
@@ -411,9 +415,19 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
                         "resource_type": "datacenter",
                         "display_name": "Slurm Datacenter (e2e)",
                         "config": {
-                            "allocator_url": "http://unused",
                             "scheduler_flavor": "slurm",
-                            "token": "unused"
+                            "ssh_host": std::env::var("TEST_SLURM_SSH_HOST")
+                                .unwrap_or_else(|_| "localhost".to_string()),
+                            "ssh_port": std::env::var("TEST_SLURM_SSH_PORT")
+                                .ok()
+                                .and_then(|s| s.parse::<u16>().ok())
+                                .unwrap_or(2222),
+                            "ssh_user": std::env::var("TEST_SLURM_SSH_USER")
+                                .unwrap_or_else(|_| "testuser".to_string()),
+                            "ssh_known_hosts": "accept",
+                            "template_dir": std::env::var("TEST_SLURM_TEMPLATE_DIR")
+                                .unwrap_or_else(|_| "/opt/petri/templates".to_string()),
+                            "ssh_key": ssh_key_pem
                         }
                     })
                     .to_string(),

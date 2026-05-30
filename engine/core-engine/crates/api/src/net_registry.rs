@@ -781,7 +781,21 @@ where
             #[cfg(feature = "executor-vault-secrets")]
             if let (Some(store), Some(wrapper)) = (&ecfg.secret_store, &ecfg.secret_wrapper) {
                 executor_nats_client.set_secret_wrapping(store.clone(), wrapper.clone());
-                tracing::info!(net_id = %net_id, "Executor secret wrapping enabled");
+                // ALSO wire the Vault store into this net's evaluation service so
+                // firing-time `resolve_secrets` (firing.rs) substitutes
+                // `{{secret:<vault_path>#field}}` placeholders in an effect's
+                // `effect_config` before the handler runs. This is what a
+                // datacenter lease needs: the cluster CONNECTION (e.g. a Slurm
+                // datacenter's inline `ssh_key` PEM) rides the
+                // `resource_lease_acquire` effect_config as a secret template and
+                // must be resolved to plaintext so the ClusterRegistry can write
+                // the real key to its 0600 temp file. Without this the template
+                // passes through LITERAL and the allocator's SSH fails with
+                // "failed to connect" (a garbage key file). Nomad datacenters
+                // dodge this — `nomad_addr` is non-secret public config — which is
+                // why only the Slurm leg surfaced it.
+                service.set_secret_store(store.clone());
+                tracing::info!(net_id = %net_id, "Executor secret wrapping + firing-time secret resolution enabled");
             }
 
             let executor_client: Arc<dyn ExecutorClient> = Arc::new(executor_nats_client);
