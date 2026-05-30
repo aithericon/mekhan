@@ -40,6 +40,7 @@ import TriggerNodeSection from '$lib/components/editor/panels/property-sections/
 import SubWorkflowSection from '$lib/components/editor/panels/property-sections/SubWorkflowSection.svelte';
 import AgentNodeSection from '$lib/components/editor/panels/property-sections/AgentNodeSection.svelte';
 import EndNodeSection from '$lib/components/editor/panels/property-sections/EndNodeSection.svelte';
+import StreamConsumerSection from '$lib/components/editor/panels/property-sections/StreamConsumerSection.svelte';
 
 /**
  * The uniform prop contract NodePropertyPanel dispatches every section with.
@@ -86,7 +87,8 @@ const SECTIONS = {
 	timeout: TimeoutNodeSection,
 	trigger: TriggerNodeSection,
 	sub_workflow: SubWorkflowSection,
-	agent: AgentNodeSection
+	agent: AgentNodeSection,
+	stream_consumer: StreamConsumerSection
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 } satisfies Record<NodeKind, Component<any>>;
 

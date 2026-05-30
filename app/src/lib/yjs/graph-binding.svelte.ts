@@ -391,6 +391,15 @@ export class YjsGraphBinding {
 					type: 'timeout',
 					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
+			case 'stream_consumer': {
+				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_consumer' }>['reduce'];
+				return {
+					...base,
+					type: 'stream_consumer',
+					resultVar: (config?.resultVar as string) ?? 'item',
+					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' }
+				};
+			}
 		}
 	}
 
@@ -875,6 +884,10 @@ export class YjsGraphBinding {
 				break;
 			case 'timeout':
 				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
+				break;
+			case 'stream_consumer':
+				config.set('resultVar', data.resultVar ?? 'item');
+				config.set('reduce', data.reduce ?? { kind: 'array' });
 				break;
 		}
 	}
