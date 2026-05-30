@@ -18,6 +18,17 @@ use super::*;
 
 pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let id = &cx.node.id;
+    // NOTE on `max_iterations` semantics: it is a SAFETY CAP, not the precise
+    // body-run count. The counter parks at `iteration: 0` (ENTER), the body
+    // runs, then `t_continue` (`iteration < max_iterations`) and `t_exit`
+    // (`iteration >= max_iterations`) race on the same `body_out` token. Because
+    // the cap is checked AFTER the body has already produced `body_out`, a loop
+    // with `loop_condition: true` runs the body `max_iterations + 1` times
+    // before the cap trips (iterations 0..=max_iterations). This is intentional:
+    // authors set the precise stop with `loop_condition` (the borrow-resolved
+    // guard); `max_iterations` is a generous backstop that bounds a runaway loop.
+    // Do NOT "fix" this to exactly-N without a deliberate contract change — it
+    // would shift the runtime iteration count of every existing loop demo.
     let WorkflowNodeData::Loop {
         label,
         max_iterations,
