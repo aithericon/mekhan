@@ -461,6 +461,8 @@ pub(crate) mod end;
 pub(crate) mod failure;
 pub(crate) mod human_task;
 pub(crate) mod join;
+pub(crate) mod lease_bridge;
+pub(crate) mod lease_scope;
 pub(crate) mod loop_;
 pub(crate) mod map;
 pub(crate) mod parallel_split;

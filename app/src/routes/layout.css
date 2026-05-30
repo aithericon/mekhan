@@ -35,6 +35,7 @@
 	--node-loop: oklch(0.70 0.17 350);
 	--node-map: oklch(0.68 0.15 165);
 	--node-scope: oklch(0.62 0.03 250);
+	--node-lease-scope: oklch(0.75 0.15 75);
 	--node-parallel: oklch(0.72 0.12 200);
 	--node-automated: oklch(0.62 0.16 290);
 	--node-phase-update: oklch(0.66 0.14 170);
@@ -125,6 +126,7 @@
 	--color-node-loop: var(--node-loop);
 	--color-node-map: var(--node-map);
 	--color-node-scope: var(--node-scope);
+	--color-node-lease-scope: var(--node-lease-scope);
 	--color-node-parallel: var(--node-parallel);
 	--color-node-automated: var(--node-automated);
 	--color-node-phase-update: var(--node-phase-update);

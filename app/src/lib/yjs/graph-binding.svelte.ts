@@ -285,6 +285,16 @@ export class YjsGraphBinding {
 			}
 			case 'scope':
 				return { ...base, type: 'scope' };
+			case 'lease_scope': {
+				type LeaseScopeDataT = Extract<WorkflowNodeData, { type: 'lease_scope' }>;
+				return {
+					...base,
+					type: 'lease_scope',
+					lease:
+						(config?.lease as LeaseScopeDataT['lease'] | undefined) ??
+						({ scheduler: '' } as LeaseScopeDataT['lease'])
+				};
+			}
 			case 'phase_update':
 				return {
 					...base,
@@ -808,6 +818,9 @@ export class YjsGraphBinding {
 				config.set('output', data.output ?? { id: 'out', label: 'Element', fields: [] });
 				break;
 			case 'scope':
+				break;
+			case 'lease_scope':
+				config.set('lease', data.lease);
 				break;
 			case 'phase_update':
 				config.set('phaseName', data.phaseName);

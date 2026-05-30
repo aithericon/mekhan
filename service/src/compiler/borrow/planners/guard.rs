@@ -15,9 +15,9 @@ use crate::compiler::borrow::ctx::BorrowContext;
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::compiler::token_shape::{
-    analyze, collect_scope_roots, is_control_leaf, is_loop_node, is_map_node, is_parked_producer,
-    scalar_satisfies, scan_dotted_refs, topo_pos, LitTy, ScopeEntry, ShapeDiagnostic, SlugIndex,
-    TokenShape,
+    analyze, collect_scope_roots, is_control_leaf, is_lease_scope_node, is_loop_node, is_map_node,
+    is_parked_producer, scalar_satisfies, scan_dotted_refs, topo_pos, LitTy, ScopeEntry,
+    ShapeDiagnostic, SlugIndex, TokenShape,
 };
 use crate::models::template::{WorkflowGraph, WorkflowNode, WorkflowNodeData};
 
@@ -229,7 +229,13 @@ pub(crate) fn resolve_ref(
             // strip the slug for the parked producer_path because the parked
             // token stores `{ iteration: N }` flat — see `lower_loop`'s
             // `t_<id>_enter` logic.
-            if is_loop_node(graph, &prod_id) {
+            // Loop AND LeaseScope are both flat parked producers keyed by slug:
+            // a Loop parks `{iteration, <accs>, lease?}`, a LeaseScope parks
+            // `{lease}`. Both resolve `<slug>.<field>` by stripping the slug for
+            // the parked place (`p_<slug>_data` stores the namespace flat) — the
+            // same read-arc rewrite (`<slug>.lease.executor_namespace` →
+            // `d_<slug>.lease.executor_namespace`).
+            if is_loop_node(graph, &prod_id) || is_lease_scope_node(graph, &prod_id) {
                 if gref.segs.is_empty() {
                     return RefResolution::Unresolved;
                 }
@@ -238,9 +244,9 @@ pub(crate) fn resolve_ref(
                 };
                 let mut full: Vec<String> = vec![root.clone()];
                 full.extend(gref.segs.iter().cloned());
-                // Resolve the full path. A loop-scoped lease parks an `Any`
-                // namespace under `<slug>.lease` (the held grant is opaque to
-                // the compiler), so an exact resolve of `<slug>.lease.alloc_id`
+                // Resolve the full path. A held lease parks an `Any` namespace
+                // under `<slug>.lease` (the held grant is opaque to the
+                // compiler), so an exact resolve of `<slug>.lease.executor_namespace`
                 // fails at the `Any` boundary. Accept it when SOME prefix of the
                 // path resolves to an `Any`/`Opaque` shape — sub-access into an
                 // opaque namespace is permissive, mirroring the parked-producer
@@ -251,7 +257,7 @@ pub(crate) fn resolve_ref(
                 let prov = shape
                     .find_by_leaf(&gref.segs[gref.segs.len() - 1])
                     .map(|(_, _, p)| p.node_label)
-                    .unwrap_or_else(|| "loop".to_string());
+                    .unwrap_or_else(|| "lease scope".to_string());
                 return RefResolution::Borrow {
                     producer_id: prod_id,
                     producer_path: gref.segs.join("."),
@@ -651,30 +657,30 @@ pub(crate) fn guard_readarc_plan(
             WorkflowNodeData::Map { items_ref, .. } if !items_ref.trim().is_empty() => {
                 vec![items_ref.clone()]
             }
-            // A `Scheduled { operation: Submit, run_on_lease: true }`
-            // AutomatedStep nested in a leased Loop now ENQUEUES to the lease
+            // A `Scheduled { operation: Submit }` AutomatedStep nested in a lease
+            // holder (a LeaseScope or a leased Loop) ENQUEUES to the lease
             // namespace (it lowers via the EXECUTOR path, not scheduler-net).
             // `lower_automated_step` injects
-            // `d.executor_namespace = <loop_slug>.lease.executor_namespace;` into
-            // the `t_<id>_prepare` logic; we synthesize the SAME dotted source
-            // here so the standard read-arc pipeline wires a read-arc into the
-            // loop's parked `p_<loop>_data` and rewrites the dotted text to
-            // `d_<loop>.lease.executor_namespace`. `resolve_ref`'s `is_loop_node`
-            // branch resolves `<loop>.lease.executor_namespace` via
-            // `resolves_under_opaque` (the parked `<loop>.lease` is `Any`),
-            // returning a `Borrow` — no new BorrowSource, no new apply arm.
-            // Without an enclosing leased loop the lowering injects nothing, so
-            // we emit nothing.
+            // `d.executor_namespace = <holder_slug>.lease.executor_namespace;`
+            // into the `t_<id>_prepare` logic; we synthesize the SAME dotted
+            // source here so the standard read-arc pipeline wires a read-arc into
+            // the holder's parked `p_<holder>_data` and rewrites the dotted text
+            // to `d_<holder>.lease.executor_namespace`. `resolve_ref`'s
+            // Loop/LeaseScope branch resolves `<holder>.lease.executor_namespace`
+            // via `resolves_under_opaque` (the parked `<holder>.lease` is `Any`),
+            // returning a `Borrow` — no new BorrowSource, no new apply arm. The
+            // enclosure decides (there is no per-step flag):
+            // `enclosing_leased_scope_slug` walks the `parent_id` chain. No
+            // enclosing holder ⇒ the lowering injects nothing, so we emit nothing.
             WorkflowNodeData::AutomatedStep {
                 deployment_model:
                     crate::models::template::DeploymentModel::Scheduled {
                         operation: crate::models::template::ScheduledOperation::Submit,
-                        run_on_lease: true,
                         ..
                     },
                 ..
-            } => match enclosing_leased_loop_slug(node, graph) {
-                Some(loop_slug) => vec![format!("{loop_slug}.lease.executor_namespace")],
+            } => match lease_holder_slug(node, graph) {
+                Some(holder_slug) => vec![format!("{holder_slug}.lease.executor_namespace")],
                 None => continue,
             },
             _ => continue,
@@ -743,26 +749,16 @@ pub(crate) fn guard_readarc_plan(
 use crate::compiler::borrow::shape::{Borrow, BorrowResolution};
 use crate::compiler::borrow::source::{BorrowSource, PlanCtx};
 
-/// Slug of the Loop that ENCLOSES `node` (`node.parent_id == loop.id`)
-/// iff that loop carries a `lease`. Mirrors the identically-named helper in
-/// `lower::automated_step` (both call `WorkflowNode::slug()`) so the dotted
-/// `<loop_slug>.lease.executor_namespace` synthesized here is byte-identical to
-/// the one injected into the `t_<id>_prepare` logic — `apply_guard_borrows`
-/// relies on the literal match to find + rewrite the ref. Loops are exempt from
-/// slug suffixing, so `slug()` == the `SlugIndex` key.
-fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
-    let parent_id = node.parent_id.as_deref()?;
-    graph.nodes.iter().find_map(|n| {
-        if n.id != parent_id {
-            return None;
-        }
-        match &n.data {
-            WorkflowNodeData::Loop {
-                lease: Some(_), ..
-            } => Some(n.slug()),
-            _ => None,
-        }
-    })
+/// Slug of the lease-namespace HOLDER that ENCLOSES a `Scheduled { Submit }`
+/// body — the SAME implicit-by-containment walk the lowering uses to decide
+/// whether to stamp `d.executor_namespace`. Delegating to the canonical helper
+/// in `lower::automated_step` keeps the dotted `<holder>.lease.executor_namespace`
+/// synthesized here byte-identical to the one injected into the `t_<id>_prepare`
+/// logic — `apply_guard_borrows` relies on the literal match to find + rewrite
+/// the ref. Single source of truth (no drift between the read-arc plan and the
+/// lowering injection).
+fn lease_holder_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
+    crate::compiler::lower::automated_step::enclosing_leased_scope_slug(node, graph)
 }
 
 pub(crate) struct GuardSource;

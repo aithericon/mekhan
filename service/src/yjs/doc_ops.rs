@@ -662,15 +662,16 @@ mod tests {
         }
     }
 
-    /// L3/L4 regression: the loop-scoped `lease` (and the body's
-    /// `Scheduled { run_on_lease }`) MUST survive the Y.Doc round-trip publish
-    /// runs (`reconstruct_graph_from_ydoc` → `doc_to_graph`). The loop's
-    /// `yjs_encode` previously `..`-dropped `lease`, so the live published
-    /// instance lowered as a PLAIN loop (no salloc; body sbatch'd) even though
-    /// offline `compile_to_air` kept it. Same silent-default-drop class as
-    /// `automated_step_input_output_survive_ydoc_roundtrip`.
+    /// L3/L4 regression: the loop-scoped `lease` MUST survive the Y.Doc
+    /// round-trip publish runs (`reconstruct_graph_from_ydoc` → `doc_to_graph`).
+    /// The loop's `yjs_encode` previously `..`-dropped `lease`, so the live
+    /// published instance lowered as a PLAIN loop (no salloc; body sbatch'd) even
+    /// though offline `compile_to_air` kept it. Same silent-default-drop class as
+    /// `automated_step_input_output_survive_ydoc_roundtrip`. The body is a
+    /// `Scheduled { Submit }` nested in the leased loop (`parent_id == "lp"`), so
+    /// it runs on the lease BY CONTAINMENT — there is no per-step flag to survive.
     #[test]
-    fn loop_lease_and_run_on_lease_survive_ydoc_roundtrip() {
+    fn loop_lease_survives_ydoc_roundtrip() {
         use crate::models::template::{
             DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding, Port,
             RetryPolicy, ScheduledOperation, WorkflowEdge, WorkflowNode,
@@ -721,7 +722,6 @@ mod tests {
                             resources: None,
                             operation: ScheduledOperation::Submit,
                             request: None,
-                            run_on_lease: true,
                         },
                     },
                     parent_id: Some("lp".to_string()),
@@ -749,11 +749,26 @@ mod tests {
         }
         match find("body") {
             WorkflowNodeData::AutomatedStep {
-                deployment_model: DeploymentModel::Scheduled { run_on_lease, .. },
+                deployment_model: DeploymentModel::Scheduled { operation, .. },
                 ..
-            } => assert!(*run_on_lease, "run_on_lease must survive Y.Doc round-trip"),
+            } => assert_eq!(
+                *operation,
+                ScheduledOperation::Submit,
+                "scheduled Submit body must survive Y.Doc round-trip"
+            ),
             other => panic!("expected Scheduled AutomatedStep, got {other:?}"),
         }
+        // Lease enclosure is now purely structural: the body's `parent_id` ties
+        // it to the leased loop (asserted above), so it runs on the lease BY
+        // CONTAINMENT — there is no per-step flag to round-trip.
+        assert_eq!(
+            rt.nodes
+                .iter()
+                .find(|n| n.id == "body")
+                .and_then(|n| n.parent_id.as_deref()),
+            Some("lp"),
+            "body must remain parented to the leased loop"
+        );
     }
 
     /// Pre-fix the slug write side was missing, so `new_version` (and any

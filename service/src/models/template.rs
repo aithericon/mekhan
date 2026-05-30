@@ -416,6 +416,33 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// Container that holds ONE datacenter allocation for the duration of its
+    /// body. Decouples "hold an allocation" from "loop": any AutomatedStep
+    /// (deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly
+    /// or through intervening containers like a plain Loop — runs ON the held
+    /// allocation by containment (no per-step `run_on_lease` flag). The lease is
+    /// acquired once on enter and released once on exit; the held lease (incl.
+    /// `executor_namespace` / `alloc_id`) is parked into the scope's
+    /// `p_<id>_data` envelope under a `lease` key, so body steps and downstream
+    /// blocks borrow `<scope_slug>.lease.<field>` through the standard read-arc
+    /// pipeline. Children attach via the same `body_in`/`body_out` interior
+    /// handles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`
+    /// handles connect to the outer flow.
+    ///
+    /// A leased Loop is exactly `LeaseScope { Loop { … } }`; Loop's `lease`
+    /// remains as back-compat sugar.
+    #[serde(rename = "lease_scope")]
+    LeaseScope {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// REQUIRED datacenter lease binding (a LeaseScope with no lease is a
+        /// pointless empty container). Reuses [`LeaseBinding`] verbatim — the
+        /// `scheduler` alias resolves via `resolve_binding(..., "datacenter",
+        /// ...)` exactly as the Loop-lease path does — and is NOT `Option`;
+        /// `validate_lease_scope` rejects an empty `scheduler` alias.
+        lease: LeaseBinding,
+    },
     /// Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`
     /// into N item tokens (one per element), runs a BODY sub-graph of child
     /// nodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`
@@ -774,6 +801,7 @@ impl WorkflowNodeData {
             | Self::Join { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
+            | Self::LeaseScope { label, .. }
             | Self::Map { label, .. }
             | Self::StreamConsumer { label, .. }
             | Self::PhaseUpdate { label, .. }
@@ -807,6 +835,7 @@ impl WorkflowNodeData {
             | Self::Join { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
+            | Self::LeaseScope { description, .. }
             | Self::Map { description, .. }
             | Self::StreamConsumer { description, .. }
             | Self::PhaseUpdate { description, .. }
@@ -1279,27 +1308,6 @@ pub enum DeploymentModel {
         /// `Submit` wire shape round-trips byte-identically.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request: Option<serde_json::Value>,
-        /// Opt-in: ENQUEUE this body to the enclosing leased loop's lease
-        /// namespace instead of submitting a fresh scheduler job. The body
-        /// step ALWAYS sits inside the leasing loop (`parent_id == loop.id`)
-        /// and there is exactly one loop lease in scope — no ambiguity. When
-        /// set (and the enclosing Loop carries a `lease`), the body lowers via
-        /// the EXECUTOR enqueue path (NOT the scheduler-net) and the compiler
-        /// injects `d.executor_namespace = <loop_slug>.lease.executor_namespace`
-        /// onto the job token via the standard read-arc borrow pipeline. The
-        /// engine's `ExecutorSubmitHandler` reads that per-job namespace and
-        /// publishes to the lease-scoped NATS queue (`lease-<grant_id>`) drained
-        /// by the ONE persistent executor the acquire path launched on the held
-        /// allocation — so every iteration's body runs WARM on the same held
-        /// instance (venv/model/GPU state persists). `false` (default) = an
-        /// independent scheduler submit. The namespace rides the job token's
-        /// top-level `executor_namespace` key — no typed engine field.
-        #[serde(
-            default,
-            rename = "runOnLease",
-            skip_serializing_if = "std::ops::Not::not"
-        )]
-        run_on_lease: bool,
     },
 }
 
@@ -2992,6 +3000,12 @@ pub mod dsl {
                 WorkflowNodeData::Scope { .. } => {
                     // children are populated by the CLI envelope after the
                     // step map is built
+                }
+                WorkflowNodeData::LeaseScope { lease, .. } => {
+                    // children are populated by the CLI envelope after the
+                    // step map is built; the held lease binding round-trips
+                    // through the shared `lease` DSL field.
+                    step.lease = Some(lease.clone());
                 }
                 WorkflowNodeData::Loop {
                     max_iterations,

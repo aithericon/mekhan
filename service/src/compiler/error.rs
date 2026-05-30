@@ -164,6 +164,12 @@ pub enum CompileError {
     #[error("loop '{node_id}' has no body — add at least one node inside the loop container")]
     LoopEmpty { node_id: String },
 
+    /// LeaseScope has no body — no child node has `parent_id == lease_scope.id`.
+    /// A LeaseScope with nothing inside holds an allocation that no step runs
+    /// on; that is pointless. Wire at least one node into the scope's interior.
+    #[error("lease scope '{node_id}' has no body — add at least one node inside the lease-scope container")]
+    LeaseScopeEmpty { node_id: String },
+
     /// Map has no body — no child node has `parent_id == map.id`. A Map with
     /// nothing to run per element is a config error; wire at least one node
     /// inside the map container.
@@ -699,6 +705,7 @@ impl CompileError {
             }
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
+            Self::LeaseScopeEmpty { .. } => "lease_scope_empty",
             Self::MapEmpty { .. } => "map_empty",
             Self::MapRefMissingStar { .. } => "map_ref_missing_star",
             Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
@@ -771,6 +778,7 @@ impl CompileError {
             | Self::SubWorkflowPrivateOwnershipViolation { node_id, .. }
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
+            | Self::LeaseScopeEmpty { node_id }
             | Self::MapEmpty { node_id }
             | Self::MapRefMissingStar { node_id, .. }
             | Self::MapResultVarInvalid { node_id, .. }

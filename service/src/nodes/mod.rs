@@ -33,6 +33,7 @@ pub mod end;
 pub mod failure;
 pub mod human_task;
 pub mod join;
+pub mod lease_scope;
 pub mod loop_;
 pub mod map;
 pub mod parallel_split;
@@ -166,6 +167,7 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &failure::FAILURE_DECL,
     &human_task::HUMAN_TASK_DECL,
     &join::JOIN_DECL,
+    &lease_scope::LEASE_SCOPE_DECL,
     &loop_::LOOP_DECL,
     &map::MAP_DECL,
     &parallel_split::PARALLEL_SPLIT_DECL,
@@ -198,6 +200,7 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::Join { .. } => "join",
         WorkflowNodeData::Loop { .. } => "loop",
         WorkflowNodeData::Scope { .. } => "scope",
+        WorkflowNodeData::LeaseScope { .. } => "lease_scope",
         WorkflowNodeData::Map { .. } => "map",
         WorkflowNodeData::StreamConsumer { .. } => "stream_consumer",
         WorkflowNodeData::PhaseUpdate { .. } => "phase_update",
@@ -254,6 +257,7 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
         | WorkflowNodeData::ParallelSplit { .. }
         | WorkflowNodeData::Join { .. }
         | WorkflowNodeData::Scope { .. }
+        | WorkflowNodeData::LeaseScope { .. }
         | WorkflowNodeData::Map { .. }
         // StreamConsumer's `reduce` Custom expr is Rhai but operates over the
         // gathered `__r` array (not `input.<path>`-resolved like guards), so it

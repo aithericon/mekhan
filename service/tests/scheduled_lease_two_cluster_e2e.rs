@@ -164,7 +164,6 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                     resources: None,
                     operation: ScheduledOperation::Submit,
                     request: None,
-                    run_on_lease: true,
                 },
             },
             parent_id: Some(loop_id.to_string()),

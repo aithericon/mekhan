@@ -4499,7 +4499,6 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
                     resources: None,
                     operation: Default::default(),
                     request: None,
-                    run_on_lease: false,
                 },
             ),
             end_node("e"),
@@ -5951,7 +5950,6 @@ fn deployment_model_surface_round_trips() {
             resources: None,
             operation: ScheduledOperation::Submit,
             request: None,
-            run_on_lease: false,
         }
     );
     assert_eq!(
@@ -5989,10 +5987,18 @@ fn pool_resource_kinds_and_pool_registry() {
 
     // datacenter: the per-flavor secrets are `token` (http), `ssh_key`
     // (slurm), and `nomad_token` (nomad); allocator_url/scheduler_flavor +
-    // the per-flavor connection fields are public. (Widened with the
-    // multi-cluster connection-on-resource model — R1/docs/16 §1.)
+    // the per-flavor connection fields are public. Order-robust: with the
+    // discriminated (internally-tagged-enum) datacenter the secret list is the
+    // UNION across the slurm/nomad/http variants, so its ORDER tracks variant
+    // declaration (ssh_key, nomad_token, token), not the old flat-struct order.
     let dc = lookup("datacenter").expect("datacenter kind registered");
-    assert_eq!(dc.secret_fields, &["token", "ssh_key", "nomad_token"]);
+    for s in ["token", "ssh_key", "nomad_token"] {
+        assert!(
+            dc.secret_fields.contains(&s),
+            "datacenter.secret_fields missing `{s}`: {:?}",
+            dc.secret_fields
+        );
+    }
     assert!(dc.public_fields.contains(&"allocator_url"));
     assert!(dc.public_fields.contains(&"scheduler_flavor"));
 

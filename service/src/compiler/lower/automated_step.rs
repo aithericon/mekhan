@@ -39,26 +39,39 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         return lower_automated_step_scheduled_lease(cx);
     }
 
-    // `Scheduled { operation: Submit, run_on_lease: true }` is NO LONGER a
-    // scheduler-net submit. The rework retargets a leased-loop body to the
-    // EXECUTOR enqueue path with a per-job `executor_namespace` borrowed from
-    // the enclosing loop lease — the held alloc runs ONE persistent drain
-    // executor on the lease namespace, and the body just enqueues to it. So a
-    // `run_on_lease` Submit body FALLS THROUGH to the plain executor lowering
-    // below (which stamps `d.executor_namespace`), NOT `lower_automated_step_scheduled`.
+    // A `Scheduled { operation: Submit }` body that runs ON a held lease is NO
+    // LONGER a scheduler-net submit. The rework retargets it to the EXECUTOR
+    // enqueue path with a per-job `executor_namespace` borrowed from the
+    // enclosing lease holder — the held alloc runs ONE persistent drain executor
+    // on the lease namespace, and the body just enqueues to it.
     //
-    // A non-lease `Scheduled` body still bridges to the scheduler-net. `Lease`
-    // was already routed above, so this arm only ever sees `Submit` here — the
-    // `run_on_lease: false` gate is what distinguishes the scheduler-net submit
-    // from the retargeted enqueue.
-    if matches!(
+    // "Runs on a lease" is IMPLICIT BY CONTAINMENT: the step sits inside a
+    // `LeaseScope` (or a leased `Loop`), detected by
+    // `enclosing_leased_scope_slug` walking the `parent_id` chain. There is no
+    // per-step flag — the enclosure is the only signal.
+    //
+    // A `Submit` with NO enclosing lease holder still bridges to the
+    // scheduler-net via `lower_automated_step_scheduled`. `Lease` was already
+    // routed above, so this arm only ever sees `Submit` here.
+    let scheduled_submit = matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled { run_on_lease: false, .. },
+            deployment_model: DeploymentModel::Scheduled {
+                operation: ScheduledOperation::Submit,
+                ..
+            },
             ..
         }
-    ) {
-        return lower_automated_step_scheduled(cx);
+    );
+    if scheduled_submit {
+        // `enclosing_leased_scope_slug` walks the `parent_id` chain to the
+        // nearest lease holder (a LeaseScope or a leased Loop). `Some` ⇒ the
+        // Submit is lease-bound by containment: fall through to the plain
+        // executor lowering below, which stamps `d.executor_namespace` from the
+        // holder's parked lease. `None` ⇒ ordinary scheduler-net submit.
+        if enclosing_leased_scope_slug(cx.node, cx.graph).is_none() {
+            return lower_automated_step_scheduled(cx);
+        }
     }
 
     if matches!(
@@ -147,36 +160,25 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     let max_retries = retry_policy.max_retries;
 
     // ── Lease retarget seam ─────────────────────────────────────────────────
-    // A `Scheduled { Submit, run_on_lease: true }` body lowers HERE (the plain
-    // executor lifecycle), NOT through the scheduler-net. When it sits inside a
-    // leased Loop we stamp a per-job `executor_namespace` onto the TOP of the
-    // job token `d` (NOT inside `d.spec`) — the engine's `ExecutorSubmitHandler`
-    // reads `d.executor_namespace` off `job_data` and publishes to the
-    // lease-scoped NATS queue (`lease-<grant_id>`) that the held alloc's
-    // persistent drain executor is consuming. The dotted
-    // `<loop_slug>.lease.executor_namespace` is a RAW borrow ref: the matching
-    // arm in `guard_readarc_plan` registers the same-shaped Guard borrow, so the
-    // standard read-arc pipeline (`apply_guard_borrows`) wires a read-arc into
-    // the loop's parked `p_<loop>_data` and word-boundary-rewrites the dotted
-    // text to `d_<loop>.lease.executor_namespace`. No enclosing leased loop ⇒
-    // no fragment (an authoring concern, surfaced by the editor/lint).
-    let run_on_lease = matches!(
-        &cx.node.data,
-        WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled {
-                run_on_lease: true,
-                ..
-            },
-            ..
-        }
-    );
-    let ns_frag = if run_on_lease {
-        enclosing_leased_loop_slug(cx.node, cx.graph)
-            .map(|loop_slug| format!(r#" d.executor_namespace = {loop_slug}.lease.executor_namespace;"#))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // A `Scheduled { Submit }` body that runs on a held lease lowers HERE (the
+    // plain executor lifecycle), NOT through the scheduler-net. "Runs on a lease"
+    // is IMPLICIT BY CONTAINMENT — `enclosing_leased_scope_slug` walks the
+    // `parent_id` chain to the nearest LeaseScope / leased Loop and returns its
+    // slug. We stamp a per-job `executor_namespace` onto the TOP of the job token
+    // `d` (NOT inside `d.spec`) — the engine's `ExecutorSubmitHandler` reads
+    // `d.executor_namespace` off `job_data` and publishes to the lease-scoped
+    // NATS queue (`lease-<grant_id>`) the held alloc's persistent drain executor
+    // is consuming. The dotted `<holder_slug>.lease.executor_namespace` is a RAW
+    // borrow ref: the matching arm in `guard_readarc_plan` registers the
+    // same-shaped Guard borrow, so the standard read-arc pipeline
+    // (`apply_guard_borrows`) wires a read-arc into the holder's parked
+    // `p_<holder>_data` and word-boundary-rewrites the dotted text to
+    // `d_<holder>.lease.executor_namespace`. Only a `Scheduled { Submit }` step
+    // is lease-bound (a plain inline `Executor` step inside the scope still runs
+    // on the normal worker); no enclosing holder ⇒ no fragment.
+    let ns_frag = enclosing_leased_scope_slug(cx.node, cx.graph)
+        .map(|holder_slug| format!(r#" d.executor_namespace = {holder_slug}.lease.executor_namespace;"#))
+        .unwrap_or_default();
 
     // Rust panic/Result model: a WIRED error handle (`source_handle == "error"`)
     // means a permanent failure routes to the handler (handled `Result::Err`,
@@ -275,7 +277,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             // refs in the literal, so `logic()` can validate variable bindings).
             prepare.logic(prepare_logic);
         } else {
-            // run_on_lease: the literal carries the RAW
+            // lease-bound body: the literal carries the RAW
             // `<loop>.lease.executor_namespace` borrow, which the post-build
             // read-arc pipeline (`apply_guard_borrows`) rewrites to
             // `d_<loop>.lease.executor_namespace` and binds via a synthesized
@@ -436,7 +438,6 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         job_template,
         resources,
         operation,
-        run_on_lease,
         ..
     } = deployment_model
     else {
@@ -444,11 +445,11 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     };
     // This entry handles a NON-lease `operation: Submit` only. The dispatcher
     // routes `operation: Lease` to `lower_automated_step_scheduled_lease` (R4)
-    // and a `run_on_lease: true` Submit to the EXECUTOR enqueue path
-    // (`lower_automated_step`, stamping `d.executor_namespace`) — neither
-    // reaches here.
+    // and a lease-enclosed Submit (inside a LeaseScope / leased Loop) to the
+    // EXECUTOR enqueue path (`lower_automated_step`, stamping
+    // `d.executor_namespace`) — neither reaches here.
     debug_assert!(
-        matches!(operation, ScheduledOperation::Submit) && !*run_on_lease,
+        matches!(operation, ScheduledOperation::Submit),
         "lower_automated_step_scheduled must only see a non-lease operation: submit"
     );
     // `scheduler` binds a `datacenter` resource (docs/13) for the LEASE path;
@@ -490,10 +491,10 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     let job_template_lit = rhai_str_escape(&job_template);
     let id_lit = rhai_str_escape(&id);
 
-    // NOTE: `runOnLease` no longer reaches this scheduler-net path. A
-    // `Scheduled { Submit, run_on_lease: true }` body now lowers via the
-    // EXECUTOR enqueue path (`lower_automated_step`), where it stamps a per-job
-    // `d.executor_namespace` borrowed from the enclosing loop lease and the
+    // NOTE: a lease-enclosed body no longer reaches this scheduler-net path. A
+    // `Scheduled { Submit }` body inside a LeaseScope / leased Loop now lowers
+    // via the EXECUTOR enqueue path (`lower_automated_step`), where it stamps a
+    // per-job `d.executor_namespace` borrowed from the enclosing lease and the
     // held alloc's persistent drain executor pulls it. The old `spec.alloc_id`
     // srun-onto-the-alloc seam (and the engine's `SlurmClient::submit_into_alloc`
     // branch) are gone. This function only services a plain, non-lease Submit.
@@ -1353,30 +1354,43 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
     Ok(())
 }
 
-/// Resolve the slug of the Loop that ENCLOSES `node` (`node.parent_id ==
-/// loop.id`) **iff** that loop carries a `lease`. Returns the loop's
-/// `slug()` — the exact key the borrow pipeline + `out_shape_loop` use for
-/// `<loop>.lease.<field>` — so the injected
-/// `<loop_slug>.lease.executor_namespace` ref lines up with the read-arc the
+/// Resolve the slug of the lease HOLDER that ENCLOSES `node` — the nearest
+/// ancestor (via the `parent_id` chain) that is a `LeaseScope` or a leased
+/// `Loop` (`lease: Some`). Returns the holder's
+/// `slug()` — the exact key the borrow pipeline + `out_shape_{loop,lease_scope}`
+/// use for `<holder>.lease.<field>` — so the injected
+/// `<holder_slug>.lease.executor_namespace` ref lines up with the read-arc the
 /// matching `guard_readarc_plan` arm registers.
 ///
-/// `None` when the body has no parent, the parent isn't a Loop, or the loop
-/// holds no lease. A `runOnLease` body in any of those cases simply enqueues
-/// to the daemon namespace (no `executor_namespace` injected) — the misuse is
-/// an authoring concern, not a hard compile error here.
-fn enclosing_leased_loop_slug(node: &WorkflowNode, graph: &WorkflowGraph) -> Option<String> {
-    let parent_id = node.parent_id.as_deref()?;
-    graph.nodes.iter().find_map(|n| {
-        if n.id != parent_id {
-            return None;
-        }
-        match &n.data {
+/// "Runs on a lease" is IMPLICIT BY CONTAINMENT — there is no per-step flag.
+/// The walk climbs the `parent_id` chain UP to the nearest ancestor that HOLDS
+/// a lease: a `LeaseScope` (always holds) OR a leased `Loop` (`lease: Some`). A
+/// `Scheduled` step can sit inside a plain `Loop` inside a `LeaseScope` (the
+/// holder is 2 levels up), so the chain-walk — not just the direct parent — is
+/// what makes containment work. Nearest-holder-wins. A plain (lease-less) Loop
+/// is transparent: keep climbing past it.
+///
+/// `None` when the body has no parent, no ancestor is a lease holder, or every
+/// enclosing Loop is lease-less — in which case a `Scheduled { Submit }` body
+/// stays an ordinary scheduler-net submit.
+pub(crate) fn enclosing_leased_scope_slug(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+) -> Option<String> {
+    let mut current = node.parent_id.as_deref();
+    while let Some(pid) = current {
+        let parent = graph.nodes.iter().find(|n| n.id == pid)?;
+        match &parent.data {
+            WorkflowNodeData::LeaseScope { .. } => return Some(parent.slug()),
             WorkflowNodeData::Loop {
                 lease: Some(_), ..
-            } => Some(n.slug()),
-            _ => None,
+            } => return Some(parent.slug()),
+            _ => {
+                current = parent.parent_id.as_deref();
+            }
         }
-    })
+    }
+    None
 }
 
 #[cfg(test)]

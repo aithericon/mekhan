@@ -128,7 +128,6 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                         resources: None,
                         operation: ScheduledOperation::Submit,
                         request: None,
-                        run_on_lease: false,
                     },
                     stream_output: false,
                 },

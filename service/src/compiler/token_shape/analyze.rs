@@ -521,6 +521,33 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
     o
 }
 
+/// LeaseScope: holds one allocation across its interior and parks the held
+/// grant write-once at `p_<id>_data` under a `lease` key. The held grant is
+/// opaque to the compiler (the allocator fills it at runtime), so the `lease`
+/// namespace is declared `Any` — body steps + downstream blocks borrow
+/// `<scope>.lease.<field>` (e.g. `<scope>.lease.executor_namespace`) through the
+/// standard read-arc pipeline (`resolve_ref`'s `resolves_under_opaque` path).
+/// Mirrors a leased `Loop`'s `<slug>.lease` namespace, minus the iteration
+/// counter / accumulators (a LeaseScope only ever parks the lease).
+pub(crate) fn out_shape_lease_scope(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::LeaseScope { .. } = &node.data else {
+        unreachable!("out_shape_lease_scope on non-LeaseScope variant");
+    };
+    let mut o = in_shape.clone();
+    let mut ns = TokenShape::object();
+    ns.insert(
+        "lease",
+        TokenShape::Any,
+        Provenance::new(node, "lease-scope held lease (`<scope>.lease.<field>`)"),
+    );
+    o.insert(
+        &node.slug(),
+        ns,
+        Provenance::new(node, "lease-scope namespace (`<scope>.lease`)"),
+    );
+    o
+}
+
 /// Map: parks a gathered COLLECTION at `p_<id>_data`, addressed downstream as
 /// `<map_slug>[*].<field>`. The outbound shape adds `<slug>` as an
 /// `Array(<element>)` namespace alongside the passed-through inbound token,
@@ -821,6 +848,7 @@ pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::SubWorkflow { .. }
                     | WorkflowNodeData::Start { .. }
                     | WorkflowNodeData::Loop { .. }
+                    | WorkflowNodeData::LeaseScope { .. }
                     | WorkflowNodeData::Join { .. }
                     | WorkflowNodeData::Map { .. }
                     | WorkflowNodeData::StreamConsumer { .. }
@@ -848,6 +876,18 @@ pub(crate) fn is_loop_node(graph: &WorkflowGraph, id: &str) -> bool {
         .nodes
         .iter()
         .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Loop { .. }))
+}
+
+/// True if `id` names a `WorkflowNodeData::LeaseScope` node. A LeaseScope parks
+/// its held grant write-once at `p_<id>_data` under a `lease` key (an opaque
+/// `Any` namespace), so `<scope>.lease.<field>` borrows resolve through the same
+/// read-arc pipeline as a leased Loop's `<slug>.lease` (see `resolve_ref`'s
+/// Qualified branch, which accepts a LeaseScope producer alongside a Loop).
+pub(crate) fn is_lease_scope_node(graph: &WorkflowGraph, id: &str) -> bool {
+    graph
+        .nodes
+        .iter()
+        .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::LeaseScope { .. }))
 }
 
 pub(crate) fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {

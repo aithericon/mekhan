@@ -7,18 +7,16 @@
 			"data": { "type": "start", "label": "Start" }
 		},
 		{
-			"id": "aloop",
-			"type": "loop",
-			"slug": "aloop",
+			"id": "ascope",
+			"type": "lease_scope",
+			"slug": "ascope",
 			"position": { "x": 250, "y": 250 },
 			"width": 420,
 			"height": 220,
 			"data": {
-				"type": "loop",
-				"label": "BO Loop",
-				"description": "Hold one datacenter allocation across every iteration; the Scheduled body srun's onto it",
-				"maxIterations": 3,
-				"loopCondition": "aloop.iteration < 3",
+				"type": "lease_scope",
+				"label": "Warm Scope",
+				"description": "Hold one datacenter allocation; any Scheduled step inside runs on it by containment",
 				"lease": {
 					"scheduler": "prod_dc",
 					"request": { "gpu_count": 1, "gpu_type": "a100" }
@@ -29,12 +27,12 @@
 			"id": "body",
 			"type": "automated_step",
 			"slug": "body",
-			"parentId": "aloop",
+			"parentId": "ascope",
 			"position": { "x": 60, "y": 60 },
 			"data": {
 				"type": "automated_step",
 				"label": "Run on held alloc",
-				"description": "Scheduled Submit that runs ON the loop's held allocation",
+				"description": "Scheduled Submit that runs ON the scope's held allocation (no per-step flag)",
 				"executionSpec": {
 					"backendType": "python",
 					"entrypoint": "main.py",
@@ -54,7 +52,7 @@
 				},
 				"output": {
 					"id": "out",
-					"label": "Iter",
+					"label": "Result",
 					"fields": [
 						{ "name": "score", "label": "Score", "kind": "number", "required": true }
 					]
@@ -72,13 +70,13 @@
 		{
 			"id": "e1",
 			"source": "start-1",
-			"target": "aloop",
+			"target": "ascope",
 			"targetHandle": "in",
 			"type": "sequence"
 		},
 		{
 			"id": "e-body-in",
-			"source": "aloop",
+			"source": "ascope",
 			"sourceHandle": "body_in",
 			"target": "body",
 			"targetHandle": "in",
@@ -87,13 +85,13 @@
 		{
 			"id": "e-body-out",
 			"source": "body",
-			"target": "aloop",
+			"target": "ascope",
 			"targetHandle": "body_out",
 			"type": "sequence"
 		},
 		{
 			"id": "e2",
-			"source": "aloop",
+			"source": "ascope",
 			"target": "end-1",
 			"targetHandle": "in",
 			"type": "sequence"

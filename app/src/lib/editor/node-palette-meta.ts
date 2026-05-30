@@ -24,6 +24,7 @@ import GitMerge from '@lucide/svelte/icons/git-merge';
 import Repeat from '@lucide/svelte/icons/repeat';
 import MapIcon from '@lucide/svelte/icons/map';
 import Group from '@lucide/svelte/icons/group';
+import Lock from '@lucide/svelte/icons/lock';
 import Flag from '@lucide/svelte/icons/flag';
 import Gauge from '@lucide/svelte/icons/gauge';
 import OctagonX from '@lucide/svelte/icons/octagon-x';
@@ -53,6 +54,7 @@ const META: Record<string, NodePaletteMeta> = {
 	loop: { icon: Repeat, color: '#ec4899' },
 	map: { icon: MapIcon, color: '#10b981' },
 	scope: { icon: Group, color: '#64748b' },
+	lease_scope: { icon: Lock, color: '#f59e0b' },
 	phase_update: { icon: Flag, color: '#0ea5a4' },
 	progress_update: { icon: Gauge, color: '#c026d3' },
 	failure: { icon: OctagonX, color: '#dc2626' },

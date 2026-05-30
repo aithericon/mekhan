@@ -1516,11 +1516,12 @@ fn loop_without_lease_emits_no_lease_topology() {
 
 // ---------------------------------------------------------------------------
 // L4 — Scheduled `Submit` body inside a leased Loop runs ON the held alloc.
-// The body opts in with `runOnLease: true`; the compiler borrows the
-// enclosing loop's `<loop>.lease.alloc_id` (the L3 parked grant) and routes it
-// into the `SchedulerSubmitInput` `spec.alloc_id` (riding the opaque `spec`
-// Value — no typed engine field). The engine's `SlurmClient::submit` reads
-// that key and `srun`s onto the held allocation (L2) instead of `sbatch`-ing.
+// The body is lease-bound BY CONTAINMENT (its `parent_id` is the leased Loop —
+// no per-step flag); the compiler retargets it off the scheduler-net onto the
+// executor enqueue path and borrows the enclosing loop's
+// `<loop>.lease.executor_namespace` (the L3 parked grant) onto the job token,
+// so the held drain executor pulls the iteration's job from the lease-scoped
+// NATS namespace instead of `sbatch`-ing a fresh job.
 // ---------------------------------------------------------------------------
 
 /// Stage the Scheduled body's `main.py` (`body` slug) so the Python backend
@@ -1556,8 +1557,8 @@ fn compile_leased_loop_scheduled_body(
     .map(|a| a.air)
 }
 
-/// Keystone: a `Scheduled { operation: submit, runOnLease: true }` body inside
-/// a `Loop { lease }` ENQUEUES to the lease namespace. It lowers via the
+/// Keystone: a `Scheduled { operation: submit }` body inside a `Loop { lease }`
+/// ENQUEUES to the lease namespace BY CONTAINMENT. It lowers via the
 /// EXECUTOR enqueue path (NOT the scheduler-net): the prepare transition stamps
 /// `d.executor_namespace` on the job-token top level, sourced FROM the enclosing
 /// loop's parked lease — via a read-arc into the loop's `p_aloop_data` and the
@@ -1569,7 +1570,7 @@ fn compile_leased_loop_scheduled_body(
 fn leased_loop_scheduled_body_runs_on_held_alloc() {
     let graph = load_graph("leased-loop-scheduled-body.json");
     let air = compile_leased_loop_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
-        .expect("leased-loop runOnLease body should compile");
+        .expect("lease-enclosed body should compile");
 
     assert_all_transitions_wired(&air);
     assert_arcs_reference_existing_places(&air);
@@ -1591,11 +1592,11 @@ fn leased_loop_scheduled_body_runs_on_held_alloc() {
     //     bridge_out (`p_body_sched_out`).
     assert!(
         has_place(&air, "body/inbox"),
-        "runOnLease body must lower to the executor lifecycle inbox"
+        "lease-enclosed body must lower to the executor lifecycle inbox"
     );
     assert!(
         !has_place(&air, "p_body_sched_out"),
-        "runOnLease body must NOT bridge to the scheduler-net"
+        "lease-enclosed body must NOT bridge to the scheduler-net"
     );
 
     // (3) The prepare transition stamps `d.executor_namespace`, sourced from the
@@ -1639,28 +1640,28 @@ fn leased_loop_scheduled_body_runs_on_held_alloc() {
     );
 }
 
-/// Negative control: the SAME graph with `runOnLease: false` injects NO
-/// `spec.alloc_id` and synthesizes NO read-arc from the body into the loop's
-/// parked data place — the body submits as an ordinary scheduler job. Proves
-/// the seam is strictly opt-in and leaves the default `Submit` wire untouched.
+/// Negative control: the SAME graph with the enclosing loop's `lease` REMOVED
+/// (a plain, lease-less Loop) borrows NO lease and synthesizes NO read-arc from
+/// the body into a parked data place — the body submits as an ordinary
+/// scheduler job. With `run_on_lease` gone, lease enclosure is purely
+/// containment-driven: no lease holder in scope ⇒
+/// `enclosing_leased_scope_slug` returns `None` ⇒ the default `Submit` wire is
+/// untouched. Proves the retarget is strictly enclosure-gated.
 #[test]
-fn scheduled_body_without_run_on_lease_does_not_borrow_alloc() {
-    use mekhan_service::models::template::{DeploymentModel, WorkflowNodeData};
+fn scheduled_body_without_enclosing_lease_does_not_borrow_alloc() {
+    use mekhan_service::models::template::WorkflowNodeData;
 
     let mut graph = load_graph("leased-loop-scheduled-body.json");
     for node in &mut graph.nodes {
-        if let WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled { run_on_lease, .. },
-            ..
-        } = &mut node.data
-        {
-            *run_on_lease = false;
+        if let WorkflowNodeData::Loop { lease, .. } = &mut node.data {
+            *lease = None;
         }
     }
     let air = compile_leased_loop_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
-        .expect("leased-loop Scheduled (no runOnLease) body should compile");
+        .expect("lease-less loop Scheduled body should compile");
 
-    // The body still bridges to the scheduler-net (it is still a Submit).
+    // The body still bridges to the scheduler-net (it is still a Submit, and the
+    // loop holds no lease to retarget it onto).
     assert!(
         has_place(&air, "p_body_sched_out"),
         "Submit body still bridges to the scheduler-net"
@@ -1675,7 +1676,7 @@ fn scheduled_body_without_run_on_lease_does_not_borrow_alloc() {
     let prepare_logic = prepare["logic"]["source"].as_str().unwrap();
     assert!(
         !prepare_logic.contains("alloc_id") && !prepare_logic.contains("executor_namespace"),
-        "no-runOnLease body must not borrow the loop lease: {prepare_logic}"
+        "lease-less body must not borrow a loop lease: {prepare_logic}"
     );
     let borrows_loop = prepare["inputs"]
         .as_array()
@@ -1684,8 +1685,186 @@ fn scheduled_body_without_run_on_lease_does_not_borrow_alloc() {
         .any(|a| a["place"] == "p_aloop_data");
     assert!(
         !borrows_loop,
-        "no-runOnLease body must not read-arc the loop's parked lease place: {:?}",
+        "lease-less body must not read-arc the loop's parked data place: {:?}",
         prepare["inputs"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// LeaseScope keystone — decouple "hold an allocation" from "loop". A
+// `LeaseScope { lease }` acquires one datacenter allocation on enter and
+// releases it on exit; ANY `Scheduled { Submit }` body inside runs on the held
+// alloc by CONTAINMENT (no per-step `run_on_lease` flag). The body lowers via
+// the EXECUTOR enqueue path stamping `d.executor_namespace` from the scope's
+// parked lease — the byte-identical machinery a leased Loop uses, now reachable
+// from the scope container via the shared `emit_lease_bridge` helper.
+// ---------------------------------------------------------------------------
+
+fn compile_lease_scope_scheduled_body(
+    graph: &WorkflowGraph,
+    known: &KnownResources,
+) -> Result<Value, CompileError> {
+    // The body node id is "body" — reuse the leased-loop body staging.
+    let files = leased_loop_scheduled_body_files();
+    compile_to_air_with_options(
+        graph,
+        "t",
+        "",
+        &files,
+        CompileOptions {
+            known_resources: known,
+            ..Default::default()
+        },
+    )
+    .map(|a| a.air)
+}
+
+/// A LeaseScope emits the SAME claim/grant/register/release lease bridges a
+/// leased Loop does (via the shared `emit_lease_bridge`): claim_out, grant
+/// inbox, register/release bridges, the single held place, and the parked lease
+/// envelope `p_<scope>_data`. The scope's exit consumes the held token and arcs
+/// to release_out — release-exactly-once.
+#[test]
+fn lease_scope_emits_lease_bridges_and_releases_on_exit() {
+    let graph = load_graph("lease-scope-scheduled-body.json");
+    let air = compile_lease_scope_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
+        .expect("lease-scope with a Scheduled body should compile");
+
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    // (1) The scope holds the full lease topology — acquire-once / hold /
+    //     release — exactly like a leased Loop (same `emit_lease_bridge`).
+    for pid in [
+        "p_ascope_claim_out",
+        "p_ascope_grant_inbox",
+        "p_ascope_register_out",
+        "p_ascope_release_out",
+        "p_ascope_held",
+        "p_ascope_data",
+    ] {
+        assert!(has_place(&air, pid), "lease-scope topology must keep {pid}");
+    }
+
+    // (2) The claim transition mints a replay-safe grant_id keyed on the SCOPE
+    //     node id (one grant per (instance, scope)).
+    let claim_logic = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_ascope_claim")
+        .expect("scope claim transition")["logic"]["source"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        claim_logic.contains("input._instance_id") && claim_logic.contains(":ascope"),
+        "grant_id must derive from input._instance_id + scope id (replay-safe): {claim_logic}"
+    );
+
+    // (3) The scope's exit consumes the held lease + arcs to release_out
+    //     (release-exactly-once), and — unlike a Loop — has NO iteration guard
+    //     (straight-through release).
+    let exit = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "t_ascope_exit")
+        .expect("scope exit transition")
+        .clone();
+    let consumes_held = exit["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["place"] == "p_ascope_held" && a["read"] != serde_json::Value::Bool(true));
+    assert!(
+        consumes_held,
+        "scope exit must CONSUME the held lease (release-exactly-once): {:?}",
+        exit["inputs"]
+    );
+    let arcs_release = exit["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["place"] == "p_ascope_release_out");
+    assert!(
+        arcs_release,
+        "scope exit must arc to release_out: {:?}",
+        exit["outputs"]
+    );
+    assert!(
+        exit.get("guard").map(|g| g.is_null()).unwrap_or(true),
+        "lease-scope exit is straight-through (no iteration/condition guard): {:?}",
+        exit.get("guard")
+    );
+}
+
+/// The keystone: a `Scheduled { Submit }` body inside a LeaseScope ENQUEUES to
+/// the scope's lease namespace BY CONTAINMENT — no `run_on_lease` flag. It
+/// lowers via the EXECUTOR enqueue path (NOT the scheduler-net): the prepare
+/// transition stamps `d.executor_namespace` sourced from the scope's parked
+/// lease, via a read-arc into `p_ascope_data` and the word-boundary rewrite
+/// `ascope.lease.executor_namespace` → `d_ascope.lease.executor_namespace`.
+#[test]
+fn scheduled_body_inside_lease_scope_enqueues_to_scope_namespace() {
+    let graph = load_graph("lease-scope-scheduled-body.json");
+    let air = compile_lease_scope_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
+        .expect("lease-scope body should compile");
+
+    // (1) The body retargeted to the EXECUTOR enqueue path: it has the scoped
+    //     executor lifecycle inbox and NO scheduler-net bridge_out.
+    assert!(
+        has_place(&air, "body/inbox"),
+        "containment body must lower to the executor lifecycle inbox"
+    );
+    assert!(
+        !has_place(&air, "p_body_sched_out"),
+        "containment body must NOT bridge to the scheduler-net"
+    );
+
+    // (2) The prepare transition stamps `d.executor_namespace` from the scope
+    //     lease (rewritten bound ref), and the raw dotted form is gone.
+    let prepare = transitions(&air)
+        .iter()
+        .find(|t| t["id"] == "body/prepare")
+        .expect("body prepare transition")
+        .clone();
+    let prepare_logic = prepare["logic"]["source"].as_str().unwrap().to_string();
+    assert!(
+        prepare_logic.contains("d.executor_namespace = d_ascope.lease.executor_namespace"),
+        "prepare must stamp executor_namespace from the scope lease (rewritten ref): {prepare_logic}"
+    );
+    assert!(
+        !prepare_logic.contains(" ascope.lease.executor_namespace"),
+        "the raw `ascope.lease.executor_namespace` must have been rewritten to the bound var: {prepare_logic}"
+    );
+
+    // (3) The read-arc binding `d_ascope` is a non-consuming read into the
+    //     scope's parked lease place.
+    let has_scope_read_arc = prepare["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["place"] == "p_ascope_data" && a["read"] == serde_json::Value::Bool(true));
+    assert!(
+        has_scope_read_arc,
+        "prepare must read-arc the scope's parked lease place p_ascope_data: {:?}",
+        prepare["inputs"]
+    );
+}
+
+/// An empty LeaseScope (no body child) is a config error — it would hold an
+/// allocation no step runs on. Mirrors `LoopEmpty`.
+#[test]
+fn empty_lease_scope_is_rejected() {
+    let mut graph = load_graph("lease-scope-scheduled-body.json");
+    // Drop the body child + its edges so the scope has no interior node.
+    graph.nodes.retain(|n| n.id != "body");
+    graph
+        .edges
+        .retain(|e| e.source != "body" && e.target != "body");
+
+    let err = compile_lease_scope_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
+        .expect_err("an empty lease scope must be rejected");
+    assert!(
+        matches!(err, CompileError::LeaseScopeEmpty { .. }),
+        "expected LeaseScopeEmpty, got {err:?}"
     );
 }
 
