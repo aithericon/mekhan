@@ -9,8 +9,13 @@
 
 	const fields = $derived(data.output?.fields ?? []);
 	const hasFields = $derived(fields.length > 0);
-	const inputs = $derived(data.inputMapping ?? []);
-	const hasInputs = $derived(inputs.length > 0);
+	// Render the child's INPUT contract (its Start fields) on the node face the
+	// same way a Start node renders its declared fields — so a sub-workflow
+	// advertises what it *consumes*, not just the rows the author happened to
+	// map. Snapshot is persisted onto `data.inputContract` by the property
+	// panel's io-contract fetch and refreshed at publish (mirrors `data.output`).
+	const inputFields = $derived(data.inputContract?.fields ?? []);
+	const hasInputs = $derived(inputFields.length > 0);
 	const outputId = $derived(data.output?.id ?? 'out');
 	const pinLabel = $derived(
 		data.versionPin?.mode === 'pinned' ? `v${data.versionPin.version}` : 'latest'
@@ -63,22 +68,23 @@
 		{#if hasInputs}
 			<div class="space-y-0.5 border-t border-border/40 pt-1.5" data-testid="sub-workflow-inputs">
 				<div class="flex items-center justify-between">
-					<span class="text-sm uppercase tracking-wider text-muted-foreground/70">Input</span>
+					<span class="text-sm uppercase tracking-wider text-muted-foreground/70">
+						{data.inputContract?.label ?? 'Input'}
+					</span>
 					<span class="text-sm text-muted-foreground/70">
-						{inputs.length} field{inputs.length === 1 ? '' : 's'}
+						{inputFields.length} field{inputFields.length === 1 ? '' : 's'}
 					</span>
 				</div>
 				<ul class="space-y-0.5">
-					{#each inputs as m, i (i)}
+					{#each inputFields as field (field.name)}
 						<li class="flex items-center justify-between gap-2">
 							<span class="truncate font-mono text-sm text-foreground">
-								{m.targetField || '—'}
+								{field.name || '—'}{field.required ? '*' : ''}
 							</span>
 							<span
-								class="truncate font-mono text-sm text-muted-foreground/80"
-								title={m.expression}
+								class="rounded bg-node-sub-workflow/15 px-1.5 py-0.5 text-sm font-medium uppercase text-node-sub-workflow"
 							>
-								{m.expression || '—'}
+								{kindBadge[field.kind] ?? field.kind}
 							</span>
 						</li>
 					{/each}

@@ -14334,6 +14334,10 @@
                   "null"
                 ]
               },
+              "inputContract": {
+                "$ref": "#/components/schemas/Port",
+                "description": "Display-only snapshot of the child's **input** contract — its\n`Start { initial }` port. Reconciled at publish from the resolved\nchild and refreshed by the editor's `/io-contract` fetch, exactly\nlike `output`. The compiler re-derives the real child input from the\nfrozen child, so this field never feeds compilation: it exists so the\ncanvas can show \"what this sub-workflow consumes\" (the way a Start\nnode shows its declared fields) without opening the property panel.\nEmpty `in` port ⇒ not yet resolved / child declares no Start fields."
+              },
               "inputMapping": {
                 "type": "array",
                 "items": {

@@ -5695,6 +5695,17 @@ export interface components {
         } | {
             description?: string | null;
             /**
+             * @description Display-only snapshot of the child's **input** contract — its
+             *     `Start { initial }` port. Reconciled at publish from the resolved
+             *     child and refreshed by the editor's `/io-contract` fetch, exactly
+             *     like `output`. The compiler re-derives the real child input from the
+             *     frozen child, so this field never feeds compilation: it exists so the
+             *     canvas can show "what this sub-workflow consumes" (the way a Start
+             *     node shows its declared fields) without opening the property panel.
+             *     Empty `in` port ⇒ not yet resolved / child declares no Start fields.
+             */
+            inputContract?: components["schemas"]["Port"];
+            /**
              * @description Parent upstream token → child Start `initial` port fields. Each
              *     entry's `expression` is a Rhai expression over the inbound token;
              *     together they assemble the token bridged into the child. Empty
