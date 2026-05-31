@@ -204,8 +204,8 @@
             "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 8192,
-            "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Use the EXACT test-name spelling as it appears in the document for `key` — it is matched back to the document layout downstream.",
-            "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence}]}.",
+            "system_prompt": "You are a medical lab-result extractor. The input is the lab table reconstructed row-by-row from OCR word positions: each line is ONE table row, columns left-to-right are test-name, value, unit, reference-range. Map each line to one field. Rules: (1) `key` = the test name, EXACTLY as spelled in the row (it is matched back to the document layout downstream). (2) `value` = the measured result — a bare number for THIS patient. (3) `reference_range` = the normal-range column (contains <, >, or a min-max like 28-100). NEVER confuse them: if a row has a test name and only a range but no measured number, the value is missing — do NOT copy the reference range into `value`. (4) Never put the test name in the value field.",
+            "prompt": "Extract every lab value from this lab report. Each line below is one table row (columns left-to-right: test-name, value, unit, reference-range).\n\nOCR table rows:\n---\n{{ ocr_layout.layout_text }}\n---\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence}]}.",
             "response_format": {
               "type": "json_schema",
               "schema": {
@@ -219,6 +219,35 @@
           "label": "Bloodwork fields",
           "fields": [
             { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ocr-layout",
+      "type": "automated_step",
+      "position": { "x": 1430, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "OCR layout (Python)",
+        "description": "Reconstructs column-aligned table rows from Surya's per-word geometry (group words by row-y, order each row left-to-right by x), so the extractor reads aligned 'test-name value unit reference-range' lines instead of Surya's flattened reading order (which interleaves columns and causes shifted rows / range-as-value errors). Reads ocr.words (read-arc borrow).",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "OCR layout text",
+          "fields": [
+            { "name": "layout_text", "label": "Column-aligned OCR rows", "kind": "textarea", "required": true }
           ]
         }
       }
@@ -402,8 +431,15 @@
       "type": "conditional"
     },
     {
-      "id": "e-ocr-extract",
+      "id": "e-ocr-layout",
       "source": "ocr",
+      "target": "ocr-layout",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-layout-extract",
+      "source": "ocr-layout",
       "target": "extract-bloodwork",
       "targetHandle": "in",
       "type": "sequence"

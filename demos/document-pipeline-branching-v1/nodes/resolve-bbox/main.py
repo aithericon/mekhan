@@ -98,9 +98,17 @@ def _row_union(words, page, row_y):
             max_y = wy + bh
     if max_x < 0:
         return None
+    # Pad the row box so the highlight border sits clear of the glyphs instead
+    # of overlapping them (table rows are thin, so vertical breathing room
+    # matters most). Clamp to the unit square.
+    pad_x, pad_y = 0.006, 0.006
+    x0 = max(0.0, min_x - pad_x)
+    y0 = max(0.0, min_y - pad_y)
+    x1 = min(1.0, max_x + pad_x)
+    y1 = min(1.0, max_y + pad_y)
     return {
         "page": page if page >= 1 else 1,
-        "bbox": {"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y},
+        "bbox": {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0},
     }
 
 
