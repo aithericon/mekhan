@@ -78,6 +78,7 @@ pub trait BackendTestKit: Send + Sync {
             timeout,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         }
     }

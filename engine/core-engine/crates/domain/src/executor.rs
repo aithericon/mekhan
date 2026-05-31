@@ -51,14 +51,23 @@ pub struct ExecutionSubmitRequest {
     pub execution_id: Option<String>,
 
     /// Per-job executor namespace override. When Some, the client publishes to
-    /// `{namespace}.{prio}.{exec_id}` instead of its construction-time fixed
+    /// {namespace}.{prio}.{exec_id} instead of its construction-time fixed
     /// namespace, so a leased body can target a lease-scoped queue
     /// (lease-<grant_id>) drained by a persistent executor. None → fixed default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
-}
 
-/// Result of a successful execution submission.
+    /// Opt-in for the INbound live chunk feed (the "live IPC reducer").
+    /// Chunks are published to `executor.chunks.{execution_id}`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub feed_chunks: bool,
+    }
+
+    fn is_false(b: &bool) -> bool {
+    !*b
+    }
+
+    /// Result of a successful execution submission.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionSubmitResult {
     /// Executor-assigned execution ID. Stored in the event log for replay
@@ -105,6 +114,18 @@ pub trait ExecutorClient: Send + Sync {
 
     /// Cancel a running execution.
     async fn cancel(&self, execution_id: &str) -> Result<(), ExecutorError>;
+
+    /// Feed a data chunk into a running reducer job.
+    ///
+    /// The client publishes to `executor.chunks.{execution_id}` with the
+    /// provided value and sequence.
+    async fn feed_chunk(
+        &self,
+        execution_id: &str,
+        value: serde_json::Value,
+        sequence: u64,
+        is_eof: bool,
+    ) -> Result<(), ExecutorError>;
 
     /// Human-readable name for this client (e.g., "executor-nats").
     fn name(&self) -> &str;

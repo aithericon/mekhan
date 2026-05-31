@@ -36,8 +36,9 @@ use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 use aithericon_executor_worker::{
     drain_signal, handle_execution, BackendRegistry, BatchRunner, CancellationRegistry,
-    CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,
-    NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
+    ChunkRegistry, CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource,
+    Lifetime, NatsCancelListener, NatsChunkListener, NixEnvironmentHook, SidecarLogConfig,
+    StatusReporter,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -220,7 +221,7 @@ async fn run_nats_daemon(
     info!("connected to NATS");
 
     let reporter =
-        StatusReporter::new(jetstream, config.name.clone(), config.status_replicas).await?;
+        StatusReporter::new(jetstream.clone(), config.name.clone(), config.status_replicas).await?;
 
     let nats_config = build_apalis_nats_config(&config);
 
@@ -253,12 +254,28 @@ async fn run_nats_daemon(
         );
     }
 
+    // Set up the inbound live chunk feed (the "live IPC reducer"). Always-on:
+    // the per-job opt-in lives on `job.feed_chunks`, not here. The listener
+    // drains the ordered+lossless `EXECUTOR_CHUNKS` JetStream into per-job
+    // channels; reuses the cancel-listener shutdown token.
+    let chunk_registry = ChunkRegistry::new();
+    NatsChunkListener::ensure_stream(&jetstream, config.status_replicas).await?;
+    NatsChunkListener::start(
+        jetstream.clone(),
+        chunk_registry.clone(),
+        None,
+        cancel_shutdown.clone(),
+    )
+    .await?;
+    info!("NATS chunk listener started");
+
     // Build the JobExecutor
     let executor = Arc::new(build_executor(
         &config,
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
+        chunk_registry,
     )?);
 
     let worker = build_worker!(
@@ -308,7 +325,7 @@ async fn run_nats_drain(
     info!("connected to NATS");
 
     let reporter =
-        StatusReporter::new(jetstream, config.name.clone(), config.status_replicas).await?;
+        StatusReporter::new(jetstream.clone(), config.name.clone(), config.status_replicas).await?;
 
     let nats_config = build_apalis_nats_config(&config);
 
@@ -330,12 +347,30 @@ async fn run_nats_drain(
         info!("NATS cancel listener started");
     }
 
+    // Inbound live chunk feed (see `run_nats_daemon` for the rationale).
+    let chunk_registry = ChunkRegistry::new();
+    NatsChunkListener::ensure_stream(&jetstream, config.status_replicas).await?;
+    NatsChunkListener::start(
+        jetstream.clone(),
+        chunk_registry.clone(),
+        None,
+        cancel_shutdown.clone(),
+    )
+    .await?;
+    info!("NATS chunk listener started");
+
     // Build the executor with a completion tracker
     let tracker = Arc::new(CompletionTracker::new());
     let drain_rx = tracker.subscribe();
     let tracker_for_exit = tracker.clone();
 
-    let mut executor = build_executor(&config, reporter, &nats_client_for_cancel, cancel_registry)?;
+    let mut executor = build_executor(
+        &config,
+        reporter,
+        &nats_client_for_cancel,
+        cancel_registry,
+        chunk_registry,
+    )?;
     executor.completion_tracker = Some(tracker);
     let executor = Arc::new(executor);
 
@@ -443,13 +478,17 @@ async fn run_manifest(
     let storage =
         NatsStorage::<ExecutionJob>::new_with_config(nats_client.clone(), nats_config).await?;
 
-    // Build executor — same pipeline as daemon mode
+    // Build executor — same pipeline as daemon mode. Manifest mode runs local
+    // jobs with no live inbound feed, so the chunk registry is present but never
+    // populated (no `NatsChunkListener`); reducer jobs aren't a manifest path.
     let cancel_registry = CancellationRegistry::new();
+    let chunk_registry = ChunkRegistry::new();
     let executor = Arc::new(build_executor(
         &config,
         reporter.clone(),
         &nats_client,
         cancel_registry,
+        chunk_registry,
     )?);
 
     // Start the apalis worker in the background (same pipeline as daemon)
@@ -593,6 +632,7 @@ fn build_executor(
     reporter: StatusReporter,
     nats_client: &async_nats::Client,
     cancel_registry: CancellationRegistry,
+    chunk_registry: ChunkRegistry,
 ) -> Result<JobExecutor, Box<dyn std::error::Error + Send + Sync>> {
     let base_dir = PathBuf::from(&config.base_dir);
 
@@ -671,6 +711,7 @@ fn build_executor(
         metric_sink,
         log_sink,
         cancel_registry,
+        chunk_registry,
         log_config,
         completion_tracker: None,
     })

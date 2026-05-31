@@ -116,6 +116,16 @@ pub const EXECUTOR_CANCEL: EffectDescriptor = EffectDescriptor {
     default_output_schema: Some("#/definitions/ExecutorCancelled"),
 };
 
+/// Feed a data chunk into a running reducer job.
+pub const EXECUTOR_STREAM_FEED: EffectDescriptor = EffectDescriptor {
+    handler_id: "executor_stream_feed",
+    default_input_port: "feed",
+    default_output_port: "fed",
+    category: ServiceCategory::Executor,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
 /// Schedule a durable timer via Clockmaster.
 pub const TIMER_SCHEDULE: EffectDescriptor = EffectDescriptor {
     handler_id: "timer_schedule",
@@ -346,6 +356,7 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &SCHEDULER_CANCEL,
     &EXECUTOR_SUBMIT,
     &EXECUTOR_CANCEL,
+    &EXECUTOR_STREAM_FEED,
     &TIMER_SCHEDULE,
     &TIMER_CANCEL,
     &HUMAN_TASK,

@@ -130,6 +130,7 @@ fn automated_step_node_streaming(id: &str, label: &str, stream_output: bool) -> 
         data: WorkflowNodeData::AutomatedStep {
             label: label.to_string(),
             description: None,
+            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -552,6 +553,7 @@ fn automated_step_produces_executor_lifecycle() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
                     description: None,
+                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
@@ -677,6 +679,7 @@ fn automated_step_wired_error_routes_to_handler() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
                     description: None,
+                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
@@ -1697,6 +1700,7 @@ fn automated_step_has_scoped_effect_errors() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
                     description: None,
+                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
@@ -1746,6 +1750,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
         data: WorkflowNodeData::AutomatedStep {
             label: label.to_string(),
             description: None,
+            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -2704,6 +2709,7 @@ fn guard_multi_hop_scope_walk() {
         data: WorkflowNodeData::AutomatedStep {
             label: "A".to_string(),
             description: None,
+            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -2939,6 +2945,7 @@ fn loop_with_accumulators_graph(
         data: WorkflowNodeData::AutomatedStep {
             label: "Body".to_string(),
             description: None,
+            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -4909,6 +4916,7 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
         data: WorkflowNodeData::AutomatedStep {
             label: "Run".to_string(),
             description: None,
+            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -5046,6 +5054,7 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Lookup".to_string(),
                     description: None,
+                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::CatalogueQuery,
                         entrypoint: None,
@@ -6193,6 +6202,7 @@ fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
         data: WorkflowNodeData::AutomatedStep {
             label: "Score Item".to_string(),
             description: None,
+            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,

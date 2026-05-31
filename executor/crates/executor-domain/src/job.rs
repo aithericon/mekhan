@@ -51,6 +51,24 @@ pub struct ExecutionJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_events: Option<Vec<EventCategory>>,
 
+    /// Opt-in for the INbound live chunk feed (the "live IPC reducer").
+    ///
+    /// When `true`, the executor registers a per-job chunk channel and the IPC
+    /// sidecar exposes the `StreamChunks` server-stream, so the child can run
+    /// `for chunk in aithericon.chunks()`; chunks arrive over the
+    /// `EXECUTOR_CHUNKS` JetStream feed (subject `executor.chunks.{id}`).
+    ///
+    /// When `false` (default), no channel is registered and `StreamChunks`
+    /// returns an immediately-empty stream — non-reducer jobs spin up nothing.
+    ///
+    /// This is the symmetric INbound counterpart to `stream_events` (which gates
+    /// OUTbound real-time event streaming). It is a dedicated flag rather than
+    /// an `EventCategory` because `stream_events` drives outbound *event
+    /// emission*, whereas this gates an inbound *data feed* — overloading the
+    /// emission filter with an inbound category would be a category error.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub feed_chunks: bool,
+
     /// Single-use Vault wrapping token containing resolved secrets.
     ///
     /// When present, the executor unwraps this token against Vault to obtain
@@ -225,4 +243,8 @@ pub struct OutputUploadConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }

@@ -96,7 +96,7 @@ fn catalogue_graph(step_id: &str) -> WorkflowGraph {
                     input: Port::empty_input(),
                     output: default_output_port(ExecutionBackendType::CatalogueQuery),
                     retry_policy: Default::default(),
-                    deployment_model: Default::default(),
+                    deployment_model: Default::default(), feed_chunks: false,
                     stream_output: false,
                 },
                 parent_id: None,
