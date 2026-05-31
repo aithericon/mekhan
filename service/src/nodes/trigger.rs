@@ -24,8 +24,8 @@ pub(crate) static TRIGGER_DECL: NodeDecl = NodeDecl {
     is_join: false,
     parks_data_envelope: false,
     lower: None,
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     // Trigger is a pre-compile dispatcher concern: it never lowers, so its
@@ -56,11 +56,7 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     }]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::Trigger {
         source,
@@ -77,8 +73,8 @@ fn yjs_encode(
     config.insert(txn, "source", json_value_to_any(&source_val));
     let concurrency_val = serde_json::to_value(concurrency).unwrap_or_default();
     config.insert(txn, "concurrency", json_value_to_any(&concurrency_val));
-    let mapping_val = serde_json::to_value(payload_mapping)
-        .unwrap_or(serde_json::Value::Array(vec![]));
+    let mapping_val =
+        serde_json::to_value(payload_mapping).unwrap_or(serde_json::Value::Array(vec![]));
     config.insert(txn, "payloadMapping", json_value_to_any(&mapping_val));
     if let Some(rd) = reply_default {
         let rd_val = serde_json::to_value(rd).unwrap_or_default();

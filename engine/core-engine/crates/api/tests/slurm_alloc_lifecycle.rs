@@ -13,8 +13,8 @@
 
 #![cfg(feature = "slurm")]
 
-use petri_application::resource_lease_handlers::AllocatorClient;
 use petri_api::slurm_allocator::SlurmAllocatorClient;
+use petri_application::resource_lease_handlers::AllocatorClient;
 use petri_slurm::SlurmConfig;
 
 /// Absolute path to the committed sandbox SSH key.
@@ -80,7 +80,10 @@ async fn slurm_allocator_acquire_release_lifecycle() {
     );
 
     // The node may briefly be null while pending; poll until assigned.
-    let mut node = lease.get("node").and_then(|v| v.as_str()).map(str::to_string);
+    let mut node = lease
+        .get("node")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     for _ in 0..10 {
         if node.as_deref().is_some_and(|n| !n.is_empty()) {
             break;
@@ -96,7 +99,10 @@ async fn slurm_allocator_acquire_release_lifecycle() {
             Some(alloc_id),
             "re-acquire must reuse the same allocation"
         );
-        node = again.get("node").and_then(|v| v.as_str()).map(str::to_string);
+        node = again
+            .get("node")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
     }
     assert!(
         node.as_deref().is_some_and(|n| !n.is_empty()),

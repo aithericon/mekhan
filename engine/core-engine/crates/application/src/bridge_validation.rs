@@ -239,12 +239,7 @@ pub fn validate_bridges(
                         format!(
                             "'{}': Expects tokens from '{}' place '{}', \
                              but no bridge_out in '{}' targets '{}:{}'",
-                            place.name,
-                            src_net_id,
-                            src_place_name,
-                            src_net_id,
-                            net_id,
-                            place.name
+                            place.name, src_net_id, src_place_name, src_net_id, net_id, place.name
                         ),
                         Some(src_net_id.clone()),
                     ));
@@ -311,12 +306,18 @@ fn suggest_closest<S: AsRef<str>>(target: &str, candidates: &[S]) -> Option<Stri
 }
 
 fn build_report(issues: Vec<ValidationIssue>) -> AnalysisReport {
-    let error_count = issues.iter().filter(|i| i.level == IssueLevel::Error).count();
+    let error_count = issues
+        .iter()
+        .filter(|i| i.level == IssueLevel::Error)
+        .count();
     let warning_count = issues
         .iter()
         .filter(|i| i.level == IssueLevel::Warning)
         .count();
-    let info_count = issues.iter().filter(|i| i.level == IssueLevel::Info).count();
+    let info_count = issues
+        .iter()
+        .filter(|i| i.level == IssueLevel::Info)
+        .count();
 
     AnalysisReport {
         is_valid: error_count == 0,
@@ -560,7 +561,10 @@ mod tests {
 
         let report = validate_bridges("net-a", &net_a, &resolver, BridgeValidationMode::Strict);
         assert!(!report.is_valid);
-        assert!(report.issues.iter().any(|i| i.code == "BRIDGE_REPLY_PLACE_MISSING"));
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "BRIDGE_REPLY_PLACE_MISSING"));
     }
 
     #[test]
@@ -597,7 +601,10 @@ mod tests {
         let report = validate_all_bridges(&resolver);
         assert!(!report.is_valid);
         // Issue should be prefixed with the net ID
-        assert!(report.issues.iter().any(|i| i.node_id.starts_with("net-a/")));
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.node_id.starts_with("net-a/")));
     }
 
     #[test]
@@ -679,10 +686,7 @@ mod tests {
     fn reply_to_exists_no_false_positive() {
         let mut net_a = PetriNet::new();
         net_a.add_place(Place::bridge_out_reply(
-            "outbox",
-            "net-b",
-            "inbox",
-            "my_reply",
+            "outbox", "net-b", "inbox", "my_reply",
         ));
         net_a.add_place(Place::bridge_reply("my_reply"));
 
@@ -695,7 +699,10 @@ mod tests {
 
         let report = validate_bridges("net-a", &net_a, &resolver, BridgeValidationMode::Strict);
         assert!(report.is_valid);
-        assert!(!report.issues.iter().any(|i| i.code == "BRIDGE_REPLY_PLACE_MISSING"));
+        assert!(!report
+            .issues
+            .iter()
+            .any(|i| i.code == "BRIDGE_REPLY_PLACE_MISSING"));
     }
 
     #[test]
@@ -740,10 +747,7 @@ mod tests {
 
         let mut net_a = PetriNet::new();
         net_a.add_place(Place::bridge_out_reply_channels(
-            "outbox",
-            "net-b",
-            "inbox",
-            channels,
+            "outbox", "net-b", "inbox", channels,
         ));
         // Only add one of the two reply places
         net_a.add_place(Place::bridge_reply_channel("result_inbox", "result"));

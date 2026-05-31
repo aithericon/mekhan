@@ -97,7 +97,10 @@ async fn list_tokens_returns_only_the_callers_machine_users() {
     assert_eq!(tokens[0].id, "u-a");
     assert_eq!(tokens[0].name, "ci-deploy");
     assert_eq!(tokens[0].description.as_deref(), Some("nightly"));
-    assert_eq!(tokens[0].created_at.as_deref(), Some("2026-05-17T10:00:00Z"));
+    assert_eq!(
+        tokens[0].created_at.as_deref(),
+        Some("2026-05-17T10:00:00Z")
+    );
     assert_eq!(tokens[0].expires_at, None);
 }
 

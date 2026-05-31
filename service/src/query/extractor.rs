@@ -154,8 +154,8 @@ impl<S: Send + Sync> FromRequestParts<S> for QueryParams {
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let query = parts.uri.query().unwrap_or("");
-        let decoded =
-            urlencoding::decode(query).map_err(|e| QueryParamsRejection(format!("URL decode error: {e}")))?;
+        let decoded = urlencoding::decode(query)
+            .map_err(|e| QueryParamsRejection(format!("URL decode error: {e}")))?;
         QueryParams::from_query_str(&decoded).map_err(QueryParamsRejection)
     }
 }
@@ -215,10 +215,8 @@ mod tests {
 
     #[test]
     fn parse_metadata_and_search() {
-        let params = QueryParams::from_query_str(
-            r#"search=gp_model&metadata={"kernel":"rbf"}"#,
-        )
-        .unwrap();
+        let params =
+            QueryParams::from_query_str(r#"search=gp_model&metadata={"kernel":"rbf"}"#).unwrap();
         assert_eq!(params.search.as_deref(), Some("gp_model"));
         assert_eq!(params.metadata.as_deref(), Some(r#"{"kernel":"rbf"}"#));
     }

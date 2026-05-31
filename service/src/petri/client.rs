@@ -25,11 +25,7 @@ impl PetriClient {
     }
 
     /// Deploy a scenario (AIR JSON) to a net.
-    pub async fn deploy_scenario(
-        &self,
-        net_id: &str,
-        air_json: &Value,
-    ) -> Result<(), PetriError> {
+    pub async fn deploy_scenario(&self, net_id: &str, air_json: &Value) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}/scenario", self.base_url, net_id);
         let resp = self.client.post(&url).json(air_json).send().await?;
         if !resp.status().is_success() {
@@ -41,11 +37,7 @@ impl PetriClient {
     }
 
     /// Set the run mode of a net.
-    pub async fn set_run_mode(
-        &self,
-        net_id: &str,
-        mode: RunMode,
-    ) -> Result<(), PetriError> {
+    pub async fn set_run_mode(&self, net_id: &str, mode: RunMode) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}/run-mode", self.base_url, net_id);
         let resp = self
             .client

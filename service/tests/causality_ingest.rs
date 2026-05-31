@@ -107,9 +107,7 @@ async fn wait_for_cross_link(db: &sqlx::PgPool, signal_key: &str, timeout: Durat
             return;
         }
         if start.elapsed() > timeout {
-            panic!(
-                "causality_cross_links row ({signal_key}) did not appear within {timeout:?}"
-            );
+            panic!("causality_cross_links row ({signal_key}) did not appear within {timeout:?}");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -162,7 +160,10 @@ async fn spawn_causality_ingest(nats: &MekhanNats, db: &sqlx::PgPool) -> IngestH
 
     let nats = nats.clone();
     let db = db.clone();
-    let kv = nats.ensure_catalogue_subscriptions_kv().await.expect("create KV");
+    let kv = nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("create KV");
     let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
     let live = LiveBroadcasts::new();
     let handle = tokio::spawn(async move {
@@ -192,7 +193,11 @@ fn token_created_event(token_id: &str, place_id: &str) -> serde_json::Value {
     })
 }
 
-fn token_created_with_signal_key(token_id: &str, place_id: &str, signal_key: &str) -> serde_json::Value {
+fn token_created_with_signal_key(
+    token_id: &str,
+    place_id: &str,
+    signal_key: &str,
+) -> serde_json::Value {
     json!({
         "type": "TokenCreated",
         "token": token_json(token_id),
@@ -204,7 +209,7 @@ fn token_created_with_signal_key(token_id: &str, place_id: &str, signal_key: &st
 
 fn transition_fired_event(
     transition_name: &str,
-    consumed: &[(&str, &str)],  // (place_id, token_id)
+    consumed: &[(&str, &str)],                    // (place_id, token_id)
     produced: &[(&str, &str, serde_json::Value)], // (place_id, token_id, token_json)
 ) -> serde_json::Value {
     let consumed_tokens: Vec<serde_json::Value> = consumed
@@ -269,23 +274,21 @@ async fn token_created_seeds_process() {
     assert_eq!(token_role, "produced");
 
     // Assert self-tag in causality_process_tags
-    let process_tag: String = sqlx::query_scalar(
-        "SELECT process_id FROM causality_process_tags WHERE token_id = $1",
-    )
-    .bind(&token_id)
-    .fetch_one(&db)
-    .await
-    .expect("fetch process tag");
+    let process_tag: String =
+        sqlx::query_scalar("SELECT process_id FROM causality_process_tags WHERE token_id = $1")
+            .bind(&token_id)
+            .fetch_one(&db)
+            .await
+            .expect("fetch process tag");
     assert_eq!(process_tag, token_id, "seed token should self-tag");
 
     // Assert hpi_processes auto-created
-    let proc_status: String = sqlx::query_scalar(
-        "SELECT status FROM hpi_processes WHERE process_id = $1",
-    )
-    .bind(&token_id)
-    .fetch_one(&db)
-    .await
-    .expect("fetch process status");
+    let proc_status: String =
+        sqlx::query_scalar("SELECT status FROM hpi_processes WHERE process_id = $1")
+            .bind(&token_id)
+            .fetch_one(&db)
+            .await
+            .expect("fetch process status");
     assert_eq!(proc_status, "active");
 }
 
@@ -323,13 +326,12 @@ async fn transition_fired_propagates_tags() {
     wait_for_process_tag(&db, &token_b, Duration::from_secs(5)).await;
 
     // Assert: token-B inherited process tag from token-A
-    let tag: String = sqlx::query_scalar(
-        "SELECT process_id FROM causality_process_tags WHERE token_id = $1",
-    )
-    .bind(&token_b)
-    .fetch_one(&db)
-    .await
-    .expect("token-B should have process tag");
+    let tag: String =
+        sqlx::query_scalar("SELECT process_id FROM causality_process_tags WHERE token_id = $1")
+            .bind(&token_b)
+            .fetch_one(&db)
+            .await
+            .expect("token-B should have process tag");
     assert_eq!(tag, token_a, "token-B should inherit token-A's process");
 
     // Assert: consumed and produced token rows
@@ -371,26 +373,28 @@ async fn effect_completed_creates_cross_link() {
     let place_out = Uuid::new_v4().to_string();
     let signal_key = format!("corr-{}", Uuid::new_v4().simple());
 
-    let event = persisted_event(1, json!({
-        "type": "EffectCompleted",
-        "transition_id": Uuid::new_v4().to_string(),
-        "transition_name": "dispatch",
-        "consumed_tokens": [[&place_in, &token_in]],
-        "produced_tokens": [[&place_out, token_json(&token_out)]],
-        "effect_handler_id": "scheduler",
-        "effect_result": { "signal_key": &signal_key }
-    }));
+    let event = persisted_event(
+        1,
+        json!({
+            "type": "EffectCompleted",
+            "transition_id": Uuid::new_v4().to_string(),
+            "transition_name": "dispatch",
+            "consumed_tokens": [[&place_in, &token_in]],
+            "produced_tokens": [[&place_out, token_json(&token_out)]],
+            "effect_handler_id": "scheduler",
+            "effect_result": { "signal_key": &signal_key }
+        }),
+    );
     publish_event(nats.jetstream(), &net_id, "effect.completed", &event).await;
     wait_for_cross_link(&db, &signal_key, Duration::from_secs(5)).await;
 
     // Assert cross-link egress side
-    let egress_net: String = sqlx::query_scalar(
-        "SELECT egress_net FROM causality_cross_links WHERE signal_key = $1",
-    )
-    .bind(&signal_key)
-    .fetch_one(&db)
-    .await
-    .expect("cross-link should exist");
+    let egress_net: String =
+        sqlx::query_scalar("SELECT egress_net FROM causality_cross_links WHERE signal_key = $1")
+            .bind(&signal_key)
+            .fetch_one(&db)
+            .await
+            .expect("cross-link should exist");
     assert_eq!(egress_net, net_id);
 }
 
@@ -420,41 +424,54 @@ async fn bridge_transfer_links_cross_net() {
     wait_for_process_tag(&db, &token_seed, Duration::from_secs(5)).await;
 
     // 2. TransitionFired: consumes seed, produces bridge token (like the real engine)
-    let ev2 = persisted_event(2, transition_fired_event(
-        "send_to_other_net",
-        &[(&place_start, &token_seed)],
-        &[(place_out, &token_bridge, json!({
-            "id": &token_bridge,
-            "color": { "type": "Unit" },
-            "created_at": "2026-04-04T12:00:00Z",
-            "created_by_event": 2
-        }))],
-    ));
+    let ev2 = persisted_event(
+        2,
+        transition_fired_event(
+            "send_to_other_net",
+            &[(&place_start, &token_seed)],
+            &[(
+                place_out,
+                &token_bridge,
+                json!({
+                    "id": &token_bridge,
+                    "color": { "type": "Unit" },
+                    "created_at": "2026-04-04T12:00:00Z",
+                    "created_by_event": 2
+                }),
+            )],
+        ),
+    );
     publish_event(nats.jetstream(), &net_a, "transition.fired", &ev2).await;
     wait_for_process_tag(&db, &token_bridge, Duration::from_secs(5)).await;
 
     // 3. TokenBridgedOut: the bridge token leaves net-A.
     //    created_by_event=2 points back to the transition at seq 2.
-    let ev3 = persisted_event(3, json!({
-        "type": "TokenBridgedOut",
-        "token": {
-            "id": &token_bridge,
-            "color": { "type": "Unit" },
-            "created_at": "2026-04-04T12:00:00Z",
-            "created_by_event": 2
-        },
-        "source_place_id": place_out,
-        "source_place_name": "Bridge Outbox",
-        "target_net_id": &net_b,
-        "target_place_name": place_dst,
-        "transition_id": Uuid::new_v4().to_string(),
-        "signal_key": &signal_key
-    }));
+    let ev3 = persisted_event(
+        3,
+        json!({
+            "type": "TokenBridgedOut",
+            "token": {
+                "id": &token_bridge,
+                "color": { "type": "Unit" },
+                "created_at": "2026-04-04T12:00:00Z",
+                "created_by_event": 2
+            },
+            "source_place_id": place_out,
+            "source_place_name": "Bridge Outbox",
+            "target_net_id": &net_b,
+            "target_place_name": place_dst,
+            "transition_id": Uuid::new_v4().to_string(),
+            "signal_key": &signal_key
+        }),
+    );
     publish_event(nats.jetstream(), &net_a, "token.bridged_out", &ev3).await;
     wait_for_cross_link(&db, &signal_key, Duration::from_secs(5)).await;
 
     // 4. TokenCreated on net-B with signal_key (bridge arrival)
-    let ev4 = persisted_event(1, token_created_with_signal_key(&token_dst, place_dst, &signal_key));
+    let ev4 = persisted_event(
+        1,
+        token_created_with_signal_key(&token_dst, place_dst, &signal_key),
+    );
     publish_event(nats.jetstream(), &net_b, "token.created", &ev4).await;
     wait_for_process_tag(&db, &token_dst, Duration::from_secs(5)).await;
 
@@ -470,13 +487,12 @@ async fn bridge_transfer_links_cross_net() {
     assert_eq!(ingress.as_deref(), Some(net_b.as_str()));
 
     // Assert: token on net-B inherited process tags from net-A
-    let tag: Option<String> = sqlx::query_scalar(
-        "SELECT process_id FROM causality_process_tags WHERE token_id = $1",
-    )
-    .bind(&token_dst)
-    .fetch_optional(&db)
-    .await
-    .expect("query process tags");
+    let tag: Option<String> =
+        sqlx::query_scalar("SELECT process_id FROM causality_process_tags WHERE token_id = $1")
+            .bind(&token_dst)
+            .fetch_optional(&db)
+            .await
+            .expect("query process tags");
     assert_eq!(
         tag.as_deref(),
         Some(token_seed.as_str()),
@@ -545,33 +561,36 @@ async fn signal_key_inherits_process_tags() {
     wait_for_process_tag(&db, &token_seed, Duration::from_secs(5)).await;
 
     // 2. EffectCompleted (executor_submit) → consumes seed, produces submitted, records signal_key
-    let ev2 = persisted_event(2, json!({
-        "type": "EffectCompleted",
-        "transition_id": Uuid::new_v4().to_string(),
-        "transition_name": "submit",
-        "consumed_tokens": [[&place_start, &token_seed]],
-        "produced_tokens": [[&place_submitted, token_json(&token_submitted)]],
-        "effect_handler_id": "executor_submit",
-        "effect_result": { "signal_key": &signal_key }
-    }));
+    let ev2 = persisted_event(
+        2,
+        json!({
+            "type": "EffectCompleted",
+            "transition_id": Uuid::new_v4().to_string(),
+            "transition_name": "submit",
+            "consumed_tokens": [[&place_start, &token_seed]],
+            "produced_tokens": [[&place_submitted, token_json(&token_submitted)]],
+            "effect_handler_id": "executor_submit",
+            "effect_result": { "signal_key": &signal_key }
+        }),
+    );
     publish_event(nats.jetstream(), &net_id, "effect.completed", &ev2).await;
     wait_for_cross_link(&db, &signal_key, Duration::from_secs(5)).await;
 
     // 3. Signal injection with signal_key → should inherit seed's process, NOT create new one
-    let ev3 = persisted_event(3, token_created_with_signal_key(
-        &token_signal, "sig_completed", &signal_key
-    ));
+    let ev3 = persisted_event(
+        3,
+        token_created_with_signal_key(&token_signal, "sig_completed", &signal_key),
+    );
     publish_event(nats.jetstream(), &net_id, "token.created", &ev3).await;
     wait_for_process_tag(&db, &token_signal, Duration::from_secs(5)).await;
 
     // Assert: signal token inherited process_id from seed token
-    let signal_process: String = sqlx::query_scalar(
-        "SELECT process_id FROM causality_process_tags WHERE token_id = $1",
-    )
-    .bind(&token_signal)
-    .fetch_one(&db)
-    .await
-    .expect("signal token should have process tag");
+    let signal_process: String =
+        sqlx::query_scalar("SELECT process_id FROM causality_process_tags WHERE token_id = $1")
+            .bind(&token_signal)
+            .fetch_one(&db)
+            .await
+            .expect("signal token should have process tag");
 
     assert_eq!(
         signal_process, token_seed,
@@ -607,17 +626,20 @@ async fn non_seed_token_without_signal_key_does_not_create_process() {
     let token_id = Uuid::new_v4().to_string();
 
     // Token with created_by_event set (produced by a transition) but no signal_key
-    let event = persisted_event(1, json!({
-        "type": "TokenCreated",
-        "token": {
-            "id": &token_id,
-            "color": { "type": "Unit" },
-            "created_at": "2026-04-04T12:00:00Z",
-            "created_by_event": 5
-        },
-        "place_id": "some_place",
-        "place_name": "Some Place"
-    }));
+    let event = persisted_event(
+        1,
+        json!({
+            "type": "TokenCreated",
+            "token": {
+                "id": &token_id,
+                "color": { "type": "Unit" },
+                "created_at": "2026-04-04T12:00:00Z",
+                "created_by_event": 5
+            },
+            "place_id": "some_place",
+            "place_name": "Some Place"
+        }),
+    );
     publish_event(nats.jetstream(), &net_id, "token.created", &event).await;
     wait_for_causality_event(&db, &net_id, 1, Duration::from_secs(5)).await;
     // Small extra wait
@@ -632,5 +654,8 @@ async fn non_seed_token_without_signal_key_does_not_create_process() {
     .await
     .unwrap_or(false);
 
-    assert!(!has_tag, "token with created_by_event should NOT self-tag as process");
+    assert!(
+        !has_tag,
+        "token with created_by_event should NOT self-tag as process"
+    );
 }

@@ -32,10 +32,7 @@ pub async fn run(server: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{:<38}  {:<30}  {:>4}  {:>5}",
-        "ID", "NAME", "VER", "PUB"
-    );
+    println!("{:<38}  {:<30}  {:>4}  {:>5}", "ID", "NAME", "VER", "PUB");
     println!("{}", "-".repeat(80));
 
     for t in &resp.items {

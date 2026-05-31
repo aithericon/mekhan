@@ -183,12 +183,10 @@ async fn anthropic_complete(
             let tool_use_id = msg.tool_call_id.clone().unwrap_or_default();
             messages.push(AnthropicMessage {
                 role: "user".into(),
-                content: AnthropicMessageContent::Parts(vec![
-                    AnthropicContentPart::ToolResult {
-                        tool_use_id,
-                        content: msg.content.clone(),
-                    },
-                ]),
+                content: AnthropicMessageContent::Parts(vec![AnthropicContentPart::ToolResult {
+                    tool_use_id,
+                    content: msg.content.clone(),
+                }]),
             });
             continue;
         }
@@ -289,10 +287,7 @@ async fn anthropic_complete(
         tool_choice,
     };
 
-    let url = format!(
-        "{}/v1/messages",
-        base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
     let client = reqwest::Client::new();
     let response = client

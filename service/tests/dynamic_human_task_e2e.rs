@@ -83,10 +83,7 @@ fn graph() -> WorkflowGraph {
 fn graph_with_steps_ref(steps_ref: &str) -> WorkflowGraph {
     let mut g = graph();
     for node in &mut g.nodes {
-        if let WorkflowNodeData::HumanTask {
-            steps_ref: sr, ..
-        } = &mut node.data
-        {
+        if let WorkflowNodeData::HumanTask { steps_ref: sr, .. } = &mut node.data {
             *sr = Some(steps_ref.to_string());
         }
     }

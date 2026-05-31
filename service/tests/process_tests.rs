@@ -42,13 +42,7 @@ async fn seed_process(
 }
 
 /// Seed a task attached to a process.
-async fn seed_task(
-    db: &sqlx::PgPool,
-    id: &str,
-    process_id: &str,
-    title: &str,
-    status: &str,
-) {
+async fn seed_task(db: &sqlx::PgPool, id: &str, process_id: &str, title: &str, status: &str) {
     sqlx::query(
         r#"
         INSERT INTO hpi_tasks (id, process_id, title, status, detail)
@@ -65,31 +59,18 @@ async fn seed_task(
 }
 
 /// Seed a metric data point.
-async fn seed_metric(
-    db: &sqlx::PgPool,
-    process_id: &str,
-    key: &str,
-    value: f64,
-) {
-    sqlx::query(
-        "INSERT INTO hpi_metrics (process_id, key, value) VALUES ($1, $2, $3)",
-    )
-    .bind(process_id)
-    .bind(key)
-    .bind(value)
-    .execute(db)
-    .await
-    .expect("seed metric");
+async fn seed_metric(db: &sqlx::PgPool, process_id: &str, key: &str, value: f64) {
+    sqlx::query("INSERT INTO hpi_metrics (process_id, key, value) VALUES ($1, $2, $3)")
+        .bind(process_id)
+        .bind(key)
+        .bind(value)
+        .execute(db)
+        .await
+        .expect("seed metric");
 }
 
 /// Seed a log entry.
-async fn seed_log(
-    db: &sqlx::PgPool,
-    process_id: &str,
-    level: &str,
-    source: &str,
-    message: &str,
-) {
+async fn seed_log(db: &sqlx::PgPool, process_id: &str, level: &str, source: &str, message: &str) {
     sqlx::query(
         "INSERT INTO hpi_logs (process_id, level, source, message, detail) VALUES ($1, $2, $3, $4, '{}')",
     )
@@ -160,8 +141,22 @@ async fn process_list_empty() {
 async fn process_list_with_data() {
     let (app, db) = common::test_app().await;
 
-    seed_process(&db, "aaa111", Some("Campaign A"), Some("bo_campaign"), "active").await;
-    seed_process(&db, "bbb222", Some("Campaign B"), Some("training"), "completed").await;
+    seed_process(
+        &db,
+        "aaa111",
+        Some("Campaign A"),
+        Some("bo_campaign"),
+        "active",
+    )
+    .await;
+    seed_process(
+        &db,
+        "bbb222",
+        Some("Campaign B"),
+        Some("training"),
+        "completed",
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -468,7 +463,9 @@ async fn process_logs() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/processes/{tid}/logs?filter[level][eq]=error"))
+                .uri(format!(
+                    "/api/v1/processes/{tid}/logs?filter[level][eq]=error"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -651,7 +648,14 @@ async fn process_pagination() {
     let (app, db) = common::test_app().await;
 
     for i in 0..5 {
-        seed_process(&db, &format!("page-{i}"), Some(&format!("Process {i}")), None, "active").await;
+        seed_process(
+            &db,
+            &format!("page-{i}"),
+            Some(&format!("Process {i}")),
+            None,
+            "active",
+        )
+        .await;
     }
 
     let resp = app

@@ -22,7 +22,7 @@ pub enum StorageBackend {
 /// `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]`
 /// section in `executor.toml`.
 ///
-/// Credential fields support `{{secret:KEY}}` patterns that are resolved
+/// Credential fields support `{{ secret:KEY }}` patterns that are resolved
 /// by the staging pipeline before use.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema, utoipa::ToSchema))]
@@ -193,7 +193,8 @@ mod tests {
 
     #[test]
     fn retry_config_individual_field_defaults() {
-        let json = r#"{"backend": "local", "endpoint": "/tmp/store", "retry": {"max_attempts": 5}}"#;
+        let json =
+            r#"{"backend": "local", "endpoint": "/tmp/store", "retry": {"max_attempts": 5}}"#;
         let config: StorageConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.retry.max_attempts, 5);
         // others fall back to defaults

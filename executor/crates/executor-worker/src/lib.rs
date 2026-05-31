@@ -23,7 +23,7 @@ pub use event_emitter::{EventEmitter, NatsEventEmitter, StreamContext};
 pub use executor::JobExecutor;
 pub use handler::handle_execution;
 pub use ipc_sidecar::{start_ipc_sidecar, SidecarLogConfig, SidecarResult};
+pub use nix::{NixConfig, NixEnvironmentHook};
 pub use registry::BackendRegistry;
 pub use reporter::StatusReporter;
-pub use nix::{NixConfig, NixEnvironmentHook};
 pub use staging::{StagingHook, StagingPipeline};

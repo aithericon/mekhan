@@ -30,12 +30,11 @@ fn init_tracing() {
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| {
-                        tracing_subscriber::EnvFilter::new(
-                            "warn,petri_executor=debug,petri_scheduler_bridge=debug,petri_nats=debug"
-                        )
-                    })
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new(
+                        "warn,petri_executor=debug,petri_scheduler_bridge=debug,petri_nats=debug",
+                    )
+                }),
             )
             .with_test_writer()
             .try_init();
@@ -83,9 +82,8 @@ async fn spawn_real_executor(nats_url: &str, namespace: &str) -> tokio::task::Jo
         .await
         .expect("create StatusReporter");
 
-    let registry = Arc::new(
-        BackendRegistry::new(Duration::from_secs(30)).register(ProcessBackend::new()),
-    );
+    let registry =
+        Arc::new(BackendRegistry::new(Duration::from_secs(30)).register(ProcessBackend::new()));
 
     let short_id = &uuid::Uuid::new_v4().simple().to_string()[..8];
     let base_dir = PathBuf::from(format!("/tmp/ex-{short_id}"));
@@ -284,10 +282,9 @@ impl ExecutorTestHarness {
             self.net_id.clone(),
             self.jetstream.clone(),
         ));
-        let listener_handle = signal_listener.clone().start(
-            self.service.clone(),
-            self.eval_notify.clone(),
-        );
+        let listener_handle = signal_listener
+            .clone()
+            .start(self.service.clone(), self.eval_notify.clone());
 
         // Let components start up
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -398,7 +395,10 @@ impl ExecutorTestHarness {
     /// Reload scenario: reset service, re-initialize net, re-seed tokens.
     async fn reload_scenario(&self) {
         self.service.clear().await;
-        self.service.initialize(self.scenario.net.clone()).await.unwrap();
+        self.service
+            .initialize(self.scenario.net.clone())
+            .await
+            .unwrap();
         self.service.set_initial_tokens(
             self.scenario
                 .initial_tokens
@@ -580,14 +580,5 @@ async fn test_executor_lifecycle_scenario_structure() {
 }
 
 // ===========================================================================
-// Test 4: Process events dual-publish
+// Test 4: Process events dual-publish (WIP)
 // ===========================================================================
-
-/// Verifies the ExecutorWatcher publishes process events to HUMAN_PROCESS
-/// when executor jobs carry process context (process_id + process_step).
-///
-/// The test stamps process context into seed token data. The
-/// `ExecutorSubmitHandler` picks it up via fallthrough, stamps it into
-/// `RoutingMeta`, and the `ExecutorWatcher` dual-publishes both:
-/// - signals to Petri net places (existing pathway)
-/// - process events to `human.process.{net_id}.{process_id}` (new pathway)

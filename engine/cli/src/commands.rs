@@ -22,14 +22,26 @@ pub fn run_fire(client: &EngineClient, net_id: &str, transition_id: &str) {
     let path = format!("/api/nets/{net_id}/command/fire/{transition_id}");
     match client.post::<Value>(&path, &serde_json::json!({})) {
         Ok(resp) => {
-            if resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-                println!("{} {} {}", net_id.bold(), transition_id.cyan(), "fired".green());
+            if resp
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                println!(
+                    "{} {} {}",
+                    net_id.bold(),
+                    transition_id.cyan(),
+                    "fired".green()
+                );
                 if let Some(event) = resp.get("event") {
                     let seq = event.get("sequence").and_then(|v| v.as_u64()).unwrap_or(0);
                     println!("  event #{seq}");
                 }
             } else {
-                let error = resp.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+                let error = resp
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
                 eprintln!("{}: {error}", "Failed".red());
                 std::process::exit(1);
             }
@@ -59,7 +71,11 @@ pub fn run_inject(client: &EngineClient, net_id: &str, place_id: &str, color_jso
     let path = format!("/api/nets/{net_id}/command/create-token");
     match client.post::<Value>(&path, &body) {
         Ok(resp) => {
-            if resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if resp
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 println!(
                     "{} → {}:{}",
                     "Token injected".green(),
@@ -67,7 +83,10 @@ pub fn run_inject(client: &EngineClient, net_id: &str, place_id: &str, color_jso
                     place_id.cyan()
                 );
             } else {
-                let error = resp.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+                let error = resp
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
                 eprintln!("{}: {error}", "Failed".red());
                 std::process::exit(1);
             }

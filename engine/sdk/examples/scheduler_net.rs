@@ -136,8 +136,7 @@ fn definition(ctx: &mut Context) {
     let sig_running = ctx.signal::<SchedulerStatusSignal>("sig_running", "Running Signals");
     let sig_completed = ctx.signal::<SchedulerStatusSignal>("sig_completed", "Completed Signals");
     let sig_failed = ctx.signal::<SchedulerStatusSignal>("sig_failed", "Failed Signals");
-    let sig_timed_out =
-        ctx.signal::<SchedulerStatusSignal>("sig_timed_out", "Timed Out Signals");
+    let sig_timed_out = ctx.signal::<SchedulerStatusSignal>("sig_timed_out", "Timed Out Signals");
 
     // Bridge out — forward to executor-net
     let to_executor = ctx.bridge_out::<ExecutorSubmitInput>(
@@ -303,13 +302,16 @@ fn definition(ctx: &mut Context) {
 
         // t_pending_slurm_timed_out — Slurm reported the job TIMEOUT (wall
         // clock exceeded) while we were waiting on an executor result.
-        ctx.transition("t_pending_slurm_timed_out", "Slurm Timed Out (Pending Exec)")
-            .auto_input("pending", &pending_execution)
-            .auto_input("sig", &sig_timed_out)
-            .correlate("sig", "pending", "scheduler_job_id")
-            .auto_output("fail", &failure_outbox)
-            .logic(
-                r#"#{
+        ctx.transition(
+            "t_pending_slurm_timed_out",
+            "Slurm Timed Out (Pending Exec)",
+        )
+        .auto_input("pending", &pending_execution)
+        .auto_input("sig", &sig_timed_out)
+        .correlate("sig", "pending", "scheduler_job_id")
+        .auto_output("fail", &failure_outbox)
+        .logic(
+            r#"#{
                     fail: #{
                         job_id: pending.job_id,
                         run: pending.run,
@@ -320,7 +322,7 @@ fn definition(ctx: &mut Context) {
                         model_name: pending.model_name
                     }
                 }"#,
-            );
+        );
     });
 
     // ── Scheduler Signals ────────────────────────────────────────────────────

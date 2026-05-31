@@ -212,7 +212,8 @@ pub struct TaskEvent {
 // Re-exported from petri-scheduler-bridge for backward compatibility.
 
 pub use petri_scheduler_bridge::meta::{
-    parse_signal_meta_key, signal_meta_key, META_NET_ID, META_PLACE, META_SIGNAL_KEY, META_SIGNAL_PREFIX,
+    parse_signal_meta_key, signal_meta_key, META_NET_ID, META_PLACE, META_SIGNAL_KEY,
+    META_SIGNAL_PREFIX,
 };
 
 #[cfg(test)]

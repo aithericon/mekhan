@@ -55,7 +55,7 @@ pub struct ExecutionJob {
     ///
     /// When present, the executor unwraps this token against Vault to obtain
     /// a `HashMap<String, String>` of secret key→value pairs, then resolves
-    /// `{{secret:KEY}}` patterns in spec.config and env using those values.
+    /// `{{ secret:KEY }}` patterns in spec.config and env using those values.
     ///
     /// NOT stored in `metadata` because metadata is echoed in every StatusUpdate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,7 +163,7 @@ pub enum InputSource {
     /// When `storage` is `None`, the global `ArtifactStore` is used (backward-compatible).
     StoragePath {
         path: String,
-        /// Per-input storage backend config. Supports `{{secret:KEY}}` in credentials.
+        /// Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         storage: Option<StorageConfig>,
     },
@@ -205,7 +205,7 @@ pub struct OutputDeclaration {
     pub kind: Option<String>,
 
     /// Upload this file output to a specific storage destination after execution.
-    /// Supports `{{secret:KEY}}` patterns in storage credentials.
+    /// Supports `{{ secret:KEY }}` patterns in storage credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upload_to: Option<OutputUploadConfig>,
 }

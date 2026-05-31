@@ -145,11 +145,8 @@ pub(crate) type TokenShapeFn = fn(&WorkflowNode, &TokenShape) -> TokenShape;
 /// YJS-side config encoder. Writes the variant's per-config fields into
 /// the supplied `Y.Map` under the surrounding transaction. Mirrors one
 /// arm of `yjs/doc_ops.rs::write_node_config` exactly.
-pub(crate) type YjsEncodeFn = fn(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-);
+pub(crate) type YjsEncodeFn =
+    fn(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData);
 
 // ─── Registry ───────────────────────────────────────────────────────────────
 
@@ -329,10 +326,9 @@ mod tests {
     use crate::models::template::{
         default_automated_input_port, default_automated_output_port, default_initial_port,
         default_join_output_port, default_subworkflow_input_contract,
-        default_subworkflow_output_port, default_terminal_port,
-        BranchCondition, ConcurrencyPolicy, ContextStrategy, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, ManualTrigger, ModelRef, PhaseUpdateStatus, RetryPolicy,
-        ToolErrorPolicy, TriggerSource, VersionPin,
+        default_subworkflow_output_port, default_terminal_port, BranchCondition, ConcurrencyPolicy,
+        ContextStrategy, ExecutionBackendType, ExecutionSpecConfig, JoinMode, ManualTrigger,
+        ModelRef, PhaseUpdateStatus, RetryPolicy, ToolErrorPolicy, TriggerSource, VersionPin,
     };
     use uuid::Uuid;
 
@@ -512,7 +508,10 @@ mod tests {
         // ParallelSplit because of its converging cousin Join), this test
         // catches it before it reaches `wire.rs`'s special-case branch.
         let count_is_join = NODES.iter().filter(|d| d.is_join).count();
-        assert_eq!(count_is_join, 1, "exactly one variant should have is_join: true (Join)");
+        assert_eq!(
+            count_is_join, 1,
+            "exactly one variant should have is_join: true (Join)"
+        );
         let only = NODES.iter().find(|d| d.is_join).unwrap();
         assert_eq!(only.wire_name, "join");
     }
@@ -953,7 +952,10 @@ mod tests {
         let en = all.iter().find(|d| d.wire_name == "end").unwrap();
         assert_eq!(en.kind, "end");
         assert!(en.lowers_to_air);
-        let pgu = all.iter().find(|d| d.wire_name == "progress_update").unwrap();
+        let pgu = all
+            .iter()
+            .find(|d| d.wire_name == "progress_update")
+            .unwrap();
         assert_eq!(pgu.kind, "progress_update");
         let fl = all.iter().find(|d| d.wire_name == "failure").unwrap();
         assert_eq!(fl.kind, "failure");
@@ -962,7 +964,10 @@ mod tests {
         // AutomatedStep — the runtime envelope shape is shared.
         let ag = all.iter().find(|d| d.wire_name == "agent").unwrap();
         assert_eq!(ag.kind, "agent");
-        let ps = all.iter().find(|d| d.wire_name == "parallel_split").unwrap();
+        let ps = all
+            .iter()
+            .find(|d| d.wire_name == "parallel_split")
+            .unwrap();
         assert_eq!(ps.kind, "parallel_split");
         let jn = all.iter().find(|d| d.wire_name == "join").unwrap();
         assert_eq!(jn.kind, "join");
@@ -974,7 +979,10 @@ mod tests {
         let ht = all.iter().find(|d| d.wire_name == "human_task").unwrap();
         assert_eq!(ht.kind, "human_task");
         assert!(ht.parks_data_envelope);
-        let asd = all.iter().find(|d| d.wire_name == "automated_step").unwrap();
+        let asd = all
+            .iter()
+            .find(|d| d.wire_name == "automated_step")
+            .unwrap();
         assert_eq!(asd.kind, "automated_step");
         assert!(asd.parks_data_envelope);
         let dn = all.iter().find(|d| d.wire_name == "decision").unwrap();

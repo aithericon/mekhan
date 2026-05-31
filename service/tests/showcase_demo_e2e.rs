@@ -86,9 +86,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream
-                .delete_consumer(&format!("{prefix}_{base}"))
-                .await;
+            let _ = stream.delete_consumer(&format!("{prefix}_{base}")).await;
         }
     }
 }
@@ -130,7 +128,10 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    (TaskHandle(causality.abort_handle()), TaskHandle(lifecycle.abort_handle()))
+    (
+        TaskHandle(causality.abort_handle()),
+        TaskHandle(lifecycle.abort_handle()),
+    )
 }
 
 /// Locate `demos/invoice-processing` relative to this test crate. The
@@ -164,19 +165,14 @@ async fn wait_for_pending_task(db: &sqlx::PgPool, net_id: &str, timeout: Duratio
     }
 }
 
-async fn wait_for_terminal_status(
-    db: &sqlx::PgPool,
-    id: Uuid,
-    timeout: Duration,
-) -> String {
+async fn wait_for_terminal_status(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if matches!(st.as_str(), "completed" | "failed" | "cancelled") {
             return st;
         }
@@ -218,10 +214,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
 
     // POST a fresh copy. The name is suffixed so successive runs can't
     // collide on the (unique) name constraint should one exist.
-    let unique_name = format!(
-        "Invoice Processing Demo E2E {}",
-        Uuid::new_v4().simple()
-    );
+    let unique_name = format!("Invoice Processing Demo E2E {}", Uuid::new_v4().simple());
     let resp = app
         .clone()
         .oneshot(

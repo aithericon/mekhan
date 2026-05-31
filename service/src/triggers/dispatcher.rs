@@ -561,10 +561,7 @@ impl TriggerDispatcher {
             return Ok((
                 finalize(
                     FireOutcome::Dropped {
-                        reason: format!(
-                            "token rejected by target port '{}': {ve}",
-                            target_port.id
-                        ),
+                        reason: format!("token rejected by target port '{}': {ve}", target_port.id),
                     },
                     false,
                 ),
@@ -679,7 +676,12 @@ impl TriggerDispatcher {
                         active_instance = %active,
                         "single-active-coalesce: fire coalesced into pending follow-up"
                     );
-                    return Ok((FireOutcome::Coalesced { active_instance_id: active }, None));
+                    return Ok((
+                        FireOutcome::Coalesced {
+                            active_instance_id: active,
+                        },
+                        None,
+                    ));
                 }
                 // No active sibling — mark ourselves provisionally active
                 // before spawn so a parallel fire racing through this same
@@ -695,15 +697,8 @@ impl TriggerDispatcher {
             }
         }
 
-        self.fire_spawn_active(
-            record,
-            template,
-            graph,
-            token,
-            wait,
-            Uuid::new_v4(),
-        )
-        .await
+        self.fire_spawn_active(record, template, graph, token, wait, Uuid::new_v4())
+            .await
     }
 
     /// Inner spawn — assumes any coalesce gate has already been passed and
@@ -811,8 +806,7 @@ impl TriggerDispatcher {
                         status.as_str(),
                         "completed" | "cancelled" | "failed" | "archived"
                     ) {
-                        waiters
-                            .resolve(&instance.id, TerminalOutcome { status, result });
+                        waiters.resolve(&instance.id, TerminalOutcome { status, result });
                     }
                 }
                 Some(rx)
@@ -820,7 +814,12 @@ impl TriggerDispatcher {
             None => None,
         };
 
-        Ok((FireOutcome::Spawned { instance_id: instance.id }, rx))
+        Ok((
+            FireOutcome::Spawned {
+                instance_id: instance.id,
+            },
+            rx,
+        ))
     }
 
     async fn fire_signal(

@@ -317,10 +317,7 @@ mod tests {
         // Top-level loaded_models stays empty regardless of caller intent —
         // the field is dropped from the wire body because capability-routing
         // sources Vanilla from services.ollama.models_loaded only.
-        assert!(
-            req.loaded_models.is_empty(),
-            "loaded_models defaults empty"
-        );
+        assert!(req.loaded_models.is_empty(), "loaded_models defaults empty");
         // services.ollama.models_loaded explicitly empty so capability-
         // routing's resolver does NOT grant Vanilla — see module-doc § Vanilla-
         // capability avoidance.

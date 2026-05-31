@@ -8,11 +8,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_nats::jetstream::{self, kv};
 use chrono::{TimeZone, Utc};
+use futures::StreamExt;
 use petri_domain::timer::{TimerCancelRequest, TimerClient, TimerError, TimerScheduleRequest};
 use petri_domain::ExternalSignal;
-use tracing::{debug, error, info};
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info};
 
 use crate::Subjects;
 
@@ -63,9 +63,9 @@ impl TimerClient for NatsTimerClient {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        
+
         let expires_at_ms = now_ms + request.delay_ms;
-        
+
         let key = timer_kv_key(&request.net_id, &request.place_id, &request.correlation_id);
 
         let value = TimerValue {
@@ -76,8 +76,7 @@ impl TimerClient for NatsTimerClient {
             payload: request.payload,
         };
 
-        let payload = serde_json::to_vec(&value)
-            .map_err(|e| TimerError::Fatal(e.to_string()))?;
+        let payload = serde_json::to_vec(&value).map_err(|e| TimerError::Fatal(e.to_string()))?;
 
         self.kv
             .put(&key, payload.into())
@@ -131,9 +130,11 @@ impl Clockmaster {
         bucket: &str,
         signal_prefix: &str,
     ) -> Result<Self, String> {
-        let kv = js.get_key_value(bucket).await
+        let kv = js
+            .get_key_value(bucket)
+            .await
             .map_err(|e| format!("Failed to get KV bucket: {}", e))?;
-        
+
         Ok(Self {
             js,
             kv,
@@ -145,7 +146,11 @@ impl Clockmaster {
         info!("Clockmaster starting up");
 
         // Hydrate existing timers
-        let mut keys = self.kv.keys().await.map_err(|e| format!("Failed to list keys: {}", e))?;
+        let mut keys = self
+            .kv
+            .keys()
+            .await
+            .map_err(|e| format!("Failed to list keys: {}", e))?;
         while let Some(k) = keys.next().await {
             if let Ok(key) = k {
                 if let Ok(Some(entry)) = self.kv.get(&key).await {
@@ -158,7 +163,10 @@ impl Clockmaster {
         }
 
         // Watch for new timers
-        let mut watcher = self.kv.watch_all().await
+        let mut watcher = self
+            .kv
+            .watch_all()
+            .await
             .map_err(|e| format!("Failed to watch KV bucket: {}", e))?;
 
         while let Some(entry_result) = watcher.next().await {
@@ -185,7 +193,8 @@ impl Clockmaster {
                 // Second one checks KV -> Gone. Returns.
                 // So it is safe!
                 info!(key = %entry.key, "Clockmaster observed new timer");
-                self.schedule_timer_execution(entry.key.clone(), timer).await;
+                self.schedule_timer_execution(entry.key.clone(), timer)
+                    .await;
             }
         }
 
@@ -196,7 +205,7 @@ impl Clockmaster {
         let js = self.js.clone();
         let kv = self.kv.clone();
         let prefix = self.signal_prefix.clone();
-        
+
         tokio::spawn(async move {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -232,7 +241,10 @@ impl Clockmaster {
             let drift_ms = now_ms.saturating_sub(timer.expires_at_ms);
 
             // Convert to ISO 8601
-            let scheduled_at_dt = match Utc.timestamp_millis_opt(timer.expires_at_ms as i64).single() {
+            let scheduled_at_dt = match Utc
+                .timestamp_millis_opt(timer.expires_at_ms as i64)
+                .single()
+            {
                 Some(dt) => dt,
                 None => {
                     error!(
@@ -258,8 +270,8 @@ impl Clockmaster {
             };
 
             info!(
-                net_id = %timer.net_id, 
-                place_id = %timer.place_id, 
+                net_id = %timer.net_id,
+                place_id = %timer.place_id,
                 drift_ms = drift_ms,
                 "Timer expired, publishing signal"
             );
@@ -268,8 +280,14 @@ impl Clockmaster {
             let mut payload = timer.payload;
             if let Some(obj) = payload.as_object_mut() {
                 obj.insert("drift_ms".to_string(), serde_json::json!(drift_ms));
-                obj.insert("scheduled_at".to_string(), serde_json::json!(scheduled_at_dt));
-                obj.insert("triggered_at".to_string(), serde_json::json!(triggered_at_dt));
+                obj.insert(
+                    "scheduled_at".to_string(),
+                    serde_json::json!(scheduled_at_dt),
+                );
+                obj.insert(
+                    "triggered_at".to_string(),
+                    serde_json::json!(triggered_at_dt),
+                );
             }
 
             let signal = ExternalSignal {
@@ -291,16 +309,14 @@ impl Clockmaster {
             };
 
             match js.publish(signal_subject, payload.into()).await {
-                Ok(ack_future) => {
-                    match ack_future.await {
-                        Ok(_) => {
-                            let _ = kv.delete(&key).await;
-                        }
-                        Err(e) => {
-                            error!(error = %e, "Timer signal publish ack failed");
-                        }
+                Ok(ack_future) => match ack_future.await {
+                    Ok(_) => {
+                        let _ = kv.delete(&key).await;
                     }
-                }
+                    Err(e) => {
+                        error!(error = %e, "Timer signal publish ack failed");
+                    }
+                },
                 Err(e) => {
                     error!(error = %e, "Failed to publish timer signal");
                 }

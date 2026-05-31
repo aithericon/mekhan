@@ -28,9 +28,7 @@ fn next_execution_id() -> String {
 }
 
 fn noop_callback() -> StatusCallback {
-    Box::new(|_status, _detail| -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        Box::pin(async {})
-    })
+    Box::new(|_status, _detail| -> Pin<Box<dyn Future<Output = ()> + Send>> { Box::pin(async {}) })
 }
 
 #[derive(Debug, Clone)]
@@ -143,7 +141,11 @@ fn bearer_config(auth_resource: Option<&str>, token: Option<&str>) -> HttpConfig
 #[test]
 fn overlay_fills_bearer_token_from_resource() {
     let mut config = bearer_config(Some("api"), None);
-    let ctx = ctx_with_resource(config.clone(), "api", serde_json::json!({ "token": "rsc-tok" }));
+    let ctx = ctx_with_resource(
+        config.clone(),
+        "api",
+        serde_json::json!({ "token": "rsc-tok" }),
+    );
     config.overlay_auth_resource(&ctx).unwrap();
     match &config.auth {
         Some(AuthConfig::Bearer { token, .. }) => assert_eq!(token.as_deref(), Some("rsc-tok")),
@@ -155,7 +157,11 @@ fn overlay_fills_bearer_token_from_resource() {
 fn overlay_does_not_clobber_inline_token() {
     // Inline value wins over the resource (precedence: inline > resource > env).
     let mut config = bearer_config(Some("api"), Some("inline-tok"));
-    let ctx = ctx_with_resource(config.clone(), "api", serde_json::json!({ "token": "rsc-tok" }));
+    let ctx = ctx_with_resource(
+        config.clone(),
+        "api",
+        serde_json::json!({ "token": "rsc-tok" }),
+    );
     config.overlay_auth_resource(&ctx).unwrap();
     match &config.auth {
         Some(AuthConfig::Bearer { token, .. }) => assert_eq!(token.as_deref(), Some("inline-tok")),
@@ -179,7 +185,9 @@ fn overlay_fills_basic_username_and_password() {
     );
     config.overlay_auth_resource(&ctx).unwrap();
     match &config.auth {
-        Some(AuthConfig::Basic { username, password, .. }) => {
+        Some(AuthConfig::Basic {
+            username, password, ..
+        }) => {
             assert_eq!(username, "svc");
             assert_eq!(password.as_deref(), Some("pw"));
         }
@@ -336,7 +344,10 @@ async fn non_2xx_is_exit_failure() {
         .unwrap();
 
     assert!(
-        matches!(result.outcome, ExecutionOutcome::ExitFailure { exit_code: 500 }),
+        matches!(
+            result.outcome,
+            ExecutionOutcome::ExitFailure { exit_code: 500 }
+        ),
         "expected ExitFailure(500), got {:?}",
         result.outcome
     );
@@ -393,7 +404,10 @@ async fn reports_running_status() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, ExecutionStatus::Running);
     assert_eq!(records[0].detail["method"], "GET");
-    assert!(records[0].detail["url"].as_str().unwrap().contains("/status-check"));
+    assert!(records[0].detail["url"]
+        .as_str()
+        .unwrap()
+        .contains("/status-check"));
 }
 
 // ─── P1: Request building ────────────────────────────────────────────────────
@@ -411,10 +425,7 @@ async fn query_params_sent() {
 
     let backend = HttpBackend::new();
     let mut config = quick_config(&format!("{}/search", server.uri()));
-    config.query = HashMap::from([
-        ("foo".into(), "bar".into()),
-        ("baz".into(), "qux".into()),
-    ]);
+    config.query = HashMap::from([("foo".into(), "bar".into()), ("baz".into(), "qux".into())]);
     let run_ctx = make_http_run_context(config, Duration::from_secs(10));
 
     let job = dummy_job();
@@ -647,7 +658,10 @@ async fn response_mode_json() {
         .unwrap();
 
     assert!(matches!(result.outcome, ExecutionOutcome::Success));
-    assert_eq!(result.outputs["body"]["items"], serde_json::json!([1, 2, 3]));
+    assert_eq!(
+        result.outputs["body"]["items"],
+        serde_json::json!([1, 2, 3])
+    );
 }
 
 #[tokio::test]
@@ -817,15 +831,23 @@ async fn metrics_populated() {
         .await
         .unwrap();
 
-    let metrics = result.metrics.as_ref().expect("metrics should be populated");
-    assert!(metrics.metric_names.contains(&"http/status_code".to_string()));
+    let metrics = result
+        .metrics
+        .as_ref()
+        .expect("metrics should be populated");
+    assert!(metrics
+        .metric_names
+        .contains(&"http/status_code".to_string()));
     assert!(metrics
         .metric_names
         .contains(&"http/response_time_ms".to_string()));
     assert!(metrics
         .metric_names
         .contains(&"http/response_bytes".to_string()));
-    assert_eq!(*metrics.latest_values.get("http/status_code").unwrap(), 200.0);
+    assert_eq!(
+        *metrics.latest_values.get("http/status_code").unwrap(),
+        200.0
+    );
     assert!(*metrics.latest_values.get("http/response_bytes").unwrap() > 0.0);
 }
 
@@ -949,7 +971,8 @@ async fn redirect_followed_by_default() {
     Mock::given(method("GET"))
         .and(path("/redirect"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("location", &format!("{}/final", server.uri())),
+            ResponseTemplate::new(302)
+                .insert_header("location", &format!("{}/final", server.uri())),
         )
         .mount(&server)
         .await;
@@ -984,7 +1007,8 @@ async fn redirect_not_followed_when_disabled() {
     Mock::given(method("GET"))
         .and(path("/redirect"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("location", &format!("{}/final", server.uri())),
+            ResponseTemplate::new(302)
+                .insert_header("location", &format!("{}/final", server.uri())),
         )
         .mount(&server)
         .await;
@@ -1002,7 +1026,10 @@ async fn redirect_not_followed_when_disabled() {
         .unwrap();
 
     assert!(
-        matches!(result.outcome, ExecutionOutcome::ExitFailure { exit_code: 302 }),
+        matches!(
+            result.outcome,
+            ExecutionOutcome::ExitFailure { exit_code: 302 }
+        ),
         "expected ExitFailure(302), got {:?}",
         result.outcome
     );
@@ -1122,8 +1149,20 @@ async fn output_mapping_extracts_json_subpath() {
     ]);
 
     let outputs = vec![
-        OutputDeclaration { name: "user_id".into(), path: None, required: true, kind: None, upload_to: None },
-        OutputDeclaration { name: "user_name".into(), path: None, required: true, kind: None, upload_to: None },
+        OutputDeclaration {
+            name: "user_id".into(),
+            path: None,
+            required: true,
+            kind: None,
+            upload_to: None,
+        },
+        OutputDeclaration {
+            name: "user_name".into(),
+            path: None,
+            required: true,
+            kind: None,
+            upload_to: None,
+        },
     ];
     let spec = config.into_spec_with_io(vec![], outputs);
     let run_ctx = RunContext {
@@ -1175,9 +1214,7 @@ async fn output_mapping_extracts_header() {
 
     let backend = HttpBackend::new();
     let mut config = quick_config(&format!("{}/api/ping", server.uri()));
-    config.output_mapping = HashMap::from([
-        ("req_id".into(), "headers.x-request-id".into()),
-    ]);
+    config.output_mapping = HashMap::from([("req_id".into(), "headers.x-request-id".into())]);
 
     let run_ctx = make_http_run_context(config, Duration::from_secs(10));
     let job = dummy_job();
@@ -1206,9 +1243,7 @@ async fn output_mapping_with_non_json_body_skips_dot_path() {
 
     let backend = HttpBackend::new();
     let mut config = quick_config(&format!("{}/text", server.uri()));
-    config.output_mapping = HashMap::from([
-        ("nested".into(), "body.data.field".into()),
-    ]);
+    config.output_mapping = HashMap::from([("nested".into(), "body.data.field".into())]);
 
     let run_ctx = make_http_run_context(config, Duration::from_secs(10));
     let job = dummy_job();
@@ -1274,9 +1309,7 @@ async fn output_mapping_array_index() {
     let backend = HttpBackend::new();
     let mut config = quick_config(&format!("{}/api/list", server.uri()));
     config.response_mode = ResponseMode::Json;
-    config.output_mapping = HashMap::from([
-        ("second_item".into(), "body.items.1".into()),
-    ]);
+    config.output_mapping = HashMap::from([("second_item".into(), "body.items.1".into())]);
 
     let run_ctx = make_http_run_context(config, Duration::from_secs(10));
     let job = dummy_job();
@@ -1294,15 +1327,16 @@ async fn output_mapping_array_index() {
 async fn prepare_rejects_invalid_output_mapping_selector() {
     let backend = HttpBackend::new();
     let mut config = quick_config("https://example.com/api");
-    config.output_mapping = HashMap::from([
-        ("bad".into(), "invalid_base.field".into()),
-    ]);
+    config.output_mapping = HashMap::from([("bad".into(), "invalid_base.field".into())]);
 
     let run_ctx = make_http_run_context(config, Duration::from_secs(10));
     let job = dummy_job();
     let result = backend.prepare(&job, run_ctx).await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("not a standard HTTP output"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("not a standard HTTP output"));
 }
 
 // ─── body_from_input Content-Type auto-detection ────────────────────────────

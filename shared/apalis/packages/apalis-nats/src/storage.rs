@@ -124,10 +124,7 @@ impl Default for Config {
             num_replicas: 1,
             enable_dlq: true,
             max_ack_pending: 100, // Allow up to 100 unacknowledged messages per consumer
-            nak_backoff: vec![
-                Duration::from_millis(500),
-                Duration::from_secs(2),
-            ],
+            nak_backoff: vec![Duration::from_millis(500), Duration::from_secs(2)],
             consumer_mode: ConsumerMode::Pool,
             #[cfg(feature = "otel")]
             enable_tracing: true,
@@ -621,10 +618,8 @@ where
                     )
                 }
                 ConsumerMode::PerJob { exec_id } => {
-                    let name = format!(
-                        "{}_{}_oneshot_{}",
-                        self.config.namespace, priority, exec_id
-                    );
+                    let name =
+                        format!("{}_{}_oneshot_{}", self.config.namespace, priority, exec_id);
                     (
                         name,
                         None, // ephemeral — no durable_name

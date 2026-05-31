@@ -89,13 +89,13 @@ pub enum TriggerError {
     NotFound(String),
     #[error("trigger '{0}' is disabled")]
     Disabled(String),
-    #[error("trigger '{node_id}' resolves to a target node '{target}' which is missing or invalid")]
+    #[error(
+        "trigger '{node_id}' resolves to a target node '{target}' which is missing or invalid"
+    )]
     TargetMissing { node_id: String, target: String },
     #[error("payload mapping for field '{field}' failed: {message}")]
     PayloadMappingFailed { field: String, message: String },
-    #[error(
-        "start input contract violation: field '{field}' expected {expected}, got {actual}"
-    )]
+    #[error("start input contract violation: field '{field}' expected {expected}, got {actual}")]
     StartContractViolation {
         field: String,
         expected: String,

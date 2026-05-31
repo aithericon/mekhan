@@ -238,7 +238,9 @@ impl ExecutionEvent {
             StatusDetail::OutputSet { name, .. } => {
                 format!("{}-output-{}", self.execution_id, name)
             }
-            StatusDetail::PhaseChanged { phase_name, status, .. } => {
+            StatusDetail::PhaseChanged {
+                phase_name, status, ..
+            } => {
                 let status_str = match status {
                     crate::progress::PhaseStatus::Pending => "pending",
                     crate::progress::PhaseStatus::Running => "running",

@@ -159,7 +159,10 @@ async fn publish_falls_back_to_db_graph() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
     assert_eq!(body["published"], true);
-    assert!(body["air_json"].is_object(), "air_json should be populated from DB graph");
+    assert!(
+        body["air_json"].is_object(),
+        "air_json should be populated from DB graph"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +203,10 @@ async fn create_template_seeds_ydoc() {
             .fetch_one(&db)
             .await
             .unwrap();
-    assert!(count >= 1, "create_template should seed Y.Doc, got {count} rows");
+    assert!(
+        count >= 1,
+        "create_template should seed Y.Doc, got {count} rows"
+    );
 
     // Load the doc and verify it has the nodes map (new schema)
     let persistence = mekhan_service::yjs::persistence::YjsPersistence::new(db);

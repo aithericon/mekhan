@@ -22,11 +22,7 @@ use super::{resolve_path, FileOpsResult};
 /// - `last_modified` — RFC 3339 timestamp (optional, backend-dependent)
 /// - `content_type` — MIME type string (optional, backend-dependent)
 /// - `etag` — entity tag string (optional, backend-dependent)
-pub async fn execute(
-    config: &StatConfig,
-    operator: &Operator,
-    prefix: &str,
-) -> FileOpsResult {
+pub async fn execute(config: &StatConfig, operator: &Operator, prefix: &str) -> FileOpsResult {
     let full_path = resolve_path(prefix, &config.path);
 
     let exists = operator.exists(&full_path).await?;
@@ -55,10 +51,7 @@ pub async fn execute(
     }
 
     if let Some(content_type) = metadata.content_type() {
-        result.insert(
-            "content_type".into(),
-            serde_json::json!(content_type),
-        );
+        result.insert("content_type".into(), serde_json::json!(content_type));
     }
 
     if let Some(etag) = metadata.etag() {

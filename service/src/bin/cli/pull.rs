@@ -21,7 +21,12 @@ struct TemplateBundle {
     files: HashMap<String, HashMap<String, String>>,
 }
 
-pub async fn run(server: &str, chain_id: &str, directory: Option<&str>, format: WorkflowFormat) -> Result<()> {
+pub async fn run(
+    server: &str,
+    chain_id: &str,
+    directory: Option<&str>,
+    format: WorkflowFormat,
+) -> Result<()> {
     let client = reqwest::Client::new();
 
     // Resolve the user-supplied id (base or any version id) to the chain
@@ -72,10 +77,7 @@ pub async fn run(server: &str, chain_id: &str, directory: Option<&str>, format: 
         let body = resp.text().await.unwrap_or_default();
         anyhow::bail!("bundle fetch failed ({status}): {body}");
     }
-    let bundle: TemplateBundle = resp
-        .json()
-        .await
-        .context("invalid bundle response")?;
+    let bundle: TemplateBundle = resp.json().await.context("invalid bundle response")?;
 
     // Lock stores the BASE id so subsequent `apply` bumps don't strand the
     // checkout on a now-stale version id.

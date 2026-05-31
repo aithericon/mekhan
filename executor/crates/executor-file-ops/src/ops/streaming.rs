@@ -17,7 +17,7 @@
 
 use std::pin::Pin;
 
-use futures::io::{AsyncRead, AsyncBufRead, BufReader};
+use futures::io::{AsyncBufRead, AsyncRead, BufReader};
 use opendal::Operator;
 
 use crate::config::Compression;
@@ -86,12 +86,12 @@ fn wrap_decoder(
     algo: Compression,
 ) -> Pin<Box<dyn AsyncRead + Send>> {
     match algo {
-        Compression::Gzip => Box::pin(
-            async_compression::futures::bufread::GzipDecoder::new(reader),
-        ),
-        Compression::Zstd => Box::pin(
-            async_compression::futures::bufread::ZstdDecoder::new(reader),
-        ),
+        Compression::Gzip => Box::pin(async_compression::futures::bufread::GzipDecoder::new(
+            reader,
+        )),
+        Compression::Zstd => Box::pin(async_compression::futures::bufread::ZstdDecoder::new(
+            reader,
+        )),
     }
 }
 
@@ -106,11 +106,11 @@ fn wrap_encoder(
     algo: Compression,
 ) -> Pin<Box<dyn AsyncRead + Send>> {
     match algo {
-        Compression::Gzip => Box::pin(
-            async_compression::futures::bufread::GzipEncoder::new(reader),
-        ),
-        Compression::Zstd => Box::pin(
-            async_compression::futures::bufread::ZstdEncoder::new(reader),
-        ),
+        Compression::Gzip => Box::pin(async_compression::futures::bufread::GzipEncoder::new(
+            reader,
+        )),
+        Compression::Zstd => Box::pin(async_compression::futures::bufread::ZstdEncoder::new(
+            reader,
+        )),
     }
 }

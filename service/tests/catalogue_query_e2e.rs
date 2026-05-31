@@ -25,8 +25,8 @@ use uuid::Uuid;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
-    default_output_port, ExecutionBackendType, ExecutionSpecConfig, Port, Position,
-    WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    default_output_port, ExecutionBackendType, ExecutionSpecConfig, Port, Position, WorkflowEdge,
+    WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -125,7 +125,10 @@ fn catalogue_graph(step_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -149,12 +152,12 @@ async fn catalogue_query_step_fires_lookup_and_completes() {
         );
     }
 
-    let engine_nats_url =
-        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
-    let (app, db) =
-        common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -235,7 +238,11 @@ async fn catalogue_query_step_fires_lookup_and_completes() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(instance["status"], "running");
 
@@ -244,16 +251,18 @@ async fn catalogue_query_step_fires_lookup_and_completes() {
     let deadline = Duration::from_secs(30);
     let started = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(instance_id)
-                .fetch_one(&db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
         if st == "completed" {
             break;
         }
-        assert_ne!(st, "failed", "instance failed — catalogue_lookup did not succeed");
+        assert_ne!(
+            st, "failed",
+            "instance failed — catalogue_lookup did not succeed"
+        );
         if started.elapsed() > deadline {
             panic!("instance did not complete within {deadline:?} (status: {st})");
         }

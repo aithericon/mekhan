@@ -21,9 +21,9 @@ use tokio::sync::{broadcast, Notify};
 
 use petri_api::dto::RunMode;
 use petri_api::net_registry::{NetRegistry, StoreFactory};
-use petri_api::router::{AppState, SseSignal, create_router, create_router_with_registry};
+use petri_api::router::{create_router, create_router_with_registry, AppState, SseSignal};
 use petri_application::{AdapterScheduler, PetriNetService};
-use petri_infrastructure::{MemoryEventStore, MemoryTopologyStore, MarkingProjection};
+use petri_infrastructure::{MarkingProjection, MemoryEventStore, MemoryTopologyStore};
 
 use aithericon_cli::client::EngineClient;
 
@@ -39,11 +39,7 @@ impl TestServer {
         let event_repo = Arc::new(MemoryEventStore::new());
         let topology_repo = Arc::new(MemoryTopologyStore::new());
         let projection = Arc::new(MarkingProjection::new());
-        let service = Arc::new(PetriNetService::new(
-            event_repo,
-            topology_repo,
-            projection,
-        ));
+        let service = Arc::new(PetriNetService::new(event_repo, topology_repo, projection));
 
         let (event_tx, _) = broadcast::channel(256);
         let state = AppState {
@@ -88,7 +84,9 @@ impl TestServer {
 
         tokio::spawn(async move {
             axum::serve(listener, router)
-                .with_graceful_shutdown(async { rx.await.ok(); })
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
                 .await
                 .ok();
         });
@@ -120,14 +118,16 @@ impl TestServer {
         self.post(
             "/api/command/evaluate",
             &serde_json::json!({"max_steps": max_steps}),
-        ).await;
+        )
+        .await;
     }
 
     // ── Multi-net helpers ───────────────────────────────────────────────
 
     /// Deploy a scenario to a named net (multi-net mode).
     pub async fn deploy_net(&self, net_id: &str, scenario: &serde_json::Value) {
-        self.post(&format!("/api/nets/{net_id}/scenario"), scenario).await;
+        self.post(&format!("/api/nets/{net_id}/scenario"), scenario)
+            .await;
     }
 
     /// Evaluate a named net (multi-net mode).
@@ -135,7 +135,8 @@ impl TestServer {
         self.post(
             &format!("/api/nets/{net_id}/command/evaluate"),
             &serde_json::json!({"max_steps": max_steps}),
-        ).await;
+        )
+        .await;
     }
 
     /// Set run-mode for a named net (multi-net mode).
@@ -143,7 +144,8 @@ impl TestServer {
         self.put(
             &format!("/api/nets/{net_id}/run-mode"),
             &serde_json::json!({"mode": mode}),
-        ).await
+        )
+        .await
     }
 
     /// PUT that returns (status_code, body) instead of panicking on non-2xx.
@@ -176,15 +178,15 @@ impl TestServer {
     /// GET a JSON endpoint.
     pub async fn get(&self, path: &str) -> serde_json::Value {
         let url = format!("{}{}", self.url, path);
-        tokio::task::spawn_blocking(move || {
-            match ureq::get(&url).call() {
-                Ok(resp) => resp.into_json::<serde_json::Value>().expect("parse GET response"),
-                Err(ureq::Error::Status(code, resp)) => {
-                    let body = resp.into_string().unwrap_or_default();
-                    panic!("GET {url} failed with {code}: {body}");
-                }
-                Err(e) => panic!("GET {url} failed: {e}"),
+        tokio::task::spawn_blocking(move || match ureq::get(&url).call() {
+            Ok(resp) => resp
+                .into_json::<serde_json::Value>()
+                .expect("parse GET response"),
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                panic!("GET {url} failed with {code}: {body}");
             }
+            Err(e) => panic!("GET {url} failed: {e}"),
         })
         .await
         .unwrap()
@@ -199,7 +201,9 @@ impl TestServer {
                 .set("Content-Type", "application/json")
                 .send_string(&body_str)
             {
-                Ok(resp) => resp.into_json::<serde_json::Value>().expect("parse PUT response"),
+                Ok(resp) => resp
+                    .into_json::<serde_json::Value>()
+                    .expect("parse PUT response"),
                 Err(ureq::Error::Status(code, resp)) => {
                     let body = resp.into_string().unwrap_or_default();
                     panic!("PUT {url} failed with {code}: {body}");
@@ -220,7 +224,9 @@ impl TestServer {
                 .set("Content-Type", "application/json")
                 .send_string(&body_str)
             {
-                Ok(resp) => resp.into_json::<serde_json::Value>().expect("parse POST response"),
+                Ok(resp) => resp
+                    .into_json::<serde_json::Value>()
+                    .expect("parse POST response"),
                 Err(ureq::Error::Status(code, resp)) => {
                     let body = resp.into_string().unwrap_or_default();
                     panic!("POST {url} failed with {code}: {body}");

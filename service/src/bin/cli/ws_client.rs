@@ -49,8 +49,7 @@ pub async fn connect_and_sync(server_url: &str, template_id: &str) -> Result<Syn
 
     let payload = &data[1..];
     let doc = Doc::new();
-    let update =
-        Update::decode_v1(payload).context("failed to decode initial state update")?;
+    let update = Update::decode_v1(payload).context("failed to decode initial state update")?;
     {
         let mut txn = doc.transact_mut();
         txn.apply_update(update)

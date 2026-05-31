@@ -4,7 +4,13 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(feature = "csv", feature = "json", feature = "parquet", feature = "excel", feature = "arrow"))]
+#[cfg(any(
+    feature = "csv",
+    feature = "json",
+    feature = "parquet",
+    feature = "excel",
+    feature = "arrow"
+))]
 use crate::error::MetadataError;
 use crate::format::FileFormat;
 

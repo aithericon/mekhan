@@ -26,9 +26,7 @@ use std::collections::HashMap;
 /// callers using `InputSource::StoragePath` (publish path) should call
 /// the `*_with_inline_sources` entry points and pass the inline source
 /// map directly. Skips `StoragePath` and `Url` silently.
-fn derive_inline_sources(
-    files: &NodeFiles,
-) -> HashMap<String, HashMap<String, String>> {
+fn derive_inline_sources(files: &NodeFiles) -> HashMap<String, HashMap<String, String>> {
     let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
     for (node_id, node_files) in files {
         let mut inner: HashMap<String, String> = HashMap::new();
@@ -773,10 +771,7 @@ fn lower_nodes_topologically<'a>(
 /// is the only lowering that populates `workflow_terminals` — there is no
 /// other path. Runs after `iface.rewrite_places` so the place ids are
 /// already post-alias-rewrite.
-fn apply_terminal_place_types(
-    scenario: &mut ScenarioDefinition,
-    interfaces: &InterfaceRegistry,
-) {
+fn apply_terminal_place_types(scenario: &mut ScenarioDefinition, interfaces: &InterfaceRegistry) {
     let resolved_terminal_ids: std::collections::HashSet<&str> = interfaces
         .values()
         .flat_map(|i| i.workflow_terminals.iter().map(String::as_str))
@@ -834,10 +829,7 @@ fn apply_group_fixups(
 /// matching `p_{node_id}_*` / `t_{node_id}_*` prefixes. **The only place this
 /// prefix match still lives.** Longest-prefix-wins so id-prefix collisions
 /// like `"lp"` vs `"lp_inner"` don't misattribute.
-fn derive_node_ownership(
-    scenario: &ScenarioDefinition,
-    interfaces: &mut InterfaceRegistry,
-) {
+fn derive_node_ownership(scenario: &ScenarioDefinition, interfaces: &mut InterfaceRegistry) {
     let mut by_len: Vec<String> = interfaces.keys().cloned().collect();
     by_len.sort_by_key(|b| std::cmp::Reverse(b.len()));
 
@@ -969,10 +961,7 @@ fn populate_borrowed_paths(
                     if prod_id == node.id {
                         continue;
                     }
-                    paths
-                        .entry(prod_id.to_string())
-                        .or_default()
-                        .insert(r.attr);
+                    paths.entry(prod_id.to_string()).or_default().insert(r.attr);
                 }
             }
             WorkflowNodeData::AutomatedStep { execution_spec, .. } => {
@@ -1001,10 +990,7 @@ fn populate_borrowed_paths(
                     if prod_id == node.id {
                         continue;
                     }
-                    paths
-                        .entry(prod_id.to_string())
-                        .or_default()
-                        .insert(r.attr);
+                    paths.entry(prod_id.to_string()).or_default().insert(r.attr);
                 }
             }
             _ => continue,
@@ -1285,11 +1271,7 @@ fn align_decision_deadends(
             continue;
         }
 
-        if let Some(deadend) = scenario
-            .transitions
-            .iter_mut()
-            .find(|t| t.id == deadend_id)
-        {
+        if let Some(deadend) = scenario.transitions.iter_mut().find(|t| t.id == deadend_id) {
             for (place_id, port_name, schema_ref) in sibling_reads {
                 if !deadend.input_ports.iter().any(|p| p.name == port_name) {
                     deadend.input_ports.push(ScenarioPort {
@@ -1508,7 +1490,10 @@ mod tests {
         );
         // Unbalanced / invalid braces are kept literal, not interpolated.
         assert_eq!(interpolate_to_rhai_expr("{{ a + b }}"), "\"{{ a + b }}\"");
-        assert_eq!(interpolate_to_rhai_expr("a {{ unclosed"), "\"a {{ unclosed\"");
+        assert_eq!(
+            interpolate_to_rhai_expr("a {{ unclosed"),
+            "\"a {{ unclosed\""
+        );
     }
 
     #[test]
@@ -1585,7 +1570,10 @@ mod tests {
 
         let logic = build_human_task_injection_logic(&node);
         // Null-safe accessor + helper prelude (it has interpolations).
-        assert!(logic.starts_with("fn __pluck("), "helper prelude missing: {logic}");
+        assert!(
+            logic.starts_with("fn __pluck("),
+            "helper prelude missing: {logic}"
+        );
         assert!(
             logic.contains("d.title = (\"\" + \"Invoice \" + (__pluck(input, [\"invoice_id\"])))"),
             "title not interpolated: {logic}"
@@ -1599,7 +1587,10 @@ mod tests {
             "step block string not interpolated: {logic}"
         );
         // Static block keys remain plain literals.
-        assert!(logic.contains("\"type\": \"mdsvex\""), "block shape changed: {logic}");
+        assert!(
+            logic.contains("\"type\": \"mdsvex\""),
+            "block shape changed: {logic}"
+        );
     }
 
     fn start_node(id: &str) -> WorkflowNode {
@@ -1655,7 +1646,10 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1700,7 +1694,9 @@ mod tests {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -1769,7 +1765,10 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1788,7 +1787,10 @@ mod tests {
             ),
             "name expr not interpolated: {logic}"
         );
-        assert!(logic.starts_with("fn __pluck("), "helper prelude missing: {logic}");
+        assert!(
+            logic.starts_with("fn __pluck("),
+            "helper prelude missing: {logic}"
+        );
 
         // 2. process_start effect transition, name resolved from the token.
         let proc_start = transitions
@@ -1796,7 +1798,10 @@ mod tests {
             .find(|t| t["id"] == "t_s_proc_start")
             .expect("t_s_proc_start transition");
         let ps = serde_json::to_string(proc_start).unwrap();
-        assert!(ps.contains("process_start"), "not a process_start effect: {ps}");
+        assert!(
+            ps.contains("process_start"),
+            "not a process_start effect: {ps}"
+        );
         assert!(ps.contains("\"name_field\""), "missing name_field: {ps}");
         assert!(ps.contains("_process_name"), "missing _process_name: {ps}");
         assert!(ps.contains("forward_ports"), "missing forward_ports: {ps}");
@@ -1821,7 +1826,10 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![s, end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1835,10 +1843,22 @@ mod tests {
             .find(|t| t["id"] == "t_e_proc_complete")
             .expect("t_e_proc_complete transition");
         let pc = serde_json::to_string(proc_complete).unwrap();
-        assert!(pc.contains("process_complete"), "not a process_complete effect: {pc}");
-        assert!(pc.contains("\"read\":true"), "process token must be read-arc: {pc}");
-        assert!(pc.contains("p_s_process"), "must read the Start's process place: {pc}");
-        assert!(pc.contains("\"completed\""), "missing completed output port: {pc}");
+        assert!(
+            pc.contains("process_complete"),
+            "not a process_complete effect: {pc}"
+        );
+        assert!(
+            pc.contains("\"read\":true"),
+            "process token must be read-arc: {pc}"
+        );
+        assert!(
+            pc.contains("p_s_process"),
+            "must read the Start's process place: {pc}"
+        );
+        assert!(
+            pc.contains("\"completed\""),
+            "missing completed output port: {pc}"
+        );
 
         // The terminal moves to `p_e_completed` (post-completion sink).
         let places = air["places"].as_array().unwrap();
@@ -1856,7 +1876,10 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge("e1", "s", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new())
@@ -1879,7 +1902,10 @@ mod tests {
         let graph = WorkflowGraph {
             nodes: vec![start_node("s"), end_node("e")],
             edges: vec![edge_with_handle("e1", "s", "e", "in")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
         assert!(
@@ -1914,7 +1940,10 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -1973,7 +2002,10 @@ mod tests {
                 edge_with_handle("econd1", "d", "e1", "cond1"),
                 edge_with_handle("edefault", "d", "e2", "default"),
             ],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let result = compile_to_air(&graph, "test", "desc", &std::collections::HashMap::new());
@@ -2054,7 +2086,9 @@ mod tests {
                 edge_with_handle("edefault", "d", "e2", "default"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
         let files: NodeFiles = std::collections::HashMap::new();
         let inline: HashMap<String, HashMap<String, String>> = std::collections::HashMap::new();
@@ -2134,7 +2168,11 @@ mod tests {
             "A test workflow",
             &std::collections::HashMap::new(),
         );
-        assert!(result.is_ok(), "showcase compile failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "showcase compile failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -2257,7 +2295,9 @@ mod tests {
                 edge("e_m_done", "merge", "done"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2266,7 +2306,9 @@ mod tests {
 
         // Three branch transitions, one per incoming edge.
         assert!(
-            s.contains("t_merge_join_0") && s.contains("t_merge_join_1") && s.contains("t_merge_join_2"),
+            s.contains("t_merge_join_0")
+                && s.contains("t_merge_join_1")
+                && s.contains("t_merge_join_2"),
             "expected three per-branch transitions, got: {s}"
         );
         // No single AND-fire transition — that's the All-mode shape.
@@ -2284,7 +2326,10 @@ mod tests {
             );
         }
         assert!(s.contains("p_merge_output"), "missing shared output place");
-        assert!(s.contains("p_merge_data"), "missing shared parked data place");
+        assert!(
+            s.contains("p_merge_data"),
+            "missing shared parked data place"
+        );
     }
 
     /// `Join { mode: All }` with two branches must lower into a single AND-fire
@@ -2356,7 +2401,9 @@ mod tests {
                 edge("e_j_e", "j", "e"),
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -2364,8 +2411,14 @@ mod tests {
         let s = air.to_string();
 
         // Single AND-fire transition, not N branch transitions.
-        assert!(s.contains("t_j_join"), "All-mode must keep the single aggregator transition");
-        assert!(!s.contains("t_j_join_0"), "All-mode must not emit per-branch transitions");
+        assert!(
+            s.contains("t_j_join"),
+            "All-mode must keep the single aggregator transition"
+        );
+        assert!(
+            !s.contains("t_j_join_0"),
+            "All-mode must not emit per-branch transitions"
+        );
 
         // Merged token still drops at the shared output AND the parked data
         // place (so `<slug>.<field>` borrows can resolve through `p_j_data`).
@@ -2407,7 +2460,10 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e1", "s", "a"), edge("e2", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("retry graph should compile");
@@ -2422,10 +2478,19 @@ mod tests {
             base_delay_ms: 0,
         });
         // Immediate path: a direct Retry transition, no timer transitions.
-        assert!(s.contains("\"Retry\""), "missing immediate Retry transition");
-        assert!(!s.contains("Retry (arm timer)"), "immediate must not arm a timer");
+        assert!(
+            s.contains("\"Retry\""),
+            "missing immediate Retry transition"
+        );
+        assert!(
+            !s.contains("Retry (arm timer)"),
+            "immediate must not arm a timer"
+        );
         assert!(!s.contains("Retry (schedule)"));
-        assert!(s.contains("Retries Exhausted"), "missing exhausted→error path");
+        assert!(
+            s.contains("Retries Exhausted"),
+            "missing exhausted→error path"
+        );
         assert!(s.contains("f.retries < f.max_retries"));
         assert!(s.contains("f.retries >= f.max_retries"));
     }
@@ -2437,12 +2502,24 @@ mod tests {
             backoff: BackoffKind::Exponential,
             base_delay_ms: 1000,
         });
-        assert!(s.contains("Retry (arm timer)"), "missing timer-arm transition");
-        assert!(s.contains("Retry (schedule)"), "missing timer schedule effect");
-        assert!(s.contains("Retry (re-dispatch)"), "missing timer re-dispatch");
+        assert!(
+            s.contains("Retry (arm timer)"),
+            "missing timer-arm transition"
+        );
+        assert!(
+            s.contains("Retry (schedule)"),
+            "missing timer schedule effect"
+        );
+        assert!(
+            s.contains("Retry (re-dispatch)"),
+            "missing timer re-dispatch"
+        );
         assert!(s.contains("Retries Exhausted"));
         // Exponential delay = base << attempt.
-        assert!(s.contains("1000 << f.retries"), "expected exponential delay expr");
+        assert!(
+            s.contains("1000 << f.retries"),
+            "expected exponential delay expr"
+        );
     }
 
     #[test]
@@ -2584,7 +2661,10 @@ mod tests {
                 edge("esucc", "a", "e1"),
                 edge_with_handle("eerr", "a", "e2", "error"),
             ],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect("error-handle edge should wire");
@@ -2633,8 +2713,7 @@ mod tests {
             {"id":"e3","source":"extract","target":"end","targetHandle":"in","type":"sequence"}
           ]
         });
-        let graph: WorkflowGraph =
-            serde_json::from_value(graph_json).expect("graph deser");
+        let graph: WorkflowGraph = serde_json::from_value(graph_json).expect("graph deser");
 
         let mut step_files = HashMap::new();
         step_files.insert(
@@ -2734,9 +2813,9 @@ mod tests {
     /// sources live inline on `execution_spec.config`, not in node files.
     #[test]
     fn smtp_step_with_template_refs_wires_into_scenario() {
+        use aithericon_executor_domain::InputSource;
         use serde_json::json;
         use std::collections::HashMap;
-        use aithericon_executor_domain::InputSource;
 
         // Start → intake (HumanTask, slug "intake") → send (SMTP) → end.
         let graph_json = json!({
@@ -2773,8 +2852,7 @@ mod tests {
             {"id":"e3","source":"send","target":"end","targetHandle":"in","type":"sequence"}
           ]
         });
-        let graph: WorkflowGraph =
-            serde_json::from_value(graph_json).expect("graph deser");
+        let graph: WorkflowGraph = serde_json::from_value(graph_json).expect("graph deser");
 
         // SMTP doesn't read node files for templates — they're inline on
         // the config — but the compile API requires a `files` map. Empty
@@ -2889,8 +2967,7 @@ mod tests {
             {"id":"e3","source":"send","target":"end","targetHandle":"in","type":"sequence"}
           ]
         });
-        let graph: WorkflowGraph =
-            serde_json::from_value(graph_json).expect("graph deser");
+        let graph: WorkflowGraph = serde_json::from_value(graph_json).expect("graph deser");
 
         let files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
         let inline_sources: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -2927,12 +3004,17 @@ mod tests {
         // Look at the send/prepare transition specifically. If the resource
         // borrow was emitted, its Rhai source contains the `mail.json`
         // job_inputs.push snippet.
-        let transitions = air.get("transitions").and_then(|t| t.as_array()).expect("transitions array");
+        let transitions = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions array");
         let send_prepare = transitions
             .iter()
             .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("send/prepare"))
             .expect("send/prepare transition exists");
-        let logic_node = send_prepare.get("logic").expect("send/prepare has logic field");
+        let logic_node = send_prepare
+            .get("logic")
+            .expect("send/prepare has logic field");
         // Two possible shapes: { "Rhai": {"source": "..."} } (utoipa-tagged)
         // or { "type": "rhai", "source": "..." } (serde flat-tag). Match either.
         let logic = logic_node
@@ -3229,7 +3311,9 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
         let scenario = crate::compiler::compile_to_scenario(
             &graph,
@@ -3269,7 +3353,10 @@ mod tests {
                 end_node("e"),
             ],
             edges: vec![edge("e0", "s", "a"), edge("e1", "a", "e")],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
         assert!(
             compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).is_ok(),
@@ -3321,7 +3408,8 @@ mod tests {
             edges: vec![edge("e1", "s", "q"), edge("e2", "q", "e")],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
@@ -3458,11 +3546,13 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
-        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
-            .expect("compile");
+        let air =
+            compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).expect("compile");
         let transitions = air["transitions"].as_array().unwrap();
 
         // Find the wire-edge transition writing to the HumanTask's input.
@@ -3524,11 +3614,13 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
-        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
-            .expect("compile");
+        let air =
+            compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).expect("compile");
         let transitions = air["transitions"].as_array().unwrap();
         let edge_t = transitions
             .iter()
@@ -3571,11 +3663,13 @@ mod tests {
             ],
             edges: vec![edge("e1", "s", "ht"), edge("e2", "ht", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
-        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
-            .expect("compile");
+        let air =
+            compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).expect("compile");
         let transitions = air["transitions"].as_array().unwrap();
         let edge_t = transitions
             .iter()
@@ -3595,7 +3689,9 @@ mod tests {
 
         let inputs = edge_t["inputs"].as_array().expect("inputs array");
         assert!(
-            !inputs.iter().any(|a| a.get("read") == Some(&serde_json::Value::Bool(true))),
+            !inputs
+                .iter()
+                .any(|a| a.get("read") == Some(&serde_json::Value::Bool(true))),
             "no read-arc should be added for a non-slug placeholder; inputs: {inputs:?}"
         );
     }
@@ -3647,7 +3743,10 @@ mod tests {
         let err = compile_to_air(&graph, "t", "d", &files)
             .expect_err("token-named output field must reject");
         match err {
-            CompileError::OutputFieldShadowsReserved { node_id, field_name } => {
+            CompileError::OutputFieldShadowsReserved {
+                node_id,
+                field_name,
+            } => {
                 assert_eq!(node_id, "extract");
                 assert_eq!(field_name, "token");
             }
@@ -4033,8 +4132,8 @@ mod tests {
           ]
         }"#;
         let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
-        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
-            .expect("compile");
+        let air =
+            compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).expect("compile");
         let transitions = air["transitions"].as_array().expect("transitions");
         let prepare = transitions
             .iter()
@@ -4140,7 +4239,9 @@ mod tests {
             ],
             edges: vec![edge("e0", "s", "sub"), edge("e1", "sub", "e")],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         // SubWorkflow lowering only needs an opaque AIR Value to embed in the
@@ -4279,8 +4380,7 @@ mod tests {
             {"id":"e_lp_end","source":"lp","target":"end","targetHandle":"in","type":"sequence"}
           ]
         });
-        let graph: WorkflowGraph =
-            serde_json::from_value(graph_json).expect("graph deser");
+        let graph: WorkflowGraph = serde_json::from_value(graph_json).expect("graph deser");
 
         let mut step_files: HashMap<String, InputSource> = HashMap::new();
         step_files.insert(
@@ -4475,10 +4575,12 @@ mod tests {
                 },
             ],
             viewport: None,
-            instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
-        let air = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
-            .expect("compile");
+        let air =
+            compile_to_air(&graph, "t", "d", &std::collections::HashMap::new()).expect("compile");
         let transitions = air["transitions"].as_array().unwrap();
 
         let branch = transitions
@@ -4507,7 +4609,10 @@ mod tests {
             "deadend must mirror the branch's read-arc on p_s_data to align enabling time; inputs: {:?}",
             deadend["inputs"]
         );
-        assert_eq!(deadend_data_arc.unwrap()["read"], serde_json::Value::Bool(true));
+        assert_eq!(
+            deadend_data_arc.unwrap()["read"],
+            serde_json::Value::Bool(true)
+        );
         // The mirrored read-arc must also bring along the input_port so the
         // engine can bind the schema'd token, matching the sibling's shape.
         let deadend_ports = deadend["input_ports"].as_array().unwrap();
@@ -4645,7 +4750,9 @@ mod tests {
         let err = compile_to_air(&graph, "t", "d", &std::collections::HashMap::new())
             .expect_err("unknown $ref must fail compilation");
         match err {
-            CompileError::SchemaRefUnresolved { node_id, message, .. } => {
+            CompileError::SchemaRefUnresolved {
+                node_id, message, ..
+            } => {
                 assert_eq!(node_id, "extract");
                 assert!(
                     message.contains("Missing"),
@@ -4759,7 +4866,11 @@ mod tests {
             default_scheduler: None,
         };
         let template_id = uuid::Uuid::new_v4();
-        let config_storage = ConfigStorage { template_id, version: 1, key_fn: None };
+        let config_storage = ConfigStorage {
+            template_id,
+            version: 1,
+            key_fn: None,
+        };
         let (scenario, _interfaces, node_configs) =
             compile_to_scenario_and_interfaces_with_configs(
                 &graph,

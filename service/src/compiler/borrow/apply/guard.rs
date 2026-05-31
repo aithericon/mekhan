@@ -21,7 +21,11 @@ pub(crate) fn apply_guard_borrows(
     borrows: &[Borrow],
 ) {
     for b in borrows {
-        let BorrowResolution::Guard { dotted, producer_path } = &b.resolution else {
+        let BorrowResolution::Guard {
+            dotted,
+            producer_path,
+        } = &b.resolution
+        else {
             continue; // unreachable per partition
         };
         if interfaces

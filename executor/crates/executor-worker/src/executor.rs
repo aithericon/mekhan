@@ -343,8 +343,7 @@ impl JobExecutor {
                 #[cfg(feature = "opendal")]
                 if matches!(exec_result.outcome, ExecutionOutcome::Success) {
                     for decl in run_context.spec.outputs.iter() {
-                        if let (Some(upload_config), Some(path_rel)) =
-                            (&decl.upload_to, &decl.path)
+                        if let (Some(upload_config), Some(path_rel)) = (&decl.upload_to, &decl.path)
                         {
                             let local_path = run_context.run_dir.outputs_dir.join(path_rel);
                             if local_path.exists() {
@@ -352,10 +351,8 @@ impl JobExecutor {
                                 // PlanSecretsHook side-channel; the
                                 // `upload_config.storage` view still carries
                                 // `{{secret:KEY}}` templates.
-                                let resolved_storage = run_context
-                                    .resolved_output_storage
-                                    .get(&decl.name)
-                                    .cloned();
+                                let resolved_storage =
+                                    run_context.resolved_output_storage.get(&decl.name).cloned();
                                 match upload_output(
                                     &local_path,
                                     &decl.name,
@@ -385,13 +382,12 @@ impl JobExecutor {
                                             "output upload failed"
                                         );
                                         if decl.required {
-                                            exec_result.outcome =
-                                                ExecutionOutcome::BackendError {
-                                                    message: format!(
-                                                        "upload required output '{}': {e}",
-                                                        decl.name
-                                                    ),
-                                                };
+                                            exec_result.outcome = ExecutionOutcome::BackendError {
+                                                message: format!(
+                                                    "upload required output '{}': {e}",
+                                                    decl.name
+                                                ),
+                                            };
                                             break;
                                         }
                                     }
@@ -410,8 +406,7 @@ impl JobExecutor {
                             .get(&decl.name)
                             .map(|p| p.exists())
                             .unwrap_or(false);
-                        let found = found_in_file
-                            || exec_result.outputs.contains_key(&decl.name);
+                        let found = found_in_file || exec_result.outputs.contains_key(&decl.name);
                         if !found {
                             warn!(
                                 %execution_id,
@@ -453,16 +448,14 @@ impl JobExecutor {
                         let mut transcript: Vec<serde_json::Value> = Vec::new();
                         if let Some(serde_json::Value::String(sys)) = cfg.get("system_prompt") {
                             if !sys.is_empty() {
-                                transcript.push(
-                                    serde_json::json!({ "role": "system", "content": sys }),
-                                );
+                                transcript
+                                    .push(serde_json::json!({ "role": "system", "content": sys }));
                             }
                         }
                         if let Some(serde_json::Value::String(prompt)) = cfg.get("prompt") {
                             if !prompt.is_empty() {
-                                transcript.push(
-                                    serde_json::json!({ "role": "user", "content": prompt }),
-                                );
+                                transcript
+                                    .push(serde_json::json!({ "role": "user", "content": prompt }));
                             }
                         }
                         for field in ["history", "pending"] {
@@ -492,9 +485,8 @@ impl JobExecutor {
                         }
                         match serde_json::to_vec(&transcript) {
                             Ok(bytes) => {
-                                if let Err(e) = store
-                                    .put(&StoragePath(write_key.to_string()), bytes)
-                                    .await
+                                if let Err(e) =
+                                    store.put(&StoragePath(write_key.to_string()), bytes).await
                                 {
                                     // Best-effort: an audit-blob write must not
                                     // fail the job (the turn already succeeded).
@@ -740,14 +732,12 @@ async fn upload_output(
         crate::staging::deserialize_resolved_storage(resolved_storage, "output", output_name)?;
     let effective_storage = resolved_storage_owned.as_ref().unwrap_or(&config.storage);
 
-    let (operator, prefix) =
-        aithericon_executor_storage::build_operator_with_prefix(effective_storage).map_err(
-            |e| {
-                ExecutorError::StagingFailed(format!(
-                    "storage operator for output '{output_name}': {e}"
-                ))
-            },
-        )?;
+    let (operator, prefix) = aithericon_executor_storage::build_operator_with_prefix(
+        effective_storage,
+    )
+    .map_err(|e| {
+        ExecutorError::StagingFailed(format!("storage operator for output '{output_name}': {e}"))
+    })?;
 
     let destination = match &config.destination_path {
         Some(dest) => format!("{}{}", prefix, dest),
@@ -762,7 +752,9 @@ async fn upload_output(
         .map_err(|e| ExecutorError::StagingFailed(format!("read output '{output_name}': {e}")))?;
 
     operator.write(&destination, data).await.map_err(|e| {
-        ExecutorError::StagingFailed(format!("upload output '{output_name}' to '{destination}': {e}"))
+        ExecutorError::StagingFailed(format!(
+            "upload output '{output_name}' to '{destination}': {e}"
+        ))
     })?;
 
     Ok(destination)

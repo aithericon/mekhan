@@ -36,28 +36,23 @@ pub async fn ws_handler(
         Ok(u) => u,
         Err(e) => {
             tracing::debug!(template_id = %template_id, "yjs ws auth rejected: {e}");
-            return crate::models::error::ApiError::new(
-                StatusCode::FORBIDDEN,
-                "unauthenticated",
-            )
-            .into_response();
+            return crate::models::error::ApiError::new(StatusCode::FORBIDDEN, "unauthenticated")
+                .into_response();
         }
     };
 
     // Verify the template exists. Published templates connect read-only so the
     // editor can render the frozen graph; writes are dropped in `handle_socket`.
-    let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(template_id)
-    .fetch_optional(&state.db)
-    .await;
+    let existing =
+        sqlx::query_as::<_, WorkflowTemplate>("SELECT * FROM workflow_templates WHERE id = $1")
+            .bind(template_id)
+            .fetch_optional(&state.db)
+            .await;
 
     let template = match existing {
         Ok(Some(t)) => t,
         Ok(None) => {
-            return crate::models::error::ApiError::not_found("template not found")
-                .into_response();
+            return crate::models::error::ApiError::not_found("template not found").into_response();
         }
         Err(e) => {
             tracing::error!("failed to check template for WS: {e}");

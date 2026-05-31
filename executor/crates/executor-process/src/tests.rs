@@ -32,15 +32,9 @@ fn process_config_serde_roundtrip() {
     let deserialized: ProcessConfig = serde_json::from_str(&json).unwrap();
 
     assert_eq!(deserialized.command, "python3");
-    assert_eq!(
-        deserialized.args,
-        vec!["train.py", "--epochs", "10"]
-    );
+    assert_eq!(deserialized.args, vec!["train.py", "--epochs", "10"]);
     assert_eq!(deserialized.env.len(), 2);
-    assert_eq!(
-        deserialized.env.get("CUDA_VISIBLE_DEVICES").unwrap(),
-        "0"
-    );
+    assert_eq!(deserialized.env.get("CUDA_VISIBLE_DEVICES").unwrap(), "0");
     assert_eq!(deserialized.working_dir.as_deref(), Some("/workspace"));
     assert!(!deserialized.inherit_env);
 }
@@ -443,9 +437,15 @@ async fn stderr_captured_separately() {
     let stdout = result.stdout_tail.unwrap();
     let stderr = result.stderr_tail.unwrap();
     assert!(stdout.contains("out_msg"), "stdout: {stdout}");
-    assert!(!stdout.contains("err_msg"), "stdout should not contain stderr: {stdout}");
+    assert!(
+        !stdout.contains("err_msg"),
+        "stdout should not contain stderr: {stdout}"
+    );
     assert!(stderr.contains("err_msg"), "stderr: {stderr}");
-    assert!(!stderr.contains("out_msg"), "stderr should not contain stdout: {stderr}");
+    assert!(
+        !stderr.contains("out_msg"),
+        "stderr should not contain stdout: {stderr}"
+    );
 }
 
 #[tokio::test]
@@ -516,7 +516,10 @@ async fn command_not_found_returns_spawn_error() {
         .await;
 
     assert!(
-        matches!(result, Err(aithericon_executor_domain::ExecutorError::SpawnFailed(_))),
+        matches!(
+            result,
+            Err(aithericon_executor_domain::ExecutorError::SpawnFailed(_))
+        ),
         "expected SpawnFailed, got: {:?}",
         result
     );

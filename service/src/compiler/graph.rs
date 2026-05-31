@@ -62,8 +62,8 @@ impl<'a> WorkflowDiGraph<'a> {
             // in the editor onto a Loop/Timeout `body_out` handle arrives as
             // a plain `sequence`. Either form closes the body cycle, so both
             // are excluded from the DAG used for topo-sort + cycle detection.
-            let is_back_edge = edge.edge_type == "loop_back"
-                || edge.target_handle.as_deref() == Some("body_out");
+            let is_back_edge =
+                edge.edge_type == "loop_back" || edge.target_handle.as_deref() == Some("body_out");
             if !is_back_edge {
                 dag.add_edge(src, tgt, edge);
             }

@@ -177,7 +177,8 @@ fn graph(http_url: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -211,11 +212,12 @@ async fn http_step_resolves_slug_field_borrow_in_url() {
         .await;
     let http_url = format!("{}/check/{{{{ pyprod.result }}}}", server.uri());
 
-    let engine_nats_url =
-        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -296,19 +298,22 @@ async fn http_step_resolves_slug_field_borrow_in_url() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(instance["status"], "running");
 
     let deadline = Duration::from_secs(90);
     let started = std::time::Instant::now();
     let final_status = loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(instance_id)
-                .fetch_one(&db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
         if st == "completed" || st == "failed" {
             break st;
         }

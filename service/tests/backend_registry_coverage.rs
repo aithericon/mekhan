@@ -22,14 +22,25 @@ use mekhan_service::backends::{lookup, DispatchMode, ResourceChannel, BACKENDS};
 
 #[test]
 fn registry_entries_are_well_formed() {
-    assert!(!BACKENDS.is_empty(), "registry must contain at least one backend (Phase 1: SMTP)");
+    assert!(
+        !BACKENDS.is_empty(),
+        "registry must contain at least one backend (Phase 1: SMTP)"
+    );
 
     let mut seen_wires: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut seen_types: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for decl in BACKENDS {
-        assert!(!decl.meta.display_name.is_empty(), "display_name missing for {:?}", decl.backend_type);
-        assert!(!decl.meta.icon.is_empty(), "icon missing for {:?}", decl.backend_type);
+        assert!(
+            !decl.meta.display_name.is_empty(),
+            "display_name missing for {:?}",
+            decl.backend_type
+        );
+        assert!(
+            !decl.meta.icon.is_empty(),
+            "icon missing for {:?}",
+            decl.backend_type
+        );
         assert_eq!(
             decl.meta.wire_name,
             decl.backend_type.as_wire_str(),
@@ -89,13 +100,17 @@ fn default_editor_config_round_trips_through_validate() {
     use mekhan_service::compiler::CompileError;
 
     let node_files = HashMap::new();
-    let ctx = ValidationCtx { node_id: "round-trip", node_files: &node_files };
+    let ctx = ValidationCtx {
+        node_id: "round-trip",
+        node_files: &node_files,
+    };
 
     for decl in BACKENDS {
         let cfg = (decl.default_editor_config)();
         match (decl.validate)(&cfg, &ctx) {
             Ok(_) => { /* fully valid default — fine */ }
-            Err(CompileError::Validation(_)) | Err(CompileError::BackendPlaceholderSyntax { .. }) => {
+            Err(CompileError::Validation(_))
+            | Err(CompileError::BackendPlaceholderSyntax { .. }) => {
                 // Acceptable: the default may be intentionally incomplete
                 // (SMTP's default has empty recipient list, etc.).
             }
@@ -139,13 +154,20 @@ fn engine_effect_decls_are_non_schedulable() {
 fn descriptor_serialization_matches_decl() {
     use mekhan_service::backends::descriptors;
     let all = descriptors();
-    assert_eq!(all.len(), BACKENDS.len(), "descriptor count must match registry length");
+    assert_eq!(
+        all.len(),
+        BACKENDS.len(),
+        "descriptor count must match registry length"
+    );
     for (decl, descriptor) in BACKENDS.iter().zip(all.iter()) {
         assert_eq!(descriptor.name, decl.meta.wire_name);
         assert_eq!(descriptor.display_name, decl.meta.display_name);
         assert_eq!(descriptor.icon, decl.meta.icon);
         assert_eq!(descriptor.schedulable, decl.meta.schedulable);
-        assert_eq!(descriptor.consumes_declared_outputs, decl.consumes_declared_outputs);
+        assert_eq!(
+            descriptor.consumes_declared_outputs,
+            decl.consumes_declared_outputs
+        );
         assert_eq!(descriptor.output_authoring, decl.output_authoring);
         assert_eq!(
             descriptor.default_output_port.fields.len(),

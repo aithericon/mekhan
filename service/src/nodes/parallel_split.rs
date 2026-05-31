@@ -28,8 +28,8 @@ pub(crate) static PARALLEL_SPLIT_DECL: NodeDecl = NodeDecl {
     // against the split itself.
     parks_data_envelope: false,
     lower: Some(crate::compiler::lower::parallel_split::lower_parallel_split),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     validate: Some(crate::compiler::validate::validate_parallel_split),
@@ -55,11 +55,7 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     }]
 }
 
-fn yjs_encode(
-    _txn: &mut yrs::TransactionMut<'_>,
-    _config: &yrs::MapRef,
-    _data: &WorkflowNodeData,
-) {
+fn yjs_encode(_txn: &mut yrs::TransactionMut<'_>, _config: &yrs::MapRef, _data: &WorkflowNodeData) {
     // ParallelSplit carries no config beyond label/description (handled
     // outside this fn). Matches the empty arm in
     // `yjs/doc_ops.rs::write_node_config`.

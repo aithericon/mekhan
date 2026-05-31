@@ -32,8 +32,7 @@ pub(crate) fn repeater_element_to_shape(
                 fo.insert("content_type", TokenShape::Scalar(ScalarTy::String), p);
                 (
                     fo,
-                    Provenance::new(node, "Repeater sub-form field")
-                        .with_anchor(ScalarTy::FileRef),
+                    Provenance::new(node, "Repeater sub-form field").with_anchor(ScalarTy::FileRef),
                 )
             }
             k => (
@@ -74,7 +73,10 @@ pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> Tok
                 fo.insert("url", TokenShape::Scalar(ScalarTy::String), p.clone());
                 fo.insert("filename", TokenShape::Scalar(ScalarTy::String), p.clone());
                 fo.insert("content_type", TokenShape::Scalar(ScalarTy::String), p);
-                (fo, Provenance::new(node, note).with_anchor(ScalarTy::FileRef))
+                (
+                    fo,
+                    Provenance::new(node, note).with_anchor(ScalarTy::FileRef),
+                )
             }
             k => (
                 TokenShape::Scalar(ScalarTy::from_kind(k)),
@@ -180,4 +182,3 @@ pub fn validate_token_against_port(
     }
     Ok(())
 }
-

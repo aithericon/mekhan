@@ -409,18 +409,13 @@ pub(crate) async fn fire_transition<
     let binding = find_valid_binding(executor, &transition, &input_arcs, marking, schema_registry)
         .ok_or_else(|| ServiceError::GuardNotSatisfied(transition_id.clone()))?;
 
-    let script_result =
-        match executor.execute_script(&transition.script, &binding.port_inputs) {
-            Ok(r) => r,
-            Err(e) => {
-                return consume_bound_tokens_on_permanent_failure(
-                    events,
-                    &binding.consumed_tokens,
-                    e,
-                )
+    let script_result = match executor.execute_script(&transition.script, &binding.port_inputs) {
+        Ok(r) => r,
+        Err(e) => {
+            return consume_bound_tokens_on_permanent_failure(events, &binding.consumed_tokens, e)
                 .await
-            }
-        };
+        }
+    };
 
     let (produced_tokens, bridge_out_tokens) = match route_output_tokens(
         &net,
@@ -434,12 +429,8 @@ pub(crate) async fn fire_transition<
     ) {
         Ok(v) => v,
         Err(e) => {
-            return consume_bound_tokens_on_permanent_failure(
-                events,
-                &binding.consumed_tokens,
-                e,
-            )
-            .await
+            return consume_bound_tokens_on_permanent_failure(events, &binding.consumed_tokens, e)
+                .await
         }
     };
 
@@ -682,9 +673,7 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                                     effect_handler_id: handler_id.clone(),
                                     effect_result: effect_output.result,
                                     read_tokens: binding.read_tokens,
-                                    process_step_started: transition
-                                        .process_step_started
-                                        .clone(),
+                                    process_step_started: transition.process_step_started.clone(),
                                     process_step_completed: transition
                                         .process_step_completed
                                         .clone(),
@@ -1038,19 +1027,14 @@ mod tests {
         transition.output_ports = vec![port];
         let transition_id = net.add_transition(transition.clone());
 
-        net.add_arc(PetriArc::output(
-            transition_id.clone(),
-            port_name,
-            place_id,
-        ));
+        net.add_arc(PetriArc::output(transition_id.clone(), port_name, place_id));
 
         (net, transition, transition_id)
     }
 
     #[test]
     fn test_scatter_batch_output_emits_one_token_per_element_in_order() {
-        let (net, transition, transition_id) =
-            scatter_net("items", PortCardinality::Batch, None);
+        let (net, transition, transition_id) = scatter_net("items", PortCardinality::Batch, None);
 
         let mut script_result: StdHashMap<String, JsonValue> = StdHashMap::new();
         script_result.insert(
@@ -1124,8 +1108,7 @@ mod tests {
 
     #[test]
     fn test_scatter_batch_non_array_is_permanent_error() {
-        let (net, transition, transition_id) =
-            scatter_net("items", PortCardinality::Batch, None);
+        let (net, transition, transition_id) = scatter_net("items", PortCardinality::Batch, None);
 
         let mut script_result: StdHashMap<String, JsonValue> = StdHashMap::new();
         // Object, not an array, on a Batch output port.
@@ -1156,8 +1139,7 @@ mod tests {
     fn test_scatter_single_output_yields_exactly_one_token() {
         // Regression: a Single (default) output port keeps the whole value in
         // ONE token, even when that value is itself an array.
-        let (net, transition, transition_id) =
-            scatter_net("result", PortCardinality::Single, None);
+        let (net, transition, transition_id) = scatter_net("result", PortCardinality::Single, None);
 
         let mut script_result: StdHashMap<String, JsonValue> = StdHashMap::new();
         let whole = serde_json::json!([1, 2, 3]);

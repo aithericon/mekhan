@@ -79,24 +79,29 @@ pub async fn project_openapi_bundle(
     .bind(workspace_id)
     .fetch_optional(&state.db)
     .await?;
-    let (_, project_slug, project_display, project_desc) = project
-        .ok_or_else(|| ApiError::not_found("project not found in this workspace"))?;
+    let (_, project_slug, project_display, project_desc) =
+        project.ok_or_else(|| ApiError::not_found("project not found in this workspace"))?;
 
     // Live chain heads (`is_latest = true`) for every template attached to
     // the project. We deliberately read the live row rather than whichever
     // version was attached — projects follow the version chain.
-    let template_rows: Vec<(Uuid, String, serde_json::Value, Option<serde_json::Value>, i32)> =
-        sqlx::query_as(
-            "SELECT t.id, t.name, t.graph, t.interface_json, t.version \
+    let template_rows: Vec<(
+        Uuid,
+        String,
+        serde_json::Value,
+        Option<serde_json::Value>,
+        i32,
+    )> = sqlx::query_as(
+        "SELECT t.id, t.name, t.graph, t.interface_json, t.version \
                FROM project_templates pt \
                JOIN workflow_templates t \
                  ON COALESCE(t.base_template_id, t.id) = pt.base_template_id \
               WHERE pt.project_id = $1 AND t.is_latest = TRUE \
               ORDER BY t.name",
-        )
-        .bind(project_id)
-        .fetch_all(&state.db)
-        .await?;
+    )
+    .bind(project_id)
+    .fetch_all(&state.db)
+    .await?;
 
     // BTreeMap so the emitted `paths` object is stably ordered (matters for
     // diffing the spec across versions).
@@ -115,9 +120,7 @@ pub async fn project_openapi_bundle(
                 &mut schemas,
             );
             let path = format!("/api/triggers/webhook/{}", hook.slug);
-            let entry = paths
-                .entry(path)
-                .or_insert_with(|| json!({}));
+            let entry = paths.entry(path).or_insert_with(|| json!({}));
             if let Some(obj) = entry.as_object_mut() {
                 obj.insert(hook.method.to_lowercase(), operation);
             }
@@ -350,10 +353,7 @@ fn build_webhook_operation(
     // shape is published-format-versioned and we'd rather degrade than
     // crash on a shape we don't recognize.
     if let Some(iface) = interface_json {
-        if let Some(node_iface) = iface
-            .as_object()
-            .and_then(|m| m.get(&hook.node_id))
-        {
+        if let Some(node_iface) = iface.as_object().and_then(|m| m.get(&hook.node_id)) {
             op["x-mekhan-node-interface"] = node_iface.clone();
         }
     }
@@ -473,14 +473,7 @@ mod tests {
             enabled: true,
         };
         let mut schemas = BTreeMap::new();
-        let op = build_webhook_operation(
-            &hook,
-            &Uuid::nil(),
-            "Invoices",
-            3,
-            None,
-            &mut schemas,
-        );
+        let op = build_webhook_operation(&hook, &Uuid::nil(), "Invoices", 3, None, &mut schemas);
         assert_eq!(op["requestBody"]["required"], true);
         assert_eq!(op["x-mekhan-template-version"], 3);
         let params = op["parameters"].as_array().expect("auth param emitted");
@@ -502,19 +495,9 @@ mod tests {
             enabled: true,
         };
         let mut schemas = BTreeMap::new();
-        let op = build_webhook_operation(
-            &hook,
-            &Uuid::nil(),
-            "",
-            1,
-            None,
-            &mut schemas,
-        );
+        let op = build_webhook_operation(&hook, &Uuid::nil(), "", 1, None, &mut schemas);
         assert!(op.get("parameters").is_none());
         // Free-form body when no target fields are declared.
-        assert_eq!(
-            schemas["Webhook_ping"]["additionalProperties"],
-            true
-        );
+        assert_eq!(schemas["Webhook_ping"]["additionalProperties"], true);
     }
 }

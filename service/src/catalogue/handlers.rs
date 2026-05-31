@@ -39,10 +39,14 @@ pub async fn list_entries(
     State(state): State<AppState>,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let response = state.catalogue_repo.list_entries(&params).await.map_err(|e| {
-        tracing::warn!("catalogue list: {e}");
-        ApiError::bad_request(e.to_string())
-    })?;
+    let response = state
+        .catalogue_repo
+        .list_entries(&params)
+        .await
+        .map_err(|e| {
+            tracing::warn!("catalogue list: {e}");
+            ApiError::bad_request(e.to_string())
+        })?;
     Ok(Json(
         serde_json::to_value(response).unwrap_or(serde_json::json!({})),
     ))
@@ -82,9 +86,7 @@ pub async fn stats(
     ),
     tag = "catalogue",
 )]
-pub async fn stats_by_net(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<NetStats>>, ApiError> {
+pub async fn stats_by_net(State(state): State<AppState>) -> Result<Json<Vec<NetStats>>, ApiError> {
     let stats = state.catalogue_repo.stats_by_net().await.map_err(|e| {
         tracing::error!("catalogue stats_by_net: {e}");
         ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
@@ -217,10 +219,7 @@ pub async fn download_artifact(
     };
 
     // Extract filename from the path
-    let filename = storage_path
-        .rsplit('/')
-        .next()
-        .unwrap_or("artifact");
+    let filename = storage_path.rsplit('/').next().unwrap_or("artifact");
 
     let disposition = format!("attachment; filename=\"{filename}\"");
     (

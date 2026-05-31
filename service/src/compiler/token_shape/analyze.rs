@@ -7,7 +7,7 @@ use crate::models::template::{
     WorkflowNodeData,
 };
 
-use super::*;// ─── Per-node shape derivation ──────────────────────────────────────────────
+use super::*; // ─── Per-node shape derivation ──────────────────────────────────────────────
 
 /// One reachable, still-live reference the editor variable picker should
 /// offer at a node — the producer-namespaced replacement for the flat TS
@@ -156,8 +156,7 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
         // `p_{id}_main`; `p_{id}_data` is schema'd by the foundation pass.
         WorkflowNodeData::Start { .. } => vec![format!("p_{id}_main")],
         WorkflowNodeData::HumanTask { .. } => vec![format!("p_{id}_output")],
-        WorkflowNodeData::AutomatedStep { .. }
-        | WorkflowNodeData::SubWorkflow { .. } => {
+        WorkflowNodeData::AutomatedStep { .. } | WorkflowNodeData::SubWorkflow { .. } => {
             vec![format!("p_{id}_output"), format!("p_{id}_error")]
         }
         WorkflowNodeData::Decision {
@@ -577,7 +576,10 @@ pub(crate) fn out_shape_stream_consumer(node: &WorkflowNode, _in_shape: &TokenSh
     o.insert(
         "output",
         TokenShape::Any,
-        Provenance::new(node, "stream-consumer reduced output (parked `<slug>.output`)"),
+        Provenance::new(
+            node,
+            "stream-consumer reduced output (parked `<slug>.output`)",
+        ),
     );
     o
 }
@@ -722,9 +724,7 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
                 .filter(|c| !c.guard.trim().is_empty())
                 .map(|c| c.guard.as_str())
                 .collect(),
-            WorkflowNodeData::Loop { loop_condition, .. }
-                if !loop_condition.trim().is_empty() =>
-            {
+            WorkflowNodeData::Loop { loop_condition, .. } if !loop_condition.trim().is_empty() => {
                 vec![loop_condition.as_str()]
             }
             // Delay/Timeout duration expressions borrow upstream refs just
@@ -910,7 +910,10 @@ pub(crate) fn is_lease_scope_node(graph: &WorkflowGraph, id: &str) -> bool {
         .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::LeaseScope { .. }))
 }
 
-pub(crate) fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {
+pub(crate) fn topo_pos(
+    order: &[petgraph::graph::NodeIndex],
+    wg: &WorkflowDiGraph,
+) -> BTreeMap<String, usize> {
     let mut pos = BTreeMap::new();
     for (i, ni) in order.iter().enumerate() {
         pos.insert(wg.dag.node_weight(*ni).unwrap().id.clone(), i);
@@ -1048,7 +1051,10 @@ pub fn collect_scope_tree(shape: &TokenShape, prov_anchor: Option<&ScalarTy>) ->
         TokenShape::Object(map) => {
             let mut fields = BTreeMap::new();
             for (k, f) in map {
-                fields.insert(k.clone(), collect_scope_tree(&f.shape, f.prov.anchor.as_ref()));
+                fields.insert(
+                    k.clone(),
+                    collect_scope_tree(&f.shape, f.prov.anchor.as_ref()),
+                );
             }
             TyDescriptor::Object {
                 fields,

@@ -68,7 +68,9 @@ pub async fn get_workspace(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkspaceSummary>, ApiError> {
-    require_member(&state.db, &user, id).await.map_err(map_to_api_error)?;
+    require_member(&state.db, &user, id)
+        .await
+        .map_err(map_to_api_error)?;
     let row: Option<WorkspaceSummary> = sqlx::query_as(
         "SELECT id, slug, display_name, is_system, created_at \
            FROM workspaces WHERE id = $1",
@@ -76,7 +78,8 @@ pub async fn get_workspace(
     .bind(id)
     .fetch_optional(&state.db)
     .await?;
-    row.map(Json).ok_or_else(|| ApiError::not_found("workspace not found"))
+    row.map(Json)
+        .ok_or_else(|| ApiError::not_found("workspace not found"))
 }
 
 /// GET /api/v1/workspaces/{id}/members
@@ -95,7 +98,9 @@ pub async fn list_members(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<WorkspaceMember>>, ApiError> {
-    require_member(&state.db, &user, id).await.map_err(map_to_api_error)?;
+    require_member(&state.db, &user, id)
+        .await
+        .map_err(map_to_api_error)?;
     let rows: Vec<WorkspaceMember> = sqlx::query_as(
         "SELECT workspace_id, user_id, role, added_at \
            FROM workspace_members WHERE workspace_id = $1 \

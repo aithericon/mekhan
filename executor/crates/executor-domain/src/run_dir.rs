@@ -125,8 +125,7 @@ mod tests {
     fn long_execution_id_gets_short_socket_path() {
         // Simulate spawned-net execution IDs: two UUIDs joined by a dash
         let base = PathBuf::from("/tmp/invoice-processing-executor");
-        let long_id =
-            "9db811ef-77cb-434a-9b9d-740a87b3f14d-17e0fbf3-b5bc-4650-ae05-cb44873e1b85";
+        let long_id = "9db811ef-77cb-434a-9b9d-740a87b3f14d-17e0fbf3-b5bc-4650-ae05-cb44873e1b85";
 
         let dir = RunDirectory::new(&base, long_id);
 

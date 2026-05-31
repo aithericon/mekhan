@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::compiler::error::CompileError;
 use crate::models::template::{FieldKind, WorkflowGraph};
 
-use super::*;// ─── Pre-publish editor entrypoint ──────────────────────────────────────────
+use super::*; // ─── Pre-publish editor entrypoint ──────────────────────────────────────────
 
 /// What the editor needs on every (debounced) keystroke: per-place schemas,
 /// the producer-namespaced scope per node, and diagnostics.
@@ -159,10 +159,8 @@ pub fn node_namespace_scopes(
 > {
     let report = analyze(graph)?;
     let slugs = slug_index(graph)?;
-    let mut out: std::collections::HashMap<
-        String,
-        BTreeMap<String, BTreeMap<String, FieldKind>>,
-    > = std::collections::HashMap::new();
+    let mut out: std::collections::HashMap<String, BTreeMap<String, BTreeMap<String, FieldKind>>> =
+        std::collections::HashMap::new();
     for (node_id, entries) in &report.scopes {
         let mut by_slug: BTreeMap<String, BTreeMap<String, FieldKind>> = BTreeMap::new();
         for e in entries {
@@ -184,11 +182,12 @@ pub fn node_namespace_scopes(
             if slug.is_empty() {
                 continue;
             }
-            let field_path = e
-                .path
-                .strip_prefix(&format!("{slug}."))
-                .unwrap_or(&e.path);
-            let leaf = field_path.split('.').next().unwrap_or(field_path).to_string();
+            let field_path = e.path.strip_prefix(&format!("{slug}.")).unwrap_or(&e.path);
+            let leaf = field_path
+                .split('.')
+                .next()
+                .unwrap_or(field_path)
+                .to_string();
             if leaf.is_empty() {
                 continue;
             }
@@ -212,4 +211,3 @@ fn ty_label_to_field_kind(ty: &str) -> FieldKind {
         _ => FieldKind::Text,
     }
 }
-

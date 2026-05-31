@@ -124,7 +124,12 @@ mod tests {
 
         let ctx = build_context(&rc).unwrap();
         assert_eq!(
-            render("https://{{ env.API_HOST }}/users/{{ intake.id }}", &ctx, "url").unwrap(),
+            render(
+                "https://{{ env.API_HOST }}/users/{{ intake.id }}",
+                &ctx,
+                "url"
+            )
+            .unwrap(),
             "https://api.example.com/users/u-7"
         );
     }
@@ -136,7 +141,10 @@ mod tests {
         rc.resolved_env.insert("TOKEN".into(), "sk-1".into());
         let ctx = build_context(&rc).unwrap();
 
-        let headers = HashMap::from([("Authorization".to_string(), "Bearer {{ env.TOKEN }}".to_string())]);
+        let headers = HashMap::from([(
+            "Authorization".to_string(),
+            "Bearer {{ env.TOKEN }}".to_string(),
+        )]);
         let out = render_map(&headers, &ctx, "headers").unwrap();
         assert_eq!(out["Authorization"], "Bearer sk-1");
     }
@@ -145,7 +153,11 @@ mod tests {
     fn body_string_leaves_render_recursively() {
         let td = TempDir::new().unwrap();
         let rc = ctx_with_inputs(&td);
-        write_slug(&rc, "review.json", serde_json::json!({"amount": 42, "vendor": "Acme"}));
+        write_slug(
+            &rc,
+            "review.json",
+            serde_json::json!({"amount": 42, "vendor": "Acme"}),
+        );
         let ctx = build_context(&rc).unwrap();
 
         let body = serde_json::json!({

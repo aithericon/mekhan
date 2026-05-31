@@ -172,7 +172,9 @@ impl VenvCache {
         }
 
         self.counters.misses.fetch_add(1, Ordering::Relaxed);
-        self.counters.builds_in_flight.fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .builds_in_flight
+            .fetch_add(1, Ordering::Relaxed);
         info!(hash = %hash, "venv cache miss; building");
         let started = std::time::Instant::now();
 
@@ -191,7 +193,9 @@ impl VenvCache {
         self.counters
             .build_duration_ms_total
             .fetch_add(elapsed.as_millis() as u64, Ordering::Relaxed);
-        self.counters.builds_in_flight.fetch_sub(1, Ordering::Relaxed);
+        self.counters
+            .builds_in_flight
+            .fetch_sub(1, Ordering::Relaxed);
 
         match build_result {
             Ok(()) => {
@@ -221,11 +225,7 @@ impl VenvCache {
         }
     }
 
-    async fn build_into(
-        &self,
-        target: &Path,
-        req: &BuildRequest<'_>,
-    ) -> Result<(), ExecutorError> {
+    async fn build_into(&self, target: &Path, req: &BuildRequest<'_>) -> Result<(), ExecutorError> {
         let use_uv = self.prefer_uv && venv::uv_available();
         if use_uv {
             debug!(target = %target.display(), "building venv via uv");
@@ -249,8 +249,7 @@ impl VenvCache {
                 .await?;
             }
             if let Some(sdk) = req.sdk_path {
-                venv::install_local_package_with_cache(target, sdk, Some(&self.wheels_dir))
-                    .await?;
+                venv::install_local_package_with_cache(target, sdk, Some(&self.wheels_dir)).await?;
             }
         }
         Ok(())
@@ -383,7 +382,10 @@ mod tests {
 
     #[test]
     fn cache_stats_start_at_zero() {
-        let tmp = tempfile::Builder::new().prefix("venv-stats-").tempdir().unwrap();
+        let tmp = tempfile::Builder::new()
+            .prefix("venv-stats-")
+            .tempdir()
+            .unwrap();
         let cache = VenvCache::new(tmp.path().join("c"), false, None).unwrap();
         let s = cache.stats();
         assert_eq!(s.hits, 0);

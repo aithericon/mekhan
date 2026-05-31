@@ -3,13 +3,11 @@ use indexmap::IndexMap;
 
 use mekhan_service::models::template::WorkflowGraph;
 
-use super::dsl::{
-    DslBranchCondition, DslExecution, DslStep, DslTaskStep, DslWorkflow,
-};
+use super::dsl::{DslBranchCondition, DslExecution, DslStep, DslTaskStep, DslWorkflow};
 
 pub fn parse(content: &str) -> Result<WorkflowGraph> {
-    let body: hcl::Body = hcl::from_str(content)
-        .map_err(|e| anyhow::anyhow!("invalid HCL: {}", e))?;
+    let body: hcl::Body =
+        hcl::from_str(content).map_err(|e| anyhow::anyhow!("invalid HCL: {}", e))?;
 
     let mut steps = IndexMap::new();
     let mut flow_entries: Vec<String> = Vec::new();
@@ -48,16 +46,14 @@ pub fn parse(content: &str) -> Result<WorkflowGraph> {
 fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
     let body = block.body();
 
-    let step_type = get_attr_str(body, "type")
-        .context("step block requires 'type' attribute")?;
+    let step_type = get_attr_str(body, "type").context("step block requires 'type' attribute")?;
 
     let mut step = DslStep {
         step_type,
         label: get_attr_str(body, "label"),
         description: get_attr_str(body, "description"),
         initial_data: get_attr_json(body, "initial_data"),
-        initial: get_attr_json(body, "initial")
-            .and_then(|v| serde_json::from_value(v).ok()),
+        initial: get_attr_json(body, "initial").and_then(|v| serde_json::from_value(v).ok()),
         process_name: get_attr_str(body, "process_name"),
         task_title: get_attr_str(body, "task_title"),
         instructions: get_attr_str(body, "instructions"),
@@ -107,21 +103,25 @@ fn parse_step_block(block: &hcl::Block) -> Result<DslStep> {
 
 fn parse_execution_block(block: &hcl::Block) -> Result<DslExecution> {
     let body = block.body();
-    let backend = get_attr_str(body, "backend")
-        .context("execution block requires 'backend'")?;
+    let backend = get_attr_str(body, "backend").context("execution block requires 'backend'")?;
     let entrypoint = get_attr_str(body, "entrypoint");
     let files = get_attr_string_array(body, "files").unwrap_or_default();
-    let config = get_attr_json(body, "config")
-        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-    let retry_policy = get_attr_json(body, "retry_policy")
-        .and_then(|v| serde_json::from_value(v).ok());
-    Ok(DslExecution { backend, entrypoint, files, config, retry_policy })
+    let config =
+        get_attr_json(body, "config").unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let retry_policy =
+        get_attr_json(body, "retry_policy").and_then(|v| serde_json::from_value(v).ok());
+    Ok(DslExecution {
+        backend,
+        entrypoint,
+        files,
+        config,
+        retry_policy,
+    })
 }
 
 fn parse_task_step_block(block: &hcl::Block) -> Result<DslTaskStep> {
     let body = block.body();
-    let title = get_attr_str(body, "title")
-        .context("task_step block requires 'title'")?;
+    let title = get_attr_str(body, "title").context("task_step block requires 'title'")?;
     let description = get_attr_str(body, "description");
 
     // Blocks within task_step are complex — store as JSON values
@@ -139,7 +139,11 @@ fn parse_task_step_block(block: &hcl::Block) -> Result<DslTaskStep> {
     Ok(DslTaskStep {
         title,
         description,
-        blocks: if blocks.is_empty() { None } else { Some(blocks) },
+        blocks: if blocks.is_empty() {
+            None
+        } else {
+            Some(blocks)
+        },
     })
 }
 
@@ -216,7 +220,10 @@ pub fn emit(graph: &WorkflowGraph) -> Result<String> {
             lines.push(format!("  task_title = \"{}\"", escape_hcl_str(tt)));
         }
         if let Some(ref inst) = step.instructions {
-            lines.push(format!("  instructions = <<-EOT\n{}\n  EOT", inst.trim_end()));
+            lines.push(format!(
+                "  instructions = <<-EOT\n{}\n  EOT",
+                inst.trim_end()
+            ));
         }
         if let Some(ref exec) = step.execution {
             lines.push(String::new());
@@ -226,7 +233,11 @@ pub fn emit(graph: &WorkflowGraph) -> Result<String> {
                 lines.push(format!("    entrypoint = \"{}\"", escape_hcl_str(ep)));
             }
             if !exec.files.is_empty() {
-                let quoted: Vec<String> = exec.files.iter().map(|f| format!("\"{}\"", escape_hcl_str(f))).collect();
+                let quoted: Vec<String> = exec
+                    .files
+                    .iter()
+                    .map(|f| format!("\"{}\"", escape_hcl_str(f)))
+                    .collect();
                 lines.push(format!("    files = [{}]", quoted.join(", ")));
             }
             lines.push(format!(
@@ -265,7 +276,11 @@ pub fn emit(graph: &WorkflowGraph) -> Result<String> {
             lines.push(format!("  loop_condition = \"{}\"", escape_hcl_str(lc)));
         }
         if !step.children.is_empty() {
-            let quoted: Vec<String> = step.children.iter().map(|c| format!("\"{}\"", escape_hcl_str(c))).collect();
+            let quoted: Vec<String> = step
+                .children
+                .iter()
+                .map(|c| format!("\"{}\"", escape_hcl_str(c)))
+                .collect();
             lines.push(format!("  children = [{}]", quoted.join(", ")));
         }
         if let Some(w) = step.width {
@@ -320,68 +335,52 @@ pub fn emit(graph: &WorkflowGraph) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 fn get_attr_str(body: &hcl::Body, key: &str) -> Option<String> {
-    body.iter()
-        .find_map(|s| match s {
-            hcl::Structure::Attribute(attr) if attr.key() == key => {
-                expr_to_string(attr.expr())
-            }
-            _ => None,
-        })
+    body.iter().find_map(|s| match s {
+        hcl::Structure::Attribute(attr) if attr.key() == key => expr_to_string(attr.expr()),
+        _ => None,
+    })
 }
 
 fn get_attr_f64(body: &hcl::Body, key: &str) -> Option<f64> {
-    body.iter()
-        .find_map(|s| match s {
-            hcl::Structure::Attribute(attr) if attr.key() == key => {
-                match attr.expr() {
-                    hcl::Expression::Number(n) => n.as_f64(),
-                    _ => None,
-                }
-            }
+    body.iter().find_map(|s| match s {
+        hcl::Structure::Attribute(attr) if attr.key() == key => match attr.expr() {
+            hcl::Expression::Number(n) => n.as_f64(),
             _ => None,
-        })
+        },
+        _ => None,
+    })
 }
 
 fn get_attr_i64(body: &hcl::Body, key: &str) -> Option<i64> {
-    body.iter()
-        .find_map(|s| match s {
-            hcl::Structure::Attribute(attr) if attr.key() == key => {
-                expr_to_i64(attr.expr())
-            }
-            _ => None,
-        })
+    body.iter().find_map(|s| match s {
+        hcl::Structure::Attribute(attr) if attr.key() == key => expr_to_i64(attr.expr()),
+        _ => None,
+    })
 }
 
 fn get_attr_json(body: &hcl::Body, key: &str) -> Option<serde_json::Value> {
-    body.iter()
-        .find_map(|s| match s {
-            hcl::Structure::Attribute(attr) if attr.key() == key => {
-                expr_to_json(attr.expr())
-            }
-            _ => None,
-        })
+    body.iter().find_map(|s| match s {
+        hcl::Structure::Attribute(attr) if attr.key() == key => expr_to_json(attr.expr()),
+        _ => None,
+    })
 }
 
 fn get_attr_string_array(body: &hcl::Body, key: &str) -> Option<Vec<String>> {
-    body.iter()
-        .find_map(|s| match s {
-            hcl::Structure::Attribute(attr) if attr.key() == key => {
-                if let hcl::Expression::Array(arr) = attr.expr() {
-                    let strings: Vec<String> = arr
-                        .iter()
-                        .filter_map(expr_to_string)
-                        .collect();
-                    if strings.is_empty() {
-                        None
-                    } else {
-                        Some(strings)
-                    }
-                } else {
+    body.iter().find_map(|s| match s {
+        hcl::Structure::Attribute(attr) if attr.key() == key => {
+            if let hcl::Expression::Array(arr) = attr.expr() {
+                let strings: Vec<String> = arr.iter().filter_map(expr_to_string).collect();
+                if strings.is_empty() {
                     None
+                } else {
+                    Some(strings)
                 }
+            } else {
+                None
             }
-            _ => None,
-        })
+        }
+        _ => None,
+    })
 }
 
 fn expr_to_string(expr: &hcl::Expression) -> Option<String> {
@@ -432,9 +431,7 @@ fn expr_to_json(expr: &hcl::Expression) -> Option<serde_json::Value> {
             for (k, v) in obj {
                 let key = match k {
                     hcl::ObjectKey::Identifier(id) => id.to_string(),
-                    hcl::ObjectKey::Expression(e) => {
-                        expr_to_string(e).unwrap_or_default()
-                    }
+                    hcl::ObjectKey::Expression(e) => expr_to_string(e).unwrap_or_default(),
                     _ => continue,
                 };
                 if let Some(val) = expr_to_json(v) {
@@ -444,10 +441,7 @@ fn expr_to_json(expr: &hcl::Expression) -> Option<serde_json::Value> {
             Some(serde_json::Value::Object(map))
         }
         hcl::Expression::Array(arr) => {
-            let items: Vec<serde_json::Value> = arr
-                .iter()
-                .filter_map(expr_to_json)
-                .collect();
+            let items: Vec<serde_json::Value> = arr.iter().filter_map(expr_to_json).collect();
             Some(serde_json::Value::Array(items))
         }
         _ => None,
@@ -484,7 +478,8 @@ fn emit_task_block(lines: &mut Vec<String>, val: &serde_json::Value, indent: usi
         None => return,
     };
 
-    let block_type = obj.get("type")
+    let block_type = obj
+        .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
@@ -495,11 +490,7 @@ fn emit_task_block(lines: &mut Vec<String>, val: &serde_json::Value, indent: usi
         if key == "type" {
             continue;
         }
-        lines.push(format!(
-            "{inner_pad}{} = {}",
-            key,
-            json_to_hcl_value(value)
-        ));
+        lines.push(format!("{inner_pad}{} = {}", key, json_to_hcl_value(value)));
     }
 
     lines.push(format!("{pad}}}"));
@@ -517,7 +508,8 @@ fn json_to_hcl_value(val: &serde_json::Value) -> String {
             format!("[{}]", items.join(", "))
         }
         serde_json::Value::Object(obj) => {
-            let entries: Vec<String> = obj.iter()
+            let entries: Vec<String> = obj
+                .iter()
                 .map(|(k, v)| format!("{} = {}", k, json_to_hcl_value(v)))
                 .collect();
             format!("{{ {} }}", entries.join(", "))

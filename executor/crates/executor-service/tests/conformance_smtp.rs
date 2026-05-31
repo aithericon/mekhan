@@ -42,7 +42,9 @@ fn smtp_e2e_enabled() -> bool {
 async fn mailhog_reachable() -> bool {
     match tokio::time::timeout(
         Duration::from_secs(2),
-        reqwest::Client::new().get(format!("{MAILHOG_API}/messages")).send(),
+        reqwest::Client::new()
+            .get(format!("{MAILHOG_API}/messages"))
+            .send(),
     )
     .await
     {
@@ -374,8 +376,8 @@ async fn smtp_e2e_send_via_mailhog_lands_in_inbox() {
         "body.html.tera",
     )
     .expect("html render");
-    let recipient = template::render("{{ intake.email }}", &tera_ctx, "to[0]")
-        .expect("recipient render");
+    let recipient =
+        template::render("{{ intake.email }}", &tera_ctx, "to[0]").expect("recipient render");
 
     let assembled = multipart::build(multipart::Inputs {
         from: resource.from_address.clone().unwrap(),
@@ -405,7 +407,10 @@ async fn smtp_e2e_send_via_mailhog_lands_in_inbox() {
     // Give MailHog a moment to durably store the message before we poll.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let messages = fetch_messages().await;
-    assert!(!messages.is_empty(), "MailHog must have received the message");
+    assert!(
+        !messages.is_empty(),
+        "MailHog must have received the message"
+    );
 
     let last = messages.into_iter().next().expect("at least one message");
     assert_eq!(last.from.as_email(), "conformance@example.com");

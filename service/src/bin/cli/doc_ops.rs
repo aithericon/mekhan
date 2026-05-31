@@ -72,10 +72,7 @@ pub fn apply_graph_and_files(
     let nodes_map = txn.get_or_insert_map("nodes");
 
     // Collect existing node IDs to detect deletions
-    let existing_ids: Vec<String> = nodes_map
-        .iter(&txn)
-        .map(|(id, _)| id.to_string())
-        .collect();
+    let existing_ids: Vec<String> = nodes_map.iter(&txn).map(|(id, _)| id.to_string()).collect();
 
     let graph_ids: std::collections::HashSet<&str> =
         graph.nodes.iter().map(|n| n.id.as_str()).collect();

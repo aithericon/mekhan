@@ -219,8 +219,7 @@ impl ExecutorSidecar for SidecarService {
         request: Request<proto::SetOutputRequest>,
     ) -> Result<Response<proto::SidecarResponse>, Status> {
         let req = request.into_inner();
-        let (status, error_message) =
-            handle_set_output(&req, &self.state, &self.stream_ctx).await;
+        let (status, error_message) = handle_set_output(&req, &self.state, &self.stream_ctx).await;
         Ok(Response::new(make_response(status, error_message)))
     }
 
@@ -511,7 +510,11 @@ pub async fn start_ipc_sidecar(
                     }
                     Ok((idx, None)) => {
                         let st = state.lock().await;
-                        let name = st.artifacts.get(idx).map(|a| a.name.as_str()).unwrap_or("?");
+                        let name = st
+                            .artifacts
+                            .get(idx)
+                            .map(|a| a.name.as_str())
+                            .unwrap_or("?");
                         warn!(
                             artifact_index = idx,
                             artifact_name = %name,
@@ -1251,8 +1254,11 @@ async fn handle_set_output(
     // node's parked output; these mid-run events are content-addressably
     // deduped per output name engine-side, so the terminal re-emit collapses.
     if let Some(ctx) = stream_ctx {
-        ctx.maybe_emit(EventCategory::Output, StatusDetail::OutputSet { name, value })
-            .await;
+        ctx.maybe_emit(
+            EventCategory::Output,
+            StatusDetail::OutputSet { name, value },
+        )
+        .await;
     }
 
     (proto::ResponseStatus::Ok, None)
@@ -1279,8 +1285,7 @@ async fn handle_log_metrics(
                 value: p.value,
                 step: p.step,
                 timestamp: if p.timestamp_ms != 0 {
-                    chrono::DateTime::from_timestamp_millis(p.timestamp_ms)
-                        .unwrap_or_else(Utc::now)
+                    chrono::DateTime::from_timestamp_millis(p.timestamp_ms).unwrap_or_else(Utc::now)
                 } else {
                     Utc::now()
                 },

@@ -79,8 +79,8 @@ pub async fn fetch_events(
                 tracing::warn!(error = %e, "Error reading event message");
                 break;
             }
-            Ok(None) => break,     // Stream ended
-            Err(_) => break,       // Timeout — caught up
+            Ok(None) => break, // Stream ended
+            Err(_) => break,   // Timeout — caught up
         }
     }
 

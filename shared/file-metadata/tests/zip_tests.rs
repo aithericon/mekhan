@@ -1,8 +1,6 @@
 #[cfg(feature = "zip")]
 mod zip_tests {
-    use fmeta::{
-        extract_metadata, FileFormat, FormatMetadata, MetadataExtractor, ZipExtractor,
-    };
+    use fmeta::{extract_metadata, FileFormat, FormatMetadata, MetadataExtractor, ZipExtractor};
     use std::io::Write;
 
     /// Helper: create a ZIP archive with the given entries using `zip::ZipWriter`.

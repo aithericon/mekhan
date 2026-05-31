@@ -73,9 +73,8 @@ impl ExecutionBackend for FileOpsBackend {
             .map_err(|e| ExecutorError::Config(format!("file_ops input resolution: {e}")))?;
 
         // Deserialize resolved config
-        let mut config: FileOpsConfig = serde_json::from_value(raw_config).map_err(|e| {
-            ExecutorError::Config(format!("invalid file_ops backend config: {e}"))
-        })?;
+        let mut config: FileOpsConfig = serde_json::from_value(raw_config)
+            .map_err(|e| ExecutorError::Config(format!("invalid file_ops backend config: {e}")))?;
 
         // Overlay any workspace-resource bindings (storage.resource_alias)
         // before validation — `validate` checks for empty endpoint/bucket
@@ -99,8 +98,8 @@ impl ExecutionBackend for FileOpsBackend {
         _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
-        let config: FileOpsConfig =
-            serde_json::from_value(run_context.backend_state.clone()).map_err(|e| {
+        let config: FileOpsConfig = serde_json::from_value(run_context.backend_state.clone())
+            .map_err(|e| {
                 ExecutorError::Config(format!("failed to deserialize file_ops config: {e}"))
             })?;
 

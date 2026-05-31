@@ -47,13 +47,13 @@ use serde_json::Value as JsonValue;
 use petri_application::resource_lease_handlers::{AllocatorClient, AllocatorError};
 
 #[cfg(feature = "slurm")]
-use serde_json::json;
-#[cfg(feature = "slurm")]
 use petri_slurm::alloc;
 #[cfg(feature = "slurm")]
 use petri_slurm::ssh::{SshError, SshSession};
 #[cfg(feature = "slurm")]
 use petri_slurm::SlurmConfig;
+#[cfg(feature = "slurm")]
+use serde_json::json;
 
 /// Slurm-internal allocation error, mapped into [`AllocatorError`] at the trait
 /// boundary.
@@ -467,7 +467,10 @@ mod tests {
             .await
             .unwrap();
         // bare acquire (flavorless) also goes to http
-        dispatch.acquire("url", "tok", "g1", &json!({})).await.unwrap();
+        dispatch
+            .acquire("url", "tok", "g1", &json!({}))
+            .await
+            .unwrap();
 
         assert_eq!(http.acquires.load(Ordering::SeqCst), 3);
         assert_eq!(slurm.acquires.load(Ordering::SeqCst), 0);

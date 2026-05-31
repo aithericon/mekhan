@@ -20,12 +20,7 @@ async fn body_json(body: Body) -> Value {
 
 // ── Seed helpers ───────────────────────────────────────────────────────────
 
-async fn seed_causality_event(
-    db: &sqlx::PgPool,
-    net_id: &str,
-    seq: i64,
-    event_type: &str,
-) {
+async fn seed_causality_event(db: &sqlx::PgPool, net_id: &str, seq: i64, event_type: &str) {
     sqlx::query(
         "INSERT INTO causality_events (net_id, event_seq, event_type, timestamp) \
          VALUES ($1, $2, $3, NOW())",
@@ -117,10 +112,16 @@ async fn token_provenance_returns_ancestry() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
-    let nodes = body["nodes"].as_array().expect("response should have nodes array");
+    let nodes = body["nodes"]
+        .as_array()
+        .expect("response should have nodes array");
 
     // Should have at least depth 0 (event 2 producing B) and depth 1 (event 1 producing A)
-    assert!(nodes.len() >= 2, "expected at least 2 ancestry nodes, got {}", nodes.len());
+    assert!(
+        nodes.len() >= 2,
+        "expected at least 2 ancestry nodes, got {}",
+        nodes.len()
+    );
 
     // Depth 0: the event that produced token_b
     let depth0: Vec<&Value> = nodes.iter().filter(|n| n["depth"] == 0).collect();
@@ -174,7 +175,11 @@ async fn provenance_respects_depth_limit() {
     let body = body_json(resp.into_body()).await;
     let nodes = body["nodes"].as_array().unwrap();
 
-    let max_depth = nodes.iter().map(|n| n["depth"].as_i64().unwrap_or(0)).max().unwrap_or(0);
+    let max_depth = nodes
+        .iter()
+        .map(|n| n["depth"].as_i64().unwrap_or(0))
+        .max()
+        .unwrap_or(0);
     assert!(max_depth <= 2, "max depth should be ≤ 2, got {max_depth}");
 }
 
@@ -183,7 +188,15 @@ async fn cross_link_lookup() {
     let (app, db) = common::test_app().await;
 
     let corr_id = format!("corr-{}", Uuid::new_v4().simple());
-    seed_cross_link(&db, &corr_id, Some("net-a"), Some(5), Some("net-b"), Some(1)).await;
+    seed_cross_link(
+        &db,
+        &corr_id,
+        Some("net-a"),
+        Some(5),
+        Some("net-b"),
+        Some(1),
+    )
+    .await;
 
     let resp = app
         .oneshot(

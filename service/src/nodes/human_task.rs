@@ -23,8 +23,8 @@ pub(crate) static HUMAN_TASK_DECL: NodeDecl = NodeDecl {
     is_join: false,
     parks_data_envelope: true,
     lower: Some(crate::compiler::lower::human_task::lower_human_task),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     // Only variant with wiring_logic: the inbound-edge transition binds each
     // step input's `{{ name }}` slot to the upstream token's field path before
     // the human-task effect fires.
@@ -80,11 +80,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     vec![derive_human_task_output_port(steps)]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::HumanTask {
         task_title,

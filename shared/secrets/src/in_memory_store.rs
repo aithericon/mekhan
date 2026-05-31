@@ -38,15 +38,16 @@ mod tests {
 
     #[tokio::test]
     async fn get_existing_key() {
-        let store = InMemorySecretStore::new(HashMap::from([
-            ("KEY".into(), "value".into()),
-        ]));
+        let store = InMemorySecretStore::new(HashMap::from([("KEY".into(), "value".into())]));
         assert_eq!(store.get("KEY").await.unwrap(), "value");
     }
 
     #[tokio::test]
     async fn get_missing_key() {
         let store = InMemorySecretStore::new(HashMap::new());
-        assert!(matches!(store.get("NOPE").await, Err(SecretError::NotFound(_))));
+        assert!(matches!(
+            store.get("NOPE").await,
+            Err(SecretError::NotFound(_))
+        ));
     }
 }

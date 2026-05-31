@@ -116,12 +116,11 @@ impl YjsPersistence {
         .await?;
 
         // Check if compaction is needed
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1",
-        )
-        .bind(template_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
+                .bind(template_id)
+                .fetch_one(&self.pool)
+                .await?;
 
         if count > COMPACTION_THRESHOLD {
             tracing::info!(
@@ -155,12 +154,11 @@ impl YjsPersistence {
         .map_err(|e| YjsPersistenceError::Decode(format!("spawn_blocking: {e}")))??;
 
         // Get the current max sequence number
-        let max_seq: Option<(i64,)> = sqlx::query_as(
-            "SELECT MAX(seq) FROM yjs_documents WHERE template_id = $1",
-        )
-        .bind(template_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let max_seq: Option<(i64,)> =
+            sqlx::query_as("SELECT MAX(seq) FROM yjs_documents WHERE template_id = $1")
+                .bind(template_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let snapshot_seq = max_seq.map(|r| r.0).unwrap_or(0);
 
@@ -244,23 +242,21 @@ impl YjsPersistence {
 
     /// Check whether a Yjs document exists for a template.
     pub async fn has_doc(&self, template_id: Uuid) -> Result<bool, YjsPersistenceError> {
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1",
-        )
-        .bind(template_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM yjs_documents WHERE template_id = $1")
+                .bind(template_id)
+                .fetch_one(&self.pool)
+                .await?;
 
         if count > 0 {
             return Ok(true);
         }
 
-        let (snap_count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM yjs_snapshots WHERE template_id = $1",
-        )
-        .bind(template_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let (snap_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM yjs_snapshots WHERE template_id = $1")
+                .bind(template_id)
+                .fetch_one(&self.pool)
+                .await?;
 
         Ok(snap_count > 0)
     }
@@ -277,11 +273,9 @@ pub fn json_value_to_any(value: &serde_json::Value) -> Any {
         serde_json::Value::Bool(b) => Any::Bool(*b),
         serde_json::Value::Number(n) => Any::Number(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::String(s) => Any::String(Arc::from(s.as_str())),
-        serde_json::Value::Array(arr) => {
-            Any::Array(Arc::from(
-                arr.iter().map(json_value_to_any).collect::<Vec<_>>(),
-            ))
-        }
+        serde_json::Value::Array(arr) => Any::Array(Arc::from(
+            arr.iter().map(json_value_to_any).collect::<Vec<_>>(),
+        )),
         serde_json::Value::Object(obj) => {
             let map: HashMap<String, Any> = obj
                 .iter()
@@ -315,9 +309,7 @@ pub fn any_to_json_value(value: &Any) -> serde_json::Value {
         Any::BigInt(n) => serde_json::json!(*n),
         Any::String(s) => serde_json::Value::String(s.to_string()),
         Any::Buffer(_) => serde_json::Value::Null,
-        Any::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(any_to_json_value).collect())
-        }
+        Any::Array(arr) => serde_json::Value::Array(arr.iter().map(any_to_json_value).collect()),
         Any::Map(map) => {
             let obj: serde_json::Map<String, serde_json::Value> = map
                 .iter()

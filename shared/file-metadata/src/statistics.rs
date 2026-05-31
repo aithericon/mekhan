@@ -12,9 +12,14 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(any(feature = "csv", feature = "json", feature = "excel"))]
 use crate::data_type::DataType;
-#[cfg(any(feature = "csv", feature = "json", feature = "parquet", feature = "excel"))]
-use crate::format::FileFormat;
 use crate::error::MetadataError;
+#[cfg(any(
+    feature = "csv",
+    feature = "json",
+    feature = "parquet",
+    feature = "excel"
+))]
+use crate::format::FileFormat;
 use crate::types::FileMetadata;
 
 /// Per-column statistics.

@@ -263,7 +263,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -285,13 +286,18 @@ async fn engine_available() -> bool {
 
 async fn net_running(net_id: &str) -> bool {
     match reqwest::get(format!("{}/api/nets/{net_id}/state", engine_url())).await {
-        Ok(resp) if resp.status().is_success() => resp
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("run_mode").and_then(|m| m.as_str()).map(str::to_string))
-            .as_deref()
-            == Some("running"),
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("run_mode")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("running")
+        }
         _ => false,
     }
 }
@@ -371,7 +377,9 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -399,9 +407,10 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     //    ClusterRegistry lazily builds a `SlurmAllocatorClient::from_connection`
     //    (ssh_host/port/user/known_hosts/template_dir + the inline `ssh_key` PEM,
     //    written to a 0600 tempfile) from the effect_config this resource threads.
-    let ssh_key_pem = std::fs::read_to_string(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../engine/infra/slurm/ssh/slurm_test"),
-    )
+    let ssh_key_pem = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../engine/infra/slurm/ssh/slurm_test"
+    ))
     .expect("read engine/infra/slurm/ssh/slurm_test private key");
     let resp = app
         .clone()
@@ -439,7 +448,11 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         .unwrap();
     let dc_status = resp.status();
     let dc_body = body_json(resp.into_body()).await;
-    assert_eq!(dc_status, StatusCode::CREATED, "create datacenter: {dc_body}");
+    assert_eq!(
+        dc_status,
+        StatusCode::CREATED,
+        "create datacenter: {dc_body}"
+    );
     let resource_id: Uuid = dc_body["id"].as_str().unwrap().parse().unwrap();
 
     // The auto-deployed pool/adapter net id is `pool-<resource_id>` (the same id
@@ -685,14 +698,24 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         drain_log.contains("Starting lease drain executor"),
         "drain-executor log at {drain_out} is missing its startup banner — the \
          mekhan-lease-executor.sh template may not have launched. tail:\n{}",
-        drain_log.lines().rev().take(20).collect::<Vec<_>>().join("\n")
+        drain_log
+            .lines()
+            .rev()
+            .take(20)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     assert!(
         handled >= MAX_ITERATIONS as usize,
         "the drain executor at {drain_out} handled {handled} jobs, expected \
          >= {MAX_ITERATIONS} (one persistent executor must drain every iteration \
          warm). tail:\n{}",
-        drain_log.lines().rev().take(30).collect::<Vec<_>>().join("\n")
+        drain_log
+            .lines()
+            .rev()
+            .take(30)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 
     // ── (7) Release witness: after the instance completes, the loop's terminal
@@ -823,13 +846,17 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("kv");
-    let sub_mgr =
-        std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(
@@ -875,7 +902,11 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED, "create template");
-    let template_id: Uuid = body_json(resp.into_body()).await["id"].as_str().unwrap().parse().unwrap();
+    let template_id: Uuid = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let resp = app
         .clone()
@@ -910,7 +941,11 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
 
     // Wait for the held alloc to appear (acquire → salloc).
@@ -935,7 +970,9 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     // grant-derived job name cancels the salloc (and the srun'd drain executor
     // on it) — simulating a cluster-side preemption / node failure.
     let grant = format!("{instance_id}:lp");
-    slurm_ssh(&format!("scancel --name='petri-{grant}' 2>/dev/null || true"));
+    slurm_ssh(&format!(
+        "scancel --name='petri-{grant}' 2>/dev/null || true"
+    ));
 
     // Fail-fast assertion: the instance must reach `failed` — NOT hang, NOT
     // complete — within a bounded window (watcher poll ~5s + signal route +
@@ -997,13 +1034,17 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("kv");
-    let sub_mgr =
-        std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(
@@ -1047,8 +1088,11 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED, "create template");
-    let template_id: Uuid =
-        body_json(resp.into_body()).await["id"].as_str().unwrap().parse().unwrap();
+    let template_id: Uuid = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let resp = app
         .clone()
@@ -1083,7 +1127,11 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
 
     // Wait for the held alloc to appear.
@@ -1118,7 +1166,10 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "cancel instance");
     let cancelled = body_json(resp.into_body()).await;
-    assert_eq!(cancelled["status"], "cancelled", "instance marked cancelled");
+    assert_eq!(
+        cancelled["status"], "cancelled",
+        "instance marked cancelled"
+    );
 
     // No-orphan: the held alloc `held_id` must be scancel'd by the engine's
     // `release_held_leases_for_instance` — squeue for the grant goes empty

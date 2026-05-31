@@ -57,6 +57,7 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "13-resource-pool",
     "13-dynamic-form",
     "14-streaming-output",
+    "15-stream-python-body",
 ];
 
 fn repo_root() -> PathBuf {
@@ -251,6 +252,11 @@ fn snapshot_14_streaming_output() {
     run("14-streaming-output");
 }
 
+#[test]
+fn snapshot_15_stream_python_body() {
+    run("15-stream-python-body");
+}
+
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
 /// a snapshot test, fail loudly. Comparison against the curated list above
 /// rather than the disk so we can intentionally exclude (e.g. subworkflow
@@ -267,8 +273,7 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
             // Numbered demos use NN-name. Strip-prefix isolates the convention
             // from the unnumbered ones (`invoice-processing`, `llm-smoke`,
             // ...) that this suite doesn't claim to cover.
-            if name.chars().take(2).all(|c| c.is_ascii_digit())
-                && name.chars().nth(2) == Some('-')
+            if name.chars().take(2).all(|c| c.is_ascii_digit()) && name.chars().nth(2) == Some('-')
             {
                 Some(name)
             } else {
@@ -287,10 +292,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     // resolve. 12a-bo-catalog-trigger carries a Trigger node whose catalogue
     // wiring is resolved at publish time, not by `compile_to_air` — same class
     // of "needs the publish handler" exclusion.
-    let documented_skip: std::collections::HashSet<&str> =
-        ["06-subworkflow", "09-agent-tool-loop", "12a-bo-catalog-trigger"]
-            .into_iter()
-            .collect();
+    let documented_skip: std::collections::HashSet<&str> = [
+        "06-subworkflow",
+        "09-agent-tool-loop",
+        "12a-bo-catalog-trigger",
+    ]
+    .into_iter()
+    .collect();
 
     for d in &numbered {
         let s = d.as_str();
@@ -303,4 +311,3 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         );
     }
 }
-

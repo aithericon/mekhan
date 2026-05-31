@@ -24,7 +24,10 @@ impl IniExtractor {
         if trimmed.is_empty() {
             return DataType::String;
         }
-        if matches!(trimmed.to_lowercase().as_str(), "true" | "false" | "yes" | "no") {
+        if matches!(
+            trimmed.to_lowercase().as_str(),
+            "true" | "false" | "yes" | "no"
+        ) {
             return DataType::Boolean;
         }
         if trimmed.parse::<i64>().is_ok() {

@@ -59,7 +59,10 @@ impl MetadataExtractor for HtmlExtractor {
         let num_scripts = count_selector(&document, "script");
 
         // Stylesheets
-        let num_stylesheets = count_selector(&document, "link[rel='stylesheet'], link[rel=\"stylesheet\"]");
+        let num_stylesheets = count_selector(
+            &document,
+            "link[rel='stylesheet'], link[rel=\"stylesheet\"]",
+        );
 
         // Images
         let num_images = count_selector(&document, "img");

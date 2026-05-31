@@ -18,7 +18,10 @@ use aithericon_executor_domain::{ExecutionSpec, ExecutorError};
 /// with a backend-named [`ExecutorError::Config`] message; this is the single
 /// implementation they all delegate to. `name` is the backend label used in
 /// the error (e.g. `"docker"`, `"http"`).
-pub fn from_spec<T: DeserializeOwned>(spec: &ExecutionSpec, name: &str) -> Result<T, ExecutorError> {
+pub fn from_spec<T: DeserializeOwned>(
+    spec: &ExecutionSpec,
+    name: &str,
+) -> Result<T, ExecutorError> {
     serde_json::from_value(spec.config.clone())
         .map_err(|e| ExecutorError::Config(format!("invalid {name} backend config: {e}")))
 }

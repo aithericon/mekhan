@@ -1,8 +1,6 @@
 #[cfg(feature = "parquet")]
 mod parquet_tests {
-    use fmeta::{
-        DataType, FileFormat, FormatMetadata, MetadataExtractor, ParquetExtractor,
-    };
+    use fmeta::{DataType, FileFormat, FormatMetadata, MetadataExtractor, ParquetExtractor};
     use std::path::Path;
     use std::sync::Arc;
 

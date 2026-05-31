@@ -311,7 +311,9 @@ fn derive_output_port(config: &Value) -> Port {
                         schema: None,
                         name: "response".into(),
                         label,
-                        kind: schema.map(kind_from_json_schema).unwrap_or(FieldKind::Textarea),
+                        kind: schema
+                            .map(kind_from_json_schema)
+                            .unwrap_or(FieldKind::Textarea),
                         required: false,
                         options: None,
                         description,

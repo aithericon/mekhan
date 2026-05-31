@@ -1,15 +1,15 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use mekhan_service::auth::authenticator::{
-    Authenticator, BffAuthenticator, NoopAuthenticator,
-};
+use mekhan_service::auth::authenticator::{Authenticator, BffAuthenticator, NoopAuthenticator};
 use mekhan_service::auth::bff::oidc::{OidcClient, OidcConfig};
 use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::DbPrincipalResolver;
 use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
 use mekhan_service::auth::{IntrospectionVerifier, PrincipalResolver, TokenVerifier, ZitadelMgmt};
+use mekhan_service::catalogue::repository::PgCatalogueRepository;
+use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::config::{AppConfig, AuthMode};
 use mekhan_service::db;
 use mekhan_service::lifecycle;
@@ -18,8 +18,6 @@ use mekhan_service::petri::client::PetriClient;
 use mekhan_service::s3::ArtifactStore;
 use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
-use mekhan_service::catalogue::repository::PgCatalogueRepository;
-use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::{build_router, AppState};
 
 #[tokio::main]
@@ -32,11 +30,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = AppConfig::load().expect("failed to load configuration");
-    tracing::info!(
-        "starting mekhan-service on {}:{}",
-        config.host,
-        config.port
-    );
+    tracing::info!("starting mekhan-service on {}:{}", config.host, config.port);
 
     let db = db::create_pool(&config.database_url).await?;
     tracing::info!("database connected and migrations applied");
@@ -106,9 +100,10 @@ async fn main() -> anyhow::Result<()> {
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     tracing::info!("Yjs collaboration manager initialized");
 
-    let artifact_s3 = config.artifact_s3.as_ref().map(|cfg| {
-        Arc::new(ArtifactStore::new(cfg))
-    });
+    let artifact_s3 = config
+        .artifact_s3
+        .as_ref()
+        .map(|cfg| Arc::new(ArtifactStore::new(cfg)));
 
     // Live broadcasts for SSE fan-out of metric/log events.
     let live = mekhan_service::causality::live::LiveBroadcasts::new();
@@ -173,11 +168,13 @@ async fn main() -> anyhow::Result<()> {
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder
-    tokio::spawn(mekhan_service::catalogue::responder::start_catalogue_responder(
-        mekhan_nats.clone(),
-        catalogue_repo.clone(),
-        subscription_manager.clone(),
-    ));
+    tokio::spawn(
+        mekhan_service::catalogue::responder::start_catalogue_responder(
+            mekhan_nats.clone(),
+            catalogue_repo.clone(),
+            subscription_manager.clone(),
+        ),
+    );
 
     // Auth adapters — composition root chooses the implementation by config.
     // `TokenVerifier`/`PrincipalResolver` are reused unchanged: the BFF
@@ -194,8 +191,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(DbPrincipalResolver::new(db.clone()));
 
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
-    let (authenticator, oidc) =
-        build_authenticator(&config, session_store.clone()).await?;
+    let (authenticator, oidc) = build_authenticator(&config, session_store.clone()).await?;
     let introspection = build_introspection(&config).await?;
     let zitadel_mgmt = build_zitadel_mgmt(&config)?;
 
@@ -241,9 +237,8 @@ async fn main() -> anyhow::Result<()> {
     // Publish-time resource resolver. Stateless on construction — every call
     // joins workspace + version + ACL inline. Shared as `Arc` so the publish
     // path can clone it cheaply.
-    let resource_resolver = Arc::new(
-        mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
-    );
+    let resource_resolver =
+        Arc::new(mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()));
 
     let state = AppState {
         db,

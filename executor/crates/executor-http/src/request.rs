@@ -75,18 +75,18 @@ pub fn build_request(
             }
         }
     } else if let Some(ref input_name) = resolved.config.body_from_input {
-        let path = run_context
-            .staged_inputs
-            .get(input_name)
-            .ok_or_else(|| {
-                ExecutorError::Config(format!(
-                    "body_from_input references unknown staged input: {input_name}"
-                ))
-            })?;
+        let path = run_context.staged_inputs.get(input_name).ok_or_else(|| {
+            ExecutorError::Config(format!(
+                "body_from_input references unknown staged input: {input_name}"
+            ))
+        })?;
         let contents = std::fs::read(path).map_err(|e| {
             ExecutorError::Io(std::io::Error::new(
                 e.kind(),
-                format!("failed to read body_from_input file {}: {e}", path.display()),
+                format!(
+                    "failed to read body_from_input file {}: {e}",
+                    path.display()
+                ),
             ))
         })?;
         // Auto-detect Content-Type when not explicitly set

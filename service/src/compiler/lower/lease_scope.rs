@@ -59,9 +59,10 @@ pub(crate) fn lower_lease_scope(cx: &mut LoweringCtx) -> Result<(), CompileError
     cx.fixups
         .lease_definitions
         .push((binding.lease_def_name.clone(), binding.lease_schema.clone()));
-    cx.fixups
-        .lease_inbox_schemas
-        .push((format!("p_{id}_grant_inbox"), binding.lease_def_name.clone()));
+    cx.fixups.lease_inbox_schemas.push((
+        format!("p_{id}_grant_inbox"),
+        binding.lease_def_name.clone(),
+    ));
 
     let scope_group = cx.fixups.scope_groups.get(id).cloned();
     let d_slug = format!("d_{}", id.replace('-', "_"));

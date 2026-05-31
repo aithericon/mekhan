@@ -148,8 +148,11 @@ mod tests {
 
     #[test]
     fn filter_builder() {
-        let f = Filter::single("category", FilterOperator::Eq, "model")
-            .and("source_net", FilterOperator::Contains, "surrogate");
+        let f = Filter::single("category", FilterOperator::Eq, "model").and(
+            "source_net",
+            FilterOperator::Contains,
+            "surrogate",
+        );
         assert_eq!(f.conditions.len(), 2);
     }
 }

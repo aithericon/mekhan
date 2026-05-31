@@ -82,11 +82,7 @@ pub async fn derive_backend_output(
     Json(config): Json<Value>,
 ) -> Response {
     let Some(backend_type) = ExecutionBackendType::from_wire_str(&name) else {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("unknown backend: {name}"),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, format!("unknown backend: {name}")).into_response();
     };
     let Some(decl) = lookup(backend_type) else {
         return (

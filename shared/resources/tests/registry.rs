@@ -46,7 +46,10 @@ fn all_builtin_types_registered() {
     // name". Other call sites depend on this for diff-stable OpenAPI output.
     let mut sorted = names.clone();
     sorted.sort_unstable();
-    assert_eq!(names, sorted, "registry must return descriptors sorted by name");
+    assert_eq!(
+        names, sorted,
+        "registry must return descriptors sorted by name"
+    );
 }
 
 /// The Postgres descriptor's secret/public partition must match the struct

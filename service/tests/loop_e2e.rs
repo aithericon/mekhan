@@ -77,23 +77,21 @@ async fn spawn_lifecycle(nats: MekhanNats, db: sqlx::PgPool) -> TaskHandle {
 async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
-        if st == "completed" {
-            return;
-        }
-        if st == "failed" {
-            let result: Option<Value> = sqlx::query_scalar(
-                "SELECT result FROM workflow_instances WHERE id = $1",
-            )
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_one(db)
             .await
             .unwrap();
+        if st == "completed" {
+            return;
+        }
+        if st == "failed" {
+            let result: Option<Value> =
+                sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(db)
+                    .await
+                    .unwrap();
             panic!("instance {id} reached `failed` (result: {result:?})");
         }
         if start.elapsed() > timeout {
@@ -230,14 +228,12 @@ fn accumulator_loop_graph() -> Value {
 }
 
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
-    sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT result FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .unwrap()
-    .expect("result column was null — loop produced no End envelope")
+    sqlx::query_scalar::<_, Option<Value>>("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+        .expect("result column was null — loop produced no End envelope")
 }
 
 async fn publish_and_start(app: &axum::Router, graph: Value) -> Uuid {
@@ -328,7 +324,8 @@ async fn loop_iterates_and_exits() {
     // and the guards are mutually exclusive so the cascade is deterministic.
     let result = fetch_result(&db, id).await;
     assert_eq!(
-        result["value"]["final_count"], json!(3),
+        result["value"]["final_count"],
+        json!(3),
         "loop should have iterated 3 times before exiting: {result}"
     );
 }
@@ -353,15 +350,18 @@ async fn loop_accumulator_folds_across_iterations() {
     // Fold state survived all three iterations and is readable in the End
     // mapping: sum = 5+0+1+2, product = 1*10*10*10, count = 3.
     assert_eq!(
-        result["value"]["final_count"], json!(3),
+        result["value"]["final_count"],
+        json!(3),
         "loop should have iterated 3 times: {result}"
     );
     assert_eq!(
-        result["value"]["total"], json!(8),
+        result["value"]["total"],
+        json!(8),
         "sum accumulator should fold to 5+0+1+2=8: {result}"
     );
     assert_eq!(
-        result["value"]["product"], json!(1000),
+        result["value"]["product"],
+        json!(1000),
         "product accumulator should fold to 1*10^3=1000: {result}"
     );
 }

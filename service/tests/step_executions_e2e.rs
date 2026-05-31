@@ -23,8 +23,8 @@ use uuid::Uuid;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
-    default_output_port, ExecutionBackendType, ExecutionSpecConfig, Port, Position,
-    WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    default_output_port, ExecutionBackendType, ExecutionSpecConfig, Port, Position, WorkflowEdge,
+    WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::projections::step_executions::start_step_executions_ingest;
@@ -132,7 +132,8 @@ fn python_graph(step_id: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -163,15 +164,15 @@ async fn step_executions_materialize_for_completed_instance() {
         );
     }
 
-    let engine_nats_url =
-        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
-    let (app, db) =
-        common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
     // ── Spawn consumers (with per-test prefix to isolate durables) ──────────
     // The test app's MekhanNats was created with `with_consumer_prefix`, so
     // these consumers get unique durable names and start at DeliverPolicy::New.
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -274,19 +275,22 @@ async fn step_executions_materialize_for_completed_instance() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
 
     // ── Wait for instance completion ────────────────────────────────────────
     let deadline = Duration::from_secs(60);
     let started = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(instance_id)
-                .fetch_one(&db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
         if st == "completed" {
             break;
         }
@@ -346,7 +350,10 @@ async fn step_executions_materialize_for_completed_instance() {
 
     let start = by_node.get("s").expect("s row exists");
     assert_eq!(start.1, "completed", "Start should be completed");
-    assert!(start.3.is_some(), "Start should have outputs (its parked envelope)");
+    assert!(
+        start.3.is_some(),
+        "Start should have outputs (its parked envelope)"
+    );
 
     let auto = by_node.get("auto").expect("auto row exists");
     assert_eq!(auto.1, "completed", "AutomatedStep should be completed");

@@ -41,7 +41,11 @@ impl EngineClient {
     }
 
     /// POST with JSON body and deserialize response.
-    pub fn post<T: DeserializeOwned>(&self, path: &str, body: &serde_json::Value) -> Result<T, String> {
+    pub fn post<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<T, String> {
         let url = format!("{}{}", self.base_url, path);
         let resp = ureq::post(&url)
             .set("Content-Type", "application/json")

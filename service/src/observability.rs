@@ -157,13 +157,13 @@ pub fn install_drainer() -> Option<UnboundedReceiver<SilentDropRecord>> {
 /// consumer can filter by kind at the broker. NATS publish failures are
 /// logged but never block the channel — a stream outage shouldn't break
 /// the call sites that are themselves reporting a different failure.
-pub async fn drain_silent_drops(
-    nats: MekhanNats,
-    mut rx: UnboundedReceiver<SilentDropRecord>,
-) {
+pub async fn drain_silent_drops(nats: MekhanNats, mut rx: UnboundedReceiver<SilentDropRecord>) {
     let js = nats.jetstream().clone();
     while let Some(record) = rx.recv().await {
-        let subject = format!("mekhan.silent_drops.{}", sanitize_subject_token(&record.kind));
+        let subject = format!(
+            "mekhan.silent_drops.{}",
+            sanitize_subject_token(&record.kind)
+        );
         let bytes = match serde_json::to_vec(&record) {
             Ok(b) => b,
             Err(e) => {
@@ -210,7 +210,10 @@ mod tests {
 
     #[test]
     fn sanitize_subject_token_keeps_safe_chars() {
-        assert_eq!(sanitize_subject_token("catalogue_register"), "catalogue_register");
+        assert_eq!(
+            sanitize_subject_token("catalogue_register"),
+            "catalogue_register"
+        );
         assert_eq!(sanitize_subject_token("foo-bar_baz123"), "foo-bar_baz123");
     }
 

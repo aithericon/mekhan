@@ -73,8 +73,7 @@ pub fn self_contained_config_schema<T: utoipa::PartialSchema>() -> Value {
         .cloned()
         .unwrap_or_default();
 
-    let mut root =
-        serde_json::to_value(T::schema()).expect("schema serialization cannot fail");
+    let mut root = serde_json::to_value(T::schema()).expect("schema serialization cannot fail");
 
     fn inline(
         value: &mut Value,
@@ -109,9 +108,7 @@ pub fn self_contained_config_schema<T: utoipa::PartialSchema>() -> Value {
                     {
                         for (k, v) in site {
                             if k != "$ref" {
-                                resolved_obj
-                                    .entry(k.clone())
-                                    .or_insert_with(|| v.clone());
+                                resolved_obj.entry(k.clone()).or_insert_with(|| v.clone());
                             }
                         }
                     }

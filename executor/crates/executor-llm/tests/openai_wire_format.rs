@@ -195,7 +195,11 @@ async fn json_schema_request_has_canonical_openai_wire_shape() {
     );
 
     let received = mock_server.received_requests().await.unwrap();
-    assert_eq!(received.len(), 1, "exactly one request in strict-mode happy path");
+    assert_eq!(
+        received.len(),
+        1,
+        "exactly one request in strict-mode happy path"
+    );
     let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
 
     // The Structured Outputs envelope.
@@ -255,12 +259,10 @@ async fn json_object_fallback_kicks_in_on_capability_400() {
         .and(wiremock::matchers::body_partial_json(
             serde_json::json!({ "response_format": { "type": "json_object" } }),
         ))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(ok_chat_response(
-                "{\"sentiment\":\"positive\"}",
-                "deepseek-v4-flash",
-            )),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(ok_chat_response(
+            "{\"sentiment\":\"positive\"}",
+            "deepseek-v4-flash",
+        )))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -299,7 +301,11 @@ async fn json_object_fallback_kicks_in_on_capability_400() {
     // Pin the SHAPE of the retry — schema must reach the model via system
     // message, and the word "JSON" must appear (OpenAI requirement).
     let received = mock_server.received_requests().await.unwrap();
-    assert_eq!(received.len(), 2, "exactly two upstream calls: schema attempt + object retry");
+    assert_eq!(
+        received.len(),
+        2,
+        "exactly two upstream calls: schema attempt + object retry"
+    );
 
     let retry_body: serde_json::Value = serde_json::from_slice(&received[1].body).unwrap();
     assert_eq!(retry_body["response_format"]["type"], "json_object");
@@ -373,10 +379,14 @@ async fn capability_cache_short_circuits_subsequent_calls_for_same_model() {
     // Same model string across both calls so the cache key matches.
     let model_suffix = cheap_unique();
     let mut spec = spec_template(&model_suffix);
-    spec.config["model"] =
-        serde_json::Value::String(format!("deepseek/cache-test-{model_suffix}"));
+    spec.config["model"] = serde_json::Value::String(format!("deepseek/cache-test-{model_suffix}"));
 
-    let _ = run_spec(spec.clone(), tmp.clone(), &format!("call-1-{}", cheap_unique())).await;
+    let _ = run_spec(
+        spec.clone(),
+        tmp.clone(),
+        &format!("call-1-{}", cheap_unique()),
+    )
+    .await;
     let _ = run_spec(spec, tmp.clone(), &format!("call-2-{}", cheap_unique())).await;
 
     let received = mock_server.received_requests().await.unwrap();

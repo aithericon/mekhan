@@ -20,8 +20,8 @@ use crate::dto::{
     AnalysisReport, AnalysisSummary, CommandResponse, CreateTokenRequest, ErrorResponse,
     EvaluateFinalState, EvaluateRequest, EvaluateResponse, EventsResponse, FiredTransition,
     IssueLevel, LoadScenarioRequest, LoadScenarioResponse, RunMode, RunModeResponse,
-    SetRunModeRequest, StateResponse, TopologyResponse, TransitionStatus,
-    UpdateTransitionRequest, ValidationIssue,
+    SetRunModeRequest, StateResponse, TopologyResponse, TransitionStatus, UpdateTransitionRequest,
+    ValidationIssue,
 };
 use crate::router::{AppState, SseSignal};
 use crate::scenario_bridge::ScenarioBridge;
@@ -38,7 +38,9 @@ where
     T: TopologyRepository,
     S: StateProjection,
 {
-    let _ = app_state.event_tx.send(SseSignal::Event(Box::new(event.clone())));
+    let _ = app_state
+        .event_tx
+        .send(SseSignal::Event(Box::new(event.clone())));
 }
 
 /// Broadcast a reset signal to all SSE clients.
@@ -431,14 +433,10 @@ where
     app_state.service.clear().await;
 
     // Initialize the service with the new topology
-    app_state
-        .service
-        .initialize(net)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Failed to initialize service");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    app_state.service.initialize(net).await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to initialize service");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     app_state.service.set_initial_tokens(initial_tokens.clone());
 
     // Build and register schema registry if definitions are present
@@ -767,9 +765,7 @@ where
 // =============================================================================
 
 /// GET /api/services -- List registered effect handlers and their categories.
-pub async fn get_services<E, T, S>(
-    State(app_state): State<AppState<E, T, S>>,
-) -> impl IntoResponse
+pub async fn get_services<E, T, S>(State(app_state): State<AppState<E, T, S>>) -> impl IntoResponse
 where
     E: EventRepository,
     T: TopologyRepository,
@@ -843,9 +839,7 @@ where
                 let data = serde_json::to_string(&event).unwrap_or_default();
                 Some((Ok(SseEvent::default().event("update").data(data)), rx))
             }
-            Ok(SseSignal::Reset) => {
-                Some((Ok(SseEvent::default().event("reset").data("{}")), rx))
-            }
+            Ok(SseSignal::Reset) => Some((Ok(SseEvent::default().event("reset").data("{}")), rx)),
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 let data = serde_json::json!({ "missed": n }).to_string();
                 Some((Ok(SseEvent::default().event("resync").data(data)), rx))
@@ -905,37 +899,33 @@ pub async fn executor_event_stream(
     };
 
     // Phase 2: live stream, skipping events already sent in backfill.
-    let live = futures::stream::unfold(
-        (rx, max_backfill_seq),
-        |(mut rx, skip_until)| async move {
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        if event.seq <= skip_until {
-                            continue;
-                        }
-                        let data =
-                            serde_json::to_string(&event.payload).unwrap_or_default();
-                        return Some((
-                            Ok(SseEvent::default()
-                                .event("executor")
-                                .data(data)
-                                .id(event.seq.to_string())),
-                            (rx, event.seq),
-                        ));
+    let live = futures::stream::unfold((rx, max_backfill_seq), |(mut rx, skip_until)| async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if event.seq <= skip_until {
+                        continue;
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        let data = serde_json::json!({ "missed": n }).to_string();
-                        return Some((
-                            Ok(SseEvent::default().event("resync").data(data)),
-                            (rx, skip_until),
-                        ));
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                    let data = serde_json::to_string(&event.payload).unwrap_or_default();
+                    return Some((
+                        Ok(SseEvent::default()
+                            .event("executor")
+                            .data(data)
+                            .id(event.seq.to_string())),
+                        (rx, event.seq),
+                    ));
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    let data = serde_json::json!({ "missed": n }).to_string();
+                    return Some((
+                        Ok(SseEvent::default().event("resync").data(data)),
+                        (rx, skip_until),
+                    ));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
             }
-        },
-    );
+        }
+    });
 
     // Chain: emit backfill immediately, then block on live events.
     use futures::StreamExt;
@@ -1025,10 +1015,9 @@ pub mod net_scoped {
             use crate::net_registry::MetadataStatus;
             match lookup.lookup(net_id).await {
                 MetadataStatus::Known => Ok(registry.get_or_create(net_id)),
-                MetadataStatus::Tombstoned => Err((
-                    StatusCode::CONFLICT,
-                    "Net is completed or cancelled",
-                )),
+                MetadataStatus::Tombstoned => {
+                    Err((StatusCode::CONFLICT, "Net is completed or cancelled"))
+                }
                 MetadataStatus::Unknown => Err((StatusCode::NOT_FOUND, "Net not found")),
             }
         } else {
@@ -1380,10 +1369,7 @@ pub mod net_scoped {
         S: StateProjection + 'static,
     {
         match registry.hibernate(&net_id) {
-            Ok(()) => (
-                StatusCode::OK,
-                Json(serde_json::json!({ "success": true })),
-            ),
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))),
             Err(e) => (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "success": false, "error": e })),
@@ -1402,10 +1388,7 @@ pub mod net_scoped {
         S: StateProjection + 'static,
     {
         let _instance = registry.get_or_create(&net_id);
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({ "success": true })),
-        )
+        (StatusCode::OK, Json(serde_json::json!({ "success": true })))
     }
 }
 

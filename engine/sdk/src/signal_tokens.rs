@@ -160,8 +160,7 @@ mod tests {
     #[test]
     fn deserialize_full_payload() {
         let val = sample_payload();
-        let token: CatalogueSignalToken =
-            serde_json::from_value(val).expect("should deserialize");
+        let token: CatalogueSignalToken = serde_json::from_value(val).expect("should deserialize");
 
         assert_eq!(token.source, "catalogue");
         assert_eq!(token.subscription_id, "sub-001");
@@ -171,7 +170,10 @@ mod tests {
         assert_eq!(token.artifact.name, "trained_model.pt");
         assert_eq!(token.artifact.category, "model");
         assert_eq!(token.artifact.filename, "trained_model.pt");
-        assert_eq!(token.artifact.mime_type.as_deref(), Some("application/octet-stream"));
+        assert_eq!(
+            token.artifact.mime_type.as_deref(),
+            Some("application/octet-stream")
+        );
         assert_eq!(token.artifact.size_bytes, Some(104857600));
         assert_eq!(
             token.artifact.storage_path.as_deref(),
@@ -214,15 +216,17 @@ mod tests {
     #[test]
     fn roundtrip_serialization() {
         let val = sample_payload();
-        let token: CatalogueSignalToken =
-            serde_json::from_value(val.clone()).expect("deserialize");
+        let token: CatalogueSignalToken = serde_json::from_value(val.clone()).expect("deserialize");
         let reserialized = serde_json::to_value(&token).expect("serialize");
 
         // Verify key fields survive the roundtrip
         assert_eq!(reserialized["source"], "catalogue");
         assert_eq!(reserialized["subscription_id"], "sub-001");
         assert_eq!(reserialized["artifact"]["id"], "art-123");
-        assert_eq!(reserialized["artifact"]["storage_path"], "s3://bucket/models/trained_model.pt");
+        assert_eq!(
+            reserialized["artifact"]["storage_path"],
+            "s3://bucket/models/trained_model.pt"
+        );
     }
 
     #[test]

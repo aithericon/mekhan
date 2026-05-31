@@ -344,8 +344,7 @@ impl ExecutorConfig {
         }
 
         // Auto-promote lifetime to RunToCompletion when drain fields are set
-        if (self.max_jobs.is_some() || self.min_jobs.is_some())
-            && self.lifetime == Lifetime::Daemon
+        if (self.max_jobs.is_some() || self.min_jobs.is_some()) && self.lifetime == Lifetime::Daemon
         {
             self.lifetime = Lifetime::RunToCompletion;
         }
@@ -357,10 +356,7 @@ impl ExecutorConfig {
 
         // Validate max >= min when both are set
         if let (Some(max), Some(min)) = (self.max_jobs, self.min_jobs) {
-            assert!(
-                max >= min,
-                "max_jobs ({max}) must be >= min_jobs ({min})"
-            );
+            assert!(max >= min, "max_jobs ({max}) must be >= min_jobs ({min})");
         }
     }
 

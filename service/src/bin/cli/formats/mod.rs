@@ -68,9 +68,7 @@ pub fn read_workflow(dir: &Path, format: WorkflowFormat) -> Result<WorkflowGraph
         .with_context(|| format!("failed to read {}", path.display()))?;
 
     match format {
-        WorkflowFormat::Json => {
-            serde_json::from_str(&content).context("invalid graph.json")
-        }
+        WorkflowFormat::Json => serde_json::from_str(&content).context("invalid graph.json"),
         WorkflowFormat::Yaml => yaml::parse(&content),
         WorkflowFormat::Hcl => hcl::parse(&content),
     }

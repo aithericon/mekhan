@@ -56,11 +56,7 @@ pub fn build_context(
 }
 
 /// Render a single template string with a named source label for diagnostics.
-pub fn render(
-    source: &str,
-    context: &tera::Context,
-    label: &str,
-) -> Result<String, SmtpOutcome> {
+pub fn render(source: &str, context: &tera::Context, label: &str) -> Result<String, SmtpOutcome> {
     shared_ctx::render(source, context, label).map_err(|error| SmtpOutcome::TemplateRender {
         file: label.into(),
         error,
@@ -126,11 +122,18 @@ mod tests {
     fn slugs_become_top_level_variables() {
         let td = TempDir::new().unwrap();
         let rc = ctx_with_inputs(&td);
-        write_json(&rc, "intake.json", serde_json::json!({"name": "Ada", "email": "ada@x.io"}));
+        write_json(
+            &rc,
+            "intake.json",
+            serde_json::json!({"name": "Ada", "email": "ada@x.io"}),
+        );
         write_json(&rc, "review.json", serde_json::json!({"score": 9}));
 
         let mut vars = HashMap::new();
-        vars.insert("support".to_string(), "https://help.example.com".to_string());
+        vars.insert(
+            "support".to_string(),
+            "https://help.example.com".to_string(),
+        );
 
         let ctx = build_context(&rc, Some("mail"), &fake_resource(), &vars).unwrap();
 
@@ -163,7 +166,11 @@ mod tests {
         // reserved — only the redacted public view is exposed.
         let td = TempDir::new().unwrap();
         let rc = ctx_with_inputs(&td);
-        write_json(&rc, "mail.json", serde_json::json!({"password": "DO-NOT-LEAK"}));
+        write_json(
+            &rc,
+            "mail.json",
+            serde_json::json!({"password": "DO-NOT-LEAK"}),
+        );
 
         let ctx = build_context(&rc, Some("mail"), &fake_resource(), &HashMap::new()).unwrap();
         let err = render("{{ mail.password }}", &ctx, "evil.tera").unwrap_err();
@@ -189,7 +196,8 @@ mod tests {
     fn env_secrets_available_in_smtp_templates() {
         let td = TempDir::new().unwrap();
         let mut rc = ctx_with_inputs(&td);
-        rc.resolved_env.insert("UNSUB_TOKEN".into(), "tok-123".into());
+        rc.resolved_env
+            .insert("UNSUB_TOKEN".into(), "tok-123".into());
 
         let ctx = build_context(&rc, None, &fake_resource(), &HashMap::new()).unwrap();
         let out = render("unsub: {{ env.UNSUB_TOKEN }}", &ctx, "body.tera").unwrap();

@@ -25,10 +25,7 @@ async fn shared_ollama() -> &'static SharedOllama {
                 .expect("Failed to start Ollama testcontainer");
 
             let host = container.get_host().await.expect("get_host");
-            let port = container
-                .get_host_port_ipv4(11434)
-                .await
-                .expect("get_port");
+            let port = container.get_host_port_ipv4(11434).await.expect("get_port");
             let base_url = format!("http://{host}:{port}");
 
             // Wait for API to be ready
@@ -41,7 +38,9 @@ async fn shared_ollama() -> &'static SharedOllama {
             }
 
             // Pull the model (blocks until download completes)
-            eprintln!("Pulling Ollama model {OLLAMA_MODEL} (this may take a few minutes on first run)...");
+            eprintln!(
+                "Pulling Ollama model {OLLAMA_MODEL} (this may take a few minutes on first run)..."
+            );
             let pull_resp = client
                 .post(format!("{base_url}/api/pull"))
                 .json(&serde_json::json!({

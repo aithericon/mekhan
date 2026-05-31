@@ -32,8 +32,8 @@ pub(crate) static LOOP_DECL: NodeDecl = NodeDecl {
     // synthesises a read-arc through the parked envelope.
     parks_data_envelope: true,
     lower: Some(crate::compiler::lower::loop_::lower_loop),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     validate: Some(crate::compiler::validate::validate_loop),
@@ -72,11 +72,7 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     ]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::Loop {
         max_iterations,

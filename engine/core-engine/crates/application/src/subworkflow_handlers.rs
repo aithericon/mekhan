@@ -7,9 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use petri_domain::subworkflow::{
-    SubWorkflowCancelRequest, SubWorkflowCancellor,
-};
+use petri_domain::subworkflow::{SubWorkflowCancelRequest, SubWorkflowCancellor};
 
 use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput};
 
@@ -46,9 +44,7 @@ impl EffectHandler for SubWorkflowCancelHandler {
         let child_net_id = cancel_data
             .get("child_net_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                EffectError::Fatal("Missing child_net_id in cancel input".to_string())
-            })?
+            .ok_or_else(|| EffectError::Fatal("Missing child_net_id in cancel input".to_string()))?
             .to_string();
 
         let reason = cancel_data

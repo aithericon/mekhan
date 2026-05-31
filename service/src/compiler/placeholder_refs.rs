@@ -128,7 +128,10 @@ mod tests {
     fn chain_emits_only_first_two_segments() {
         // `{{ review.config.timeout }}` — head=review, attr=config; deeper
         // segments are attribute lookups on the staged producer envelope.
-        assert_eq!(pairs("{{ review.config.timeout }}"), vec![("review".into(), "config".into())]);
+        assert_eq!(
+            pairs("{{ review.config.timeout }}"),
+            vec![("review".into(), "config".into())]
+        );
     }
 
     #[test]

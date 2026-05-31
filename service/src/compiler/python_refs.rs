@@ -211,10 +211,7 @@ fn try_string(bytes: &[u8], i: usize) -> Option<usize> {
 }
 
 fn is_prefix_letter(b: u8) -> bool {
-    matches!(
-        b,
-        b'r' | b'b' | b'f' | b'u' | b'R' | b'B' | b'F' | b'U'
-    )
+    matches!(b, b'r' | b'b' | b'f' | b'u' | b'R' | b'B' | b'F' | b'U')
 }
 
 #[cfg(test)]
@@ -261,7 +258,10 @@ mod tests {
     #[test]
     fn skip_comment() {
         // The `#` line is a comment — no refs.
-        assert_eq!(refs("# review.invoice_amount\n"), Vec::<(String, String)>::new());
+        assert_eq!(
+            refs("# review.invoice_amount\n"),
+            Vec::<(String, String)>::new()
+        );
     }
 
     #[test]
@@ -282,7 +282,10 @@ mod tests {
     fn f_string_prefix_is_string() {
         // F-strings contain expressions; for v1 we treat the whole literal
         // as opaque (no refs extracted from inside `{}`).
-        assert_eq!(refs(r#"x = f"hello {review.x}""#), Vec::<(String, String)>::new());
+        assert_eq!(
+            refs(r#"x = f"hello {review.x}""#),
+            Vec::<(String, String)>::new()
+        );
     }
 
     #[test]

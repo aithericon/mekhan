@@ -119,10 +119,14 @@ pub(crate) fn validate_resource_refs(
             });
         }
         if explicit_slugs.contains(name) {
-            return Err(CompileError::ResourceAliasCollidesWithSlug { alias: name.clone() });
+            return Err(CompileError::ResourceAliasCollidesWithSlug {
+                alias: name.clone(),
+            });
         }
         if CONTROL_TOKEN_NAMES.contains(&name.as_str()) {
-            return Err(CompileError::ResourceAliasCollidesWithToken { alias: name.clone() });
+            return Err(CompileError::ResourceAliasCollidesWithToken {
+                alias: name.clone(),
+            });
         }
     }
 
@@ -146,13 +150,12 @@ pub(crate) fn resource_name_scope(known: &KnownResources) -> BTreeSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::template::{
-        Port, Position, WorkflowEdge, WorkflowNode, WorkflowNodeData,
-    };
+    use crate::models::template::{Port, Position, WorkflowEdge, WorkflowNode, WorkflowNodeData};
 
     fn minimal_graph() -> WorkflowGraph {
         WorkflowGraph {
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
             nodes: vec![
                 WorkflowNode {
                     id: "n_start".to_string(),

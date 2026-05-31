@@ -80,10 +80,7 @@ pub async fn upload_file(
         )));
     }
 
-    let filename = field
-        .file_name()
-        .unwrap_or("upload.png")
-        .to_string();
+    let filename = field.file_name().unwrap_or("upload.png").to_string();
 
     let bytes = field
         .bytes()
@@ -126,10 +123,7 @@ pub async fn upload_file(
     ),
     tag = "files",
 )]
-pub async fn get_file(
-    State(state): State<AppState>,
-    Path(key): Path<String>,
-) -> impl IntoResponse {
+pub async fn get_file(State(state): State<AppState>, Path(key): Path<String>) -> impl IntoResponse {
     match state.s3.get_file(&key).await {
         Ok((bytes, content_type)) => (
             StatusCode::OK,

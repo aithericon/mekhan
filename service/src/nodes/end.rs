@@ -19,8 +19,8 @@ pub(crate) static END_DECL: NodeDecl = NodeDecl {
     is_join: false,
     parks_data_envelope: false,
     lower: Some(crate::compiler::lower::end::lower_end),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     // No per-node structural rule (End cardinality is checked graph-wide in
@@ -46,11 +46,7 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     vec![]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::End { result_mapping, .. } = data else {
         unreachable!("end::yjs_encode on non-End variant");
@@ -59,8 +55,8 @@ fn yjs_encode(
     // attribute mirrors this in the JSON wire form. Round-trip parity matters
     // for the publish path (graph → Y.Doc → graph reconstruction).
     if !result_mapping.is_empty() {
-        let rm_val = serde_json::to_value(result_mapping)
-            .unwrap_or(serde_json::Value::Array(vec![]));
+        let rm_val =
+            serde_json::to_value(result_mapping).unwrap_or(serde_json::Value::Array(vec![]));
         config.insert(txn, "resultMapping", json_value_to_any(&rm_val));
     }
 }

@@ -24,11 +24,7 @@ use super::{resolve_path, FileOpsResult};
 /// - `files` — array of path strings or stat objects
 /// - `count` — number of entries returned
 /// - `truncated` — `true` if `limit` was reached
-pub async fn execute(
-    config: &ListConfig,
-    operator: &Operator,
-    prefix: &str,
-) -> FileOpsResult {
+pub async fn execute(config: &ListConfig, operator: &Operator, prefix: &str) -> FileOpsResult {
     let full_prefix = resolve_path(prefix, &config.prefix);
 
     let entries = operator.list(&full_prefix).await?;
@@ -80,6 +76,9 @@ pub async fn execute(
         ("prefix".into(), serde_json::json!(config.prefix)),
         ("files".into(), serde_json::Value::Array(files)),
         ("count".into(), serde_json::json!(total)),
-        ("truncated".into(), serde_json::json!(config.limit.is_some_and(|l| total >= l))),
+        (
+            "truncated".into(),
+            serde_json::json!(config.limit.is_some_and(|l| total >= l)),
+        ),
     ]))
 }

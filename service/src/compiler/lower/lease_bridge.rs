@@ -20,8 +20,8 @@
 //! they need `cx.fixups` before the `&mut *cx.ctx` reborrow, which is the
 //! caller's concern (this helper only sees the already-resolved `&Context`).
 
-use super::*;
 use super::automated_step::PoolBinding;
+use super::*;
 
 /// The interior places + pre-wired bindings the holder's body cycle wires onto.
 /// Returned by [`emit_lease_bridge`]; the caller (Loop / LeaseScope) reads these
@@ -163,8 +163,7 @@ pub(super) fn emit_lease_bridge(
     // instance), replay-deterministic (no RNG/clock) — the same argument
     // as `lower_pooled_body`.
     let grant_id_expr = format!(r#"(input._instance_id + ":{id}")"#);
-    let claim_payload =
-        format!("#{{ grant_id: gid, request: {} }}", binding.request_rhai);
+    let claim_payload = format!("#{{ grant_id: gid, request: {} }}", binding.request_rhai);
 
     // t_{id}_claim — mint grant_id, emit ClaimRequest, park {input, grant_id}.
     ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim Lease"))

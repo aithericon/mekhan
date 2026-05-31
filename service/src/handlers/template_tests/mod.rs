@@ -42,12 +42,11 @@ pub use runner::{run_test, RunContext};
 /// already; defensively fall back to `id` if the column is NULL (the very
 /// first row in a chain).
 pub async fn family_root(db: &PgPool, template_id: Uuid) -> Result<Uuid, ApiError> {
-    let row: Option<(Option<Uuid>, Uuid)> = sqlx::query_as(
-        "SELECT base_template_id, id FROM workflow_templates WHERE id = $1",
-    )
-    .bind(template_id)
-    .fetch_optional(db)
-    .await?;
+    let row: Option<(Option<Uuid>, Uuid)> =
+        sqlx::query_as("SELECT base_template_id, id FROM workflow_templates WHERE id = $1")
+            .bind(template_id)
+            .fetch_optional(db)
+            .await?;
 
     let (base, id) = row.ok_or_else(|| ApiError::not_found("template not found"))?;
     Ok(base.unwrap_or(id))
@@ -124,8 +123,8 @@ pub async fn create_test(
 ) -> Result<(StatusCode, Json<TemplateTest>), ApiError> {
     let family = family_root(&state.db, template_id).await?;
 
-    let start_tokens = serde_json::to_value(&req.start_tokens)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let start_tokens =
+        serde_json::to_value(&req.start_tokens).map_err(|e| ApiError::internal(e.to_string()))?;
     let assertions =
         serde_json::to_value(&req.assertions).map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -395,21 +394,19 @@ pub async fn promote_instance_to_test(
 ) -> Result<(StatusCode, Json<TemplateTest>), ApiError> {
     // Pull source instance + its template so we can resolve slugs and the
     // family root the test will attach to.
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1",
-    )
-    .bind(instance_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::not_found("instance not found"))?;
+    let instance =
+        sqlx::query_as::<_, WorkflowInstance>("SELECT * FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
-    let template = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1",
-    )
-    .bind(instance.template_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::internal("source instance references unknown template"))?;
+    let template =
+        sqlx::query_as::<_, WorkflowTemplate>("SELECT * FROM workflow_templates WHERE id = $1")
+            .bind(instance.template_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::internal("source instance references unknown template"))?;
     let graph: WorkflowGraph = serde_json::from_value(template.graph.clone())
         .map_err(|e| ApiError::internal(format!("template graph invalid: {e}")))?;
 
@@ -565,10 +562,7 @@ async fn extract_human_answers(
             // care about `data`; a bare-token-shaped payload (no `data` key)
             // is passed through unchanged so an unusual engine variant still
             // produces a usable fixture.
-            let answer = token_data
-                .get("data")
-                .cloned()
-                .unwrap_or(token_data);
+            let answer = token_data.get("data").cloned().unwrap_or(token_data);
             answers.insert(node.slug(), answer);
         }
     }
@@ -632,4 +626,3 @@ pub async fn run_all(
         runs,
     }))
 }
-

@@ -208,7 +208,11 @@ mod tests {
     fn slug_envelopes_become_top_level_vars() {
         let td = TempDir::new().unwrap();
         let rc = ctx_with_inputs(&td, "e1");
-        write_slug(&rc, "review.json", serde_json::json!({"invoice_amount": 42}));
+        write_slug(
+            &rc,
+            "review.json",
+            serde_json::json!({"invoice_amount": 42}),
+        );
         write_slug(&rc, "intake.json", serde_json::json!({"name": "Ada"}));
 
         let ctx = build_template_context(&rc, &[]).unwrap();
@@ -228,7 +232,8 @@ mod tests {
         rc.env.insert("API_HOST".into(), "api.example.com".into());
         // resolved_env wins over env for the same key (plaintext secret).
         rc.env.insert("API_TOKEN".into(), "{{secret:x#t}}".into());
-        rc.resolved_env.insert("API_TOKEN".into(), "sk-live-xyz".into());
+        rc.resolved_env
+            .insert("API_TOKEN".into(), "sk-live-xyz".into());
 
         let ctx = build_template_context(&rc, &[]).unwrap();
         let out = render(
@@ -249,7 +254,10 @@ mod tests {
 
         let ctx = build_template_context(&rc, &["mail"]).unwrap();
         let err = render("{{ mail.password }}", &ctx, "t").unwrap_err();
-        assert!(err.contains("mail"), "expected unknown-var error, got: {err}");
+        assert!(
+            err.contains("mail"),
+            "expected unknown-var error, got: {err}"
+        );
     }
 
     #[test]

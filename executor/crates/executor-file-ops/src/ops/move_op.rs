@@ -89,7 +89,12 @@ pub async fn execute(
                     }
                     Err(e) if e.kind() == opendal::ErrorKind::Unsupported => {
                         let bytes = streaming::stream_copy(
-                            src_operator, &src, dst_operator, &dst, None, None,
+                            src_operator,
+                            &src,
+                            dst_operator,
+                            &dst,
+                            None,
+                            None,
                         )
                         .await?;
                         src_operator.delete(&src).await?;

@@ -392,8 +392,13 @@ pub(crate) async fn evaluate_until_quiescent<
                         // marker and tears the net down.
                         let reason = format!("Transition {}: {}", transition_id, e);
                         tracing::warn!("{}", reason);
-                        let retryable =
-                            matches!(e, ServiceError::EffectFailed { retryable: true, .. });
+                        let retryable = matches!(
+                            e,
+                            ServiceError::EffectFailed {
+                                retryable: true,
+                                ..
+                            }
+                        );
                         // Surface the audit events the firing layer appended
                         // (so callers/tests see them in EvaluateResult.events;
                         // the driver also re-reads the store for SSE).
@@ -649,8 +654,7 @@ mod tests {
             "input",
         ));
         net.add_arc(
-            PetriArc::input(PlaceId("p_data".to_string()), tb1.clone(), "d_prod")
-                .with_read(true),
+            PetriArc::input(PlaceId("p_data".to_string()), tb1.clone(), "d_prod").with_read(true),
         );
         net.add_arc(PetriArc::output(
             tb1,

@@ -112,7 +112,10 @@ fn validate_recursive(
     path: &mut String,
 ) -> Result<(), (String, SchemaRefError)> {
     if depth > DEPTH_CAP {
-        return Err((path.clone(), SchemaRefError::DepthExceeded { max: DEPTH_CAP }));
+        return Err((
+            path.clone(),
+            SchemaRefError::DepthExceeded { max: DEPTH_CAP },
+        ));
     }
 
     match ref_target(value) {
@@ -129,13 +132,7 @@ fn validate_recursive(
             let saved = path.clone();
             path.push_str("/$ref->");
             path.push_str(&name);
-            validate_recursive(
-                &definitions[&name],
-                definitions,
-                in_flight,
-                depth + 1,
-                path,
-            )?;
+            validate_recursive(&definitions[&name], definitions, in_flight, depth + 1, path)?;
             *path = saved;
             in_flight.remove(&name);
             return Ok(());
@@ -239,8 +236,10 @@ fn contains_ref(value: &serde_json::Value) -> bool {
 /// `AutomatedStep` ref would.
 pub fn inline_agent_response_format_refs(
     graph: &crate::models::template::WorkflowGraph,
-) -> Result<std::borrow::Cow<'_, crate::models::template::WorkflowGraph>, crate::compiler::error::CompileError>
-{
+) -> Result<
+    std::borrow::Cow<'_, crate::models::template::WorkflowGraph>,
+    crate::compiler::error::CompileError,
+> {
     use crate::models::template::WorkflowNodeData;
 
     let needs_inline = graph.nodes.iter().any(|n| {
@@ -323,7 +322,9 @@ mod tests {
         let d = defs(&[]);
         let mut v = json!({ "$ref": "#/definitions/DoesNotExist" });
         let err = inline_refs(&mut v, &d).unwrap_err();
-        assert!(matches!(err, SchemaRefError::UnknownDefinition { ref name } if name == "DoesNotExist"));
+        assert!(
+            matches!(err, SchemaRefError::UnknownDefinition { ref name } if name == "DoesNotExist")
+        );
     }
 
     #[test]
@@ -354,10 +355,7 @@ mod tests {
             "items": { "$ref": "#/definitions/Foo" }
         });
         inline_refs(&mut v, &d).unwrap();
-        assert_eq!(
-            v,
-            json!({ "type": "array", "items": { "type": "string" } })
-        );
+        assert_eq!(v, json!({ "type": "array", "items": { "type": "string" } }));
     }
 
     #[test]

@@ -130,9 +130,7 @@ async fn public_visibility_crosses_workspace() {
                 .method("PUT")
                 .uri(format!("/api/v1/templates/{tpl_a}"))
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "name": "bob's hijack" }).to_string(),
-                ))
+                .body(Body::from(json!({ "name": "bob's hijack" }).to_string()))
                 .unwrap(),
         )
         .await
@@ -462,7 +460,11 @@ async fn test_app_with_authenticator_and_petri_url(
     let yjs = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
-    let triggers = Arc::new(TriggerDispatcher::new(db.clone(), petri.clone(), nats.clone()));
+    let triggers = Arc::new(TriggerDispatcher::new(
+        db.clone(),
+        petri.clone(),
+        nats.clone(),
+    ));
 
     let state = AppState {
         db: db.clone(),
@@ -501,10 +503,9 @@ async fn yjs_ws_rejects_cross_workspace() {
     // Real TCP server + real WS handshake — synthetic `oneshot()` requests
     // can't drive HTTP/1.1 upgrade through Tower, so the `WebSocketUpgrade`
     // extractor 426s before the gate ever runs.
-    let (addr, db) = common::start_test_server_with_authenticator(Arc::new(
-        MockAuthenticator::header_driven(),
-    ))
-    .await;
+    let (addr, db) =
+        common::start_test_server_with_authenticator(Arc::new(MockAuthenticator::header_driven()))
+            .await;
 
     let ws_a = seed_workspace(&db, &format!("ws-a-{}", Uuid::new_v4().simple())).await;
     let ws_b = seed_workspace(&db, &format!("ws-b-{}", Uuid::new_v4().simple())).await;
@@ -514,10 +515,8 @@ async fn yjs_ws_rejects_cross_workspace() {
 
     let url = format!("ws://{addr}/api/yjs/{tpl}");
     let mut req = url.into_client_request().expect("ws request");
-    req.headers_mut().insert(
-        "x-test-subject",
-        http::HeaderValue::from_static("bob"),
-    );
+    req.headers_mut()
+        .insert("x-test-subject", http::HeaderValue::from_static("bob"));
     req.headers_mut().insert(
         "x-test-workspace",
         http::HeaderValue::from_str(&ws_b.to_string()).unwrap(),
@@ -567,7 +566,9 @@ async fn private_visibility_requires_and_pins_owner() {
     };
 
     // private without an owner → 400
-    let resp = patch_visibility(json!({ "visibility": "private" })).await.unwrap();
+    let resp = patch_visibility(json!({ "visibility": "private" }))
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // private owned by itself → 400
@@ -606,7 +607,9 @@ async fn private_visibility_requires_and_pins_owner() {
     );
 
     // flip back to workspace → owner cleared
-    let resp = patch_visibility(json!({ "visibility": "workspace" })).await.unwrap();
+    let resp = patch_visibility(json!({ "visibility": "workspace" }))
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     let resp = app
@@ -727,7 +730,9 @@ async fn create_instance_rejects_private() {
                 .method("POST")
                 .uri("/api/v1/instances")
                 .header("content-type", "application/json")
-                .body(Body::from(json!({ "template_id": child.to_string() }).to_string()))
+                .body(Body::from(
+                    json!({ "template_id": child.to_string() }).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -770,7 +775,11 @@ async fn editor_can_privatize_but_not_publicize() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT, "editor may privatize");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NO_CONTENT,
+        "editor may privatize"
+    );
 
     // editor → public: forbidden (admin-gated tenancy decision)
     let resp = app
@@ -784,5 +793,9 @@ async fn editor_can_privatize_but_not_publicize() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "editor may not publicize");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "editor may not publicize"
+    );
 }

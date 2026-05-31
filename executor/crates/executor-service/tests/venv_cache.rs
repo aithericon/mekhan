@@ -5,12 +5,12 @@ mod venv_cache_tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use aithericon_executor_python::cache::VenvCache;
-    use aithericon_executor_python::{PythonBackend, PythonConfig};
     use aithericon_executor_domain::{
         ExecutionJob, ExecutionStatus, InputDeclaration, InputSource, JobPriority,
         OutputDeclaration,
     };
+    use aithericon_executor_python::cache::VenvCache;
+    use aithericon_executor_python::{PythonBackend, PythonConfig};
     use aithericon_executor_test_harness::context::ExecutorTestContext;
     use aithericon_executor_test_harness::helpers::assert_status_sequence;
     use aithericon_executor_worker::{BackendRegistry, CleanupPolicy};
@@ -108,8 +108,11 @@ mod venv_cache_tests {
         let code = "print('hello from cached venv')";
 
         let t0 = Instant::now();
-        ctx.push_job(venv_job(&eid1, code, vec![], vec![], vec![])).await;
-        let statuses1 = ctx.collect_statuses(&consumer1, Duration::from_secs(60)).await;
+        ctx.push_job(venv_job(&eid1, code, vec![], vec![], vec![]))
+            .await;
+        let statuses1 = ctx
+            .collect_statuses(&consumer1, Duration::from_secs(60))
+            .await;
         let miss_elapsed = t0.elapsed();
 
         assert_status_sequence(
@@ -128,8 +131,11 @@ mod venv_cache_tests {
         );
 
         let t1 = Instant::now();
-        ctx.push_job(venv_job(&eid2, code, vec![], vec![], vec![])).await;
-        let statuses2 = ctx.collect_statuses(&consumer2, Duration::from_secs(60)).await;
+        ctx.push_job(venv_job(&eid2, code, vec![], vec![], vec![]))
+            .await;
+        let statuses2 = ctx
+            .collect_statuses(&consumer2, Duration::from_secs(60))
+            .await;
         let hit_elapsed = t1.elapsed();
 
         assert_status_sequence(
@@ -178,8 +184,13 @@ mod venv_cache_tests {
 
         ctx.push_job(venv_job(&eid, "print(1)", vec![], vec![], vec![]))
             .await;
-        let statuses = ctx.collect_statuses(&consumer, Duration::from_secs(60)).await;
-        assert_eq!(statuses.last().map(|s| s.status), Some(ExecutionStatus::Completed));
+        let statuses = ctx
+            .collect_statuses(&consumer, Duration::from_secs(60))
+            .await;
+        assert_eq!(
+            statuses.last().map(|s| s.status),
+            Some(ExecutionStatus::Completed)
+        );
 
         // Run dir cleanup runs *after* the terminal status is published, so we
         // poll briefly rather than assert synchronously.
@@ -245,8 +256,13 @@ mod venv_cache_tests {
 
         ctx.push_job(venv_job(&eid_a, "print(1)", vec![], vec![], vec![]))
             .await;
-        let statuses_a = ctx.collect_statuses(&consumer_a, Duration::from_secs(60)).await;
-        assert_eq!(statuses_a.last().map(|s| s.status), Some(ExecutionStatus::Completed));
+        let statuses_a = ctx
+            .collect_statuses(&consumer_a, Duration::from_secs(60))
+            .await;
+        assert_eq!(
+            statuses_a.last().map(|s| s.status),
+            Some(ExecutionStatus::Completed)
+        );
 
         ctx.push_job(venv_job(
             &eid_b,
@@ -256,8 +272,13 @@ mod venv_cache_tests {
             vec![],
         ))
         .await;
-        let statuses_b = ctx.collect_statuses(&consumer_b, Duration::from_secs(120)).await;
-        assert_eq!(statuses_b.last().map(|s| s.status), Some(ExecutionStatus::Completed));
+        let statuses_b = ctx
+            .collect_statuses(&consumer_b, Duration::from_secs(120))
+            .await;
+        assert_eq!(
+            statuses_b.last().map(|s| s.status),
+            Some(ExecutionStatus::Completed)
+        );
 
         assert_eq!(
             count_hash_subdirs(&cache_root),
@@ -304,8 +325,14 @@ mod venv_cache_tests {
 
         // ---- Cache miss: real pip install ----
         let t0 = Instant::now();
-        ctx.push_job(venv_job(&eid_miss, code, requirements.clone(), vec![], vec![]))
-            .await;
+        ctx.push_job(venv_job(
+            &eid_miss,
+            code,
+            requirements.clone(),
+            vec![],
+            vec![],
+        ))
+        .await;
         let statuses_miss = ctx
             .collect_statuses(&consumer_miss, Duration::from_secs(180))
             .await;
@@ -395,7 +422,10 @@ mod venv_cache_tests {
             sdk_path: None,
         };
         let warmed = cache.resolve(req).await.expect("warm resolve");
-        assert!(warmed.join("bin/python").exists(), "warm path should produce a usable venv");
+        assert!(
+            warmed.join("bin/python").exists(),
+            "warm path should produce a usable venv"
+        );
 
         let s_after_warm = cache.stats();
         assert_eq!(s_after_warm.misses, 1);
@@ -414,7 +444,9 @@ mod venv_cache_tests {
 
         ctx.push_job(venv_job(&eid, "print('warm hit')", vec![], vec![], vec![]))
             .await;
-        let statuses = ctx.collect_statuses(&consumer, Duration::from_secs(60)).await;
+        let statuses = ctx
+            .collect_statuses(&consumer, Duration::from_secs(60))
+            .await;
         assert_eq!(
             statuses.last().map(|s| s.status),
             Some(ExecutionStatus::Completed),
@@ -422,7 +454,10 @@ mod venv_cache_tests {
         );
 
         let s_after_job = cache.stats();
-        assert_eq!(s_after_job.misses, 1, "no new misses — job hit the warmed entry");
+        assert_eq!(
+            s_after_job.misses, 1,
+            "no new misses — job hit the warmed entry"
+        );
         assert_eq!(s_after_job.hits, 1, "job recorded as a cache hit");
         assert!((s_after_job.hit_ratio() - 0.5).abs() < 1e-9);
 
@@ -461,11 +496,21 @@ mod venv_cache_tests {
         ctx.push_job(venv_job(&eid_b, "print('b')", vec![], vec![], vec![]))
             .await;
 
-        let statuses_a = ctx.collect_statuses(&consumer_a, Duration::from_secs(60)).await;
-        let statuses_b = ctx.collect_statuses(&consumer_b, Duration::from_secs(60)).await;
+        let statuses_a = ctx
+            .collect_statuses(&consumer_a, Duration::from_secs(60))
+            .await;
+        let statuses_b = ctx
+            .collect_statuses(&consumer_b, Duration::from_secs(60))
+            .await;
 
-        assert_eq!(statuses_a.last().map(|s| s.status), Some(ExecutionStatus::Completed));
-        assert_eq!(statuses_b.last().map(|s| s.status), Some(ExecutionStatus::Completed));
+        assert_eq!(
+            statuses_a.last().map(|s| s.status),
+            Some(ExecutionStatus::Completed)
+        );
+        assert_eq!(
+            statuses_b.last().map(|s| s.status),
+            Some(ExecutionStatus::Completed)
+        );
 
         assert_eq!(
             count_hash_subdirs(&cache_root),
@@ -477,7 +522,10 @@ mod venv_cache_tests {
         let leftover = std::fs::read_dir(&staging)
             .map(|i| i.flatten().count())
             .unwrap_or(0);
-        assert_eq!(leftover, 0, ".staging/ should be empty after both jobs finish");
+        assert_eq!(
+            leftover, 0,
+            ".staging/ should be empty after both jobs finish"
+        );
 
         worker.abort();
         ctx.cleanup().await;

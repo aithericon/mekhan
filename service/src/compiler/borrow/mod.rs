@@ -31,9 +31,9 @@ pub(crate) mod shape;
 pub(crate) mod source;
 
 pub(crate) use apply::apply_borrows;
-pub(crate) use shape::{Borrow, BorrowResolution};
 #[cfg(test)]
 pub(crate) use shape::BORROW_MARKER;
+pub(crate) use shape::{Borrow, BorrowResolution};
 
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::CompileError;
@@ -163,14 +163,22 @@ mod tests {
                 {{"id":"end","type":"end","position":{{"x":0,"y":0}},
                  "data":{{"type":"end","label":"End"}}}}"#,
             extra = extra_nodes_json,
-            maybe_comma = if extra_nodes_json.trim().is_empty() { "" } else { "," },
+            maybe_comma = if extra_nodes_json.trim().is_empty() {
+                ""
+            } else {
+                ","
+            },
         );
         let edges = format!(
             r#"{extra}{maybe_comma}
                 {{"id":"e_start_step","source":"start","target":"step","type":"sequence"}},
                 {{"id":"e_step_end","source":"step","target":"end","type":"sequence"}}"#,
             extra = extra_edges_json,
-            maybe_comma = if extra_edges_json.trim().is_empty() { "" } else { "," },
+            maybe_comma = if extra_edges_json.trim().is_empty() {
+                ""
+            } else {
+                ","
+            },
         );
 
         let full = format!(r#"{{"nodes":[{nodes}],"edges":[{edges}]}}"#);
@@ -223,7 +231,12 @@ mod tests {
             "expected exactly one ResourceEnvelope borrow; got all borrows: {borrows:?}"
         );
         match &envelope[0].resolution {
-            BorrowResolution::ResourceEnvelope { name, type_name, latest_version, .. } => {
+            BorrowResolution::ResourceEnvelope {
+                name,
+                type_name,
+                latest_version,
+                ..
+            } => {
                 assert_eq!(name, "local_pg");
                 assert_eq!(type_name, "postgres");
                 assert_eq!(*latest_version, 1);
@@ -288,7 +301,12 @@ mod tests {
         // `apply_borrows`, so the assertion below sees the final AIR shape.
         let interfaces = InterfaceRegistry::new();
         let mut node_configs = std::collections::HashMap::new();
-        apply_borrows(&mut scenario, &interfaces, resource_borrows, &mut node_configs);
+        apply_borrows(
+            &mut scenario,
+            &interfaces,
+            resource_borrows,
+            &mut node_configs,
+        );
 
         let TransitionLogic::Rhai { source } = &scenario.transitions[0].logic else {
             panic!("prepare transition must remain Rhai")
@@ -342,7 +360,9 @@ mod tests {
             "expected exactly one ResourceEnvelope borrow (`local_pg`); got borrows: {borrows:?}"
         );
         match &resource_borrows[0].resolution {
-            BorrowResolution::ResourceEnvelope { name, type_name, .. } => {
+            BorrowResolution::ResourceEnvelope {
+                name, type_name, ..
+            } => {
                 assert_eq!(name, "local_pg");
                 assert_eq!(type_name, "postgres");
             }
@@ -364,8 +384,7 @@ mod tests {
     /// isn't a slug → no resource borrow emitted.
     #[test]
     fn unknown_head_emits_no_resource_borrow() {
-        let (graph, files) =
-            make_python_step_graph("", "", "x = something_unknown.field\n");
+        let (graph, files) = make_python_step_graph("", "", "x = something_unknown.field\n");
         let known = KnownResources::new();
 
         let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");

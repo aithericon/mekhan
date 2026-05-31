@@ -137,11 +137,7 @@ impl KreuzbergTestKit for KreuzbergConformanceKit {
         (ctx, tmps)
     }
 
-    async fn make_empty_run_context(
-        &self,
-        spec: ExecutionSpec,
-        timeout: Duration,
-    ) -> RunContext {
+    async fn make_empty_run_context(&self, spec: ExecutionSpec, timeout: Duration) -> RunContext {
         make_empty_run_context(spec, timeout)
     }
 }

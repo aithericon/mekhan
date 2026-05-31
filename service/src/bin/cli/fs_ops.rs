@@ -10,8 +10,8 @@ use crate::formats::{self, WorkflowFormat};
 
 /// File extensions treated as binary assets (not synced as Y.Text).
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "tiff",
-    "pdf", "zip", "tar", "gz", "whl",
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "tiff", "pdf", "zip", "tar", "gz",
+    "whl",
 ];
 
 /// Filename of the per-checkout metadata file (lockfile-style: machine-managed,
@@ -111,9 +111,8 @@ pub fn meta_path(dir: &Path) -> std::path::PathBuf {
 /// Read and parse `mekhan.lock.json` from a template directory.
 pub fn read_meta(dir: &Path) -> Result<MekhanJson> {
     let path = meta_path(dir);
-    let raw = std::fs::read_to_string(&path).with_context(|| {
-        format!("failed to read {META_FILENAME} — is this a mekhan directory?")
-    })?;
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {META_FILENAME} — is this a mekhan directory?"))?;
     serde_json::from_str(&raw).with_context(|| format!("invalid {META_FILENAME}"))
 }
 
@@ -123,8 +122,7 @@ pub fn write_meta(dir: &Path, meta: &MekhanJson) -> Result<()> {
     let path = meta_path(dir);
     let mut json = serde_json::to_string_pretty(meta)?;
     json.push('\n');
-    std::fs::write(&path, json)
-        .with_context(|| format!("failed to write {}", path.display()))
+    std::fs::write(&path, json).with_context(|| format!("failed to write {}", path.display()))
 }
 
 /// Check if a filename is a binary asset based on extension.
@@ -150,11 +148,7 @@ pub fn read_node_assets(dir: &Path) -> Result<HashMap<String, HashMap<String, Ve
             continue;
         }
 
-        let node_id = entry
-            .file_name()
-            .to_str()
-            .unwrap_or_default()
-            .to_string();
+        let node_id = entry.file_name().to_str().unwrap_or_default().to_string();
 
         let mut node_assets: HashMap<String, Vec<u8>> = HashMap::new();
         for file_entry in std::fs::read_dir(entry.path())? {
@@ -184,10 +178,7 @@ pub fn read_node_assets(dir: &Path) -> Result<HashMap<String, HashMap<String, Ve
     Ok(assets)
 }
 
-fn write_node_files(
-    dir: &Path,
-    files: &HashMap<String, HashMap<String, String>>,
-) -> Result<()> {
+fn write_node_files(dir: &Path, files: &HashMap<String, HashMap<String, String>>) -> Result<()> {
     if files.is_empty() {
         return Ok(());
     }
@@ -220,11 +211,7 @@ fn read_node_files(dir: &Path) -> Result<HashMap<String, HashMap<String, String>
 
     for entry in std::fs::read_dir(&nodes_dir).context("failed to read nodes directory")? {
         let entry = entry?;
-        let node_id = entry
-            .file_name()
-            .to_str()
-            .unwrap_or_default()
-            .to_string();
+        let node_id = entry.file_name().to_str().unwrap_or_default().to_string();
 
         if !entry.file_type()?.is_dir() {
             continue;
@@ -314,8 +301,14 @@ mod tests {
         let step_files = files.get("step1").expect("step1 should have text files");
 
         assert!(step_files.contains_key("main.py"), "should include main.py");
-        assert!(step_files.contains_key("config.json"), "should include config.json");
-        assert!(!step_files.contains_key("screenshot.png"), "should NOT include screenshot.png");
+        assert!(
+            step_files.contains_key("config.json"),
+            "should include config.json"
+        );
+        assert!(
+            !step_files.contains_key("screenshot.png"),
+            "should NOT include screenshot.png"
+        );
     }
 
     #[test]
@@ -333,9 +326,18 @@ mod tests {
         let assets = read_node_assets(tmp.path()).unwrap();
         let review_assets = assets.get("review").expect("review should have assets");
 
-        assert!(review_assets.contains_key("screenshot.png"), "should include screenshot.png");
-        assert!(review_assets.contains_key("diagram.svg"), "should include diagram.svg");
-        assert!(!review_assets.contains_key("main.py"), "should NOT include main.py");
+        assert!(
+            review_assets.contains_key("screenshot.png"),
+            "should include screenshot.png"
+        );
+        assert!(
+            review_assets.contains_key("diagram.svg"),
+            "should include diagram.svg"
+        );
+        assert!(
+            !review_assets.contains_key("main.py"),
+            "should NOT include main.py"
+        );
     }
 
     #[test]

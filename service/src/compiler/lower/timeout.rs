@@ -64,8 +64,10 @@ pub(crate) fn lower_timeout(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         ctx.state(format!("p_{id}_body_in"), format!("{label} - Body In"));
     let p_body_out: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_body_out"), format!("{label} - Body Out"));
-    let p_timer_data: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_timer_data"), format!("{label} - Timer Data"));
+    let p_timer_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_timer_data"),
+        format!("{label} - Timer Data"),
+    );
     let p_scheduled: PlaceHandle<DynamicToken> = ctx.state(
         format!("p_{id}_scheduled"),
         format!("{label} - Scheduled (race token)"),

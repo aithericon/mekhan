@@ -37,8 +37,7 @@ async fn create_draft(app: &axum::Router) -> String {
                 .header("content-type", "application/json")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::from(
-                    json!({ "name": "Introspect E2E", "author_id": Uuid::new_v4() })
-                        .to_string(),
+                    json!({ "name": "Introspect E2E", "author_id": Uuid::new_v4() }).to_string(),
                 ))
                 .unwrap(),
         )

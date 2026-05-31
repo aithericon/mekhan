@@ -217,13 +217,16 @@ async fn publish_resolves_and_splices_known_resources() {
     );
 
     // Exactly one audit row per resolved name with site="publish".
-    let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT resource_id, action, site FROM resource_audit ORDER BY id ASC",
-    )
-    .fetch_all(&db)
-    .await
-    .expect("read audit rows");
-    assert_eq!(rows.len(), 1, "expected one audit row for one resolved name");
+    let rows: Vec<(Uuid, String, String)> =
+        sqlx::query_as("SELECT resource_id, action, site FROM resource_audit ORDER BY id ASC")
+            .fetch_all(&db)
+            .await
+            .expect("read audit rows");
+    assert_eq!(
+        rows.len(),
+        1,
+        "expected one audit row for one resolved name"
+    );
     assert_eq!(rows[0].0, resource_id);
     assert_eq!(rows[0].1, "resolve");
     assert_eq!(rows[0].2, "publish");

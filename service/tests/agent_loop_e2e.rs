@@ -14,12 +14,12 @@ use mekhan_service::compiler::{
     compile_to_air, compile_to_air_with_options, CompileArtifacts, CompileOptions, ConfigStorage,
     ResolvedChild, SubWorkflowAir,
 };
-use mekhan_service::models::template::{FieldKind, PortField};
 use mekhan_service::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, ModelRef, Port,
     Position, RetryPolicy, ToolErrorPolicy, VersionPin, WorkflowEdge, WorkflowGraph, WorkflowNode,
     WorkflowNodeData,
 };
+use mekhan_service::models::template::{FieldKind, PortField};
 use serde_json::{json, Value};
 
 fn pos() -> Position {
@@ -192,7 +192,8 @@ fn compile(nodes: Vec<WorkflowNode>, edges: Vec<WorkflowEdge>) -> Value {
         edges,
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     compile_to_air(&graph, "t", "", &std::collections::HashMap::new()).expect("compile")
 }
@@ -295,9 +296,7 @@ fn multi_turn_agent_with_one_tool_compiles_to_agent_loop_shape() {
     // `<child_id>/...` (lower_automated_step's `scoped_prefix`).
     // Confirms the tool child's subnet was emitted.
     assert!(
-        transitions
-            .iter()
-            .any(|t| t.starts_with("lookup_node/")),
+        transitions.iter().any(|t| t.starts_with("lookup_node/")),
         "tool child must lower into its own scoped prefix; have: {transitions:?}"
     );
 }
@@ -346,8 +345,9 @@ fn agent_tool_collect_reads_child_parked_data_not_control_token() {
     // The payload comes from the parked data place via a READ-arc (non-
     // consuming — the parked place is the borrow surface, write-once).
     assert!(
-        inputs.iter().any(|a| a["place"] == "p_lookup_node_data"
-            && a["read"] == serde_json::json!(true)),
+        inputs
+            .iter()
+            .any(|a| a["place"] == "p_lookup_node_data" && a["read"] == serde_json::json!(true)),
         "collect must READ-arc the child's parked data place; inputs: {inputs:#?}"
     );
 
@@ -355,13 +355,15 @@ fn agent_tool_collect_reads_child_parked_data_not_control_token() {
     // exact bug. The control token (the child's default output place) is
     // still CONSUMED as the firing trigger, but never as the payload source.
     assert!(
-        !inputs.iter().any(|a| a["place"] == "p_lookup_node_ctrl"
-            && a["read"] == serde_json::json!(true)),
+        !inputs
+            .iter()
+            .any(|a| a["place"] == "p_lookup_node_ctrl" && a["read"] == serde_json::json!(true)),
         "collect must not read the payload from the control token; inputs: {inputs:#?}"
     );
     assert!(
-        inputs.iter().any(|a| a["place"] == "p_lookup_node_ctrl"
-            && a["read"] != serde_json::json!(true)),
+        inputs
+            .iter()
+            .any(|a| a["place"] == "p_lookup_node_ctrl" && a["read"] != serde_json::json!(true)),
         "collect must still CONSUME the control token as the done-trigger; inputs: {inputs:#?}"
     );
 }
@@ -390,7 +392,11 @@ fn route_transitions_have_no_effect_handler() {
         .and_then(Value::as_array)
         .expect("transitions array");
 
-    let route_ids = ["t_a_route_final", "t_a_route_dispatch_lookup", "t_a_route_unknown"];
+    let route_ids = [
+        "t_a_route_final",
+        "t_a_route_dispatch_lookup",
+        "t_a_route_unknown",
+    ];
     for rid in &route_ids {
         let route = transitions
             .iter()
@@ -493,8 +499,7 @@ fn agent_threads_transcript_off_token_via_inputs() {
     // Transcript I/O rides as declared inputs + the existing overlay; the
     // full conversation never travels on the token (no `s.history`).
     assert!(
-        prepare.contains(r#""name": "history""#)
-            && prepare.contains(r#""name": "pending""#),
+        prepare.contains(r#""name": "history""#) && prepare.contains(r#""name": "pending""#),
         "prepare_call must declare `history` + `pending` job inputs; got: {prepare}"
     );
     assert!(
@@ -566,7 +571,11 @@ fn route_guards_bake_in_stop_when() {
         ],
     );
     let transitions = air.get("transitions").and_then(Value::as_array).unwrap();
-    for id in ["t_a_route_final", "t_a_route_dispatch_lookup", "t_a_route_unknown"] {
+    for id in [
+        "t_a_route_final",
+        "t_a_route_dispatch_lookup",
+        "t_a_route_unknown",
+    ] {
         let tr = transitions
             .iter()
             .find(|t| t.get("id").and_then(Value::as_str) == Some(id))
@@ -850,7 +859,8 @@ fn incoming_edge_to_tool_child_is_validation_error() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect_err("non-tools-handle edge into tool child must reject");
@@ -1007,7 +1017,11 @@ fn unwired_bubble_agent_crashes_net_and_rhai_parses() {
     for tr in air.get("transitions").and_then(Value::as_array).unwrap() {
         let tid = tr.get("id").and_then(Value::as_str).unwrap_or("<no-id>");
         for field in ["logic", "guard"] {
-            if let Some(source) = tr.get(field).and_then(|l| l.get("source")).and_then(Value::as_str) {
+            if let Some(source) = tr
+                .get(field)
+                .and_then(|l| l.get("source"))
+                .and_then(Value::as_str)
+            {
                 if let Err(e) = engine.compile(source) {
                     failures.push(format!("[{tid}.{field}] {e}\n    source: {source}"));
                 }
@@ -1132,7 +1146,7 @@ fn bare_end_after_agent_does_not_tag_upstream_ctrl_terminal() {
 /// compiler addresses tools by their slugified label, so a collision
 /// makes the per-tool dispatch route guards ambiguous.
 /// (Test fn lives below — see `duplicate_tool_name_is_compile_error`.)
-
+///
 /// The LLM-facing tool `input_schema` must reflect the tool node's
 /// declared input port — field names, types, required list. Without
 /// this, the LLM has no idea what arg keys to emit and the Python
@@ -1179,9 +1193,11 @@ fn tool_input_schema_reflects_declared_input_port() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
-    let inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> = Default::default();
+    let inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
+        Default::default();
     let files = mekhan_service::compiler::node_files_inline(&inline);
     let CompileArtifacts {
         node_configs: configs,
@@ -1215,9 +1231,7 @@ fn tool_input_schema_reflects_declared_input_port() {
         .expect("lookup carries input_schema");
     assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
     assert_eq!(
-        schema
-            .get("additionalProperties")
-            .and_then(Value::as_bool),
+        schema.get("additionalProperties").and_then(Value::as_bool),
         Some(false),
         "declared-fields tools must lock additionalProperties=false so the \
          LLM can't invent unknown args; got: {schema}"
@@ -1262,7 +1276,8 @@ fn tool_input_schema_reflects_declared_input_port() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let CompileArtifacts {
         node_configs: configs2,
@@ -1280,7 +1295,9 @@ fn tool_input_schema_reflects_declared_input_port() {
     .expect("compile (bare tool)");
     let bare_schema = configs2["a"]["tools"][0]["input_schema"].clone();
     assert_eq!(
-        bare_schema.get("additionalProperties").and_then(Value::as_bool),
+        bare_schema
+            .get("additionalProperties")
+            .and_then(Value::as_bool),
         Some(true),
         "no-fields tool must use the permissive fallback; got: {bare_schema}"
     );
@@ -1304,7 +1321,8 @@ fn duplicate_tool_name_is_compile_error() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
         .expect_err("duplicate tool name must fail");
@@ -1464,7 +1482,8 @@ fn subworkflow_tool_input_schema_reflects_child_start() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let sub_air = sub_air_with_contract("sub_lookup", child_id, contract);
     let (air, _iface, configs) = compile_with_sub_air(&graph, &sub_air);
@@ -1548,7 +1567,8 @@ fn subworkflow_tool_empty_child_start_is_permissive() {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let sub_air = sub_air_with_contract("sub_lookup", child_id, Port::empty_input());
     let (_air, _iface, configs) = compile_with_sub_air(&graph, &sub_air);

@@ -34,8 +34,8 @@ pub(crate) static SUB_WORKFLOW_DECL: NodeDecl = NodeDecl {
     // the declared `output` Port shape, not against the parked node.
     parks_data_envelope: false,
     lower: Some(crate::compiler::lower::subworkflow::lower_subworkflow),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     validate: None,
@@ -66,11 +66,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     ]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::SubWorkflow {
         template_id,

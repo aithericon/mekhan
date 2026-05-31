@@ -45,8 +45,8 @@ mod tests {
                 place_id: place_id.clone(),
                 place_name: None,
                 workflow_id: None,
-                    signal_key: None,
-                    dedup_id: None,
+                signal_key: None,
+                dedup_id: None,
             },
             None,
         )];

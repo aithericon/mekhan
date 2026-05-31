@@ -94,7 +94,7 @@ mod tests {
                     "working_dir": "/tmp",
                     "inherit_env": true
                 }),
-                    config_ref: None,
+                config_ref: None,
             },
             metadata: HashMap::from([("petri_net_id".into(), "my-net".into())]),
             timeout: Some(std::time::Duration::from_secs(300)),
@@ -143,7 +143,7 @@ mod tests {
                     "command": "python3",
                     "args": ["train.py"]
                 }),
-                    config_ref: None,
+                config_ref: None,
             },
             metadata: Default::default(),
             timeout: None,
@@ -248,7 +248,9 @@ mod tests {
 
     #[test]
     fn input_source_storage_path_with_storage_config_roundtrip() {
-        use aithericon_executor_storage_types::{StorageBackend, StorageConfig, StorageCredentials};
+        use aithericon_executor_storage_types::{
+            StorageBackend, StorageConfig, StorageCredentials,
+        };
         let input = InputDeclaration {
             name: "weights.pt".into(),
             source: InputSource::StoragePath {
@@ -345,7 +347,10 @@ mod tests {
         let json = serde_json::to_string(&output).unwrap();
         let deserialized: OutputDeclaration = serde_json::from_str(&json).unwrap();
         let upload = deserialized.upload_to.expect("upload_to should be Some");
-        assert_eq!(upload.destination_path.as_deref(), Some("custom/path/result.json"));
+        assert_eq!(
+            upload.destination_path.as_deref(),
+            Some("custom/path/result.json")
+        );
         assert_eq!(upload.storage.bucket, "results-bucket");
     }
 
@@ -371,12 +376,17 @@ mod tests {
             upload_to: None,
         };
         let json = serde_json::to_string(&output).unwrap();
-        assert!(!json.contains("upload_to"), "None upload_to should be skipped");
+        assert!(
+            !json.contains("upload_to"),
+            "None upload_to should be skipped"
+        );
     }
 
     #[test]
     fn full_job_with_multi_storage_roundtrip() {
-        use aithericon_executor_storage_types::{StorageBackend, StorageConfig, StorageCredentials};
+        use aithericon_executor_storage_types::{
+            StorageBackend, StorageConfig, StorageCredentials,
+        };
         let job = ExecutionJob {
             execution_id: "multi-storage-test".into(),
             spec: ExecutionSpec {
@@ -455,7 +465,12 @@ mod tests {
         }
         // Output has upload config
         assert!(deserialized.spec.outputs[0].upload_to.is_some());
-        assert!(deserialized.spec.outputs[0].upload_to.as_ref().unwrap().destination_path.is_none());
+        assert!(deserialized.spec.outputs[0]
+            .upload_to
+            .as_ref()
+            .unwrap()
+            .destination_path
+            .is_none());
     }
 
     #[test]

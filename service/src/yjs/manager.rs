@@ -72,8 +72,7 @@ async fn create_room_from_db(
     // Sync: build Doc and extract encoded state (yrs types are !Send)
     let persistence_clone = persistence.clone();
     let room = tokio::task::spawn_blocking(move || -> Result<Arc<YjsRoom>, YjsPersistenceError> {
-        let doc =
-            YjsPersistence::build_doc_from_raw(snapshot.as_deref(), &updates)?;
+        let doc = YjsPersistence::build_doc_from_raw(snapshot.as_deref(), &updates)?;
         Ok(Arc::new(YjsRoom::from_doc(
             template_id,
             &doc,

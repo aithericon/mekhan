@@ -42,14 +42,11 @@ pub(crate) fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
              else {{ __out.exit_code = #{{ ok: true, value: __rv }}; }} \
              #{{ result: __out }}"
         );
-        ctx.transition(
-            format!("t_{id}_result_shape"),
-            format!("{label} - Result"),
-        )
-        .auto_input("input", &done)
-        .auto_output("result", &shaped)
-        .logic_rhai(with_pluck_prelude(&logic))
-        .done();
+        ctx.transition(format!("t_{id}_result_shape"), format!("{label} - Result"))
+            .auto_input("input", &done)
+            .auto_output("result", &shaped)
+            .logic_rhai(with_pluck_prelude(&logic))
+            .done();
         (shaped, format!("p_{id}_result"))
     } else {
         (done.clone(), done_id)
@@ -72,14 +69,11 @@ pub(crate) fn lower_end(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         None => {
             let exit: PlaceHandle<DynamicToken> =
                 ctx.state(format!("p_{id}_terminal"), format!("{label} - Exit"));
-            ctx.transition(
-                format!("t_{id}_complete"),
-                format!("{label} - Complete"),
-            )
-            .auto_input("input", &terminal_feed)
-            .auto_output("output", &exit)
-            .logic_rhai("#{ output: input }".to_string())
-            .done();
+            ctx.transition(format!("t_{id}_complete"), format!("{label} - Complete"))
+                .auto_input("input", &terminal_feed)
+                .auto_output("output", &exit)
+                .logic_rhai("#{ output: input }".to_string())
+                .done();
             let _ = terminal_feed_id;
             format!("p_{id}_terminal")
         }

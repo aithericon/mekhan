@@ -5,9 +5,7 @@ use std::sync::Arc;
 use crate::data_type::DataType;
 use crate::error::MetadataError;
 use crate::extractor::MetadataExtractor;
-use crate::format::{
-    FileFormat, FormatMetadata, ZarrArrayMeta, ZarrMetadata, ZarrNode,
-};
+use crate::format::{FileFormat, FormatMetadata, ZarrArrayMeta, ZarrMetadata, ZarrNode};
 use crate::types::{AttributeValue, ColumnInfo, Dimension, FileMetadata};
 
 /// Metadata extractor for Zarr V2/V3 stores.
@@ -164,9 +162,7 @@ impl MetadataExtractor for ZarrExtractor {
                             names
                                 .iter()
                                 .enumerate()
-                                .map(|(i, n)| {
-                                    n.clone().unwrap_or_else(|| format!("dim_{i}"))
-                                })
+                                .map(|(i, n)| n.clone().unwrap_or_else(|| format!("dim_{i}")))
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -177,18 +173,16 @@ impl MetadataExtractor for ZarrExtractor {
                         let meta_json = serde_json::to_value(array_meta).ok();
                         meta_json
                             .and_then(|v| {
-                                v.get("codecs")
-                                    .and_then(|c| c.as_array())
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|codec| {
-                                                codec
-                                                    .get("name")
-                                                    .and_then(|n| n.as_str())
-                                                    .map(String::from)
-                                            })
-                                            .collect()
-                                    })
+                                v.get("codecs").and_then(|c| c.as_array()).map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|codec| {
+                                            codec
+                                                .get("name")
+                                                .and_then(|n| n.as_str())
+                                                .map(String::from)
+                                        })
+                                        .collect()
+                                })
                             })
                             .unwrap_or_default()
                     };

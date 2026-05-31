@@ -183,8 +183,7 @@ fn definition(ctx: &mut Context) {
     let effect_errors = ctx.state::<EffectError>("effect_errors", "Effect Errors");
 
     // Embedded scripts
-    let validation_script =
-        include_str!("../../demos/invoice_processing/validate_invoice.py");
+    let validation_script = include_str!("../../demos/invoice_processing/validate_invoice.py");
 
     // ── Shared Rhai constants ─────────────────────────────────────────────
 
@@ -225,7 +224,10 @@ fn definition(ctx: &mut Context) {
         let process_done = ctx.state::<DynamicToken>("process_done", "Process Done");
         let process_completed = ctx.state::<DynamicToken>("process_completed", "Process Completed");
 
-        ctx.seed(&process_inbox, vec![DynamicToken::new(serde_json::json!({}))]);
+        ctx.seed(
+            &process_inbox,
+            vec![DynamicToken::new(serde_json::json!({}))],
+        );
 
         ctx.transition("create_process", "Create Process")
             .process_start_to(ProcessStart {

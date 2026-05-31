@@ -2,9 +2,7 @@
 
 #[cfg(all(feature = "classify", feature = "csv"))]
 mod csv_classify {
-    use fmeta::{
-        classify_columns, extract_metadata, ClassificationOptions, ClassificationTag,
-    };
+    use fmeta::{classify_columns, extract_metadata, ClassificationOptions, ClassificationTag};
     use std::io::Write;
 
     fn write_csv(content: &str) -> tempfile::NamedTempFile {

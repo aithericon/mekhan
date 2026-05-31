@@ -7,12 +7,12 @@ use petri_api::{create_router_with_registry, NetRegistry};
 use petri_infrastructure::{MarkingProjection, MemoryEventStore, MemoryTopologyStore};
 use petri_nats::human_client::HumanNatsClient;
 use petri_nats::GlobalHumanResultListener;
-use petri_nats::{
-    ActivityTracker, Clockmaster, CreateNetListener, EventConsumer,
-    GlobalBridgeListener, GlobalSignalListener, HibernationMaster, NatsConfig, NatsEventStore,
-    NatsTimerClient, NetMetadataProjection, ACTIVITY_KV_BUCKET, METADATA_KV_BUCKET,
-};
 use petri_nats::Subjects;
+use petri_nats::{
+    ActivityTracker, Clockmaster, CreateNetListener, EventConsumer, GlobalBridgeListener,
+    GlobalSignalListener, HibernationMaster, NatsConfig, NatsEventStore, NatsTimerClient,
+    NetMetadataProjection, ACTIVITY_KV_BUCKET, METADATA_KV_BUCKET,
+};
 use petri_nats::{NetMetadata, NetStatus};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -124,12 +124,8 @@ async fn main() {
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
         // Create and start consumer (handles hydration + live consumption)
-        let consumer = EventConsumer::new(
-            cache.clone(),
-            topology_store.clone(),
-            applied_tx,
-            ready_tx,
-        );
+        let consumer =
+            EventConsumer::new(cache.clone(), topology_store.clone(), applied_tx, ready_tx);
 
         let js_consumer = js.clone();
         let net_id_consumer = net_id.to_string();
@@ -154,7 +150,9 @@ async fn main() {
 
                 // Wait for hydration to complete before returning stores
                 if ready_rx.await.is_err() {
-                    tracing::warn!("Event consumer ready signal dropped (consumer may have failed)");
+                    tracing::warn!(
+                        "Event consumer ready signal dropped (consumer may have failed)"
+                    );
                 }
             })
         });
@@ -225,10 +223,7 @@ async fn main() {
             }
         };
 
-        match options
-            .connect(&executor_nats_url)
-            .await
-        {
+        match options.connect(&executor_nats_url).await {
             Ok(client) => {
                 let executor_js = async_nats::jetstream::new(client.clone());
                 if let Some(ecfg) =
@@ -289,10 +284,7 @@ async fn main() {
             instance.service.set_execution_config(exec_config.clone());
 
             // Register spawn_net effect handler (uses JetStream to create child nets)
-            let spawn_handler = petri_nats::SpawnNetHandler::new(
-                js_for_spawn.clone(),
-                &net_id,
-            );
+            let spawn_handler = petri_nats::SpawnNetHandler::new(js_for_spawn.clone(), &net_id);
             instance
                 .service
                 .register_effect_handler(
@@ -318,13 +310,14 @@ async fn main() {
     // `just dev slurm-up`/`scheduler-up` keep working. (A future phase can also
     // pre-build a dev-bootstrap `ClusterClient` under the reserved `_env` key.)
     #[cfg(any(feature = "slurm", feature = "nomad"))]
-    let cluster_registry = std::sync::Arc::new(
-        petri_api::cluster_registry::ClusterRegistry::new(jetstream.clone()),
-    );
+    let cluster_registry = std::sync::Arc::new(petri_api::cluster_registry::ClusterRegistry::new(
+        jetstream.clone(),
+    ));
 
     // Create global executor SSE broadcast channel + backfill buffer
     #[cfg(feature = "executor")]
-    let executor_sse_tx = Arc::new(tokio::sync::broadcast::channel::<petri_executor::ExecutorSseEvent>(512).0);
+    let executor_sse_tx =
+        Arc::new(tokio::sync::broadcast::channel::<petri_executor::ExecutorSseEvent>(512).0);
     #[cfg(feature = "executor")]
     let executor_sse_buffer: petri_executor::ExecutorSseBuffer =
         Arc::new(std::sync::RwLock::new(Vec::new()));
@@ -332,9 +325,10 @@ async fn main() {
     // Start ExecutorWatcher if executor is enabled
     #[cfg(feature = "executor")]
     let _executor_watcher_handle = {
-        if let (Some(client), true) =
-            (executor_nats_client.as_ref(), engine_config.is_executor_enabled())
-        {
+        if let (Some(client), true) = (
+            executor_nats_client.as_ref(),
+            engine_config.is_executor_enabled(),
+        ) {
             let executor_config = petri_executor::ExecutorConfig::from_env().unwrap_or_default();
             match petri_executor::ExecutorWatcher::new(
                 executor_config.clone(),
@@ -343,7 +337,8 @@ async fn main() {
             .await
             {
                 Ok(watcher) => {
-                    let watcher = watcher.with_sse_broadcast(executor_sse_tx.clone(), executor_sse_buffer.clone());
+                    let watcher = watcher
+                        .with_sse_broadcast(executor_sse_tx.clone(), executor_sse_buffer.clone());
                     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
                     info!(
                         namespace = %executor_config.namespace,
@@ -372,9 +367,9 @@ async fn main() {
     // can call `terminate` on its own registry. The Timeout node's body
     // cancellation post-pass emits `subworkflow_cancel` effects which route
     // through this adapter.
-    registry.set_subworkflow_cancellor(Arc::new(
-        petri_api::net_registry::RegistryCancellor::new(registry.clone()),
-    ));
+    registry.set_subworkflow_cancellor(Arc::new(petri_api::net_registry::RegistryCancellor::new(
+        registry.clone(),
+    )));
 
     // Install the multi-cluster ClusterRegistry BEFORE the first get_or_create
     // so every net's resource_lease handlers route through it (docs/16). Must
@@ -450,10 +445,8 @@ async fn main() {
             registry: registry.clone(),
             activity: activity_tracker.clone(),
         };
-        let create_net_listener = Arc::new(CreateNetListener::new(
-            jetstream.clone(),
-            Arc::new(creator),
-        ));
+        let create_net_listener =
+            Arc::new(CreateNetListener::new(jetstream.clone(), Arc::new(creator)));
         info!("Starting create-net command listener");
         let _handle = create_net_listener.start();
     }
@@ -625,7 +618,8 @@ async fn ensure_lifecycle_kv(
 
 /// Implements `NetHibernator` for the `NetRegistry`.
 struct RegistryHibernator {
-    registry: Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
+    registry:
+        Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
 }
 
 #[async_trait::async_trait]
@@ -637,11 +631,13 @@ impl petri_nats::NetHibernator for RegistryHibernator {
 
 /// Wraps a `NetInstance` as a `SignalTarget` for the global signal listener.
 struct InstanceSignalTarget {
-    service: Arc<petri_application::PetriNetService<
-        NatsEventStore<MemoryEventStore>,
-        MemoryTopologyStore,
-        MarkingProjection,
-    >>,
+    service: Arc<
+        petri_application::PetriNetService<
+            NatsEventStore<MemoryEventStore>,
+            MemoryTopologyStore,
+            MarkingProjection,
+        >,
+    >,
     eval_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -676,7 +672,8 @@ impl petri_nats::SignalTarget for InstanceSignalTarget {
 
 /// Implements `NetResolver` for the `NetRegistry` (resolves and wakes nets).
 struct RegistryResolver {
-    registry: Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
+    registry:
+        Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
     activity: Option<Arc<ActivityTracker>>,
     /// Metadata KV for tombstone check: reject signals to completed/cancelled nets.
     metadata_kv: Option<async_nats::jetstream::kv::Store>,
@@ -707,10 +704,7 @@ impl petri_nats::NetResolver for RegistryResolver {
                     ));
                 }
                 Err(e) => {
-                    return Err(format!(
-                        "Net '{}' metadata lookup failed: {}",
-                        net_id, e
-                    ));
+                    return Err(format!("Net '{}' metadata lookup failed: {}", net_id, e));
                 }
             }
         }
@@ -781,7 +775,8 @@ impl petri_api::net_registry::MetadataLookup for KvMetadataLookup {
 
 /// Implements `BridgeResolver` for the `NetRegistry` (resolves nets for bridge token injection).
 struct RegistryBridgeResolver {
-    registry: Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
+    registry:
+        Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
     activity: Option<Arc<ActivityTracker>>,
     metadata_kv: Option<async_nats::jetstream::kv::Store>,
 }
@@ -811,10 +806,7 @@ impl petri_nats::BridgeResolver for RegistryBridgeResolver {
                     ));
                 }
                 Err(e) => {
-                    return Err(format!(
-                        "Net '{}' metadata lookup failed: {}",
-                        net_id, e
-                    ));
+                    return Err(format!("Net '{}' metadata lookup failed: {}", net_id, e));
                 }
             }
         }
@@ -837,7 +829,13 @@ impl petri_nats::BridgeResolver for RegistryBridgeResolver {
 
 /// Bridge target implementation backed by a NetInstance.
 struct InstanceBridgeTarget {
-    service: Arc<petri_application::PetriNetService<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
+    service: Arc<
+        petri_application::PetriNetService<
+            NatsEventStore<MemoryEventStore>,
+            MemoryTopologyStore,
+            MarkingProjection,
+        >,
+    >,
     eval_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -872,16 +870,14 @@ impl petri_nats::BridgeTarget for InstanceBridgeTarget {
 
 /// Implements `NetCreator` for the `NetRegistry` (creates nets via NATS command).
 struct RegistryNetCreator {
-    registry: Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
+    registry:
+        Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
     activity: Option<Arc<ActivityTracker>>,
 }
 
 #[async_trait::async_trait]
 impl petri_nats::NetCreator for RegistryNetCreator {
-    async fn create_and_load(
-        &self,
-        request: &petri_nats::CreateNetRequest,
-    ) -> Result<(), String> {
+    async fn create_and_load(&self, request: &petri_nats::CreateNetRequest) -> Result<(), String> {
         let instance = self.registry.get_or_create(&request.net_id);
 
         // Emit NetCreated lifecycle event
@@ -897,7 +893,6 @@ impl petri_nats::NetCreator for RegistryNetCreator {
             .append_event(event)
             .await
             .map_err(|e| e.to_string())?;
-
 
         // Store net parameters on the service for $params. resolution in bridge targets
         if let Some(ref params) = request.parameters {
@@ -1014,7 +1009,10 @@ async fn ensure_streams(
     {
         let human_streams = [
             (Subjects::STREAM_HUMAN_CANCEL, Subjects::HUMAN_CANCEL_PREFIX),
-            (Subjects::STREAM_HUMAN_CANCELLED, Subjects::HUMAN_CANCELLED_PREFIX),
+            (
+                Subjects::STREAM_HUMAN_CANCELLED,
+                Subjects::HUMAN_CANCELLED_PREFIX,
+            ),
             (Subjects::STREAM_HUMAN_FAILED, Subjects::HUMAN_FAILED_PREFIX),
         ];
         for (stream_name, prefix) in human_streams {
@@ -1029,7 +1027,9 @@ async fn ensure_streams(
                 .await
             {
                 Ok(_) => info!(name = %stream_name, "Human stream ready"),
-                Err(e) => tracing::warn!(error = %e, name = %stream_name, "Could not create human stream"),
+                Err(e) => {
+                    tracing::warn!(error = %e, name = %stream_name, "Could not create human stream")
+                }
             }
         }
     }
@@ -1044,7 +1044,8 @@ async fn ensure_streams(
 /// Combined state for the `/api/nets/metadata` endpoint.
 #[derive(Clone)]
 struct NetDiscoveryState {
-    registry: Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
+    registry:
+        Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
     metadata_kv: async_nats::jetstream::kv::Store,
 }
 
@@ -1127,7 +1128,8 @@ async fn list_nets_metadata(
 /// activity tracker, and JetStream (direct event publishing for hibernated nets).
 #[derive(Clone)]
 struct NetDeletionState {
-    registry: Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
+    registry:
+        Arc<NetRegistry<NatsEventStore<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>>,
     metadata_kv: async_nats::jetstream::kv::Store,
     activity_tracker: Option<Arc<ActivityTracker>>,
     jetstream: async_nats::jetstream::Context,
@@ -1156,7 +1158,10 @@ async fn delete_net_handler(
         // (404-tolerant), so a double-cancel or a cancel racing a natural release
         // is harmless.
         #[cfg(any(feature = "slurm", feature = "nomad"))]
-        state.registry.release_held_leases_for_instance(&net_id).await;
+        state
+            .registry
+            .release_held_leases_for_instance(&net_id)
+            .await;
         match state
             .registry
             .terminate(
@@ -1248,12 +1253,10 @@ async fn delete_net_handler(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        None => {
-            (
-                StatusCode::NOT_FOUND,
-                axum::Json(serde_json::json!({"error": "Net not found"})),
-            )
-                .into_response()
-        }
+        None => (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error": "Net not found"})),
+        )
+            .into_response(),
     }
 }

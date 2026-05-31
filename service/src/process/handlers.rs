@@ -7,17 +7,17 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
+use super::model::{
+    HpiLog, HpiMetric, HpiMetricSummary, HpiProcess, HpiTask, ProcessDetail, ProcessStats,
+    ProcessUpdateRequest,
+};
+use super::queries;
 use crate::catalogue::model::CatalogueEntry;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::responses::TaskListResponse;
 use crate::query::extractor::QueryParams;
 use crate::query::pagination::Paginated;
 use crate::AppState;
-use super::model::{
-    HpiLog, HpiMetric, HpiMetricSummary, HpiProcess, HpiTask, ProcessDetail, ProcessStats,
-    ProcessUpdateRequest,
-};
-use super::queries;
 
 /// Convert a DB `HpiTask` row into the `HumanTask`-shaped JSON expected by the
 /// Mekhan frontend (`@aithericon/hpi-ui` types). Merges fields projected into
@@ -89,10 +89,12 @@ pub async fn list_processes(
     State(state): State<AppState>,
     params: QueryParams,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let response = queries::list_processes(&state.db, &params).await.map_err(|e| {
-        tracing::warn!("process list: {e}");
-        ApiError::bad_request(e.to_string())
-    })?;
+    let response = queries::list_processes(&state.db, &params)
+        .await
+        .map_err(|e| {
+            tracing::warn!("process list: {e}");
+            ApiError::bad_request(e.to_string())
+        })?;
     Ok(Json(serde_json::to_value(response).unwrap_or(json!({}))))
 }
 
@@ -106,9 +108,7 @@ pub async fn list_processes(
     ),
     tag = "processes",
 )]
-pub async fn process_stats(
-    State(state): State<AppState>,
-) -> Result<Json<ProcessStats>, ApiError> {
+pub async fn process_stats(State(state): State<AppState>) -> Result<Json<ProcessStats>, ApiError> {
     let stats = queries::process_stats(&state.db).await.map_err(|e| {
         tracing::error!("process stats: {e}");
         ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
@@ -551,7 +551,12 @@ pub async fn complete_task(
             "completed_at": Utc::now().to_rfc3339(),
         });
         let payload = serde_json::to_vec(&completion).unwrap_or_default();
-        if let Err(e) = state.nats.client().publish(subject.clone(), payload.into()).await {
+        if let Err(e) = state
+            .nats
+            .client()
+            .publish(subject.clone(), payload.into())
+            .await
+        {
             tracing::error!(subject = %subject, "failed to publish task completion: {e}");
         } else {
             tracing::info!(task_id = %id, subject = %subject, "published task completion");
@@ -619,7 +624,12 @@ pub async fn cancel_task(
             "cancelled_at": Utc::now().to_rfc3339(),
         });
         let payload = serde_json::to_vec(&cancellation).unwrap_or_default();
-        if let Err(e) = state.nats.client().publish(subject.clone(), payload.into()).await {
+        if let Err(e) = state
+            .nats
+            .client()
+            .publish(subject.clone(), payload.into())
+            .await
+        {
             tracing::error!(subject = %subject, "failed to publish task cancellation: {e}");
         } else {
             tracing::info!(task_id = %id, subject = %subject, "published task cancellation");

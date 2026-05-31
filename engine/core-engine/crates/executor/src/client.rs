@@ -373,10 +373,10 @@ impl ExecutorClient for ExecutorNatsClient {
                     })?;
                     resolved.insert(key.clone(), value);
                 }
-                let wrapping_token =
-                    wrapper.wrap(resolved, self.wrap_ttl_secs).await.map_err(|e| {
-                        ExecutorError::Fatal(format!("Failed to wrap secrets: {e}"))
-                    })?;
+                let wrapping_token = wrapper
+                    .wrap(resolved, self.wrap_ttl_secs)
+                    .await
+                    .map_err(|e| ExecutorError::Fatal(format!("Failed to wrap secrets: {e}")))?;
                 job.wrapped_secrets = Some(wrapping_token);
                 tracing::debug!(
                     execution_id = %execution_id,
@@ -538,7 +538,10 @@ mod tests {
             subject_for(ns, ApalisPriority::Medium, "exec-42"),
             "lease-x.medium.exec-42"
         );
-        assert_eq!(stream_name_for(ns, ApalisPriority::Medium), "lease-x_medium");
+        assert_eq!(
+            stream_name_for(ns, ApalisPriority::Medium),
+            "lease-x_medium"
+        );
 
         // Absent per-job ns → byte-identical to the fixed-namespace daemon path.
         let none_ns: Option<String> = None;

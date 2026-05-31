@@ -102,7 +102,10 @@ async fn empty_template_gets_empty_room() {
     // Room should exist even without pre-seeded data (empty doc)
     let state = room.encode_full_state().await;
     // The state may be a minimal yrs encoding of an empty doc, which is still non-empty bytes
-    assert!(!state.is_empty(), "even empty doc should produce some encoded bytes");
+    assert!(
+        !state.is_empty(),
+        "even empty doc should produce some encoded bytes"
+    );
 }
 
 // ---------------------------------------------------------------------------

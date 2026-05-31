@@ -27,8 +27,8 @@ pub(crate) static AUTOMATED_STEP_DECL: NodeDecl = NodeDecl {
     is_join: false,
     parks_data_envelope: true,
     lower: Some(crate::compiler::lower::automated_step::lower_automated_step),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     // The unmerged-fan-in warning (shared with HumanTask) — never errors.
@@ -83,11 +83,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     ports
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::AutomatedStep {
         execution_spec,

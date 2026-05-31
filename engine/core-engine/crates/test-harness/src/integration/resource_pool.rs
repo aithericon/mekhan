@@ -36,11 +36,8 @@ use petri_nats::{CrossNetBridge, NatsConfig, NatsEventPublisher};
 
 use crate::nats::{ensure_global_stream, shared_nats_url};
 
-type Svc = PetriNetService<
-    NatsEventPublisher<MemoryEventStore>,
-    MemoryTopologyStore,
-    MarkingProjection,
->;
+type Svc =
+    PetriNetService<NatsEventPublisher<MemoryEventStore>, MemoryTopologyStore, MarkingProjection>;
 
 const POOL_CAPACITY: usize = 1;
 const N_REQUESTERS: usize = 3;
@@ -70,8 +67,9 @@ impl PoolTestContext {
 
         let suffix = uuid::Uuid::new_v4().simple().to_string();
         let pool_id = format!("resource-pool-{suffix}");
-        let requester_ids: Vec<String> =
-            (0..n_requesters).map(|i| format!("req-{i}-{suffix}")).collect();
+        let requester_ids: Vec<String> = (0..n_requesters)
+            .map(|i| format!("req-{i}-{suffix}"))
+            .collect();
 
         let build_service = |net_id: &str| {
             let store = Arc::new(MemoryEventStore::new());
@@ -143,7 +141,9 @@ impl PoolTestContext {
         let mut ids = vec![self.pool_id.clone()];
         ids.extend(self.requester_ids.iter().cloned());
         for net_id in &ids {
-            let _ = stream.delete_consumer(&format!("bridge-inbound-{net_id}")).await;
+            let _ = stream
+                .delete_consumer(&format!("bridge-inbound-{net_id}"))
+                .await;
         }
     }
 }
@@ -181,8 +181,8 @@ fn build_pool_net() -> (PetriNet, PoolPlaces) {
     let done = Place::internal("done").with_id(PlaceId::named("done"));
     let claim_inbox = Place::bridge_in("claim_inbox").with_id(PlaceId::named("claim_inbox"));
     let release_inbox = Place::bridge_in("release_inbox").with_id(PlaceId::named("release_inbox"));
-    let grant_outbox =
-        Place::bridge_reply_channel("grant_outbox", "grant").with_id(PlaceId::named("grant_outbox"));
+    let grant_outbox = Place::bridge_reply_channel("grant_outbox", "grant")
+        .with_id(PlaceId::named("grant_outbox"));
 
     let (pool_id, done_id, claim_id, release_id, grant_id) = (
         pool.id.clone(),
@@ -207,7 +207,11 @@ fn build_pool_net() -> (PetriNet, PoolPlaces) {
     .with_output_port(Port::new("grant"));
     let t_grant_id = t_grant.id.clone();
     net.add_transition(t_grant);
-    net.add_arc(PetriArc::input(claim_id.clone(), t_grant_id.clone(), "claim"));
+    net.add_arc(PetriArc::input(
+        claim_id.clone(),
+        t_grant_id.clone(),
+        "claim",
+    ));
     net.add_arc(PetriArc::input(pool_id.clone(), t_grant_id.clone(), "cap"));
     net.add_arc(PetriArc::output(t_grant_id.clone(), "grant", grant_id));
 
@@ -226,9 +230,21 @@ fn build_pool_net() -> (PetriNet, PoolPlaces) {
     .with_output_port(Port::new("done"));
     let t_release_id = t_release.id.clone();
     net.add_transition(t_release);
-    net.add_arc(PetriArc::input(release_id.clone(), t_release_id.clone(), "req"));
-    net.add_arc(PetriArc::output(t_release_id.clone(), "cap", pool_id.clone()));
-    net.add_arc(PetriArc::output(t_release_id.clone(), "done", done_id.clone()));
+    net.add_arc(PetriArc::input(
+        release_id.clone(),
+        t_release_id.clone(),
+        "req",
+    ));
+    net.add_arc(PetriArc::output(
+        t_release_id.clone(),
+        "cap",
+        pool_id.clone(),
+    ));
+    net.add_arc(PetriArc::output(
+        t_release_id.clone(),
+        "done",
+        done_id.clone(),
+    ));
 
     (
         net,
@@ -257,8 +273,7 @@ fn build_requester_net(pool_net_id: &str) -> (PetriNet, ReqPlaces) {
     // Gate the release on an explicit signal so the hold is observable and the
     // test controls release timing (otherwise evaluate fires receive→finish in
     // one shot and the hold is never observable).
-    let finish_trigger =
-        Place::signal("finish_trigger").with_id(PlaceId::named("finish_trigger"));
+    let finish_trigger = Place::signal("finish_trigger").with_id(PlaceId::named("finish_trigger"));
     let finish_trigger_id = finish_trigger.id.clone();
 
     // claim_out: bridge_out to pool/claim_inbox, with the "grant" reply channel
@@ -283,7 +298,15 @@ fn build_requester_net(pool_net_id: &str) -> (PetriNet, ReqPlaces) {
         grant_inbox.id.clone(),
         release_out.id.clone(),
     );
-    for p in [start, holding, done, claim_out, grant_inbox, release_out, finish_trigger] {
+    for p in [
+        start,
+        holding,
+        done,
+        claim_out,
+        grant_inbox,
+        release_out,
+        finish_trigger,
+    ] {
         net.add_place(p);
     }
 
@@ -293,8 +316,16 @@ fn build_requester_net(pool_net_id: &str) -> (PetriNet, ReqPlaces) {
         .with_output_port(Port::new("claim_out"));
     let t_claim_id = t_claim.id.clone();
     net.add_transition(t_claim);
-    net.add_arc(PetriArc::input(start_id.clone(), t_claim_id.clone(), "start"));
-    net.add_arc(PetriArc::output(t_claim_id.clone(), "claim_out", claim_out_id));
+    net.add_arc(PetriArc::input(
+        start_id.clone(),
+        t_claim_id.clone(),
+        "start",
+    ));
+    net.add_arc(PetriArc::output(
+        t_claim_id.clone(),
+        "claim_out",
+        claim_out_id,
+    ));
 
     // t_receive: grant_inbox → holding
     let t_receive = Transition::new("t_receive", r#"#{ holding: grant }"#)
@@ -302,8 +333,16 @@ fn build_requester_net(pool_net_id: &str) -> (PetriNet, ReqPlaces) {
         .with_output_port(Port::new("holding"));
     let t_receive_id = t_receive.id.clone();
     net.add_transition(t_receive);
-    net.add_arc(PetriArc::input(grant_inbox_id.clone(), t_receive_id.clone(), "grant"));
-    net.add_arc(PetriArc::output(t_receive_id.clone(), "holding", holding_id.clone()));
+    net.add_arc(PetriArc::input(
+        grant_inbox_id.clone(),
+        t_receive_id.clone(),
+        "grant",
+    ));
+    net.add_arc(PetriArc::output(
+        t_receive_id.clone(),
+        "holding",
+        holding_id.clone(),
+    ));
 
     // t_finish: holding + finish_trigger → release_out + done.
     // Gated on the trigger so the hold stays observable until the test releases.
@@ -317,10 +356,26 @@ fn build_requester_net(pool_net_id: &str) -> (PetriNet, ReqPlaces) {
     .with_output_port(Port::new("local"));
     let t_finish_id = t_finish.id.clone();
     net.add_transition(t_finish);
-    net.add_arc(PetriArc::input(holding_id.clone(), t_finish_id.clone(), "holding"));
-    net.add_arc(PetriArc::input(finish_trigger_id.clone(), t_finish_id.clone(), "trigger"));
-    net.add_arc(PetriArc::output(t_finish_id.clone(), "release", release_out_id));
-    net.add_arc(PetriArc::output(t_finish_id.clone(), "local", done_id.clone()));
+    net.add_arc(PetriArc::input(
+        holding_id.clone(),
+        t_finish_id.clone(),
+        "holding",
+    ));
+    net.add_arc(PetriArc::input(
+        finish_trigger_id.clone(),
+        t_finish_id.clone(),
+        "trigger",
+    ));
+    net.add_arc(PetriArc::output(
+        t_finish_id.clone(),
+        "release",
+        release_out_id,
+    ));
+    net.add_arc(PetriArc::output(
+        t_finish_id.clone(),
+        "local",
+        done_id.clone(),
+    ));
 
     (
         net,
@@ -366,7 +421,10 @@ async fn three_requesters_contend_for_one_capacity_unit() {
     let (pool_net, pp) = build_pool_net();
     ctx.pool.initialize(pool_net).await.unwrap();
     ctx.pool
-        .create_token(pp.pool.clone(), TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })))
+        .create_token(
+            pp.pool.clone(),
+            TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })),
+        )
         .await
         .unwrap();
 
@@ -472,7 +530,10 @@ async fn three_requesters_contend_for_one_capacity_unit() {
             .create_token(req_places[h].finish_trigger.clone(), TokenColor::Unit)
             .await
             .unwrap();
-        ctx.requesters[h].evaluate_until_quiescent(10).await.unwrap();
+        ctx.requesters[h]
+            .evaluate_until_quiescent(10)
+            .await
+            .unwrap();
         served[h] = true;
 
         poll(
@@ -489,9 +550,17 @@ async fn three_requesters_contend_for_one_capacity_unit() {
 
     // All served, capacity fully returned, every requester completed.
     let pm = ctx.pool.get_marking().await;
-    assert_eq!(pm.token_count(&pp.pool), POOL_CAPACITY, "capacity returned to pool");
+    assert_eq!(
+        pm.token_count(&pp.pool),
+        POOL_CAPACITY,
+        "capacity returned to pool"
+    );
     assert_eq!(count_holders(&req_places).await, 0, "no holds outstanding");
-    assert_eq!(pm.token_count(&pp.done), N_REQUESTERS, "every claim served once");
+    assert_eq!(
+        pm.token_count(&pp.done),
+        N_REQUESTERS,
+        "every claim served once"
+    );
     for (i, rp) in req_places.iter().enumerate() {
         assert_eq!(
             ctx.requesters[i].get_marking().await.token_count(&rp.done),
@@ -546,7 +615,14 @@ fn build_registered_pool_net(capacity: usize) -> (PetriNet, RegPoolPlaces) {
     let lease_id = lease_expired.id.clone();
     let grant_id = grant_outbox.id.clone();
     for p in [
-        pool, in_use, done, claim_inbox, register_inbox, release_inbox, lease_expired, grant_outbox,
+        pool,
+        in_use,
+        done,
+        claim_inbox,
+        register_inbox,
+        release_inbox,
+        lease_expired,
+        grant_outbox,
     ] {
         net.add_place(p);
     }
@@ -661,7 +737,14 @@ fn build_registered_requester_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces)
     let register_out_id = register_out.id.clone();
     let release_out_id = release_out.id.clone();
     for p in [
-        start, holding, done, grant_inbox, finish_trigger, claim_out, register_out, release_out,
+        start,
+        holding,
+        done,
+        grant_inbox,
+        finish_trigger,
+        claim_out,
+        register_out,
+        release_out,
     ] {
         net.add_place(p);
     }
@@ -685,7 +768,11 @@ fn build_registered_requester_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces)
     .with_output_port(Port::new("register"));
     let trc = t_receive.id.clone();
     net.add_transition(t_receive);
-    net.add_arc(PetriArc::input(grant_inbox_id.clone(), trc.clone(), "grant"));
+    net.add_arc(PetriArc::input(
+        grant_inbox_id.clone(),
+        trc.clone(),
+        "grant",
+    ));
     net.add_arc(PetriArc::output(trc.clone(), "holding", holding_id.clone()));
     net.add_arc(PetriArc::output(trc.clone(), "register", register_out_id));
 
@@ -745,7 +832,10 @@ async fn gpu_pool_two_capacity_four_jobs_showcase() {
     ctx.pool.initialize(pool_net).await.unwrap();
     for i in 0..CAP {
         ctx.pool
-            .create_token(pp.pool.clone(), TokenColor::Data(serde_json::json!({ "gpu_id": format!("gpu-{i}") })))
+            .create_token(
+                pp.pool.clone(),
+                TokenColor::Data(serde_json::json!({ "gpu_id": format!("gpu-{i}") })),
+            )
             .await
             .unwrap();
     }
@@ -779,7 +869,10 @@ async fn gpu_pool_two_capacity_four_jobs_showcase() {
         }
         n
     };
-    assert_eq!(initial_holders, CAP, "exactly CAP jobs should be running, the rest queued");
+    assert_eq!(
+        initial_holders, CAP,
+        "exactly CAP jobs should be running, the rest queued"
+    );
 
     // Release holders one at a time; each freed GPU is handed to a waiter.
     let mut completed = 0usize;
@@ -834,7 +927,10 @@ async fn crashed_holder_lease_is_reaped_and_regranted() {
     let (pool_net, pp) = build_registered_pool_net(CAP);
     ctx.pool.initialize(pool_net).await.unwrap();
     ctx.pool
-        .create_token(pp.pool.clone(), TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })))
+        .create_token(
+            pp.pool.clone(),
+            TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })),
+        )
         .await
         .unwrap();
 
@@ -856,7 +952,12 @@ async fn crashed_holder_lease_is_reaped_and_regranted() {
     assert_eq!(pool_in_use(&ctx, &pp).await, 1);
     let mut holder = None;
     for i in 0..2 {
-        if ctx.requesters[i].get_marking().await.token_count(&rps[i].holding) >= 1 {
+        if ctx.requesters[i]
+            .get_marking()
+            .await
+            .token_count(&rps[i].holding)
+            >= 1
+        {
             holder = Some(i);
             break;
         }
@@ -875,11 +976,19 @@ async fn crashed_holder_lease_is_reaped_and_regranted() {
     settle(&ctx, 4).await;
 
     // The reaped GPU was handed to the waiting job, which now holds.
-    assert_eq!(pool_in_use(&ctx, &pp).await, 1, "capacity reclaimed and regranted");
+    assert_eq!(
+        pool_in_use(&ctx, &pp).await,
+        1,
+        "capacity reclaimed and regranted"
+    );
     let mut new_holder = None;
     for i in 0..2 {
         if i != holder
-            && ctx.requesters[i].get_marking().await.token_count(&rps[i].holding) >= 1
+            && ctx.requesters[i]
+                .get_marking()
+                .await
+                .token_count(&rps[i].holding)
+                >= 1
         {
             new_holder = Some(i);
             break;
@@ -941,7 +1050,14 @@ fn build_token_pool_net_mirror() -> (PetriNet, RegPoolPlaces) {
     let lease_id = lease_expired.id.clone();
     let grant_id = grant_outbox.id.clone();
     for p in [
-        pool, in_use, done, claim_inbox, register_inbox, release_inbox, lease_expired, grant_outbox,
+        pool,
+        in_use,
+        done,
+        claim_inbox,
+        register_inbox,
+        release_inbox,
+        lease_expired,
+        grant_outbox,
     ] {
         net.add_place(p);
     }
@@ -1051,7 +1167,14 @@ fn build_r2_contract_requester_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces
     let register_out_id = register_out.id.clone();
     let release_out_id = release_out.id.clone();
     for p in [
-        start, holding, done, grant_inbox, finish_trigger, claim_out, register_out, release_out,
+        start,
+        holding,
+        done,
+        grant_inbox,
+        finish_trigger,
+        claim_out,
+        register_out,
+        release_out,
     ] {
         net.add_place(p);
     }
@@ -1079,7 +1202,11 @@ fn build_r2_contract_requester_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces
     .with_output_port(Port::new("register"));
     let trc = t_receive.id.clone();
     net.add_transition(t_receive);
-    net.add_arc(PetriArc::input(grant_inbox_id.clone(), trc.clone(), "grant"));
+    net.add_arc(PetriArc::input(
+        grant_inbox_id.clone(),
+        trc.clone(),
+        "grant",
+    ));
     net.add_arc(PetriArc::output(trc.clone(), "holding", holding_id.clone()));
     net.add_arc(PetriArc::output(trc.clone(), "register", register_out_id));
 
@@ -1169,7 +1296,10 @@ async fn tokens_backend_r2_contract_two_capacity_four_jobs() {
         }
         n
     };
-    assert_eq!(initial_holders, CAP, "exactly CAP jobs running, the rest queued");
+    assert_eq!(
+        initial_holders, CAP,
+        "exactly CAP jobs running, the rest queued"
+    );
 
     // TYPED LEASE: every current holder's `holding` token carries a `unit_id`
     // (the R1/R2 lease field) drawn from the seeded pool — never `gpu_id`.
@@ -1186,8 +1316,14 @@ async fn tokens_backend_r2_contract_two_capacity_four_jobs() {
                     unit.starts_with("unit-"),
                     "lease unit_id must come from the seeded pool, got {unit}"
                 );
-                assert!(d.get("gpu_id").is_none(), "lease must be unit_id-typed, not gpu_id");
-                assert!(seen_units.insert(unit.to_string()), "two holders share a unit — mutex broken");
+                assert!(
+                    d.get("gpu_id").is_none(),
+                    "lease must be unit_id-typed, not gpu_id"
+                );
+                assert!(
+                    seen_units.insert(unit.to_string()),
+                    "two holders share a unit — mutex broken"
+                );
             }
         }
     }
@@ -1332,7 +1468,12 @@ impl MockAllocator {
             }
         });
 
-        Self { addr, granted, released, _task: task }
+        Self {
+            addr,
+            granted,
+            released,
+            _task: task,
+        }
     }
 
     fn url(&self) -> String {
@@ -1372,7 +1513,13 @@ fn build_datacenter_adapter_net_mirror(allocator_url: &str) -> (PetriNet, RegPoo
     let lease_id = lease_expired.id.clone();
     let grant_id = grant_outbox.id.clone();
     for p in [
-        in_use, done, release_prep, claim_inbox, register_inbox, release_inbox, lease_expired,
+        in_use,
+        done,
+        release_prep,
+        claim_inbox,
+        register_inbox,
+        release_inbox,
+        lease_expired,
         grant_outbox,
     ] {
         net.add_place(p);
@@ -1418,7 +1565,11 @@ fn build_datacenter_adapter_net_mirror(allocator_url: &str) -> (PetriNet, RegPoo
     net.add_transition(t_release_prep);
     net.add_arc(PetriArc::input(release_id.clone(), trp.clone(), "req"));
     net.add_arc(PetriArc::input(in_use_id.clone(), trp.clone(), "held"));
-    net.add_arc(PetriArc::output(trp.clone(), "release", release_prep_id.clone()));
+    net.add_arc(PetriArc::output(
+        trp.clone(),
+        "release",
+        release_prep_id.clone(),
+    ));
     net.add_arc(PetriArc::output(trp.clone(), "done", done_id.clone()));
 
     // t_release: release_prep → resource_lease_release effect (DELETE alloc).
@@ -1429,7 +1580,11 @@ fn build_datacenter_adapter_net_mirror(allocator_url: &str) -> (PetriNet, RegPoo
         .with_output_port(Port::new("released"));
     let trl = t_release.id.clone();
     net.add_transition(t_release);
-    net.add_arc(PetriArc::input(release_prep_id.clone(), trl.clone(), "release"));
+    net.add_arc(PetriArc::input(
+        release_prep_id.clone(),
+        trl.clone(),
+        "release",
+    ));
     net.add_arc(PetriArc::output(trl.clone(), "released", done_id.clone()));
 
     // t_reap: lease_expired + in_use (correlate grant_id) → drop hold.
@@ -1489,7 +1644,14 @@ fn build_datacenter_requester_net(adapter_net_id: &str) -> (PetriNet, RegReqPlac
     let register_out_id = register_out.id.clone();
     let release_out_id = release_out.id.clone();
     for p in [
-        start, holding, done, grant_inbox, finish_trigger, claim_out, register_out, release_out,
+        start,
+        holding,
+        done,
+        grant_inbox,
+        finish_trigger,
+        claim_out,
+        register_out,
+        release_out,
     ] {
         net.add_place(p);
     }
@@ -1513,7 +1675,11 @@ fn build_datacenter_requester_net(adapter_net_id: &str) -> (PetriNet, RegReqPlac
     .with_output_port(Port::new("register"));
     let trc = t_receive.id.clone();
     net.add_transition(t_receive);
-    net.add_arc(PetriArc::input(grant_inbox_id.clone(), trc.clone(), "grant"));
+    net.add_arc(PetriArc::input(
+        grant_inbox_id.clone(),
+        trc.clone(),
+        "grant",
+    ));
     net.add_arc(PetriArc::output(trc.clone(), "holding", holding_id.clone()));
     net.add_arc(PetriArc::output(trc.clone(), "register", register_out_id));
 
@@ -1572,7 +1738,11 @@ async fn datacenter_lease_adapter_grants_and_releases_via_mock_allocator() {
     ctx.pool
         .register_effect_handler(
             "resource_lease_release",
-            Arc::new(ResourceLeaseReleaseHandler::new(alloc_client, "release", "released")),
+            Arc::new(ResourceLeaseReleaseHandler::new(
+                alloc_client,
+                "release",
+                "released",
+            )),
         )
         .unwrap();
 
@@ -1603,21 +1773,44 @@ async fn datacenter_lease_adapter_grants_and_releases_via_mock_allocator() {
         let toks = m.tokens_at(&rp.holding);
         assert_eq!(toks.len(), 1, "each requester holds exactly one lease");
         if let TokenColor::Data(d) = &toks[0].color {
-            let gpu = d.get("gpu_uuid").and_then(|v| v.as_str()).expect("lease.gpu_uuid");
-            assert!(gpu.starts_with("gpu-uuid-"), "real allocator gpu_uuid, got {gpu}");
-            let alloc = d.get("alloc_id").and_then(|v| v.as_str()).expect("lease.alloc_id");
-            assert!(alloc.starts_with("alloc-"), "real allocator alloc_id, got {alloc}");
-            assert!(held_allocs.insert(alloc.to_string()), "alloc_ids must be distinct per lease");
+            let gpu = d
+                .get("gpu_uuid")
+                .and_then(|v| v.as_str())
+                .expect("lease.gpu_uuid");
+            assert!(
+                gpu.starts_with("gpu-uuid-"),
+                "real allocator gpu_uuid, got {gpu}"
+            );
+            let alloc = d
+                .get("alloc_id")
+                .and_then(|v| v.as_str())
+                .expect("lease.alloc_id");
+            assert!(
+                alloc.starts_with("alloc-"),
+                "real allocator alloc_id, got {alloc}"
+            );
+            assert!(
+                held_allocs.insert(alloc.to_string()),
+                "alloc_ids must be distinct per lease"
+            );
         }
     }
     assert_eq!(held_allocs.len(), JOBS, "K distinct leases granted");
-    assert_eq!(allocator.granted().len(), JOBS, "allocator granted K leases");
+    assert_eq!(
+        allocator.granted().len(),
+        JOBS,
+        "allocator granted K leases"
+    );
 
     // Finish requester 0 → release fires a DELETE to the allocator for its alloc_id.
     let alloc0 = {
         let m = ctx.requesters[0].get_marking().await;
         match &m.tokens_at(&rps[0].holding)[0].color {
-            TokenColor::Data(d) => d.get("alloc_id").and_then(|v| v.as_str()).unwrap().to_string(),
+            TokenColor::Data(d) => d
+                .get("alloc_id")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .to_string(),
             _ => panic!("hold not data"),
         }
     };

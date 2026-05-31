@@ -273,9 +273,7 @@ where
 /// All API routes are mounted under `/api/nets/{net_id}/*`.
 /// If an `ArtifactStoreState` is provided, adds `PUT /api/artifacts/*path`
 /// for uploading files referenced by `storage_path` job inputs.
-pub fn create_router_with_registry<E, T, S>(
-    registry: Arc<NetRegistry<E, T, S>>,
-) -> Router
+pub fn create_router_with_registry<E, T, S>(registry: Arc<NetRegistry<E, T, S>>) -> Router
 where
     E: EventRepository + 'static,
     T: TopologyRepository + 'static,
@@ -320,4 +318,3 @@ where
 
     app.layer(cors)
 }
-

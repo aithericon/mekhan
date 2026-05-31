@@ -34,7 +34,10 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
     let latest = crate::http::resolve_latest(server_url, base_id).await?;
     let template_id = latest.id.as_str();
 
-    println!("Connecting to template {} (v{})...", template_id, latest.version);
+    println!(
+        "Connecting to template {} (v{})...",
+        template_id, latest.version
+    );
 
     // Connect and get remote state
     let mut handle = ws_client::connect_and_sync(server_url, template_id).await?;
@@ -44,7 +47,12 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
     // Compute diff (ignore positions for DSL formats)
     let local_format = formats::detect_format(&dir).unwrap_or(formats::WorkflowFormat::Json);
     let result = if local_format != formats::WorkflowFormat::Json {
-        diff::compute_diff_ignoring_positions(&local_graph, &local_files, &remote_graph, &remote_files)
+        diff::compute_diff_ignoring_positions(
+            &local_graph,
+            &local_files,
+            &remote_graph,
+            &remote_files,
+        )
     } else {
         diff::compute_diff(&local_graph, &local_files, &remote_graph, &remote_files)
     };
@@ -122,7 +130,10 @@ pub(crate) async fn upload_assets(
 
     for (node_id, node_assets) in assets {
         for (filename, content) in node_assets {
-            let url = format!("{}/api/v1/templates/{}/files/{}", base, template_id, node_id);
+            let url = format!(
+                "{}/api/v1/templates/{}/files/{}",
+                base, template_id, node_id
+            );
 
             let content_type = mime_from_ext(filename);
             let part = reqwest::multipart::Part::bytes(content.clone())
@@ -142,7 +153,10 @@ pub(crate) async fn upload_assets(
                 let body = resp.text().await.unwrap_or_default();
                 bail!(
                     "asset upload failed for {}/{}: {} {}",
-                    node_id, filename, status, body
+                    node_id,
+                    filename,
+                    status,
+                    body
                 );
             }
 
@@ -185,7 +199,11 @@ fn validate_entrypoints(
             let node_dir = nodes_dir.join(&node.id);
 
             // Check entrypoint
-            if let Some(ep) = execution_spec.config.get("entrypoint").and_then(|v| v.as_str()) {
+            if let Some(ep) = execution_spec
+                .config
+                .get("entrypoint")
+                .and_then(|v| v.as_str())
+            {
                 if !node_dir.join(ep).is_file() {
                     errors.push(format!(
                         "step '{}': entrypoint '{}' not found (expected at nodes/{}/{})",
@@ -195,7 +213,11 @@ fn validate_entrypoints(
             }
 
             // Check required files
-            if let Some(files) = execution_spec.config.get("required_files").and_then(|v| v.as_array()) {
+            if let Some(files) = execution_spec
+                .config
+                .get("required_files")
+                .and_then(|v| v.as_array())
+            {
                 for file_val in files {
                     if let Some(filename) = file_val.as_str() {
                         if !node_dir.join(filename).is_file() {
@@ -211,10 +233,7 @@ fn validate_entrypoints(
     }
 
     if !errors.is_empty() {
-        bail!(
-            "file validation failed:\n  {}",
-            errors.join("\n  ")
-        );
+        bail!("file validation failed:\n  {}", errors.join("\n  "));
     }
 
     Ok(())

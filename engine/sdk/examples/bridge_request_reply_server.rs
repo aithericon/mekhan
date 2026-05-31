@@ -49,7 +49,8 @@ struct AuditEntry {
 
 fn definition(ctx: &mut Context) {
     // Bridge-in: receives requests from the client net
-    let inbox = ctx.bridge_in_from::<CalcRequest>("inbox", "Request Inbox", "calc-client", "outbox");
+    let inbox =
+        ctx.bridge_in_from::<CalcRequest>("inbox", "Request Inbox", "calc-client", "outbox");
 
     // Bridge-reply: sends results back to the client's reply_to place
     let reply_outbox = ctx.bridge_reply::<CalcResult>("reply_outbox", "Reply Outbox");

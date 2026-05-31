@@ -26,11 +26,7 @@ use super::{resolve_path, FileOpsError, FileOpsResult};
 /// - `sidecar_path` — the sidecar path (`<path>.meta.json`)
 /// - `merged` — whether merge mode was used
 /// - `annotations` — the final JSON object written to the sidecar
-pub async fn execute(
-    config: &AnnotateConfig,
-    operator: &Operator,
-    prefix: &str,
-) -> FileOpsResult {
+pub async fn execute(config: &AnnotateConfig, operator: &Operator, prefix: &str) -> FileOpsResult {
     let target_path = resolve_path(prefix, &config.path);
     let sidecar_path = resolve_path(prefix, &format!("{}.meta.json", config.path));
 

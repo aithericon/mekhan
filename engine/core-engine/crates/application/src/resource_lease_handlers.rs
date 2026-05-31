@@ -736,7 +736,10 @@ mod tests {
 
         let out = handler.execute(input).await.unwrap();
 
-        assert_eq!(out.tokens.get("released").unwrap()["grant_id"], "instance-1:render");
+        assert_eq!(
+            out.tokens.get("released").unwrap()["grant_id"],
+            "instance-1:render"
+        );
         assert_eq!(out.result["alloc_id"], "alloc-42");
         assert_eq!(out.result["released"], true);
 
@@ -791,10 +794,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(alloc.acquire_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            alloc.last_grant_id.lock().unwrap().as_deref(),
-            Some("g1")
-        );
+        assert_eq!(alloc.last_grant_id.lock().unwrap().as_deref(), Some("g1"));
     }
 
     /// The flavor-aware acquire delegates to the leaf `acquire` for the default

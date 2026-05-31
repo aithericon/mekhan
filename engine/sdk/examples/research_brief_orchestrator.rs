@@ -208,7 +208,8 @@ fn definition(ctx: &mut Context) {
     // Human data entry
     let entry_form = ctx.state::<HumanTaskRequest>("entry_form", "Entry Form");
     let entry_task = ctx.state::<HumanTaskAssigned>("entry_task", "Entry Task");
-    let sig_entry_response = ctx.signal::<HumanTaskResponse>("sig_entry_response", "Entry Response Signal");
+    let sig_entry_response =
+        ctx.signal::<HumanTaskResponse>("sig_entry_response", "Entry Response Signal");
     let research_params = ctx.state::<ResearchParams>("research_params", "Research Parameters");
 
     // Python phase
@@ -218,8 +219,12 @@ fn definition(ctx: &mut Context) {
     let to_jobs = ctx.bridge_out::<JobRequest>("to_jobs", "To Jobs", "job-net", "job_queue");
 
     // Shared bridge in — results/failures from job-net
-    let result_inbox =
-        ctx.bridge_in_from::<StepResult>("result_inbox", "Result Inbox", "job-net", "result_outbox");
+    let result_inbox = ctx.bridge_in_from::<StepResult>(
+        "result_inbox",
+        "Result Inbox",
+        "job-net",
+        "result_outbox",
+    );
     let failure_inbox = ctx.bridge_in_from::<StepFailure>(
         "failure_inbox",
         "Failure Inbox",
@@ -261,7 +266,10 @@ fn definition(ctx: &mut Context) {
         let process_done = ctx.state::<DynamicToken>("process_done", "Process Done");
         let process_completed = ctx.state::<DynamicToken>("process_completed", "Process Completed");
 
-        ctx.seed(&process_inbox, vec![DynamicToken::new(serde_json::json!({}))]);
+        ctx.seed(
+            &process_inbox,
+            vec![DynamicToken::new(serde_json::json!({}))],
+        );
 
         ctx.transition("create_process", "Create Process")
             .process_start_to(ProcessStart {

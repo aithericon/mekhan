@@ -92,10 +92,7 @@ pub struct ExecutorLifecycleHandles {
 ///
 /// The caller provides `bridges` to wire the lifecycle into the broader net.
 /// Returns handles to key output places.
-pub fn executor_lifecycle(
-    ctx: &mut Context,
-    bridges: ExecutorBridges,
-) -> ExecutorLifecycleHandles {
+pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> ExecutorLifecycleHandles {
     let exec_queue = bridges.inbox;
     let dead_letter = ctx.terminal::<DynamicToken>("dead_letter", "Dead Letter");
     let effect_errors = ctx.state::<EffectError>("effect_errors", "Effect Errors");

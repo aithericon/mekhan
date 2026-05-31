@@ -85,8 +85,8 @@ pub fn compute_quality(meta: &mut FileMetadata) {
         return;
     }
 
-    let aggregate_completeness = column_scores.iter().map(|c| c.completeness).sum::<f64>()
-        / column_scores.len() as f64;
+    let aggregate_completeness =
+        column_scores.iter().map(|c| c.completeness).sum::<f64>() / column_scores.len() as f64;
 
     meta.data_quality = Some(DataQualityReport {
         row_count: Some(row_count),
@@ -129,11 +129,7 @@ mod tests {
         }
     }
 
-    fn col_with_stats(
-        name: &str,
-        null_count: u64,
-        distinct_count: u64,
-    ) -> ColumnInfo {
+    fn col_with_stats(name: &str, null_count: u64, distinct_count: u64) -> ColumnInfo {
         ColumnInfo {
             name: name.into(),
             data_type: DataType::String,

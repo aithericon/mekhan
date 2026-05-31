@@ -127,7 +127,10 @@ async fn drain_cluster(
 pub fn cluster_routes(registry: Arc<ClusterRegistry>) -> Router {
     Router::new()
         .route("/api/clusters", get(list_clusters))
-        .route("/api/clusters/:resource_id/reconnect", post(reconnect_cluster))
+        .route(
+            "/api/clusters/:resource_id/reconnect",
+            post(reconnect_cluster),
+        )
         .route("/api/clusters/:resource_id/drain", post(drain_cluster))
         .with_state(registry)
 }

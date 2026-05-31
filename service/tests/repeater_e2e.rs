@@ -161,7 +161,10 @@ fn repeater_output_surfaces_as_array_in_consumer_scope() {
         .unwrap_or_else(|| {
             panic!(
                 "review.review_tasks must be a picker root, got: {:?}",
-                consumer_scope.iter().map(|e| e.path.as_str()).collect::<Vec<_>>()
+                consumer_scope
+                    .iter()
+                    .map(|e| e.path.as_str())
+                    .collect::<Vec<_>>()
             )
         });
 
@@ -300,8 +303,8 @@ fn nested_iteration_is_hard_error() {
         "review_tasks",
         REVIEW_FIELDS,
     );
-    let err = compile_to_air(&g, "repeater_e2e", "", &python_files())
-        .expect_err("nested [*] must error");
+    let err =
+        compile_to_air(&g, "repeater_e2e", "", &python_files()).expect_err("nested [*] must error");
     match err {
         CompileError::RepeaterRefMalformed { message, .. } => {
             assert!(
@@ -320,9 +323,7 @@ fn unknown_items_ref_slug_is_hard_error() {
         .expect_err("unknown slug must error");
     match err {
         CompileError::RepeaterRefUnresolved {
-            slug,
-            available,
-            ..
+            slug, available, ..
         } => {
             assert_eq!(slug, "nonesuch");
             assert!(

@@ -7,8 +7,8 @@
 //! - `just -f aithericon-test-infra/justfile up` (NATS)
 //! - A petri-lab engine running on localhost:13030 connected to NATS
 
-use petri_api_types::{RunMode, StateResponse, TopologyResponse};
 use mekhan_service::petri::client::PetriClient;
+use petri_api_types::{RunMode, StateResponse, TopologyResponse};
 use uuid::Uuid;
 
 /// Engine URL — use TEST_ENGINE_URL env var to override.
@@ -86,7 +86,11 @@ async fn deploy_and_get_state() {
         !state.marking.tokens.is_empty(),
         "marking should have tokens after deploy"
     );
-    assert_eq!(state.run_mode, RunMode::Stopped, "default run mode is stopped");
+    assert_eq!(
+        state.run_mode,
+        RunMode::Stopped,
+        "default run mode is stopped"
+    );
 
     // Verify transition statuses are populated
     assert!(
@@ -182,7 +186,10 @@ async fn delete_net_is_idempotent() {
     client.delete_net(&net_id).await.expect("first delete");
 
     // Second delete — should not error (404 is treated as success)
-    client.delete_net(&net_id).await.expect("second delete should be idempotent");
+    client
+        .delete_net(&net_id)
+        .await
+        .expect("second delete should be idempotent");
 }
 
 #[tokio::test]
@@ -203,8 +210,5 @@ async fn terminate_net_stops_then_deletes() {
     // Terminate: best-effort stop then DELETE the in-memory instance. The
     // engine retains events in JetStream and rehydrates on subsequent reads,
     // so we only assert that the call succeeds (no longer that GETs 404).
-    client
-        .terminate_net(&net_id)
-        .await
-        .expect("terminate_net");
+    client.terminate_net(&net_id).await.expect("terminate_net");
 }

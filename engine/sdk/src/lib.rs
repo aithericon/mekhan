@@ -174,12 +174,15 @@ pub mod validation;
 // Re-exports for convenience
 pub use component::Component;
 pub use components::{
-    CancelledSignal, ClaimFailedJob, ClaimHandleToken, ClaimInput, ClaimJobResult, ClaimOutput,
-    ClaimPattern, ClaimProcessing, ClaimRelease, CompletedSignal, ExecErrorSignal,
-    ExecutorBridges, ExecutorLifecycleHandles, InvalidationSignal,
-    executor_lifecycle,
+    executor_lifecycle, CancelledSignal, ClaimFailedJob, ClaimHandleToken, ClaimInput,
+    ClaimJobResult, ClaimOutput, ClaimPattern, ClaimProcessing, ClaimRelease, CompletedSignal,
+    ExecErrorSignal, ExecutorBridges, ExecutorLifecycleHandles, InvalidationSignal,
 };
 pub use context::{Context, SpawnChildIO, SpawnHandles, TimerHandles};
+pub use contracts::{
+    ExecutorCancel, ExecutorSubmit, HumanTaskCancel, HumanTaskSubmit, ProcessComplete,
+    ProcessStart, SchedulerCancel, SchedulerSubmit, TimerCancel, TimerSchedule,
+};
 pub use place::{PlaceHandle, Target};
 pub use port::{Cardinality, InputPort, OutputPort};
 pub use resource::{Resource, ResourceBuilder, ResourceStateBuilder};
@@ -191,12 +194,10 @@ pub use scenario::{
 };
 pub use step::StepDefinition;
 pub use token::{DynamicToken, IntegerToken, Token, UnitToken};
-pub use contracts::{
-    ExecutorCancel, ExecutorSubmit, HumanTaskCancel, HumanTaskSubmit, ProcessComplete, ProcessStart,
-    SchedulerCancel, SchedulerSubmit, TimerCancel, TimerSchedule,
-};
 pub use transition::TransitionBuilder;
-pub use validation::{mock_from_schema, validate, validate_script, validate_with_mocks, ValidationResult};
+pub use validation::{
+    mock_from_schema, validate, validate_script, validate_with_mocks, ValidationResult,
+};
 
 // Re-export effect descriptors from petri-domain for typed effect API
 pub use petri_domain::effects::{self as effects, EffectDescriptor, ServiceCategory};
@@ -222,16 +223,33 @@ pub use petri_domain::human::{
 
 // Re-export executor domain types for typed execution specs, status, and results
 pub use aithericon_executor_domain::{
-    // Job construction
-    ExecutionSpec, InputDeclaration, InputSource, OutputDeclaration, JobPriority,
-    // Status & results
-    ExecutionStatus, ExecutionOutcome, ExecutionResult,
-    EventCategory, StatusUpdate, StatusDetail, ExecutionEvent,
     // Observability
-    Artifact, ArtifactCategory, ArtifactManifest,
-    Progress, Phase, PhaseStatus,
-    LogLevel, LogEntry, LogSummary,
-    MetricType, MetricPoint, MetricSummary,
+    Artifact,
+    ArtifactCategory,
+    ArtifactManifest,
+    EventCategory,
+    ExecutionEvent,
+    ExecutionOutcome,
+    ExecutionResult,
+    // Job construction
+    ExecutionSpec,
+    // Status & results
+    ExecutionStatus,
+    InputDeclaration,
+    InputSource,
+    JobPriority,
+    LogEntry,
+    LogLevel,
+    LogSummary,
+    MetricPoint,
+    MetricSummary,
+    MetricType,
+    OutputDeclaration,
+    Phase,
+    PhaseStatus,
+    Progress,
+    StatusDetail,
+    StatusUpdate,
 };
 
 // Re-export attribute macros from the derive crate
@@ -267,12 +285,15 @@ pub mod prelude {
     pub use crate::bridge::{BridgeAddress, BridgeSource, BridgeTarget};
     pub use crate::component::Component;
     pub use crate::components::{
-        CancelledSignal, ClaimFailedJob, ClaimHandleToken, ClaimInput, ClaimJobResult, ClaimOutput,
-        ClaimPattern, ClaimProcessing, ClaimRelease, CompletedSignal, ExecErrorSignal,
-        ExecutorBridges, ExecutorLifecycleHandles, InvalidationSignal,
-        executor_lifecycle,
+        executor_lifecycle, CancelledSignal, ClaimFailedJob, ClaimHandleToken, ClaimInput,
+        ClaimJobResult, ClaimOutput, ClaimPattern, ClaimProcessing, ClaimRelease, CompletedSignal,
+        ExecErrorSignal, ExecutorBridges, ExecutorLifecycleHandles, InvalidationSignal,
     };
     pub use crate::context::{Context, SpawnChildIO, SpawnHandles};
+    pub use crate::contracts::{
+        ExecutorCancel, ExecutorSubmit, HumanTaskCancel, HumanTaskSubmit, ProcessComplete,
+        ProcessStart, SchedulerCancel, SchedulerSubmit, TimerCancel, TimerSchedule,
+    };
     pub use crate::place::{PlaceHandle, Target};
     pub use crate::port::{Cardinality, InputPort, OutputPort};
     pub use crate::resource::{Resource, ResourceBuilder, ResourceStateBuilder};
@@ -280,14 +301,10 @@ pub mod prelude {
     pub use crate::scenario::{
         BridgeTargetDto, ScenarioDefinition, TransitionGuard, TransitionLogic,
     };
+    pub use crate::secret;
     pub use crate::step::StepDefinition;
     pub use crate::token::{DynamicToken, IntegerToken, Token, UnitToken};
-    pub use crate::contracts::{
-        ExecutorCancel, ExecutorSubmit, HumanTaskCancel, HumanTaskSubmit, ProcessComplete,
-        ProcessStart, SchedulerCancel, SchedulerSubmit, TimerCancel, TimerSchedule,
-    };
     pub use crate::validation::{validate, validate_with_mocks, ValidationResult};
-    pub use crate::secret;
     pub use crate::Place;
 
     // Re-export attribute macros
@@ -315,16 +332,33 @@ pub mod prelude {
 
     // Re-export executor domain types for typed execution specs
     pub use aithericon_executor_domain::{
-        // Job construction
-        ExecutionSpec, InputDeclaration, InputSource, OutputDeclaration, JobPriority,
-        // Status & results
-        ExecutionStatus, ExecutionOutcome, ExecutionResult,
-        EventCategory, StatusUpdate, StatusDetail, ExecutionEvent,
         // Observability
-        Artifact, ArtifactCategory, ArtifactManifest,
-        Progress, Phase, PhaseStatus,
-        LogLevel, LogEntry, LogSummary,
-        MetricType, MetricPoint, MetricSummary,
+        Artifact,
+        ArtifactCategory,
+        ArtifactManifest,
+        EventCategory,
+        ExecutionEvent,
+        ExecutionOutcome,
+        ExecutionResult,
+        // Job construction
+        ExecutionSpec,
+        // Status & results
+        ExecutionStatus,
+        InputDeclaration,
+        InputSource,
+        JobPriority,
+        LogEntry,
+        LogLevel,
+        LogSummary,
+        MetricPoint,
+        MetricSummary,
+        MetricType,
+        OutputDeclaration,
+        Phase,
+        PhaseStatus,
+        Progress,
+        StatusDetail,
+        StatusUpdate,
     };
 
     // Re-export common derives (still available for manual use)

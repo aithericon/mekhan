@@ -26,11 +26,9 @@ use crate::AppState;
 async fn gate_demo_write(state: &AppState, user: &AuthUser) -> Result<(), ApiError> {
     match require_role(&state.db, user, uuid::Uuid::nil(), Role::Editor).await {
         Ok(_) => Ok(()),
-        Err(MembershipError::NotMember(_)) | Err(MembershipError::InsufficientRole { .. }) => {
-            Err(ApiError::forbidden(
-                "demo reset requires editor of the default workspace",
-            ))
-        }
+        Err(MembershipError::NotMember(_)) | Err(MembershipError::InsufficientRole { .. }) => Err(
+            ApiError::forbidden("demo reset requires editor of the default workspace"),
+        ),
         Err(MembershipError::TemplateNotFound(_)) => {
             Err(ApiError::forbidden("demo reset requires editor"))
         }

@@ -83,7 +83,11 @@ pub struct OpenAI {
 /// kind needs no executor change. Bind it on an LLM step whose `provider` is
 /// `anthropic`. See [[project_llm_resource_binding]].
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "anthropic", display_name = "Anthropic", icon = "lucide-sparkles")]
+#[resource(
+    name = "anthropic",
+    display_name = "Anthropic",
+    icon = "lucide-sparkles"
+)]
 pub struct Anthropic {
     #[resource(secret)]
     pub api_key: String,
@@ -98,7 +102,11 @@ pub struct Anthropic {
 /// Slack webhook target — v1 only supports incoming-webhook posting. Bot-
 /// token / OAuth Slack flows land in v2.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "slack", display_name = "Slack (Webhook)", icon = "lucide-slack")]
+#[resource(
+    name = "slack",
+    display_name = "Slack (Webhook)",
+    icon = "lucide-slack"
+)]
 pub struct Slack {
     /// `https://hooks.slack.com/services/...` — the whole URL is treated as
     /// a secret because the path component carries the auth material.
@@ -124,7 +132,11 @@ pub struct Slack {
 /// Bearer-token credential for the HTTP node's `Bearer` auth scheme.
 /// Pairs with a step whose `auth.type = "bearer"`.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "http_bearer", display_name = "Bearer Token", icon = "lucide-key-round")]
+#[resource(
+    name = "http_bearer",
+    display_name = "Bearer Token",
+    icon = "lucide-key-round"
+)]
 pub struct HttpBearer {
     /// Sent as `Authorization: Bearer <token>`.
     #[resource(secret)]
@@ -135,7 +147,11 @@ pub struct HttpBearer {
 /// Pairs with a step whose `auth.type = "basic"`. `username` is public
 /// (it's not a secret); only `password` lands in Vault.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "http_basic", display_name = "Basic Auth", icon = "lucide-key-round")]
+#[resource(
+    name = "http_basic",
+    display_name = "Basic Auth",
+    icon = "lucide-key-round"
+)]
 pub struct HttpBasic {
     pub username: String,
     #[resource(secret)]
@@ -236,7 +252,11 @@ pub struct GoogleOauth {
 /// free. No secret — the pool is owned by the platform, not an external system,
 /// so there is no credential to store. See `docs/14`.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(name = "token_pool", display_name = "Token Pool", icon = "lucide-layers")]
+#[resource(
+    name = "token_pool",
+    display_name = "Token Pool",
+    icon = "lucide-layers"
+)]
 pub struct TokenPool {
     /// Number of concurrent holders the pool admits. Surfaces N capacity tokens
     /// in the backing net.

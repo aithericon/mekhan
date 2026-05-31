@@ -36,9 +36,7 @@ pub async fn run(server: &str, instance_id: &str, tail: Option<usize>) -> Result
             anyhow::bail!("Instance not found: {}", instance_id);
         }
         500 => {
-            anyhow::bail!(
-                "Server error — NATS may be unavailable. Check server logs."
-            );
+            anyhow::bail!("Server error — NATS may be unavailable. Check server logs.");
         }
         _ => {
             let body: Value = resp.json().await.unwrap_or_default();
@@ -47,10 +45,7 @@ pub async fn run(server: &str, instance_id: &str, tail: Option<usize>) -> Result
         }
     }
 
-    let state: InstanceState = resp
-        .json()
-        .await
-        .context("invalid response from server")?;
+    let state: InstanceState = resp.json().await.context("invalid response from server")?;
 
     // Header
     println!("Instance:  {}", state.instance_id);
@@ -63,11 +58,7 @@ pub async fn run(server: &str, instance_id: &str, tail: Option<usize>) -> Result
     // Engine
     println!();
     if state.engine.available {
-        let mode = state
-            .engine
-            .run_mode
-            .as_deref()
-            .unwrap_or("unknown");
+        let mode = state.engine.run_mode.as_deref().unwrap_or("unknown");
         println!("Engine:    available (mode: {})", mode);
     } else {
         println!("Engine:    unavailable");
@@ -75,10 +66,7 @@ pub async fn run(server: &str, instance_id: &str, tail: Option<usize>) -> Result
 
     // Enabled transitions
     if !state.enabled_transitions.is_empty() {
-        println!(
-            "Enabled:   {}",
-            state.enabled_transitions.join(", ")
-        );
+        println!("Enabled:   {}", state.enabled_transitions.join(", "));
     }
 
     // Marking

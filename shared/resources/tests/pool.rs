@@ -60,7 +60,12 @@ fn datacenter_kind_registered() {
     }
     let public: Vec<&str> = d.public_fields.to_vec();
     // The serde tag is listed first, then the union of non-secret variant fields.
-    for required in ["scheduler_flavor", "allocator_url", "ssh_host", "nomad_addr"] {
+    for required in [
+        "scheduler_flavor",
+        "allocator_url",
+        "ssh_host",
+        "nomad_addr",
+    ] {
         assert!(
             public.contains(&required),
             "datacenter.public_fields missing `{required}`; got {public:?}"

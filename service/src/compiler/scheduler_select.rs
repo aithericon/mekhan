@@ -99,8 +99,8 @@ pub fn resolve_scheduler_defaults(
                 ..
             } => {
                 let node_scheduler = non_blank(&binding.scheduler);
-                if node_scheduler.is_some() {
-                    binding.scheduler = node_scheduler.unwrap().to_string();
+                if let Some(scheduler) = node_scheduler {
+                    binding.scheduler = scheduler.to_string();
                     continue;
                 }
                 // A loop lease REQUIRES a concrete cluster — inherit the default
@@ -221,23 +221,28 @@ mod tests {
     }
 
     fn node_scheduler<'a>(g: &'a WorkflowGraph, id: &str) -> Option<&'a str> {
-        g.nodes.iter().find(|n| n.id == id).and_then(|n| match &n.data {
-            WorkflowNodeData::AutomatedStep {
-                deployment_model: DeploymentModel::Scheduled { scheduler, .. },
-                ..
-            } => scheduler.as_deref(),
-            WorkflowNodeData::Loop {
-                lease: Some(b), ..
-            } => Some(b.scheduler.as_str()),
-            _ => None,
-        })
+        g.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .and_then(|n| match &n.data {
+                WorkflowNodeData::AutomatedStep {
+                    deployment_model: DeploymentModel::Scheduled { scheduler, .. },
+                    ..
+                } => scheduler.as_deref(),
+                WorkflowNodeData::Loop { lease: Some(b), .. } => Some(b.scheduler.as_str()),
+                _ => None,
+            })
     }
 
     // node.scheduler set → it wins; template/workspace defaults ignored.
     #[test]
     fn node_level_alias_wins() {
         let g = graph(
-            vec![scheduled_node("a", Some("node_dc"), ScheduledOperation::Lease)],
+            vec![scheduled_node(
+                "a",
+                Some("node_dc"),
+                ScheduledOperation::Lease,
+            )],
             Some("tmpl_dc"),
         );
         let out = resolve_scheduler_defaults(&g, Some("ws_dc")).unwrap();

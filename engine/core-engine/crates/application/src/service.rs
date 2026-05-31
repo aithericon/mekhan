@@ -1865,7 +1865,10 @@ mod tests {
             .unwrap();
         service.initialize(net).await.unwrap();
         service
-            .create_token(input_id.clone(), TokenColor::Data(serde_json::json!({"x": 1})))
+            .create_token(
+                input_id.clone(),
+                TokenColor::Data(serde_json::json!({"x": 1})),
+            )
             .await
             .unwrap();
 

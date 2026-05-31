@@ -184,17 +184,19 @@ pub fn doc_to_graph(doc: &Doc) -> Result<WorkflowGraph, String> {
 
     // -- default_scheduler: read the top-level Y.Map written by
     // graph_to_doc_with_files (`{ alias }`). Absent → None.
-    let default_scheduler = txn.get_map("defaultScheduler").and_then(|m| match m.get(&txn, "alias") {
-        Some(yrs::Out::Any(Any::String(s))) => {
-            let s = s.to_string();
-            if s.trim().is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        }
-        _ => None,
-    });
+    let default_scheduler =
+        txn.get_map("defaultScheduler")
+            .and_then(|m| match m.get(&txn, "alias") {
+                Some(yrs::Out::Any(Any::String(s))) => {
+                    let s = s.to_string();
+                    if s.trim().is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }
+                _ => None,
+            });
 
     Ok(WorkflowGraph {
         nodes,
@@ -333,10 +335,7 @@ pub fn graph_to_doc_with_files(
         let edges_arr = txn.get_or_insert_array("edges");
         for edge in &graph.edges {
             let mut edge_map: HashMap<String, Any> = HashMap::new();
-            edge_map.insert(
-                "id".to_string(),
-                Any::String(Arc::from(edge.id.as_str())),
-            );
+            edge_map.insert("id".to_string(), Any::String(Arc::from(edge.id.as_str())));
             edge_map.insert(
                 "source".to_string(),
                 Any::String(Arc::from(edge.source.as_str())),
@@ -362,10 +361,7 @@ pub fn graph_to_doc_with_files(
                 );
             }
             if let Some(ref label) = edge.label {
-                edge_map.insert(
-                    "label".to_string(),
-                    Any::String(Arc::from(label.as_str())),
-                );
+                edge_map.insert("label".to_string(), Any::String(Arc::from(label.as_str())));
             }
             edges_arr.push_back(&mut txn, Any::from(edge_map));
         }
@@ -472,14 +468,21 @@ mod tests {
                 },
             ],
             edges: vec![],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let doc = graph_to_doc(&graph);
         let roundtripped = doc_to_graph(&doc).expect("should parse Y.Doc");
 
         // Scope node
-        let scope = roundtripped.nodes.iter().find(|n| n.id == "scope1").unwrap();
+        let scope = roundtripped
+            .nodes
+            .iter()
+            .find(|n| n.id == "scope1")
+            .unwrap();
         assert_eq!(scope.node_type, "scope");
         assert_eq!(scope.data.label(), "My Group");
         assert_eq!(scope.data.description(), Some("container"));
@@ -488,7 +491,11 @@ mod tests {
         assert_eq!(scope.height, Some(300.0));
 
         // Child node with parent_id
-        let child = roundtripped.nodes.iter().find(|n| n.id == "child1").unwrap();
+        let child = roundtripped
+            .nodes
+            .iter()
+            .find(|n| n.id == "child1")
+            .unwrap();
         assert_eq!(child.parent_id, Some("scope1".to_string()));
         assert_eq!(child.width, None);
         assert_eq!(child.height, None);
@@ -503,7 +510,11 @@ mod tests {
         assert_eq!(roundtripped.nodes.len(), 2);
         assert_eq!(roundtripped.edges.len(), 1);
 
-        let start = roundtripped.nodes.iter().find(|n| n.node_type == "start").unwrap();
+        let start = roundtripped
+            .nodes
+            .iter()
+            .find(|n| n.node_type == "start")
+            .unwrap();
         assert_eq!(start.parent_id, None);
         assert_eq!(start.width, None);
     }
@@ -551,7 +562,10 @@ mod tests {
                     height: None,
                 }],
                 edges: vec![],
-                viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+                viewport: None,
+                instance_concurrency: Default::default(),
+                definitions: Default::default(),
+                default_scheduler: None,
             }
         }
 
@@ -566,8 +580,7 @@ mod tests {
         }
 
         // None → stays None (opt-out: no stray key written/read back).
-        let rt_none =
-            doc_to_graph(&graph_to_doc(&start_with(None))).expect("parse Y.Doc");
+        let rt_none = doc_to_graph(&graph_to_doc(&start_with(None))).expect("parse Y.Doc");
         match &rt_none.nodes[0].data {
             WorkflowNodeData::Start { process_name, .. } => {
                 assert_eq!(process_name.as_deref(), None);
@@ -586,8 +599,8 @@ mod tests {
     #[test]
     fn automated_step_input_output_survive_ydoc_roundtrip() {
         use crate::models::template::{
-            DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, FieldKind, Port,
-            PortField, RetryPolicy, WorkflowEdge, WorkflowNode,
+            DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, FieldKind, Port, PortField,
+            RetryPolicy, WorkflowEdge, WorkflowNode,
         };
 
         let output_port = Port {
@@ -644,7 +657,8 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
@@ -732,12 +746,19 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
         // Y.Doc nodes round-trip via a Y.Map, so order is not preserved — look up by id.
-        let find = |id: &str| &rt.nodes.iter().find(|n| n.id == id).expect("node present").data;
+        let find = |id: &str| {
+            &rt.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .expect("node present")
+                .data
+        };
         match find("lp") {
             WorkflowNodeData::Loop { lease, .. } => {
                 let lease = lease
@@ -822,7 +843,8 @@ mod tests {
             edges: vec![],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
@@ -840,16 +862,15 @@ mod tests {
         let mut files: HashMap<String, HashMap<String, String>> = HashMap::new();
         files.insert(
             "start".to_string(),
-            HashMap::from([(
-                "main.py".to_string(),
-                "print('seeded')\n".to_string(),
-            )]),
+            HashMap::from([("main.py".to_string(), "print('seeded')\n".to_string())]),
         );
 
         let doc = graph_to_doc_with_files(&graph, &files);
         let extracted = extract_files_from_doc(&doc);
 
-        let start_files = extracted.get("start").expect("start node should have files");
+        let start_files = extracted
+            .get("start")
+            .expect("start node should have files");
         assert_eq!(
             start_files.get("main.py").map(String::as_str),
             Some("print('seeded')\n")

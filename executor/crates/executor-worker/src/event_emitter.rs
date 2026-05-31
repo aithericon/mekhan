@@ -25,7 +25,11 @@ pub(crate) fn subject_for(prefix: &Option<String>, base: String) -> String {
 ///
 /// `None` → `default`; `Some(pfx)` → `{prefixed_root}_{pfx}` (e.g.
 /// `STATUS_{pfx}` / `EVENTS_{pfx}`).
-pub(crate) fn stream_name_for(prefix: &Option<String>, prefixed_root: &str, default: &str) -> String {
+pub(crate) fn stream_name_for(
+    prefix: &Option<String>,
+    prefixed_root: &str,
+    default: &str,
+) -> String {
     match prefix {
         Some(pfx) => format!("{prefixed_root}_{pfx}"),
         None => default.to_string(),
@@ -238,9 +242,18 @@ mod tests {
             ("petri_net_id".to_string(), "net-1".to_string()),
         ]);
         enrich_log_fields("exec-42", &metadata, &mut fields);
-        assert_eq!(fields.get("execution_id").map(String::as_str), Some("exec-42"));
-        assert_eq!(fields.get("petri_signal_key").map(String::as_str), Some("sig-1"));
-        assert_eq!(fields.get("petri_net_id").map(String::as_str), Some("net-1"));
+        assert_eq!(
+            fields.get("execution_id").map(String::as_str),
+            Some("exec-42")
+        );
+        assert_eq!(
+            fields.get("petri_signal_key").map(String::as_str),
+            Some("sig-1")
+        );
+        assert_eq!(
+            fields.get("petri_net_id").map(String::as_str),
+            Some("net-1")
+        );
     }
 
     #[test]
@@ -267,6 +280,9 @@ mod tests {
             "user-supplied metadata key wins"
         );
         // But unmentioned metadata keys still get added.
-        assert_eq!(fields.get("petri_net_id").map(String::as_str), Some("net-1"));
+        assert_eq!(
+            fields.get("petri_net_id").map(String::as_str),
+            Some("net-1")
+        );
     }
 }

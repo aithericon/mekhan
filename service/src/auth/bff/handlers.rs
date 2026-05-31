@@ -84,10 +84,7 @@ pub struct LoginQuery {
 }
 
 /// `GET /api/auth/login` — start the Authorization-Code + PKCE flow.
-pub async fn login(
-    State(state): State<AppState>,
-    Query(q): Query<LoginQuery>,
-) -> Response {
+pub async fn login(State(state): State<AppState>, Query(q): Query<LoginQuery>) -> Response {
     let Some(oidc) = state.oidc.as_ref() else {
         // dev_noop has no IdP; nothing to log into. Bounce home.
         return Redirect::to(&state.config.auth.post_login_redirect).into_response();
@@ -151,8 +148,7 @@ pub async fn callback(
     let flow = match state.session_store.take_login_flow(&returned_state).await {
         Ok(Some(f)) => f,
         Ok(None) => {
-            return AuthError::InvalidToken("unknown or replayed state".into())
-                .into_response()
+            return AuthError::InvalidToken("unknown or replayed state".into()).into_response()
         }
         Err(e) => return e.into_response(),
     };

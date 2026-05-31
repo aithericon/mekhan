@@ -354,10 +354,7 @@ impl MekhanNats {
                 &durable,
                 jetstream::consumer::pull::Config {
                     durable_name: Some(durable.clone()),
-                    filter_subjects: vec![
-                        "petri.events.>".into(),
-                        "petri.bridge.>".into(),
-                    ],
+                    filter_subjects: vec!["petri.events.>".into(), "petri.bridge.>".into()],
                     ack_policy: jetstream::consumer::AckPolicy::Explicit,
                     deliver_policy: self.deliver_policy(),
                     ..Default::default()
@@ -387,5 +384,4 @@ impl MekhanNats {
             .await?;
         Ok(consumer)
     }
-
 }

@@ -64,9 +64,7 @@ pub fn try_load_resource_envelope(
     }
     let bytes = std::fs::read(&path)?;
     let value = serde_json::from_slice(&bytes).map_err(|e| {
-        ExecutorError::Config(format!(
-            "resource '{alias}' envelope invalid JSON: {e}"
-        ))
+        ExecutorError::Config(format!("resource '{alias}' envelope invalid JSON: {e}"))
     })?;
     Ok(Some(value))
 }
@@ -201,11 +199,7 @@ mod tests {
         let td = TempDir::new().unwrap();
         let ctx = ctx_with_inputs_dir(&td);
         fs::create_dir_all(&ctx.run_dir.inputs_dir).unwrap();
-        fs::write(
-            ctx.run_dir.inputs_dir.join("broken.json"),
-            "{ not json",
-        )
-        .unwrap();
+        fs::write(ctx.run_dir.inputs_dir.join("broken.json"), "{ not json").unwrap();
         let err = load_resource_envelope(&ctx, "broken").unwrap_err();
         match err {
             ExecutorError::Config(msg) => assert!(msg.contains("invalid JSON")),

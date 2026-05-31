@@ -261,9 +261,7 @@ async fn test_run_one_returns_412_when_no_published_version() {
 /// HumanTask node. Returns `(template_id, start_node_id, human_node_id,
 /// human_slug)`. Slugs round-trip through `WorkflowNode::slug()` so the
 /// asserted shape matches what the promote handler emits.
-async fn seed_template_with_human_task(
-    db: &sqlx::PgPool,
-) -> (Uuid, String, String, String) {
+async fn seed_template_with_human_task(db: &sqlx::PgPool) -> (Uuid, String, String, String) {
     let template_id = Uuid::new_v4();
     let author_id = Uuid::new_v4();
     let start_id = "start".to_string();
@@ -322,7 +320,8 @@ async fn seed_template_with_human_task(
         edges: Vec::<WorkflowEdge>::new(),
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let graph_json = serde_json::to_value(&graph).unwrap();
 
@@ -447,8 +446,7 @@ async fn seed_instance_with_events(
 async fn test_promote_extracts_start_tokens_and_human_answers() {
     let (app, db) = common::test_app().await;
 
-    let (template_id, start_id, human_id, human_slug) =
-        seed_template_with_human_task(&db).await;
+    let (template_id, start_id, human_id, human_slug) = seed_template_with_human_task(&db).await;
 
     let start_token = json!({ "amount": 1234, "_instance_id": "ignored" });
     let human_completion = json!({

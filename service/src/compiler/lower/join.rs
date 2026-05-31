@@ -27,10 +27,8 @@ pub(crate) fn lower_join(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    let p_data: PlaceHandle<DynamicToken> = ctx.state(
-        format!("p_{id}_data"),
-        format!("{label} - Parked data"),
-    );
+    let p_data: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_data"), format!("{label} - Parked data"));
 
     // Pre-create one input place per incoming edge so wire.rs can route each
     // edge to its dedicated input.

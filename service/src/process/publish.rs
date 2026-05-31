@@ -93,8 +93,7 @@ impl<'a> PublishService<'a> {
     ) -> Result<CompiledArtifacts, ApiError> {
         synthesize_py_io_files(graph, files);
 
-        let sub_air =
-            resolve_subworkflow_air(self.state, publishing_family, graph).await?;
+        let sub_air = resolve_subworkflow_air(self.state, publishing_family, graph).await?;
 
         // Reconcile each SubWorkflow node's declared `output` port with the
         // authoritative contract derived from its resolved child (the union of
@@ -122,20 +121,19 @@ impl<'a> PublishService<'a> {
         // only in the compiled artifact.
         let workspace_default =
             workspace_default_datacenter_alias(self.state, workspace_id).await?;
-        let compiled_graph =
-            crate::compiler::scheduler_select::resolve_scheduler_defaults(
-                &compiled_graph,
-                workspace_default.as_deref(),
-            )
-            .map_err(|errs| {
-                let summary = errs
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                let views: Vec<_> = errs.iter().map(|e| e.to_view()).collect();
-                ApiError::compile(format!("scheduler selection failed: {summary}"), views)
-            })?;
+        let compiled_graph = crate::compiler::scheduler_select::resolve_scheduler_defaults(
+            &compiled_graph,
+            workspace_default.as_deref(),
+        )
+        .map_err(|errs| {
+            let summary = errs
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let views: Vec<_> = errs.iter().map(|e| e.to_view()).collect();
+            ApiError::compile(format!("scheduler selection failed: {summary}"), views)
+        })?;
 
         // Discover workspace resources this graph touches by source-scanning
         // Python entrypoints for `<head>.<field>` accesses and looking the
@@ -451,7 +449,9 @@ async fn discover_known_resources(
         // contributes nothing.
         if let WorkflowNodeData::AutomatedStep {
             deployment_model:
-                crate::models::template::DeploymentModel::Executor { pool: Some(binding) },
+                crate::models::template::DeploymentModel::Executor {
+                    pool: Some(binding),
+                },
             ..
         } = &node.data
         {
@@ -753,16 +753,14 @@ pub async fn resolve_subworkflow_air(
             ));
         }
 
-        make_child_callable(&mut child_def, &entry_place, &terminal_ids).map_err(
-            |e| {
-                tracing::warn!(node = %node.id, error = %e, "make_child_callable failed");
-                let e = CompileError::SubWorkflowUnresolved {
-                    node_id: node.id.clone(),
-                    template_id: template_id.to_string(),
-                };
-                ApiError::compile(e.to_string(), vec![e.to_view()])
-            },
-        )?;
+        make_child_callable(&mut child_def, &entry_place, &terminal_ids).map_err(|e| {
+            tracing::warn!(node = %node.id, error = %e, "make_child_callable failed");
+            let e = CompileError::SubWorkflowUnresolved {
+                node_id: node.id.clone(),
+                template_id: template_id.to_string(),
+            };
+            ApiError::compile(e.to_string(), vec![e.to_view()])
+        })?;
 
         let air = serde_json::to_value(&child_def)
             .map_err(|e| ApiError::internal(format!("serialize child AIR: {e}")))?;

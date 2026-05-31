@@ -158,12 +158,11 @@ async fn spawn_consumers(
 async fn wait_for_terminal(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if matches!(st.as_str(), "completed" | "failed" | "cancelled") {
             return st;
         }
@@ -175,14 +174,12 @@ async fn wait_for_terminal(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> St
 }
 
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
-    sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT result FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .unwrap()
-    .expect("result column was null — Timeout produced no End envelope")
+    sqlx::query_scalar::<_, Option<Value>>("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+        .expect("result column was null — Timeout produced no End envelope")
 }
 
 async fn wait_for_net_id(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
@@ -591,7 +588,7 @@ async fn timeout_timer_wins_drains_body_human_task() {
     let saw = |name: &str| -> bool {
         evs.iter().any(|e| {
             let ev = &e["event"];
-            ev.get("type").and_then(|t| t.as_str()).map_or(false, |t| {
+            ev.get("type").and_then(|t| t.as_str()).is_some_and(|t| {
                 (t == "TransitionFired" || t == "EffectCompleted")
                     && ev.get("transition_id").and_then(|x| x.as_str()) == Some(name)
             })
@@ -702,7 +699,7 @@ async fn timeout_drains_mid_body_human_task() {
     let saw = |name: &str| -> bool {
         evs.iter().any(|e| {
             let ev = &e["event"];
-            ev.get("type").and_then(|t| t.as_str()).map_or(false, |t| {
+            ev.get("type").and_then(|t| t.as_str()).is_some_and(|t| {
                 (t == "TransitionFired" || t == "EffectCompleted")
                     && ev.get("transition_id").and_then(|x| x.as_str()) == Some(name)
             })
@@ -776,9 +773,7 @@ async fn timeout_drains_mid_body_human_task() {
         // Latest iteration for `review` (one row here) — mirrors the badge,
         // which reads the last execution.
         let status = rows.as_array().and_then(|rs| {
-            rs.iter()
-                .filter(|r| r["node_id"] == json!("review"))
-                .next_back()
+            rs.iter().rfind(|r| r["node_id"] == json!("review"))
                 .and_then(|r| r["status"].as_str().map(str::to_string))
         });
         if let Some(s) = &status {

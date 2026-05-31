@@ -292,9 +292,7 @@ async fn ollama_complete(
             .text()
             .await
             .unwrap_or_else(|_| "<failed to read body>".into());
-        return Err(LlmError::Api(format!(
-            "Ollama returned {status}: {body}"
-        )));
+        return Err(LlmError::Api(format!("Ollama returned {status}: {body}")));
     }
 
     let resp: OllamaChatResponse = response

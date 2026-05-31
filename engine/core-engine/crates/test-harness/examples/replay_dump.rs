@@ -3,7 +3,9 @@
 use petri_domain::{apply_event_to_marking, Marking, PersistedEvent};
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "/tmp/all_events.json".to_string());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/all_events.json".to_string());
     let json = std::fs::read_to_string(&path).expect("read");
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
     let events_json = parsed["events"].as_array().expect("events array");
@@ -23,7 +25,11 @@ fn main() {
         }
     }
     if failed > 0 {
-        eprintln!("Total deserialize failures: {}/{}", failed, events_json.len());
+        eprintln!(
+            "Total deserialize failures: {}/{}",
+            failed,
+            events_json.len()
+        );
     }
 
     let mut marking = Marking::new();

@@ -49,8 +49,8 @@ pub(crate) static AGENT_DECL: NodeDecl = NodeDecl {
     // degenerate path delegates to AutomatedStep which also parks data.
     parks_data_envelope: true,
     lower: Some(crate::compiler::lower::agent::lower_agent),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     // No per-node structural rule. Agent shares AutomatedStep's outbound
@@ -116,11 +116,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     ]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::Agent {
         model,

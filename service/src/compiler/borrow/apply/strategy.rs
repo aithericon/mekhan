@@ -80,12 +80,7 @@ impl ApplyStrategy for EnvelopeStageStrategy {
         )
     }
     fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {
-        super::envelope::apply_envelope_borrows(
-            ctx.scenario,
-            ctx.interfaces,
-            consumer,
-            group,
-        );
+        super::envelope::apply_envelope_borrows(ctx.scenario, ctx.interfaces, consumer, group);
     }
 }
 
@@ -98,12 +93,7 @@ impl ApplyStrategy for HumanTaskStrategy {
         matches!(r, BorrowResolution::HumanTaskInputRewrite)
     }
     fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {
-        super::human_task::apply_human_task_borrows(
-            ctx.scenario,
-            ctx.interfaces,
-            consumer,
-            group,
-        );
+        super::human_task::apply_human_task_borrows(ctx.scenario, ctx.interfaces, consumer, group);
     }
 }
 

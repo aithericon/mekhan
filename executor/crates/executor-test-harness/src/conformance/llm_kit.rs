@@ -6,7 +6,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use aithericon_executor_backend::ExecutionBackend;
-use aithericon_executor_domain::{ExecutionJob, ExecutionSpec, JobPriority, RunContext, RunDirectory};
+use aithericon_executor_domain::{
+    ExecutionJob, ExecutionSpec, JobPriority, RunContext, RunDirectory,
+};
 
 /// Factory trait that LLM backends implement to participate in conformance testing.
 ///

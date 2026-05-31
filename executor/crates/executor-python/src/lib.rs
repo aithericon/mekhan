@@ -148,11 +148,13 @@ impl ExecutionBackend for PythonBackend {
                     .into_owned()
             } else {
                 info!(venv_dir = %venv_link.display(), "creating virtualenv");
-                let python_path =
-                    venv::create_virtualenv(&config.python, &venv_link).await?;
+                let python_path = venv::create_virtualenv(&config.python, &venv_link).await?;
 
                 if !config.requirements.is_empty() {
-                    info!(count = config.requirements.len(), "installing pip requirements");
+                    info!(
+                        count = config.requirements.len(),
+                        "installing pip requirements"
+                    );
                     venv::install_requirements(&venv_link, &config.requirements).await?;
                 }
 
@@ -257,7 +259,10 @@ impl ExecutionBackend for PythonBackend {
 /// Race-tolerant: an existing entry at `link_path` (left over from a prior
 /// run dir if the executor crashed mid-cleanup, or from a stale symlink) is
 /// removed before the new symlink is created. The cache target is unaffected.
-async fn symlink_into_run_dir(target: &std::path::Path, link_path: &std::path::Path) -> Result<(), ExecutorError> {
+async fn symlink_into_run_dir(
+    target: &std::path::Path,
+    link_path: &std::path::Path,
+) -> Result<(), ExecutorError> {
     if link_path.symlink_metadata().is_ok() {
         if let Err(e) = tokio::fs::remove_file(link_path).await {
             // Symlinks live as a file entry; if for some reason it's a real dir,

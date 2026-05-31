@@ -606,9 +606,7 @@ pub fn validate_with_mocks(scenario: &ScenarioDefinition) -> ValidationResult {
             Err(e) => {
                 result.add_error(format!(
                     "Transition '{}' ({}): mock execution failed: {}",
-                    transition.id,
-                    transition.name,
-                    e
+                    transition.id, transition.name, e
                 ));
             }
         }
@@ -679,10 +677,22 @@ mod tests {
     #[test]
     fn test_mock_from_schema_primitives() {
         let defs = std::collections::HashMap::new();
-        assert_eq!(mock_from_schema(&serde_json::json!({"type": "string"}), &defs), serde_json::json!("mock_string"));
-        assert_eq!(mock_from_schema(&serde_json::json!({"type": "integer"}), &defs), serde_json::json!(1));
-        assert_eq!(mock_from_schema(&serde_json::json!({"type": "number"}), &defs), serde_json::json!(1.0));
-        assert_eq!(mock_from_schema(&serde_json::json!({"type": "boolean"}), &defs), serde_json::json!(true));
+        assert_eq!(
+            mock_from_schema(&serde_json::json!({"type": "string"}), &defs),
+            serde_json::json!("mock_string")
+        );
+        assert_eq!(
+            mock_from_schema(&serde_json::json!({"type": "integer"}), &defs),
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            mock_from_schema(&serde_json::json!({"type": "number"}), &defs),
+            serde_json::json!(1.0)
+        );
+        assert_eq!(
+            mock_from_schema(&serde_json::json!({"type": "boolean"}), &defs),
+            serde_json::json!(true)
+        );
     }
 
     #[test]
@@ -703,10 +713,13 @@ mod tests {
     #[test]
     fn test_mock_from_schema_ref() {
         let mut defs = std::collections::HashMap::new();
-        defs.insert("MyType".into(), serde_json::json!({
-            "type": "object",
-            "properties": { "id": { "type": "string" } }
-        }));
+        defs.insert(
+            "MyType".into(),
+            serde_json::json!({
+                "type": "object",
+                "properties": { "id": { "type": "string" } }
+            }),
+        );
         let schema = serde_json::json!({"$ref": "#/definitions/MyType"});
         let mock = mock_from_schema(&schema, &defs);
         assert_eq!(mock["id"], serde_json::json!("mock_string"));
@@ -744,19 +757,25 @@ mod tests {
         ctx.transition("bad_transition", "Bad Transition")
             .auto_input("data", &input_place)
             .auto_output("out", &output_place)
-            .logic(r#"
+            .logic(
+                r#"
                 let x = data.nested.deep.field;
                 #{ out: #{ id: data.id, value: x } }
-            "#);
+            "#,
+            );
 
         let scenario = ctx.build();
         let result = validate_with_mocks(&scenario);
 
         // Should report an error — `data.nested` doesn't exist on TestInput
-        assert!(!result.is_valid, "Expected mock validation to catch missing nested field");
+        assert!(
+            !result.is_valid,
+            "Expected mock validation to catch missing nested field"
+        );
         assert!(
             result.errors.iter().any(|e| e.contains("bad_transition")),
-            "Error should reference the transition: {:?}", result.errors
+            "Error should reference the transition: {:?}",
+            result.errors
         );
     }
 
@@ -784,6 +803,10 @@ mod tests {
         let scenario = ctx.build();
         let result = validate_with_mocks(&scenario);
 
-        assert!(result.is_valid, "Valid script should pass: {:?}", result.errors);
+        assert!(
+            result.is_valid,
+            "Valid script should pass: {:?}",
+            result.errors
+        );
     }
 }

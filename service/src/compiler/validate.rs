@@ -553,7 +553,12 @@ fn map_body_terminal_supported(data: &WorkflowNodeData) -> bool {
                 deployment_model,
                 crate::models::template::DeploymentModel::Executor { .. }
             ) && crate::backends::lookup(execution_spec.backend_type)
-                .map(|d| matches!(d.dispatch_mode(), crate::backends::DispatchMode::ExecutorJob))
+                .map(|d| {
+                    matches!(
+                        d.dispatch_mode(),
+                        crate::backends::DispatchMode::ExecutorJob
+                    )
+                })
                 .unwrap_or(false)
         }
         WorkflowNodeData::Agent { .. } | WorkflowNodeData::SubWorkflow { .. } => true,
@@ -1063,7 +1068,11 @@ mod tests {
         };
         let err = validate_schema_refs(&graph).expect_err("unresolved ref must fail");
         match err {
-            CompileError::SchemaRefUnresolved { node_id, path, message } => {
+            CompileError::SchemaRefUnresolved {
+                node_id,
+                path,
+                message,
+            } => {
                 assert_eq!(node_id, "extract");
                 assert_eq!(path, "/response_format/schema");
                 assert!(message.contains("Missing"));
@@ -1151,11 +1160,12 @@ pub(crate) fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileErro
         // Resolve target port by handle. Triggers always need an explicit
         // `target_handle` — the edge validation in `validate_edges_typed`
         // skips Trigger sources, so we re-enforce target_handle here.
-        let target_handle = edge.target_handle.as_deref().ok_or_else(|| {
-            CompileError::MissingTargetHandle {
-                edge_id: edge.id.clone(),
-            }
-        })?;
+        let target_handle =
+            edge.target_handle
+                .as_deref()
+                .ok_or_else(|| CompileError::MissingTargetHandle {
+                    edge_id: edge.id.clone(),
+                })?;
 
         let Some(tgt_node) = nodes_by_id.get(edge.target.as_str()) else {
             continue;
@@ -1272,12 +1282,16 @@ fn parse_repeater_ref(raw: &str) -> Result<ParsedRepeaterRef<'_>, &'static str> 
         return Err("empty");
     }
     // Find `[*]`. Reject nested iteration (two or more `[*]`s).
-    let first = trimmed.find("[*]").ok_or("missing `[*]` iteration boundary")?;
+    let first = trimmed
+        .find("[*]")
+        .ok_or("missing `[*]` iteration boundary")?;
     if trimmed[first + 3..].contains("[*]") {
         return Err("nested `[*]` is not supported (NestedIterationUnsupported)");
     }
     let before = &trimmed[..first];
-    let after = trimmed[first + 3..].strip_prefix('.').unwrap_or(&trimmed[first + 3..]);
+    let after = trimmed[first + 3..]
+        .strip_prefix('.')
+        .unwrap_or(&trimmed[first + 3..]);
     // `before` must be `<head>.<seg>...` — at least head + one seg.
     let dot = before.find('.').ok_or("expected `<slug>.<field>[*]`")?;
     let head = &before[..dot];
@@ -1415,8 +1429,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                 let resolved = shape.and_then(|s| {
                     let head_seg = parsed.pre[0];
                     let (phys, _ty, _prov) = s.find_by_leaf(head_seg)?;
-                    let mut segs: Vec<String> =
-                        phys.split('.').map(str::to_string).collect();
+                    let mut segs: Vec<String> = phys.split('.').map(str::to_string).collect();
                     for extra in &parsed.pre[1..] {
                         segs.push((*extra).to_string());
                     }
@@ -1427,9 +1440,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                     Some(TokenShape::Array(_))
                     | Some(TokenShape::Any)
                     | Some(TokenShape::Opaque(_))
-                    | Some(TokenShape::Scalar(
-                        crate::compiler::token_shape::ScalarTy::Json,
-                    )) => {
+                    | Some(TokenShape::Scalar(crate::compiler::token_shape::ScalarTy::Json)) => {
                         // Array (canonical), Any/Opaque (deferred to runtime),
                         // or Json (deliberately opaque — the producer declared
                         // arbitrary JSON which the executor will deliver as
@@ -1447,11 +1458,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                             node_id: node.id.clone(),
                             ref_value: items_ref.clone(),
                             slug: parsed.head.to_string(),
-                            available: slugs
-                                .all_slugs()
-                                .iter()
-                                .map(|s| s.to_string())
-                                .collect(),
+                            available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
                         });
                     }
                 }
@@ -1487,8 +1494,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                             node_id: node.id.clone(),
                             site: "item_label_ref".to_string(),
                             ref_value: label_ref.clone(),
-                            message: "expected a `[*].<field>` per-element label path"
-                                .to_string(),
+                            message: "expected a `[*].<field>` per-element label path".to_string(),
                         });
                     }
                 }
@@ -1654,7 +1660,13 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
     // Short-circuit when no HumanTask carries a stepsRef — avoids the analyze
     // pass on graphs that don't use the dynamic-form opt-in.
     if !graph.nodes.iter().any(|n| {
-        matches!(&n.data, WorkflowNodeData::HumanTask { steps_ref: Some(_), .. })
+        matches!(
+            &n.data,
+            WorkflowNodeData::HumanTask {
+                steps_ref: Some(_),
+                ..
+            }
+        )
     }) {
         return Ok(());
     }
@@ -1663,7 +1675,11 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
     let slugs = slug_index(graph)?;
 
     for node in &graph.nodes {
-        let WorkflowNodeData::HumanTask { steps_ref: Some(raw), .. } = &node.data else {
+        let WorkflowNodeData::HumanTask {
+            steps_ref: Some(raw),
+            ..
+        } = &node.data
+        else {
             continue;
         };
 
@@ -1737,8 +1753,10 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
                         return Err(CompileError::HumanTaskStepsRefNotArray {
                             node_id: node.id.clone(),
                             ref_value: raw.clone(),
-                            actual_kind: format!("Schema(type={})",
-                                v.get("type").and_then(|t| t.as_str()).unwrap_or("?")),
+                            actual_kind: format!(
+                                "Schema(type={})",
+                                v.get("type").and_then(|t| t.as_str()).unwrap_or("?")
+                            ),
                         });
                     }
                 }
@@ -1858,14 +1876,20 @@ mod repeater_tests {
     fn rejects_empty_output_slug() {
         let g = graph_with_repeater("extract.tasks[*]", None, "");
         let err = validate_repeaters(&g).unwrap_err();
-        assert!(matches!(err, CompileError::RepeaterOutputSlugInvalid { .. }));
+        assert!(matches!(
+            err,
+            CompileError::RepeaterOutputSlugInvalid { .. }
+        ));
     }
 
     #[test]
     fn rejects_non_ident_output_slug() {
         let g = graph_with_repeater("extract.tasks[*]", None, "9bad");
         let err = validate_repeaters(&g).unwrap_err();
-        assert!(matches!(err, CompileError::RepeaterOutputSlugInvalid { .. }));
+        assert!(matches!(
+            err,
+            CompileError::RepeaterOutputSlugInvalid { .. }
+        ));
     }
 
     #[test]
@@ -1913,11 +1937,7 @@ mod repeater_tests {
 
     #[test]
     fn rejects_label_ref_without_post_segment() {
-        let g = graph_with_repeater(
-            "extract.tasks[*]",
-            Some("extract.tasks[*]"),
-            "review_tasks",
-        );
+        let g = graph_with_repeater("extract.tasks[*]", Some("extract.tasks[*]"), "review_tasks");
         let err = validate_repeaters(&g).unwrap_err();
         assert!(matches!(err, CompileError::RepeaterRefMalformed { .. }));
     }

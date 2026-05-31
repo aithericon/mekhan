@@ -556,10 +556,7 @@ mod tests {
         let trigger_place = PlaceId::named("fit_trigger");
         let t_id = TransitionId::named("dispatch_fit");
 
-        let transition = transition_with_ports(vec![
-            Port::new("trigger"),
-            Port::batch("obs"),
-        ]);
+        let transition = transition_with_ports(vec![Port::new("trigger"), Port::batch("obs")]);
 
         let trigger_arc = PetriArc::input(trigger_place.clone(), t_id.clone(), "trigger");
         let obs_arc = PetriArc::input(obs_place.clone(), t_id, "obs").with_read(true);
@@ -625,8 +622,7 @@ mod tests {
         let expected_place = PlaceId::named("expected");
         let t_id = TransitionId::named("gather");
 
-        let transition =
-            transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
+        let transition = transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
 
         // coordinator (single, read) bound first; results (batch, count-gated)
         let expected_arc =
@@ -725,8 +721,7 @@ mod tests {
         let expected_place = PlaceId::named("expected");
         let t_id = TransitionId::named("gather");
 
-        let transition =
-            transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
+        let transition = transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
 
         let expected_arc =
             PetriArc::input(expected_place.clone(), t_id.clone(), "expected").with_read(true);
@@ -741,11 +736,26 @@ mod tests {
             data_token(json!({ "k": 3, "iteration_id": "A" })),
         );
         // 3 tokens of iteration A, 2 of iteration B (interleaved).
-        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A", "v": 0 })));
-        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "B", "v": 100 })));
-        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A", "v": 1 })));
-        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "B", "v": 101 })));
-        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A", "v": 2 })));
+        marking.add_token(
+            results_place.clone(),
+            data_token(json!({ "iteration_id": "A", "v": 0 })),
+        );
+        marking.add_token(
+            results_place.clone(),
+            data_token(json!({ "iteration_id": "B", "v": 100 })),
+        );
+        marking.add_token(
+            results_place.clone(),
+            data_token(json!({ "iteration_id": "A", "v": 1 })),
+        );
+        marking.add_token(
+            results_place.clone(),
+            data_token(json!({ "iteration_id": "B", "v": 101 })),
+        );
+        marking.add_token(
+            results_place.clone(),
+            data_token(json!({ "iteration_id": "A", "v": 2 })),
+        );
 
         let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
         let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None)
@@ -781,8 +791,7 @@ mod tests {
         let expected_place = PlaceId::named("expected");
         let t_id = TransitionId::named("gather");
 
-        let transition =
-            transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
+        let transition = transition_with_ports(vec![Port::new("expected"), Port::batch("results")]);
         let expected_arc =
             PetriArc::input(expected_place.clone(), t_id.clone(), "expected").with_read(true);
         let results_arc = PetriArc::input(results_place.clone(), t_id, "results")
@@ -794,11 +803,20 @@ mod tests {
             expected_place.clone(),
             data_token(json!({ "k": 3, "iteration_id": "A" })),
         );
-        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A" })));
-        marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "A" })));
+        marking.add_token(
+            results_place.clone(),
+            data_token(json!({ "iteration_id": "A" })),
+        );
+        marking.add_token(
+            results_place.clone(),
+            data_token(json!({ "iteration_id": "A" })),
+        );
         // 3 B-tokens — irrelevant to iteration A's gather.
         for _ in 0..3 {
-            marking.add_token(results_place.clone(), data_token(json!({ "iteration_id": "B" })));
+            marking.add_token(
+                results_place.clone(),
+                data_token(json!({ "iteration_id": "B" })),
+            );
         }
 
         let arcs: Vec<&PetriArc> = vec![&expected_arc, &results_arc];
@@ -851,15 +869,17 @@ mod tests {
     fn merge_reply_routing_compatible_channels() {
         let existing = ReplyRouting {
             reply_to: None,
-            reply_channels: Some(HashMap::from([
-                ("alpha".to_string(), addr("net-a", "alpha_inbox")),
-            ])),
+            reply_channels: Some(HashMap::from([(
+                "alpha".to_string(),
+                addr("net-a", "alpha_inbox"),
+            )])),
         };
         let incoming = ReplyRouting {
             reply_to: None,
-            reply_channels: Some(HashMap::from([
-                ("beta".to_string(), addr("net-a", "beta_inbox")),
-            ])),
+            reply_channels: Some(HashMap::from([(
+                "beta".to_string(),
+                addr("net-a", "beta_inbox"),
+            )])),
         };
         let merged = merge_reply_routing(existing, &incoming).expect("should merge");
         let channels = merged.reply_channels.unwrap();
@@ -872,9 +892,10 @@ mod tests {
     fn merge_reply_routing_conflicting_channel() {
         let existing = ReplyRouting {
             reply_to: None,
-            reply_channels: Some(HashMap::from([
-                ("result".to_string(), addr("net-a", "inbox_a")),
-            ])),
+            reply_channels: Some(HashMap::from([(
+                "result".to_string(),
+                addr("net-a", "inbox_a"),
+            )])),
         };
         let incoming = ReplyRouting {
             reply_to: None,

@@ -43,12 +43,12 @@ pub use classify::classify_columns;
 pub use classify::classify_semantic;
 pub use classify::{ClassificationOptions, ClassificationTag};
 pub use data_type::DataType;
-pub use fingerprint::{compute_schema_fingerprint, SchemaFingerprint};
 pub use detect::{detect_format, detect_format_from_bytes, detect_from_extension};
 pub use diff::{diff_schema, ColumnChange, ColumnDiff, SchemaDiff};
 pub use duplicates::{find_duplicates, DuplicateGroup};
 pub use error::MetadataError;
 pub use extractor::MetadataExtractor;
+pub use fingerprint::{compute_schema_fingerprint, SchemaFingerprint};
 pub use format::*;
 pub use preview::{ContentPreview, PreviewOptions};
 pub use quality::{compute_quality, ColumnQuality, DataQualityReport};
@@ -120,7 +120,9 @@ pub use backends::txt::TxtExtractor;
 pub mod async_api;
 
 #[cfg(feature = "tokio")]
-pub use async_api::{extract_all_async, extract_metadata_async, extract_metadata_with_preview_async};
+pub use async_api::{
+    extract_all_async, extract_metadata_async, extract_metadata_with_preview_async,
+};
 
 #[cfg(all(feature = "tokio", feature = "rayon"))]
 pub use async_api::extract_all_parallel_async;

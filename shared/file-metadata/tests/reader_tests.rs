@@ -65,18 +65,9 @@ mod csv_reader_tests {
         let meta = extract_metadata_from_reader(cursor, &hint).unwrap();
 
         assert_eq!(meta.columns.len(), 3);
-        assert_eq!(
-            meta.columns[0].data_type,
-            fmeta::DataType::Int64
-        );
-        assert_eq!(
-            meta.columns[1].data_type,
-            fmeta::DataType::Float64
-        );
-        assert_eq!(
-            meta.columns[2].data_type,
-            fmeta::DataType::Boolean
-        );
+        assert_eq!(meta.columns[0].data_type, fmeta::DataType::Int64);
+        assert_eq!(meta.columns[1].data_type, fmeta::DataType::Float64);
+        assert_eq!(meta.columns[2].data_type, fmeta::DataType::Boolean);
     }
 }
 

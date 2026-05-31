@@ -350,20 +350,30 @@ mod tests {
 
     #[tokio::test]
     async fn acquire_dispatches_lease_job_and_returns_namespaced_lease() {
-        let (addr, captured) =
-            fake_nomad(r#"{"DispatchedJobID":"petri-lease-executor/dispatch-99","EvalID":"e1","Index":7}"#)
-                .await;
+        let (addr, captured) = fake_nomad(
+            r#"{"DispatchedJobID":"petri-lease-executor/dispatch-99","EvalID":"e1","Index":7}"#,
+        )
+        .await;
         let client = client_for(&addr);
 
         // grant_id is instance_id:node_id — the ':' MUST be sanitised.
         let lease = client
-            .acquire_lease("inst-1:loop-node", &json!({ "max_jobs": 5, "idle_timeout_secs": 120 }))
+            .acquire_lease(
+                "inst-1:loop-node",
+                &json!({ "max_jobs": 5, "idle_timeout_secs": 120 }),
+            )
             .await
             .unwrap();
 
         // dispatched job id → alloc_id; namespace sanitised; empty-not-null fields.
-        assert_eq!(lease.get("alloc_id").unwrap(), "petri-lease-executor/dispatch-99");
-        assert_eq!(lease.get("executor_namespace").unwrap(), "lease-inst-1-loop-node");
+        assert_eq!(
+            lease.get("alloc_id").unwrap(),
+            "petri-lease-executor/dispatch-99"
+        );
+        assert_eq!(
+            lease.get("executor_namespace").unwrap(),
+            "lease-inst-1-loop-node"
+        );
         assert_eq!(lease.get("node").unwrap(), "");
         assert_eq!(lease.get("gpu_uuid").unwrap(), "");
         assert_eq!(lease.get("expiry").unwrap(), "");
@@ -373,10 +383,22 @@ mod tests {
         assert_eq!(cap.path, "/v1/job/petri-lease-executor/dispatch");
         // lease env rides as Meta (no payload)
         assert!(cap.body.contains("\"Meta\""), "body: {}", cap.body);
-        assert!(cap.body.contains("lease-inst-1-loop-node"), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("lease-inst-1-loop-node"),
+            "body: {}",
+            cap.body
+        );
         assert!(cap.body.contains("LEASE_NAMESPACE"), "body: {}", cap.body);
-        assert!(cap.body.contains("\"LEASE_MAX_JOBS\":\"5\""), "body: {}", cap.body);
-        assert!(cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"120\""), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("\"LEASE_MAX_JOBS\":\"5\""),
+            "body: {}",
+            cap.body
+        );
+        assert!(
+            cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"120\""),
+            "body: {}",
+            cap.body
+        );
         // payload-free dispatch (meta-only)
         assert!(!cap.body.contains("\"Payload\""), "body: {}", cap.body);
     }
@@ -404,7 +426,11 @@ mod tests {
             .await
             .unwrap();
         let cap = captured.lock().unwrap().clone();
-        assert!(cap.body.contains("petri_signal_failed"), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("petri_signal_failed"),
+            "body: {}",
+            cap.body
+        );
         assert!(cap.body.contains("pool-rid-9"), "body: {}", cap.body);
         assert!(cap.body.contains("lease_failed"), "body: {}", cap.body);
     }
@@ -418,8 +444,16 @@ mod tests {
         let _ = client.acquire_lease("g:n", &json!({})).await.unwrap();
 
         let cap = captured.lock().unwrap().clone();
-        assert!(cap.body.contains("\"LEASE_MAX_JOBS\":\"100000\""), "body: {}", cap.body);
-        assert!(cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"300\""), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("\"LEASE_MAX_JOBS\":\"100000\""),
+            "body: {}",
+            cap.body
+        );
+        assert!(
+            cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"300\""),
+            "body: {}",
+            cap.body
+        );
     }
 
     #[tokio::test]

@@ -246,20 +246,21 @@ mod tests {
     /// originating input's name (for log/metric provenance).
     #[test]
     fn resolve_target_file_accepts_absolute_path_from_input_path_resolver() {
-        let staged_path = PathBuf::from(
-            "/tmp/runs/exec-1/inputs/__borrow_start__document.png",
-        );
+        let staged_path = PathBuf::from("/tmp/runs/exec-1/inputs/__borrow_start__document.png");
         let staged = HashMap::from([
-            ("input.json".into(), PathBuf::from("/tmp/runs/exec-1/inputs/input.json")),
+            (
+                "input.json".into(),
+                PathBuf::from("/tmp/runs/exec-1/inputs/input.json"),
+            ),
             ("__borrow_start__document".into(), staged_path.clone()),
         ]);
         let config = KreuzbergConfig {
             file: Some(staged_path.display().to_string()),
             ..default_config()
         };
-        let (name, path) = config.resolve_target_file(&staged).expect(
-            "absolute path that round-trips to a staged input must resolve",
-        );
+        let (name, path) = config
+            .resolve_target_file(&staged)
+            .expect("absolute path that round-trips to a staged input must resolve");
         assert_eq!(name, "__borrow_start__document");
         assert_eq!(path, staged_path);
     }
@@ -271,9 +272,10 @@ mod tests {
     /// provenance label is synthetic.
     #[test]
     fn resolve_target_file_falls_back_to_file_stem_for_unregistered_path() {
-        let staged = HashMap::from([
-            ("input.json".into(), PathBuf::from("/tmp/runs/exec-1/inputs/input.json")),
-        ]);
+        let staged = HashMap::from([(
+            "input.json".into(),
+            PathBuf::from("/tmp/runs/exec-1/inputs/input.json"),
+        )]);
         let config = KreuzbergConfig {
             file: Some("/var/data/external/report.pdf".into()),
             ..default_config()

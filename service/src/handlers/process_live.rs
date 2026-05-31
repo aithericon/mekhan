@@ -102,7 +102,9 @@ pub async fn metrics_series(
     Query(q): Query<MetricsSeriesQuery>,
 ) -> Result<Json<MetricsSeriesResponse>, ApiError> {
     let until = q.until.unwrap_or_else(Utc::now);
-    let since = q.since.unwrap_or_else(|| until - chrono::Duration::hours(1));
+    let since = q
+        .since
+        .unwrap_or_else(|| until - chrono::Duration::hours(1));
     let keys: Vec<String> = q
         .keys
         .as_deref()
@@ -126,7 +128,11 @@ pub async fn metrics_series(
                      AND ($4::text[] IS NULL OR key = ANY($4)) \
                      AND ($5::text IS NULL OR signal_key = $5) \
                    ORDER BY key, timestamp ASC";
-        let keys_opt: Option<Vec<String>> = if keys.is_empty() { None } else { Some(keys.clone()) };
+        let keys_opt: Option<Vec<String>> = if keys.is_empty() {
+            None
+        } else {
+            Some(keys.clone())
+        };
         let rows = sqlx::query(sql)
             .bind(&process_id)
             .bind(since)
@@ -158,7 +164,11 @@ pub async fn metrics_series(
                      AND ($5::text IS NULL OR signal_key = $5) \
                    GROUP BY key, t \
                    ORDER BY key, t ASC";
-        let keys_opt: Option<Vec<String>> = if keys.is_empty() { None } else { Some(keys.clone()) };
+        let keys_opt: Option<Vec<String>> = if keys.is_empty() {
+            None
+        } else {
+            Some(keys.clone())
+        };
         let rows = sqlx::query(sql)
             .bind(&process_id)
             .bind(since)
@@ -251,7 +261,11 @@ pub async fn metrics_stream(
         .into_iter()
         .filter(|e| e.seq > since_seq)
         .filter(|e| e.process_id == pid)
-        .filter(|e| sig_for_backfill.as_deref().is_none_or(|s| e.signal_key.as_deref() == Some(s)))
+        .filter(|e| {
+            sig_for_backfill
+                .as_deref()
+                .is_none_or(|s| e.signal_key.as_deref() == Some(s))
+        })
         .filter(|e| {
             keys_for_backfill
                 .as_ref()
@@ -264,7 +278,13 @@ pub async fn metrics_stream(
 
     let pid2 = process_id.clone();
     let live_stream = futures::stream::unfold(
-        (rx, signal_filter, key_filter, pid2, since_seq.max(max_backfill_seq)),
+        (
+            rx,
+            signal_filter,
+            key_filter,
+            pid2,
+            since_seq.max(max_backfill_seq),
+        ),
         |(mut rx, sig, keys, pid, skip_until)| async move {
             loop {
                 match rx.recv().await {
@@ -286,10 +306,7 @@ pub async fn metrics_stream(
                             }
                         }
                         let seq = event.seq;
-                        return Some((
-                            Ok(metric_event_to_sse(&event)),
-                            (rx, sig, keys, pid, seq),
-                        ));
+                        return Some((Ok(metric_event_to_sse(&event)), (rx, sig, keys, pid, seq)));
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         let data = serde_json::json!({ "missed": n }).to_string();
@@ -457,7 +474,11 @@ pub async fn logs_stream(
         .into_iter()
         .filter(|e| e.seq > since_seq)
         .filter(|e| e.process_id == pid)
-        .filter(|e| sig_bf.as_deref().is_none_or(|s| e.signal_key.as_deref() == Some(s)))
+        .filter(|e| {
+            sig_bf
+                .as_deref()
+                .is_none_or(|s| e.signal_key.as_deref() == Some(s))
+        })
         .filter(|e| lvl_bf.as_deref().is_none_or(|l| e.level == l))
         .filter(|e| {
             txt_bf
@@ -470,7 +491,14 @@ pub async fn logs_stream(
     let max_backfill_seq = state.live.logs_snapshot().1;
     let pid2 = process_id.clone();
     let live_stream = futures::stream::unfold(
-        (rx, signal_filter, level_filter, text_filter, pid2, since_seq.max(max_backfill_seq)),
+        (
+            rx,
+            signal_filter,
+            level_filter,
+            text_filter,
+            pid2,
+            since_seq.max(max_backfill_seq),
+        ),
         |(mut rx, sig, lvl, txt, pid, skip_until)| async move {
             loop {
                 match rx.recv().await {
@@ -497,10 +525,7 @@ pub async fn logs_stream(
                             }
                         }
                         let seq = event.seq;
-                        return Some((
-                            Ok(log_event_to_sse(&event)),
-                            (rx, sig, lvl, txt, pid, seq),
-                        ));
+                        return Some((Ok(log_event_to_sse(&event)), (rx, sig, lvl, txt, pid, seq)));
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         let data = serde_json::json!({ "missed": n }).to_string();
@@ -707,10 +732,7 @@ pub async fn artifacts_stream(
                             continue;
                         }
                         let seq = event.seq;
-                        return Some((
-                            Ok(artifact_event_to_sse(&event)),
-                            (rx, cats, hs, pid, seq),
-                        ));
+                        return Some((Ok(artifact_event_to_sse(&event)), (rx, cats, hs, pid, seq)));
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         let data = serde_json::json!({ "missed": n }).to_string();

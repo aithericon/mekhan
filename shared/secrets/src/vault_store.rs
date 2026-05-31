@@ -113,7 +113,9 @@ impl VaultSecretStore {
     /// Returns `None` if either variable is missing or empty.
     pub fn from_env() -> Option<Self> {
         let addr = std::env::var("VAULT_ADDR").ok().filter(|s| !s.is_empty())?;
-        let token = std::env::var("VAULT_TOKEN").ok().filter(|s| !s.is_empty())?;
+        let token = std::env::var("VAULT_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())?;
         Some(Self::new(addr, token))
     }
 
@@ -209,14 +211,10 @@ impl VaultSecretStore {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                SecretError::StoreUnavailable(format!("vault put request failed: {e}"))
-            })?;
+            .map_err(|e| SecretError::StoreUnavailable(format!("vault put request failed: {e}")))?;
 
         let status = response.status();
-        if status == reqwest::StatusCode::FORBIDDEN
-            || status == reqwest::StatusCode::UNAUTHORIZED
-        {
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(SecretError::AccessDenied(format!(
                 "vault denied write to {full_path} (HTTP {status})"
             )));
@@ -257,9 +255,7 @@ impl VaultSecretStore {
             })?;
 
         let status = response.status();
-        if status == reqwest::StatusCode::FORBIDDEN
-            || status == reqwest::StatusCode::UNAUTHORIZED
-        {
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(SecretError::AccessDenied(format!(
                 "vault denied delete to {full_path} (HTTP {status})"
             )));
@@ -296,15 +292,11 @@ impl SecretStore for VaultSecretStore {
             .header("X-Vault-Token", &self.token)
             .send()
             .await
-            .map_err(|e| {
-                SecretError::StoreUnavailable(format!("vault request failed: {e}"))
-            })?;
+            .map_err(|e| SecretError::StoreUnavailable(format!("vault request failed: {e}")))?;
 
         let status = response.status();
 
-        if status == reqwest::StatusCode::FORBIDDEN
-            || status == reqwest::StatusCode::UNAUTHORIZED
-        {
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(SecretError::AccessDenied(format!(
                 "vault denied access to {path} (HTTP {status})"
             )));
@@ -320,9 +312,10 @@ impl SecretStore for VaultSecretStore {
             )));
         }
 
-        let body: VaultResponse = response.json().await.map_err(|e| {
-            SecretError::StoreUnavailable(format!("invalid vault response: {e}"))
-        })?;
+        let body: VaultResponse = response
+            .json()
+            .await
+            .map_err(|e| SecretError::StoreUnavailable(format!("invalid vault response: {e}")))?;
 
         if let Some(errors) = body.errors {
             if !errors.is_empty() {
@@ -382,9 +375,7 @@ impl SecretWrapper for VaultSecretStore {
             })?;
 
         let status = response.status();
-        if status == reqwest::StatusCode::FORBIDDEN
-            || status == reqwest::StatusCode::UNAUTHORIZED
-        {
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(SecretError::AccessDenied(
                 "vault denied access to sys/wrapping/wrap".to_string(),
             ));
@@ -431,9 +422,7 @@ pub async fn vault_unwrap_secrets(
         .header("X-Vault-Token", wrapping_token)
         .send()
         .await
-        .map_err(|e| {
-            SecretError::StoreUnavailable(format!("vault unwrap request failed: {e}"))
-        })?;
+        .map_err(|e| SecretError::StoreUnavailable(format!("vault unwrap request failed: {e}")))?;
 
     let status = response.status();
     if status == reqwest::StatusCode::BAD_REQUEST {
@@ -441,9 +430,7 @@ pub async fn vault_unwrap_secrets(
             "wrapping token is invalid or already used".to_string(),
         ));
     }
-    if status == reqwest::StatusCode::FORBIDDEN
-        || status == reqwest::StatusCode::UNAUTHORIZED
-    {
+    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(SecretError::AccessDenied(
             "wrapping token expired or revoked".to_string(),
         ));
@@ -495,8 +482,7 @@ mod tests {
 
     #[test]
     fn parse_key_with_prefix() {
-        let store = VaultSecretStore::new("http://localhost:8200", "token")
-            .key_prefix("project/");
+        let store = VaultSecretStore::new("http://localhost:8200", "token").key_prefix("project/");
         let (path, field) = store.parse_key("db#password");
         assert_eq!(path, "project/db");
         assert_eq!(field, "password");
@@ -513,8 +499,8 @@ mod tests {
 
     #[test]
     fn cache_disabled_with_zero_ttl() {
-        let store = VaultSecretStore::new("http://localhost:8200", "token")
-            .cache_ttl(Duration::ZERO);
+        let store =
+            VaultSecretStore::new("http://localhost:8200", "token").cache_ttl(Duration::ZERO);
         store.insert_cache("key".to_string(), "val".to_string());
         assert!(store.check_cache("key").is_none());
     }
@@ -567,8 +553,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        let store = VaultSecretStore::new(server.uri(), "test-token")
-            .cache_ttl(Duration::ZERO);
+        let store = VaultSecretStore::new(server.uri(), "test-token").cache_ttl(Duration::ZERO);
 
         let pw = store.get("myapp/db#password").await.unwrap();
         assert_eq!(pw, "s3cret");
@@ -593,8 +578,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        let store = VaultSecretStore::new(server.uri(), "test-token")
-            .cache_ttl(Duration::ZERO);
+        let store = VaultSecretStore::new(server.uri(), "test-token").cache_ttl(Duration::ZERO);
 
         let token = store.get("myapp/api_token").await.unwrap();
         assert_eq!(token, "tok_abc123");
@@ -610,8 +594,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        let store = VaultSecretStore::new(server.uri(), "test-token")
-            .cache_ttl(Duration::ZERO);
+        let store = VaultSecretStore::new(server.uri(), "test-token").cache_ttl(Duration::ZERO);
 
         let err = store.get("missing").await.unwrap_err();
         assert!(matches!(err, SecretError::NotFound(_)));
@@ -627,8 +610,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        let store = VaultSecretStore::new(server.uri(), "bad-token")
-            .cache_ttl(Duration::ZERO);
+        let store = VaultSecretStore::new(server.uri(), "bad-token").cache_ttl(Duration::ZERO);
 
         let err = store.get("restricted").await.unwrap_err();
         assert!(matches!(err, SecretError::AccessDenied(_)));
@@ -650,8 +632,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        let store = VaultSecretStore::new(server.uri(), "test-token")
-            .cache_ttl(Duration::ZERO);
+        let store = VaultSecretStore::new(server.uri(), "test-token").cache_ttl(Duration::ZERO);
 
         let err = store.get("myapp/db#password").await.unwrap_err();
         assert!(matches!(err, SecretError::NotFound(_)));
@@ -717,8 +698,8 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        let store = VaultSecretStore::new(server.uri(), "test-token")
-            .cache_ttl(Duration::from_secs(300));
+        let store =
+            VaultSecretStore::new(server.uri(), "test-token").cache_ttl(Duration::from_secs(300));
 
         let v1 = store.get("cached").await.unwrap();
         let v2 = store.get("cached").await.unwrap();
@@ -741,8 +722,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        let store = VaultSecretStore::new(server.uri(), "test-token")
-            .cache_ttl(Duration::ZERO);
+        let store = VaultSecretStore::new(server.uri(), "test-token").cache_ttl(Duration::ZERO);
 
         let val = store.get("config#port").await.unwrap();
         assert_eq!(val, "5432");

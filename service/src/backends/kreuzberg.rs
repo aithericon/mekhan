@@ -179,7 +179,10 @@ fn ref_scanner(ctx: &ScanCtx<'_>) -> Vec<RefSite> {
 /// defaults to single — mirrors the executor's `ExtractionMode::Single`
 /// default.
 fn derive_output_port(config: &Value) -> Port {
-    let mode = config.get("mode").and_then(|v| v.as_str()).unwrap_or("single");
+    let mode = config
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("single");
     let fields: Vec<PortField> = match mode {
         "batch" => batch_fields(),
         _ => single_fields(),
@@ -263,7 +266,13 @@ mod tests {
         let names: Vec<_> = port.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(
             names,
-            ["content", "mime_type", "metadata", "tables", "detected_languages"]
+            [
+                "content",
+                "mime_type",
+                "metadata",
+                "tables",
+                "detected_languages"
+            ]
         );
     }
 

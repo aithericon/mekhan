@@ -91,8 +91,10 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let p_input: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
-    let p_items: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_items"), format!("{label} - Scattered Items"));
+    let p_items: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_items"),
+        format!("{label} - Scattered Items"),
+    );
     let p_body_in: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_body_in"), format!("{label} - Body In"));
     let p_body_out: PlaceHandle<DynamicToken> =
@@ -213,14 +215,11 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // wiring reads from `p_<id>_output`, so forward it through a tiny
     // passthrough (single-input merge collapses this in `wire.rs` when the
     // downstream edge is a pure pass-through).
-    ctx.transition(
-        format!("t_{id}_emit"),
-        format!("{label} - Emit Control"),
-    )
-    .auto_input("ctrl", &p_ctrl)
-    .auto_output("output", &p_output)
-    .logic_rhai("#{ output: ctrl }".to_string())
-    .done();
+    ctx.transition(format!("t_{id}_emit"), format!("{label} - Emit Control"))
+        .auto_input("ctrl", &p_ctrl)
+        .auto_output("output", &p_output)
+        .logic_rhai("#{ output: ctrl }".to_string())
+        .done();
 
     cx.fixups
         .groups

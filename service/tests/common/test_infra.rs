@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 /// Default Postgres URL for test infrastructure.
 /// Override with `TEST_POSTGRES_URL` env var.
-pub const DEFAULT_POSTGRES_URL: &str = "postgres://test:test@localhost:5599/test";
+pub const DEFAULT_POSTGRES_URL: &str = "postgres://mekhan:mekhan@localhost:15439/mekhan";
 
 /// Default NATS URL for test infrastructure.
 ///

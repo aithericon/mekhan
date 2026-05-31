@@ -252,8 +252,7 @@ pub fn detect_format(path: &Path) -> Result<FileFormat, MetadataError> {
 
             // HTML: <!DOCTYPE html or <html
             if bytes.len() >= 5 {
-                let prefix = std::str::from_utf8(&bytes[..bytes.len().min(30)])
-                    .unwrap_or("");
+                let prefix = std::str::from_utf8(&bytes[..bytes.len().min(30)]).unwrap_or("");
                 let lower = prefix.to_lowercase();
                 if lower.starts_with("<!doctype html") || lower.starts_with("<html") {
                     return Ok(FileFormat::Html);
@@ -440,8 +439,7 @@ pub fn detect_format_from_bytes(bytes: &[u8]) -> Option<FileFormat> {
     }
     // HTML
     if bytes.len() >= 5 {
-        let prefix = std::str::from_utf8(&bytes[..bytes.len().min(30)])
-            .unwrap_or("");
+        let prefix = std::str::from_utf8(&bytes[..bytes.len().min(30)]).unwrap_or("");
         let lower = prefix.to_lowercase();
         if lower.starts_with("<!doctype html") || lower.starts_with("<html") {
             return Some(FileFormat::Html);

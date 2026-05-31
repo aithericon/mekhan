@@ -91,7 +91,8 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // future engine-effect backends only need a new registry entry.
     if let WorkflowNodeData::AutomatedStep { execution_spec, .. } = &cx.node.data {
         if let Some(decl) = crate::backends::lookup(execution_spec.backend_type) {
-            if let crate::backends::DispatchMode::EngineEffect { handler } = decl.meta.dispatch_mode {
+            if let crate::backends::DispatchMode::EngineEffect { handler } = decl.meta.dispatch_mode
+            {
                 return lower_engine_effect(cx, handler);
             }
         }
@@ -134,12 +135,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // pre-lowering `validate_schema_refs` pass already surfaced unresolved
     // refs with node id + JSON path, so a failure here would be a logic
     // bug (validation drifted from inlining); still propagate cleanly.
-    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
-        .map_err(|e| CompileError::SchemaRefUnresolved {
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions).map_err(
+        |e| CompileError::SchemaRefUnresolved {
             node_id: id.clone(),
             path: String::new(),
             message: e.to_string(),
-        })?;
+        },
+    )?;
     // Offload the static config to the per-node side-channel; the publish
     // path uploads it to S3 (see `service::process::publish`), and the
     // executor's `FetchConfigHook` materialises it back into `spec.config`
@@ -177,7 +179,9 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // is lease-bound (a plain inline `Executor` step inside the scope still runs
     // on the normal worker); no enclosing holder ⇒ no fragment.
     let ns_frag = enclosing_leased_scope_slug(cx.node, cx.graph)
-        .map(|holder_slug| format!(r#" d.executor_namespace = {holder_slug}.lease.executor_namespace;"#))
+        .map(|holder_slug| {
+            format!(r#" d.executor_namespace = {holder_slug}.lease.executor_namespace;"#)
+        })
         .unwrap_or_default();
 
     // Rust panic/Result model: a WIRED error handle (`source_handle == "error"`)
@@ -467,12 +471,13 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
             cx.node_files,
             &id,
         )?;
-    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
-        .map_err(|e| CompileError::SchemaRefUnresolved {
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions).map_err(
+        |e| CompileError::SchemaRefUnresolved {
             node_id: id.clone(),
             path: String::new(),
             message: e.to_string(),
-        })?;
+        },
+    )?;
     // Side-channel the static config to the publish layer — see the
     // parallel offload in `lower_automated_step` for the rationale.
     let storage_key = cx.config_storage.key(&id);
@@ -483,9 +488,8 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
     );
     let inputs_rhai =
         json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
-    let resources_rhai = json_to_rhai_literal(
-        &serde_json::to_value(&resources).unwrap_or(serde_json::Value::Null),
-    );
+    let resources_rhai =
+        json_to_rhai_literal(&serde_json::to_value(&resources).unwrap_or(serde_json::Value::Null));
     let outputs_rhai = declared_outputs_rhai(backend_type, output);
     let backend_wire = backend_type.as_wire_str();
     let job_template_lit = rhai_str_escape(&job_template);
@@ -568,9 +572,7 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
             .auto_output("error", p_error)
             .logic(r#"#{ error: fail }"#);
     } else {
-        let msg = format!(
-            "scheduled step '{label}' failed and no error handler is wired"
-        );
+        let msg = format!("scheduled step '{label}' failed and no error handler is wired");
         ctx.transition(
             format!("t_{id}_to_error_deadend"),
             format!("{label} - On Failure (no handler — crash net)"),
@@ -639,12 +641,12 @@ pub(super) fn resolve_binding(
     expected_kind: &str,
     known: &crate::compiler::resource_refs::KnownResources,
 ) -> Result<PoolBinding, CompileError> {
-    let resource = known.get(alias).ok_or_else(|| {
-        CompileError::WorkspaceResourceUnknown {
+    let resource = known
+        .get(alias)
+        .ok_or_else(|| CompileError::WorkspaceResourceUnknown {
             node_id: node_id.to_string(),
             alias: alias.to_string(),
-        }
-    })?;
+        })?;
     let kind = resource.type_name.clone();
 
     // The `pool_kind` lookup gates "is it a pool kind at all"; the
@@ -678,9 +680,7 @@ pub(super) fn resolve_binding(
     // SECRET (slurm `ssh_key`) is structurally guaranteed by the resource-create
     // validator. Hard-fail with no fallback.
     if kind == "datacenter" {
-        if let Some(missing) =
-            datacenter_missing_connection_fields(&resource.public_config)
-        {
+        if let Some(missing) = datacenter_missing_connection_fields(&resource.public_config) {
             return Err(CompileError::DatacenterConnectionIncomplete {
                 node_id: node_id.to_string(),
                 alias: alias.to_string(),
@@ -859,7 +859,9 @@ fn sanitize_definition_schema(mut schema: serde_json::Value) -> serde_json::Valu
 /// pool, so capacity tokens stay clean and the pool does not wedge.
 fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::AutomatedStep {
-        deployment_model: DeploymentModel::Executor { pool: Some(binding) },
+        deployment_model: DeploymentModel::Executor {
+            pool: Some(binding),
+        },
         ..
     } = &cx.node.data
     else {
@@ -891,12 +893,9 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
 /// here.
 fn lower_automated_step_scheduled_lease(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::AutomatedStep {
-        deployment_model:
-            DeploymentModel::Scheduled {
-                scheduler,
-                request,
-                ..
-            },
+        deployment_model: DeploymentModel::Scheduled {
+            scheduler, request, ..
+        },
         ..
     } = &cx.node.data
     else {
@@ -938,7 +937,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         unreachable!("lower_pooled_body on non-AutomatedStep node")
     };
     let label = label.clone();
-    let retry_policy = retry_policy.clone();
+    let retry_policy = *retry_policy;
     let backend_type = execution_spec.backend_type;
 
     // Same config offload + staged inputs + declared outputs as the inline
@@ -951,12 +950,13 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             cx.node_files,
             &id,
         )?;
-    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions)
-        .map_err(|e| CompileError::SchemaRefUnresolved {
+    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions).map_err(
+        |e| CompileError::SchemaRefUnresolved {
             node_id: id.clone(),
             path: String::new(),
             message: e.to_string(),
-        })?;
+        },
+    )?;
     let storage_key = cx.config_storage.key(&id);
     cx.node_configs.insert(id.clone(), validated_config);
     let config_ref_rhai = format!(
@@ -989,12 +989,14 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // `cx.fixups`). The grant inbox is created OUTSIDE the lifecycle scope, so
     // its id is the unprefixed `p_{id}_grant_inbox`. `compile_to_air` drains
     // these after `ctx.build()`.
-    cx.fixups
-        .lease_definitions
-        .push((pool_binding.lease_def_name.clone(), pool_binding.lease_schema.clone()));
-    cx.fixups
-        .lease_inbox_schemas
-        .push((format!("p_{id}_grant_inbox"), pool_binding.lease_def_name.clone()));
+    cx.fixups.lease_definitions.push((
+        pool_binding.lease_def_name.clone(),
+        pool_binding.lease_schema.clone(),
+    ));
+    cx.fixups.lease_inbox_schemas.push((
+        format!("p_{id}_grant_inbox"),
+        pool_binding.lease_def_name.clone(),
+    ));
 
     let ctx = &mut *cx.ctx;
 
@@ -1072,7 +1074,10 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // ── ClaimRequest payload: `grant_id` + the validated `request` params (the
     // kind's claim-schema shape; `()` when omitted) so the backing net's
     // `t_grant` can size/shape the grant.
-    let claim_payload = format!("#{{ grant_id: gid, request: {} }}", pool_binding.request_rhai);
+    let claim_payload = format!(
+        "#{{ grant_id: gid, request: {} }}",
+        pool_binding.request_rhai
+    );
     // ── t_claim: mint grant_id, emit ClaimRequest, park {input, grant_id} ───
     ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim"))
         .auto_input("input", &p_input)
@@ -1174,8 +1179,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // `<slug>.lease.<field>` borrow resolves through the standard read-arc
     // pipeline against the parked data place. The parked `Data__<id>` schema is
     // `additionalProperties: true`, so the extra `lease` key validates.
-    let to_output_logic =
-        r#"let out = done; out.lease = held; #{ output: out, release: #{ grant_id: held.grant_id } }"#;
+    let to_output_logic = r#"let out = done; out.lease = held; #{ output: out, release: #{ grant_id: held.grant_id } }"#;
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
         .auto_input("done", &handles.completed)
         .auto_input("held", &p_held)
@@ -1218,9 +1222,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             .auto_output("release", &p_release_out)
             .logic(r#"#{ panic: err, release: #{ grant_id: held.grant_id } }"#);
 
-        let msg = format!(
-            "pooled step '{label}' failed and no error handler is wired"
-        );
+        let msg = format!("pooled step '{label}' failed and no error handler is wired");
         ctx.transition(
             format!("t_{id}_panic"),
             format!("{label} - Crash Net (no handler)"),
@@ -1288,19 +1290,19 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
     let input_port = descriptor.default_input_port;
     let output_port = descriptor.default_output_port;
 
-    let (mut query_token, _no_inputs) =
-        crate::compiler::backend_configs::validate_and_transform(
-            &backend_type,
-            &execution_spec.config,
-            cx.node_files,
-            &id,
-        )?;
-    crate::compiler::schema_refs::inline_refs(&mut query_token, cx.definitions)
-        .map_err(|e| CompileError::SchemaRefUnresolved {
+    let (mut query_token, _no_inputs) = crate::compiler::backend_configs::validate_and_transform(
+        &backend_type,
+        &execution_spec.config,
+        cx.node_files,
+        &id,
+    )?;
+    crate::compiler::schema_refs::inline_refs(&mut query_token, cx.definitions).map_err(|e| {
+        CompileError::SchemaRefUnresolved {
             node_id: id.clone(),
             path: String::new(),
             message: e.to_string(),
-        })?;
+        }
+    })?;
     let query_rhai = json_to_rhai_literal(&query_token);
 
     let ctx = &mut *cx.ctx;
@@ -1316,15 +1318,12 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
     // Build the effect-input token from the (validated) editor config. The
     // inbound workflow token is consumed but not used — engine-effect
     // backends are authored, not data-driven, in v1.
-    ctx.transition(
-        format!("t_{id}_q_build"),
-        format!("{label} - Build Query"),
-    )
-    .auto_input("input", &p_input)
-    .auto_output(input_port, &p_query)
-    // The inbound token is consumed by the arc; the query is authored, not
-    // data-driven (v1), so the logic ignores `input` and emits the token.
-    .logic(format!("#{{ {input_port}: {query_rhai} }}"));
+    ctx.transition(format!("t_{id}_q_build"), format!("{label} - Build Query"))
+        .auto_input("input", &p_input)
+        .auto_output(input_port, &p_query)
+        // The inbound token is consumed by the arc; the query is authored, not
+        // data-driven (v1), so the logic ignores `input` and emits the token.
+        .logic(format!("#{{ {input_port}: {query_rhai} }}"));
 
     // Fire the registered builtin effect (input `<input_port>` →
     // `<output_port>`). For catalogue_query this is
@@ -1342,10 +1341,7 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
         id.clone(),
         NodePorts {
             input_place: p_input,
-            output_places: vec![
-                (None, p_ctrl),
-                (Some("error".to_string()), p_error),
-            ],
+            output_places: vec![(None, p_ctrl), (Some("error".to_string()), p_error)],
             input_places: HashMap::new(),
             input_handles: HashMap::new(),
         },
@@ -1382,9 +1378,7 @@ pub(crate) fn enclosing_leased_scope_slug(
         let parent = graph.nodes.iter().find(|n| n.id == pid)?;
         match &parent.data {
             WorkflowNodeData::LeaseScope { .. } => return Some(parent.slug()),
-            WorkflowNodeData::Loop {
-                lease: Some(_), ..
-            } => return Some(parent.slug()),
+            WorkflowNodeData::Loop { lease: Some(_), .. } => return Some(parent.slug()),
             _ => {
                 current = parent.parent_id.as_deref();
             }
@@ -1414,7 +1408,10 @@ mod datacenter_connection_tests {
         let cfg = json!({ "scheduler_flavor": "slurm", "ssh_user": "runner" });
         let (flavor, missing) = datacenter_missing_connection_fields(&cfg).expect("incomplete");
         assert_eq!(flavor, "slurm");
-        assert_eq!(missing, vec!["ssh_host".to_string(), "template_dir".to_string()]);
+        assert_eq!(
+            missing,
+            vec!["ssh_host".to_string(), "template_dir".to_string()]
+        );
     }
 
     #[test]

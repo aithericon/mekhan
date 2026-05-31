@@ -81,7 +81,7 @@
           "id": "out",
           "label": "Uppercased",
           "fields": [
-            { "id": "item", "label": "Uppercased Chunk", "kind": "string" }
+            { "name": "item", "label": "Uppercased Chunk", "kind": "text" }
           ]
         }
       }

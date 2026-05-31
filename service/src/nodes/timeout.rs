@@ -20,8 +20,8 @@ pub(crate) static TIMEOUT_DECL: NodeDecl = NodeDecl {
     is_join: false,
     parks_data_envelope: false,
     lower: Some(crate::compiler::lower::timeout::lower_timeout),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     validate: Some(crate::compiler::validate::validate_timeout),
@@ -59,11 +59,7 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     ]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::Timeout {
         duration_ms_expr, ..

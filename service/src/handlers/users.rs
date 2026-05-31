@@ -75,9 +75,7 @@ pub async fn resolve_user_by_email(
                 subject,
                 email: email.to_string(),
             })),
-            Ok(None) => Err(ApiError::not_found(format!(
-                "no user matches '{email}'"
-            ))),
+            Ok(None) => Err(ApiError::not_found(format!("no user matches '{email}'"))),
             Err(crate::auth::mgmt::MgmtError::NotFound) => {
                 Err(ApiError::not_found(format!("no user matches '{email}'")))
             }

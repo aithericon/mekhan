@@ -605,8 +605,14 @@ fn event_digest(events: &[PersistedEvent]) -> Vec<String> {
         .iter()
         .map(|e| match &e.event {
             DomainEvent::NetInitialized { .. } => "NetInitialized".to_string(),
-            DomainEvent::TokenCreated { place_id, token, .. } => {
-                format!("TokenCreated({},{})", place_id, token_color_json(&token.color))
+            DomainEvent::TokenCreated {
+                place_id, token, ..
+            } => {
+                format!(
+                    "TokenCreated({},{})",
+                    place_id,
+                    token_color_json(&token.color)
+                )
             }
             DomainEvent::TransitionFired {
                 transition_id,
@@ -630,7 +636,9 @@ fn event_digest(events: &[PersistedEvent]) -> Vec<String> {
                 effect_result,
                 sorted_produced(produced_tokens)
             ),
-            DomainEvent::TokenConsumed { token_id, place_id, .. } => {
+            DomainEvent::TokenConsumed {
+                token_id, place_id, ..
+            } => {
                 format!("TokenConsumed({},{})", place_id, token_id)
             }
             DomainEvent::NetCompleted { .. } => "NetCompleted".to_string(),
@@ -742,7 +750,9 @@ fn build_scatter_gather_net(
         .with_output_ports(vec![Port::new("reduced")]);
     let t_gather_id = t_gather.id.clone();
     net.add_transition(t_gather);
-    net.add_arc(PetriArc::input(coordinator_id.clone(), t_gather_id.clone(), "expected").with_read(true));
+    net.add_arc(
+        PetriArc::input(coordinator_id.clone(), t_gather_id.clone(), "expected").with_read(true),
+    );
     net.add_arc(
         PetriArc::input(mapped_items_id.clone(), t_gather_id.clone(), "results")
             .with_count_from("expected.k")
@@ -790,11 +800,23 @@ async fn scatter_gather_live_run_reduces_k_items_to_one_collection_token() {
     let marking = TestProjection.project(&events);
 
     // SCATTER fanned out into exactly K raw items; all consumed by t_map.
-    assert_eq!(marking.token_count(&raw_items_id), 0, "all raw items mapped");
+    assert_eq!(
+        marking.token_count(&raw_items_id),
+        0,
+        "all raw items mapped"
+    );
     // GATHER consumed exactly K mapped items.
-    assert_eq!(marking.token_count(&mapped_items_id), 0, "all mapped items gathered");
+    assert_eq!(
+        marking.token_count(&mapped_items_id),
+        0,
+        "all mapped items gathered"
+    );
     // Coordinator was a READ arc → it survives.
-    assert_eq!(marking.token_count(&coordinator_id), 1, "coordinator read, not consumed");
+    assert_eq!(
+        marking.token_count(&coordinator_id),
+        1,
+        "coordinator read, not consumed"
+    );
     // Exactly one reduced collection token lands in the terminal place.
     assert_eq!(marking.token_count(&done_id), 1);
 
@@ -849,8 +871,7 @@ async fn scatter_gather_replay_is_marking_and_event_identical() {
         &mapped_items_id,
         &done_id,
     );
-    let live_places_ref: Vec<(&str, &PlaceId)> =
-        live_places.iter().map(|(l, p)| (*l, p)).collect();
+    let live_places_ref: Vec<(&str, &PlaceId)> = live_places.iter().map(|(l, p)| (*l, p)).collect();
     let live_marking_digest = marking_digest(&live_marking, &live_places_ref);
     let live_event_digest = event_digest(&live_events);
 
@@ -1000,11 +1021,17 @@ async fn effect_batch_output_scatters_and_replays_stored_tokens() {
     let live_produced: Vec<(PlaceId, petri_domain::Token)> = events
         .iter()
         .find_map(|e| match &e.event {
-            DomainEvent::EffectCompleted { produced_tokens, .. } => Some(produced_tokens.clone()),
+            DomainEvent::EffectCompleted {
+                produced_tokens, ..
+            } => Some(produced_tokens.clone()),
             _ => None,
         })
         .expect("one EffectCompleted in live run");
-    assert_eq!(live_produced.len(), n, "N>1 produced tokens stored for replay");
+    assert_eq!(
+        live_produced.len(),
+        n,
+        "N>1 produced tokens stored for replay"
+    );
 
     // ── REPLAY: same service + log, re-seed the trigger and replay. The engine
     // re-emits the STORED produced tokens (not re-running execute) — the
@@ -1020,7 +1047,10 @@ async fn effect_batch_output_scatters_and_replays_stored_tokens() {
     // freshly re-seeded trigger — leaving the transition perpetually enabled.
     // One step is exactly the recorded firing we want to replay.
     let replay_result = service.evaluate_until_quiescent(1).await.unwrap();
-    assert_eq!(replay_result.steps_executed, 1, "one replayed effect firing");
+    assert_eq!(
+        replay_result.steps_executed, 1,
+        "one replayed effect firing"
+    );
     assert_eq!(
         handler.execute_count.load(Ordering::SeqCst),
         1,
@@ -1037,7 +1067,9 @@ async fn effect_batch_output_scatters_and_replays_stored_tokens() {
     // a fresh handler call.
     let replay_event = &replay_result.events[0];
     match &replay_event.event {
-        DomainEvent::EffectCompleted { produced_tokens, .. } => {
+        DomainEvent::EffectCompleted {
+            produced_tokens, ..
+        } => {
             assert_eq!(produced_tokens.len(), n, "replay re-emits all N tokens");
             for (live, replayed) in live_produced.iter().zip(produced_tokens.iter()) {
                 assert_eq!(live.1.id, replayed.1.id, "same token id");

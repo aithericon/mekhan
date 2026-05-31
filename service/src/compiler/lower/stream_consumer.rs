@@ -126,7 +126,8 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
     // Body modes mint the body-attach places + dispatch/collect transitions;
     // the default `Rhai` mode keeps the byte-identical pure-passthrough ingest.
     // `body_handles` carries the extra NodePorts wiring (None for `Rhai`).
-    let body_handles: Option<(PlaceHandle<DynamicToken>, PlaceHandle<DynamicToken>)> = if body_mode {
+    let body_handles: Option<(PlaceHandle<DynamicToken>, PlaceHandle<DynamicToken>)> = if body_mode
+    {
         let p_body_in: PlaceHandle<DynamicToken> =
             ctx.state(format!("p_{id}_body_in"), format!("{label} - Body In"));
         let p_body_out: PlaceHandle<DynamicToken> =
@@ -158,8 +159,10 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
             // with a dense ARRIVAL index from its own counter (`p_ingest`), and
             // dispatch gates on THAT. The chunk's true `sequence` is still
             // carried as `__map_idx` so `t_gather` reduces in real stream order.
-            let p_pending: PlaceHandle<DynamicToken> =
-                ctx.state(format!("p_{id}_pending"), format!("{label} - Pending Chunks"));
+            let p_pending: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_pending"),
+                format!("{label} - Pending Chunks"),
+            );
             let p_ingest: PlaceHandle<DynamicToken> = ctx.state(
                 format!("p_{id}_ingest"),
                 format!("{label} - Arrival Counter"),

@@ -65,7 +65,10 @@ async fn expired_session_cookie_returns_401() {
     let authn = Arc::new(MockAuthenticator::reject_expired("alice"));
     let (app, _db) = common::test_app_with_authenticator(authn).await;
 
-    assert_eq!(get_templates(&app, Some("expired")).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        get_templates(&app, Some("expired")).await,
+        StatusCode::UNAUTHORIZED
+    );
     assert_eq!(get_templates(&app, Some("fresh")).await, StatusCode::OK);
 }
 

@@ -7,12 +7,7 @@ use std::io::BufRead;
 use crate::client::EngineClient;
 
 /// Print recent events, optionally filtered by type.
-pub fn run_events(
-    client: &EngineClient,
-    net_id: &str,
-    last: usize,
-    event_type: Option<&str>,
-) {
+pub fn run_events(client: &EngineClient, net_id: &str, last: usize, event_type: Option<&str>) {
     let path = format!("/api/nets/{net_id}/events");
     let resp: Value = match client.get(&path) {
         Ok(r) => r,
@@ -52,7 +47,9 @@ pub fn run_events(
         "\n{} events total, {} shown{}",
         events.len(),
         filtered.len().min(last),
-        event_type.map(|t| format!(" (filtered: {t})")).unwrap_or_default()
+        event_type
+            .map(|t| format!(" (filtered: {t})"))
+            .unwrap_or_default()
     );
 }
 
@@ -94,10 +91,7 @@ pub fn run_tail(client: &EngineClient, net_id: &str) {
 
 /// Format and print a single event.
 fn print_event(event: &Value) {
-    let seq = event
-        .get("sequence")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let seq = event.get("sequence").and_then(|v| v.as_u64()).unwrap_or(0);
     let event_data = event.get("event").unwrap_or(event);
     let type_name = event_type_name(event).unwrap_or("Unknown");
 
@@ -157,7 +151,12 @@ fn format_event_detail(event: &Value, type_name: &str) -> String {
             let name = event
                 .get("transition_name")
                 .and_then(|v| v.as_str())
-                .or_else(|| event.get("transition_id").and_then(|v| v.as_str()).map(|s| if s.len() > 8 { &s[..8] } else { s }))
+                .or_else(|| {
+                    event
+                        .get("transition_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| if s.len() > 8 { &s[..8] } else { s })
+                })
                 .unwrap_or("?");
             let handler = event
                 .get("effect_handler_id")
@@ -212,10 +211,7 @@ fn format_event_detail(event: &Value, type_name: &str) -> String {
             s
         }
         "ErrorOccurred" => {
-            let msg = event
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
+            let msg = event.get("message").and_then(|v| v.as_str()).unwrap_or("?");
             msg.to_string()
         }
         "NetFailed" => {
@@ -228,10 +224,7 @@ fn format_event_detail(event: &Value, type_name: &str) -> String {
             } else {
                 tid
             };
-            let reason = event
-                .get("reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
+            let reason = event.get("reason").and_then(|v| v.as_str()).unwrap_or("?");
             format!("{tid}  {reason}")
         }
         _ => String::new(),

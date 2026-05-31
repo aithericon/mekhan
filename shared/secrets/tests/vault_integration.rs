@@ -141,10 +141,9 @@ async fn test_wrap_unwrap_real_vault() {
     assert!(!wrapping_token.is_empty());
 
     // Unwrap
-    let unwrapped =
-        aithericon_secrets::vault_unwrap_secrets(&v.addr, &wrapping_token)
-            .await
-            .unwrap();
+    let unwrapped = aithericon_secrets::vault_unwrap_secrets(&v.addr, &wrapping_token)
+        .await
+        .unwrap();
     assert_eq!(unwrapped["API_KEY"], "sk-live-abc123");
     assert_eq!(unwrapped["DB_PASS"], "super-secret");
 }
@@ -179,10 +178,9 @@ async fn test_unwrap_without_vault_token() {
     // Unwrap using vault_unwrap_secrets — this function does NOT use VAULT_TOKEN,
     // it uses the wrapping token itself as X-Vault-Token. This proves the executor
     // only needs VAULT_ADDR, not VAULT_TOKEN.
-    let unwrapped =
-        aithericon_secrets::vault_unwrap_secrets(&v.addr, &wrapping_token)
-            .await
-            .unwrap();
+    let unwrapped = aithericon_secrets::vault_unwrap_secrets(&v.addr, &wrapping_token)
+        .await
+        .unwrap();
     assert_eq!(unwrapped["SECRET"], "data");
 }
 
@@ -251,10 +249,9 @@ async fn test_full_secret_resolution_pipeline() {
     let wrapping_token = store.wrap(resolved.clone(), 300).await.unwrap();
 
     // Step 6: Unwrap (simulating executor side — only needs VAULT_ADDR)
-    let unwrapped =
-        aithericon_secrets::vault_unwrap_secrets(&v.addr, &wrapping_token)
-            .await
-            .unwrap();
+    let unwrapped = aithericon_secrets::vault_unwrap_secrets(&v.addr, &wrapping_token)
+        .await
+        .unwrap();
 
     // Step 7: Build InMemorySecretStore from unwrapped secrets
     let mem_store = InMemorySecretStore::new(unwrapped);

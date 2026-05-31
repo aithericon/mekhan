@@ -262,11 +262,8 @@ impl HibernationMaster {
                         // Already hibernating or gone
                         return;
                     }
-                    if let Ok(last) =
-                        chrono::DateTime::parse_from_rfc3339(&act.last_active)
-                    {
-                        let elapsed =
-                            Utc::now().signed_duration_since(last.with_timezone(&Utc));
+                    if let Ok(last) = chrono::DateTime::parse_from_rfc3339(&act.last_active) {
+                        let elapsed = Utc::now().signed_duration_since(last.with_timezone(&Utc));
                         if elapsed.to_std().unwrap_or(timeout) < timeout {
                             // Refreshed recently — skip
                             tracing::debug!(

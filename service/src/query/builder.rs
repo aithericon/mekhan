@@ -229,7 +229,10 @@ pub fn build_order_by_with_prefix(
         ));
     }
     let prefix = table_prefix.unwrap_or("");
-    qb.push(format!(" ORDER BY {prefix}{field} {}", sort.sql_direction()));
+    qb.push(format!(
+        " ORDER BY {prefix}{field} {}",
+        sort.sql_direction()
+    ));
     Ok(())
 }
 
@@ -241,11 +244,7 @@ pub fn build_pagination(qb: &mut QueryBuilder<'_, Postgres>, page: &PageQuery) {
 /// JSONB containment filter: `column @> $N::jsonb`.
 ///
 /// Use this for user_metadata / file_metadata queries.
-pub fn push_jsonb_contains(
-    qb: &mut QueryBuilder<'_, Postgres>,
-    column: &str,
-    json_str: &str,
-) {
+pub fn push_jsonb_contains(qb: &mut QueryBuilder<'_, Postgres>, column: &str, json_str: &str) {
     qb.push(format!("{column} @> "));
     qb.push_bind(json_str.to_string());
     qb.push("::jsonb");

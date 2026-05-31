@@ -82,8 +82,8 @@ impl ExecutionBackend for DockerBackend {
         _event_stream: Option<std::sync::Arc<dyn aithericon_executor_backend::traits::EventStream>>,
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
-        let config: DockerConfig =
-            serde_json::from_value(run_context.backend_state.clone()).map_err(|e| {
+        let config: DockerConfig = serde_json::from_value(run_context.backend_state.clone())
+            .map_err(|e| {
                 ExecutorError::Config(format!("failed to deserialize docker config: {e}"))
             })?;
         container::run_container(

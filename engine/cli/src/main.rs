@@ -184,7 +184,12 @@ fn main() {
                 print_summary(&scenario);
             }
         }
-        Commands::Deploy { path, example, net_id, url } => {
+        Commands::Deploy {
+            path,
+            example,
+            net_id,
+            url,
+        } => {
             let json = run_cargo_build(&path, example.as_deref());
             deploy(&json, &url, net_id.as_deref());
         }

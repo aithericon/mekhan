@@ -139,13 +139,19 @@ async fn sync_step1_returns_step2() {
     let response = room.handle_message(1, msg).await.unwrap();
     let response = response.expect("SyncStep1 should produce a response");
 
-    assert_eq!(response[0], MSG_SYNC_STEP2, "response type should be SyncStep2");
+    assert_eq!(
+        response[0], MSG_SYNC_STEP2,
+        "response type should be SyncStep2"
+    );
     assert!(response.len() > 1, "response payload should be non-empty");
 
     // Verify the payload is valid yrs update data
     let update_data = &response[1..];
     let decoded = Update::decode_v1(update_data);
-    assert!(decoded.is_ok(), "response payload should be valid yrs update");
+    assert!(
+        decoded.is_ok(),
+        "response payload should be valid yrs update"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +300,9 @@ async fn multi_client_convergence() {
             txn.apply_update(update).unwrap();
         }
         let txn = doc.transact();
-        let root = txn.get_map("test_data").expect("test_data map should exist");
+        let root = txn
+            .get_map("test_data")
+            .expect("test_data map should exist");
         let has_a = root.get(&txn, "key_a").is_some();
         let has_b = root.get(&txn, "key_b").is_some();
         (has_a, has_b)

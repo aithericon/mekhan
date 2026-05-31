@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use aithericon_executor_process::ProcessConfig;
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionStatus, InputDeclaration, JobPriority, OutputDeclaration, StatusUpdate,
 };
+use aithericon_executor_process::ProcessConfig;
 
 /// Create an echo job that prints "hello" to stdout.
 pub fn echo_job(eid: &str) -> ExecutionJob {

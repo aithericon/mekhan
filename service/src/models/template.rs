@@ -373,7 +373,11 @@ pub enum WorkflowNodeData {
         mode: JoinMode,
         /// Honoured only when `mode == All`. For `Any` only one payload ever
         /// arrives per firing, so there is nothing to merge.
-        #[serde(rename = "mergeStrategy", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "mergeStrategy",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         merge_strategy: Option<MergeStrategy>,
         /// Declared output shape. Each branch's inbound payload is parked at
         /// `p_<id>_data`; the declared fields here describe what downstream
@@ -550,9 +554,17 @@ pub enum WorkflowNodeData {
         /// Optional progress message. Supports `{{ field }}` placeholders.
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(rename = "currentStep", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "currentStep",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         current_step: Option<i64>,
-        #[serde(rename = "totalSteps", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "totalSteps",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         total_steps: Option<i64>,
     },
     /// Pass-through control node that marks the owning HPI process `failed`
@@ -708,11 +720,7 @@ pub enum WorkflowNodeData {
         /// Optional terminal Rhai guard. When `Some`, the agent loop exits
         /// once this expression evaluates true on the parked agent state.
         /// Inert in the degenerate (single-turn) path.
-        #[serde(
-            rename = "stopWhen",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "stopWhen", default, skip_serializing_if = "Option::is_none")]
         stop_when: Option<String>,
         /// Context-window management strategy. Defaults to `None` (no
         /// compaction). Inert in the degenerate path.
@@ -789,7 +797,10 @@ pub enum WorkflowNodeData {
         /// canvas can show "what this sub-workflow consumes" (the way a Start
         /// node shows its declared fields) without opening the property panel.
         /// Empty `in` port ⇒ not yet resolved / child declares no Start fields.
-        #[serde(rename = "inputContract", default = "default_subworkflow_input_contract")]
+        #[serde(
+            rename = "inputContract",
+            default = "default_subworkflow_input_contract"
+        )]
         input_contract: Port,
     },
 }
@@ -1100,7 +1111,9 @@ pub struct DownloadItemConfig {
 /// Severity for callout blocks. Snake-case on the wire (`"info"`,
 /// `"warning"`, `"error"`, `"success"`) to keep the byte-for-byte shape that
 /// the editor and human-task UI already produce/consume.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CalloutSeverity {
     Info,
@@ -1111,7 +1124,18 @@ pub enum CalloutSeverity {
 
 /// Layout mode for image blocks. Snake-case wire values: `"single"`,
 /// `"grid"`, `"gallery"`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageDisplay {
     #[default]
@@ -1483,9 +1507,11 @@ fn default_stream_result_var() -> String {
 /// `compiler/lower/stream_consumer.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Default)]
 pub enum StreamReduce {
     /// Ordered array — sort chunks by stream sequence, project each `.value`
     /// into a `Vec`. The default (matches Map's gather reduce).
+    #[default]
     Array,
     /// String-join the chunk `.value`s (rendered as strings) in stream order,
     /// optionally separated by `sep`.
@@ -1500,11 +1526,6 @@ pub enum StreamReduce {
     Custom { expr: String },
 }
 
-impl Default for StreamReduce {
-    fn default() -> Self {
-        StreamReduce::Array
-    }
-}
 
 /// How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.
 /// Tagged on `mode` (camelCase), mirroring the other config enums.
@@ -1629,11 +1650,11 @@ where
     let Some(value) = value else {
         return Ok(None);
     };
-    let arr = value
-        .as_array()
-        .ok_or_else(|| D::Error::custom(
+    let arr = value.as_array().ok_or_else(|| {
+        D::Error::custom(
             "task field `options` must be a list (either of strings or of `{value,label}` objects)",
-        ))?;
+        )
+    })?;
     let mut out = Vec::with_capacity(arr.len());
     for (i, item) in arr.iter().enumerate() {
         match item {
@@ -1685,7 +1706,18 @@ where
 /// `TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the
 /// compiler accepts an author's choice that the engine rejects (or
 /// vice-versa).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskFieldKind {
     #[default]
@@ -1740,11 +1772,9 @@ impl FieldKind {
             Self::Json => true,
             Self::Bool => value.is_boolean(),
             Self::Number => value.is_number(),
-            Self::Text
-            | Self::Textarea
-            | Self::Select
-            | Self::Signature
-            | Self::Timestamp => value.is_string(),
+            Self::Text | Self::Textarea | Self::Select | Self::Signature | Self::Timestamp => {
+                value.is_string()
+            }
             // File is a catalog reference (`file_metadata::StoragePath`); accept
             // any string or object, validation happens deeper.
             Self::File => value.is_string() || value.is_object(),
@@ -1838,7 +1868,11 @@ impl Port {
     /// Empty input port — used as the deserialization default for `Start.initial`
     /// and similar so existing templates load unchanged.
     pub fn empty_input() -> Self {
-        Self { id: "in".to_string(), label: "Input".to_string(), fields: vec![] }
+        Self {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![],
+        }
     }
 
     /// Validate a candidate token against this port's declared fields.
@@ -1851,9 +1885,7 @@ impl Port {
     /// ports (via the trigger dispatcher's signal path). Keeping one
     /// implementation guarantees the spawn and signal paths can't diverge.
     pub fn validate_token(&self, token: &serde_json::Value) -> Result<(), PortValidationError> {
-        let obj = token
-            .as_object()
-            .ok_or(PortValidationError::NotObject)?;
+        let obj = token.as_object().ok_or(PortValidationError::NotObject)?;
         for field in &self.fields {
             match obj.get(&field.name) {
                 None if field.required => {
@@ -1951,9 +1983,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             kind: FieldKind::Number,
             required: false,
             options: None,
-            description: Some(
-                "Number of LLM round-trips before the agent exited.".to_string(),
-            ),
+            description: Some("Number of LLM round-trips before the agent exited.".to_string()),
             accept: None,
         },
         PortField {
@@ -2028,7 +2058,10 @@ pub fn agent_to_llm_config(
 ) -> serde_json::Value {
     use serde_json::{Number, Value};
     let mut config = serde_json::Map::new();
-    config.insert("provider".to_string(), Value::String(model.provider.clone()));
+    config.insert(
+        "provider".to_string(),
+        Value::String(model.provider.clone()),
+    );
     config.insert("model".to_string(), Value::String(model.model.clone()));
     if let Some(k) = &model.api_key {
         config.insert("api_key".to_string(), Value::String(k.clone()));
@@ -2046,7 +2079,9 @@ pub fn agent_to_llm_config(
     if let Some(t) = model.temperature {
         config.insert(
             "temperature".to_string(),
-            Number::from_f64(t).map(Value::Number).unwrap_or(Value::Null),
+            Number::from_f64(t)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
         );
     }
     if let Some(m) = model.max_tokens {
@@ -2176,16 +2211,10 @@ pub enum WebhookAuth {
     None,
     /// Compare a header (typically `Authorization` or `X-Webhook-Token`) to a
     /// static shared secret. Secret is stored encrypted at rest.
-    SharedSecret {
-        header: String,
-        secret_ref: String,
-    },
+    SharedSecret { header: String, secret_ref: String },
     /// HMAC-SHA256 signature over the request body, with the signing key
     /// stored encrypted at rest and the signature read from `header`.
-    SignedHmac {
-        header: String,
-        secret_ref: String,
-    },
+    SignedHmac { header: String, secret_ref: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -2219,7 +2248,10 @@ pub enum ConcurrencyPolicy {
     Queue,
     /// Dedup by hashing the result of a Rhai `expression` over the event scope;
     /// fires whose key has been seen within `window_secs` are dropped.
-    DedupKey { expression: String, window_secs: u32 },
+    DedupKey {
+        expression: String,
+        window_secs: u32,
+    },
 }
 
 /// A single field mapping for `Trigger.payload_mapping`. Each entry projects
@@ -2242,9 +2274,7 @@ pub struct FieldMapping {
 /// when the caller doesn't specify. `Sse` is never *executed* on the fire
 /// endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
 /// modeled so a node can advertise it as the intended consumption mode.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplyMode {
     /// Return `{ result }` immediately; caller polls / streams. Default —
@@ -2465,7 +2495,8 @@ impl WorkflowGraph {
             }],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
         }
     }
 }
@@ -2481,8 +2512,8 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, LeaseBinding, LoopAccumulator, MergeStrategy, ModelRef, Port,
-        RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
+        ExecutionSpecConfig, JoinMode, LeaseBinding, LoopAccumulator, MergeStrategy, ModelRef,
+        Port, RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
         WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
@@ -2681,10 +2712,7 @@ pub mod dsl {
                     // via the dedicated `initial` / `process_name` fields;
                     // absent (legacy files) falls back to the empty-input
                     // default so older templates load unchanged.
-                    initial: step
-                        .initial
-                        .clone()
-                        .unwrap_or_else(Port::empty_input),
+                    initial: step.initial.clone().unwrap_or_else(Port::empty_input),
                     process_name: step.process_name.clone(),
                 }),
                 "end" => Ok(WorkflowNodeData::End {
@@ -2727,19 +2755,17 @@ pub mod dsl {
                     Ok(WorkflowNodeData::HumanTask {
                         label: label.to_string(),
                         description: step.description.clone(),
-                        task_title: step
-                            .task_title
-                            .clone()
-                            .unwrap_or_else(|| label.to_string()),
+                        task_title: step.task_title.clone().unwrap_or_else(|| label.to_string()),
                         instructions_mdsvex: step.instructions.clone(),
                         steps: task_steps,
                         steps_ref: step.steps_ref.clone(),
                     })
                 }
                 "agent" => {
-                    let a = step.agent.as_ref().ok_or_else(|| {
-                        format!("agent '{}' requires an 'agent' field", key)
-                    })?;
+                    let a = step
+                        .agent
+                        .as_ref()
+                        .ok_or_else(|| format!("agent '{}' requires an 'agent' field", key))?;
                     Ok(WorkflowNodeData::Agent {
                         label: label.to_string(),
                         description: step.description.clone(),
@@ -2969,27 +2995,25 @@ pub mod dsl {
                     // Extract entrypoint and files from config into their own
                     // fields
                     let mut config = execution_spec.config.clone();
-                    let (entrypoint, files) =
-                        if let serde_json::Value::Object(ref mut map) = config {
-                            let ep = map
-                                .remove("entrypoint")
-                                .and_then(|v| v.as_str().map(|s| s.to_string()));
-                            let f = map
-                                .remove("required_files")
-                                .and_then(|v| {
-                                    v.as_array().map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|item| {
-                                                item.as_str().map(|s| s.to_string())
-                                            })
-                                            .collect()
-                                    })
+                    let (entrypoint, files) = if let serde_json::Value::Object(ref mut map) = config
+                    {
+                        let ep = map
+                            .remove("entrypoint")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()));
+                        let f = map
+                            .remove("required_files")
+                            .and_then(|v| {
+                                v.as_array().map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                                        .collect()
                                 })
-                                .unwrap_or_default();
-                            (ep, f)
-                        } else {
-                            (None, vec![])
-                        };
+                            })
+                            .unwrap_or_default();
+                        (ep, f)
+                    } else {
+                        (None, vec![])
+                    };
                     // Round-trip the enum through serde to recover the
                     // canonical snake_case wire string (`python`, `file_ops`,
                     // …) so the DSL export matches what users would type.
@@ -3095,8 +3119,7 @@ pub mod dsl {
                         deployment_model: deployment_model.clone(),
                     });
                 }
-                WorkflowNodeData::Trigger { .. }
-                | WorkflowNodeData::SubWorkflow { .. } => {
+                WorkflowNodeData::Trigger { .. } | WorkflowNodeData::SubWorkflow { .. } => {
                     // DSL doesn't model triggers or sub-workflows — declared in
                     // the GUI for now. Round-trip through DSL drops them,
                     // matching how legacy DSL templates behave.
@@ -3172,12 +3195,18 @@ mod tests {
         // From impl. Pin the mapping so downstream borrow-checking can
         // rely on the typed-ports superset (`Bool` for checkbox, etc.).
         assert_eq!(FieldKind::from(TaskFieldKind::Text), FieldKind::Text);
-        assert_eq!(FieldKind::from(TaskFieldKind::Textarea), FieldKind::Textarea);
+        assert_eq!(
+            FieldKind::from(TaskFieldKind::Textarea),
+            FieldKind::Textarea
+        );
         assert_eq!(FieldKind::from(TaskFieldKind::Number), FieldKind::Number);
         assert_eq!(FieldKind::from(TaskFieldKind::Select), FieldKind::Select);
         assert_eq!(FieldKind::from(TaskFieldKind::Checkbox), FieldKind::Bool);
         assert_eq!(FieldKind::from(TaskFieldKind::File), FieldKind::File);
-        assert_eq!(FieldKind::from(TaskFieldKind::Signature), FieldKind::Signature);
+        assert_eq!(
+            FieldKind::from(TaskFieldKind::Signature),
+            FieldKind::Signature
+        );
         // New in Feature B parity sync: Radio borrows Select's option
         // semantics, Date is wire-text (ISO string), Range/Rating emit
         // plain numbers.
@@ -3312,7 +3341,10 @@ mod tests {
         let port = Port {
             id: "in".into(),
             label: "In".into(),
-            fields: vec![pf("name", FieldKind::Text, true), pf("n", FieldKind::Number, false)],
+            fields: vec![
+                pf("name", FieldKind::Text, true),
+                pf("n", FieldKind::Number, false),
+            ],
         };
         match port.validate_token(&serde_json::json!({ "n": 1 })) {
             Err(PortValidationError::MissingRequiredField { field }) => assert_eq!(field, "name"),
@@ -3334,7 +3366,9 @@ mod tests {
     #[test]
     fn validate_token_fieldless_port_accepts_any_object() {
         let port = Port::empty_input();
-        assert!(port.validate_token(&serde_json::json!({ "anything": 1 })).is_ok());
+        assert!(port
+            .validate_token(&serde_json::json!({ "anything": 1 }))
+            .is_ok());
         assert!(port.validate_token(&serde_json::json!({})).is_ok());
         assert!(matches!(
             port.validate_token(&serde_json::json!("nope")),
@@ -3429,9 +3463,15 @@ mod tests {
             height: None,
         };
         let json = serde_json::to_string(&node).unwrap();
-        assert!(!json.contains("parentId"), "parentId should be omitted when None");
+        assert!(
+            !json.contains("parentId"),
+            "parentId should be omitted when None"
+        );
         assert!(!json.contains("width"), "width should be omitted when None");
-        assert!(!json.contains("height"), "height should be omitted when None");
+        assert!(
+            !json.contains("height"),
+            "height should be omitted when None"
+        );
     }
 
     #[test]
@@ -3452,7 +3492,13 @@ mod tests {
         assert!(json.get("url").is_none());
 
         let back: TaskBlockConfig = serde_json::from_value(json).unwrap();
-        if let TaskBlockConfig::Image { filenames, display, url, .. } = back {
+        if let TaskBlockConfig::Image {
+            filenames,
+            display,
+            url,
+            ..
+        } = back
+        {
             assert_eq!(filenames.len(), 2);
             assert_eq!(display, ImageDisplay::Grid);
             assert_eq!(url, None);
@@ -3576,7 +3622,12 @@ mod tests {
         ];
         for (i, json) in blocks.iter().enumerate() {
             let result: Result<TaskBlockConfig, _> = serde_json::from_value(json.clone());
-            assert!(result.is_ok(), "block type {} failed to deserialize: {:?}", i, result.err());
+            assert!(
+                result.is_ok(),
+                "block type {} failed to deserialize: {:?}",
+                i,
+                result.err()
+            );
         }
     }
 

@@ -19,20 +19,20 @@ pub mod zitadel_mock;
 pub use test_infra::{nats_url, postgres_url, wait_for_nats, wait_for_postgres, TestDb, TestNats};
 
 use mekhan_service::auth::authenticator::{Authenticator, NoopAuthenticator};
-use mekhan_service::auth::{IntrospectionVerifier, ZitadelMgmt};
 use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
+use mekhan_service::auth::{IntrospectionVerifier, ZitadelMgmt};
 use mekhan_service::auth::{PrincipalResolver, TokenVerifier};
+use mekhan_service::catalogue::repository::PgCatalogueRepository;
+use mekhan_service::causality::live::LiveBroadcasts;
 use mekhan_service::config::{AppConfig, AuthConfig, CleanupConfig, S3Config};
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;
 use mekhan_service::s3::ArtifactStore;
+use mekhan_service::triggers::TriggerDispatcher;
 use mekhan_service::yjs::manager::YjsManager;
 use mekhan_service::yjs::persistence::YjsPersistence;
-use mekhan_service::catalogue::repository::PgCatalogueRepository;
-use mekhan_service::causality::live::LiveBroadcasts;
-use mekhan_service::triggers::TriggerDispatcher;
 use mekhan_service::{build_router, AppState};
 
 /// Build a `TriggerDispatcher` for tests. The dispatcher's `hydrate()` is
@@ -60,7 +60,7 @@ pub async fn create_test_db() -> PgPool {
 
 /// Default S3 URL for test infrastructure.
 /// Override with `TEST_S3_ENDPOINT` env var.
-const DEFAULT_TEST_S3_ENDPOINT: &str = "http://localhost:9099";
+const DEFAULT_TEST_S3_ENDPOINT: &str = "http://localhost:19005";
 
 /// Build a test AppConfig pointing to the shared test infrastructure.
 ///
@@ -69,14 +69,14 @@ const DEFAULT_TEST_S3_ENDPOINT: &str = "http://localhost:9099";
 /// (`mekhan-artifacts` + the rustfs creds), or staging 404s and the net
 /// hangs. Override via `TEST_S3_{ENDPOINT,BUCKET,ACCESS_KEY,SECRET_KEY}`.
 pub fn test_config() -> AppConfig {
-    let s3_endpoint = std::env::var("TEST_S3_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_TEST_S3_ENDPOINT.to_string());
+    let s3_endpoint =
+        std::env::var("TEST_S3_ENDPOINT").unwrap_or_else(|_| DEFAULT_TEST_S3_ENDPOINT.to_string());
     let s3_bucket =
-        std::env::var("TEST_S3_BUCKET").unwrap_or_else(|_| "mekhan-test".to_string());
+        std::env::var("TEST_S3_BUCKET").unwrap_or_else(|_| "mekhan-artifacts".to_string());
     let s3_access_key =
-        std::env::var("TEST_S3_ACCESS_KEY").unwrap_or_else(|_| "testadmin".to_string());
+        std::env::var("TEST_S3_ACCESS_KEY").unwrap_or_else(|_| "rustfsadmin".to_string());
     let s3_secret_key =
-        std::env::var("TEST_S3_SECRET_KEY").unwrap_or_else(|_| "testadmin".to_string());
+        std::env::var("TEST_S3_SECRET_KEY").unwrap_or_else(|_| "rustfsadmin".to_string());
 
     AppConfig {
         host: "127.0.0.1".to_string(),
@@ -434,11 +434,7 @@ pub async fn test_app_waiters(
     nats_url: &str,
     petri_url: &str,
     wait_timeout_secs: u64,
-) -> (
-    Router,
-    PgPool,
-    Arc<mekhan_service::triggers::ResultWaiters>,
-) {
+) -> (Router, PgPool, Arc<mekhan_service::triggers::ResultWaiters>) {
     let db = create_test_db().await;
     let mut config = test_config();
     config.nats_url = nats_url.to_string();

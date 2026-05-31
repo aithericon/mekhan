@@ -32,8 +32,10 @@ pub(crate) fn lower_delay(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     //   p_{id}_output       — control token out
     let p_input: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
-    let p_timer_data: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_timer_data"), format!("{label} - Timer Data"));
+    let p_timer_data: PlaceHandle<DynamicToken> = ctx.state(
+        format!("p_{id}_timer_data"),
+        format!("{label} - Timer Data"),
+    );
     let p_scheduled: PlaceHandle<DynamicToken> = ctx.state(
         format!("p_{id}_scheduled"),
         format!("{label} - Scheduled (parked)"),

@@ -18,7 +18,7 @@ use axum::{
 
 use crate::auth::extractor::CookieAuthUser;
 use crate::auth::mgmt::{MgmtError, ZitadelMgmt};
-use crate::models::auth_token::{CreatedToken, CreateTokenRequest, TokenSummary};
+use crate::models::auth_token::{CreateTokenRequest, CreatedToken, TokenSummary};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 
@@ -91,7 +91,10 @@ pub async fn create_token(
         .create_token(
             &user.subject,
             req.name.trim(),
-            req.description.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            req.description
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
             req.expires_at.as_deref(),
         )
         .await

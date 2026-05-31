@@ -173,8 +173,18 @@ fn definition(ctx: &mut Context) {
     let eval_pending = ctx.state::<StepPending>("eval_pending", "Eval Pending");
 
     // Bridge in — receive results and failures from job-net
-    let result_inbox = ctx.bridge_in_from::<StepResult>("result_inbox", "Result Inbox", "job-net", "result_outbox");
-    let failure_inbox = ctx.bridge_in_from::<StepFailure>("failure_inbox", "Failure Inbox", "job-net", "failure_outbox");
+    let result_inbox = ctx.bridge_in_from::<StepResult>(
+        "result_inbox",
+        "Result Inbox",
+        "job-net",
+        "result_outbox",
+    );
+    let failure_inbox = ctx.bridge_in_from::<StepFailure>(
+        "failure_inbox",
+        "Failure Inbox",
+        "job-net",
+        "failure_outbox",
+    );
 
     // Done places — track completed steps for dependency gating
     let a_done = ctx.state::<StepDone>("A_done", "A Done");
@@ -295,9 +305,11 @@ fn definition(ctx: &mut Context) {
 
     // 4+5. join/fail preprocess-A
     ctx.join_pair(
-        "A", "Preprocess-A",
+        "A",
+        "Preprocess-A",
         &a_pending,
-        &result_inbox, &a_done,
+        &result_inbox,
+        &a_done,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,
@@ -306,7 +318,8 @@ fn definition(ctx: &mut Context) {
                     detail: result.detail
                 }
             }"#,
-        &failure_inbox, &workflow_failed,
+        &failure_inbox,
+        &workflow_failed,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,
@@ -319,9 +332,11 @@ fn definition(ctx: &mut Context) {
 
     // 6+7. join/fail preprocess-B
     ctx.join_pair(
-        "B", "Preprocess-B",
+        "B",
+        "Preprocess-B",
         &b_pending,
-        &result_inbox, &b_done,
+        &result_inbox,
+        &b_done,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,
@@ -330,7 +345,8 @@ fn definition(ctx: &mut Context) {
                     detail: result.detail
                 }
             }"#,
-        &failure_inbox, &workflow_failed,
+        &failure_inbox,
+        &workflow_failed,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,
@@ -398,9 +414,11 @@ fn definition(ctx: &mut Context) {
 
     // 8+9. join/fail train
     ctx.join_pair(
-        "train", "Train",
+        "train",
+        "Train",
         &train_pending,
-        &result_inbox, &train_done,
+        &result_inbox,
+        &train_done,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,
@@ -409,7 +427,8 @@ fn definition(ctx: &mut Context) {
                     detail: result.detail
                 }
             }"#,
-        &failure_inbox, &workflow_failed,
+        &failure_inbox,
+        &workflow_failed,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,
@@ -453,9 +472,11 @@ fn definition(ctx: &mut Context) {
 
     // 10+11. join/fail evaluate
     ctx.join_pair(
-        "eval", "Evaluate",
+        "eval",
+        "Evaluate",
         &eval_pending,
-        &result_inbox, &workflow_completed,
+        &result_inbox,
+        &workflow_completed,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,
@@ -463,7 +484,8 @@ fn definition(ctx: &mut Context) {
                     final_detail: result.detail
                 }
             }"#,
-        &failure_inbox, &workflow_failed,
+        &failure_inbox,
+        &workflow_failed,
         r#"#{
                 out: #{
                     workflow_id: pending.workflow_id,

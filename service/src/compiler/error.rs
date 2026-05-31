@@ -362,10 +362,7 @@ pub enum CompileError {
     #[error(
         "node '{node_id}': output field '{field_name}' shadows a reserved runner global — rename the field"
     )]
-    OutputFieldShadowsReserved {
-        node_id: String,
-        field_name: String,
-    },
+    OutputFieldShadowsReserved { node_id: String, field_name: String },
 
     /// Declared output field name matches a slug bound as a Python global on
     /// this node (an upstream producer the user's source borrows as
@@ -558,9 +555,7 @@ pub enum CompileError {
 
     /// `resourcePool.request` failed validation against the pool kind's
     /// `claim_schema`. `message` carries the first jsonschema error.
-    #[error(
-        "node '{node_id}': resource pool request for '{alias}' is invalid: {message}"
-    )]
+    #[error("node '{node_id}': resource pool request for '{alias}' is invalid: {message}")]
     ResourcePoolRequestInvalid {
         node_id: String,
         alias: String,
@@ -589,9 +584,7 @@ pub enum CompileError {
     /// `validate_schema_refs` pass so the editor can highlight the node.
     /// `path` is the JSON pointer to the offending `$ref` inside the
     /// node's `executionSpec.config`.
-    #[error(
-        "node '{node_id}': schema ref at config{path}: {message}"
-    )]
+    #[error("node '{node_id}': schema ref at config{path}: {message}")]
     SchemaRefUnresolved {
         node_id: String,
         path: String,
@@ -607,9 +600,7 @@ pub enum CompileError {
     /// `<slug>.<field>[*]…` with exactly one `[*]` iteration boundary.
     /// Covers nested `[*]` (v1 rejects with `NestedIterationUnsupported`
     /// wording) and missing boundaries.
-    #[error(
-        "human task '{node_id}': Repeater {site} '{ref_value}' is malformed: {message}"
-    )]
+    #[error("human task '{node_id}': Repeater {site} '{ref_value}' is malformed: {message}")]
     RepeaterRefMalformed {
         node_id: String,
         site: String,

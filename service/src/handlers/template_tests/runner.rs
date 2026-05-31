@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::models::error::ApiError;
 use crate::models::instance::StartToken;
 use crate::models::template::{WorkflowGraph, WorkflowTemplate};
-use crate::models::template_test::{Assertion, AssertOp, TemplateTest, TemplateTestRun};
+use crate::models::template_test::{AssertOp, Assertion, TemplateTest, TemplateTestRun};
 use crate::petri::launcher::{InstanceLauncher, LaunchSpec};
 use crate::AppState;
 
@@ -89,8 +89,8 @@ pub async fn run_test(
 
     // Deserialize the test's stored start tokens into the typed shape the
     // launcher expects.
-    let start_tokens: Vec<StartToken> = serde_json::from_value(test.start_tokens.clone())
-        .map_err(|e| {
+    let start_tokens: Vec<StartToken> =
+        serde_json::from_value(test.start_tokens.clone()).map_err(|e| {
             ApiError::internal(format!("test {} has invalid start_tokens: {e}", test.id))
         })?;
 
@@ -151,11 +151,7 @@ pub async fn run_test(
 
     // Index human_answers by both slug and node_id so the answer-lookup
     // tolerates either keying scheme in the stored fixture.
-    let answers_obj = test
-        .human_answers
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    let answers_obj = test.human_answers.as_object().cloned().unwrap_or_default();
     let mut answers: HashMap<String, Value> = HashMap::new();
     for (k, v) in answers_obj {
         answers.insert(k, v);
@@ -194,84 +190,19 @@ pub async fn run_test(
         // auto-complete them from the fixture. The `timeout` also paces the
         // loop (replacing the old fixed sleep), so we interleave draining with
         // the terminal-status check below.
-        match tokio::time::timeout(POLL_INTERVAL, human_requests.next()).await {
-            Ok(Some(msg)) => {
-                // Payload is the engine's HumanTaskRequest JSON.
-                let detail: Value = match serde_json::from_slice(&msg.payload) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(test_id = %test.id, "skipping unparseable human.request: {e}");
-                        continue;
-                    }
-                };
-
-                let task_id = match detail.get("task_id").and_then(Value::as_str) {
-                    Some(t) => t.to_string(),
-                    None => {
-                        return persist_run(
-                            state,
-                            test,
-                            ctx.template_version,
-                            instance.id,
-                            "error",
-                            Some(json!({
-                                "reason": "request_missing_task_id",
-                                "subject": msg.subject.to_string(),
-                            })),
-                            None,
-                            started_at,
-                            started_instant.elapsed(),
-                        )
-                        .await;
-                    }
-                };
-
-                // JetStream may redeliver a request; answer each task once.
-                if !completed_task_ids.insert(task_id.clone()) {
+        if let Ok(Some(msg)) = tokio::time::timeout(POLL_INTERVAL, human_requests.next()).await {
+            // Payload is the engine's HumanTaskRequest JSON.
+            let detail: Value = match serde_json::from_slice(&msg.payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(test_id = %test.id, "skipping unparseable human.request: {e}");
                     continue;
                 }
+            };
 
-                // Place is the subject tail (`human.request.{net_id}.{place}`),
-                // with the payload's `place` as a fallback.
-                let place = msg
-                    .subject
-                    .strip_prefix(&format!("human.request.{net_id}."))
-                    .map(str::to_string)
-                    .or_else(|| {
-                        detail
-                            .get("place")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    });
-                let Some(place) = place else {
-                    return persist_run(
-                        state,
-                        test,
-                        ctx.template_version,
-                        instance.id,
-                        "error",
-                        Some(json!({ "reason": "task_missing_place", "task_id": task_id })),
-                        None,
-                        started_at,
-                        started_instant.elapsed(),
-                    )
-                    .await;
-                };
-
-                let slug = resolve_task_slug(&ctx.graph, &detail, &place);
-                let answer = answers
-                    .get(&slug)
-                    .or_else(|| {
-                        // Fall back to node_id (the WorkflowNode.id) so authors
-                        // can hand-author by either identifier.
-                        detail
-                            .get("node_id")
-                            .and_then(Value::as_str)
-                            .and_then(|nid| answers.get(nid))
-                    })
-                    .cloned();
-
-                let Some(answer) = answer else {
+            let task_id = match detail.get("task_id").and_then(Value::as_str) {
+                Some(t) => t.to_string(),
+                None => {
                     return persist_run(
                         state,
                         test,
@@ -279,42 +210,102 @@ pub async fn run_test(
                         instance.id,
                         "error",
                         Some(json!({
-                            "reason": "missing_human_answer",
-                            "node_slug": slug,
-                            "place": place,
-                            "task_id": task_id,
-                            "hint": "add an entry to human_answers keyed by this slug",
+                            "reason": "request_missing_task_id",
+                            "subject": msg.subject.to_string(),
                         })),
                         None,
                         started_at,
                         started_instant.elapsed(),
                     )
                     .await;
-                };
-
-                // Publish the synthetic completion on the same subject the UI
-                // path uses (`process::handlers`): the engine's
-                // GlobalHumanResultListener injects the result token at `place`.
-                let subject = format!("human.completed.{net_id}.{place}");
-                let payload = json!({
-                    "task_id": task_id,
-                    "data": answer,
-                    "completed_at": Utc::now().to_rfc3339(),
-                });
-                if let Err(e) = state
-                    .nats
-                    .client()
-                    .publish(subject, serde_json::to_vec(&payload).unwrap().into())
-                    .await
-                {
-                    return Err(ApiError::internal(format!(
-                        "failed to publish human completion: {e}"
-                    )));
                 }
+            };
+
+            // JetStream may redeliver a request; answer each task once.
+            if !completed_task_ids.insert(task_id.clone()) {
+                continue;
             }
-            // Subscription closed (shouldn't happen mid-run) or the poll
-            // elapsed with no request — fall through to the terminal check.
-            Ok(None) | Err(_) => {}
+
+            // Place is the subject tail (`human.request.{net_id}.{place}`),
+            // with the payload's `place` as a fallback.
+            let place = msg
+                .subject
+                .strip_prefix(&format!("human.request.{net_id}."))
+                .map(str::to_string)
+                .or_else(|| {
+                    detail
+                        .get("place")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+            let Some(place) = place else {
+                return persist_run(
+                    state,
+                    test,
+                    ctx.template_version,
+                    instance.id,
+                    "error",
+                    Some(json!({ "reason": "task_missing_place", "task_id": task_id })),
+                    None,
+                    started_at,
+                    started_instant.elapsed(),
+                )
+                .await;
+            };
+
+            let slug = resolve_task_slug(&ctx.graph, &detail, &place);
+            let answer = answers
+                .get(&slug)
+                .or_else(|| {
+                    // Fall back to node_id (the WorkflowNode.id) so authors
+                    // can hand-author by either identifier.
+                    detail
+                        .get("node_id")
+                        .and_then(Value::as_str)
+                        .and_then(|nid| answers.get(nid))
+                })
+                .cloned();
+
+            let Some(answer) = answer else {
+                return persist_run(
+                    state,
+                    test,
+                    ctx.template_version,
+                    instance.id,
+                    "error",
+                    Some(json!({
+                        "reason": "missing_human_answer",
+                        "node_slug": slug,
+                        "place": place,
+                        "task_id": task_id,
+                        "hint": "add an entry to human_answers keyed by this slug",
+                    })),
+                    None,
+                    started_at,
+                    started_instant.elapsed(),
+                )
+                .await;
+            };
+
+            // Publish the synthetic completion on the same subject the UI
+            // path uses (`process::handlers`): the engine's
+            // GlobalHumanResultListener injects the result token at `place`.
+            let subject = format!("human.completed.{net_id}.{place}");
+            let payload = json!({
+                "task_id": task_id,
+                "data": answer,
+                "completed_at": Utc::now().to_rfc3339(),
+            });
+            if let Err(e) = state
+                .nats
+                .client()
+                .publish(subject, serde_json::to_vec(&payload).unwrap().into())
+                .await
+            {
+                return Err(ApiError::internal(format!(
+                    "failed to publish human completion: {e}"
+                )));
+            }
         }
 
         // Check whether the instance has terminated.
@@ -363,7 +354,10 @@ pub async fn run_test(
     for (idx, assertion) in assertions.iter().enumerate() {
         match eval_assertion(&scope, assertion) {
             Ok(AssertionOutcome { passed: true, .. }) => continue,
-            Ok(AssertionOutcome { passed: false, resolved_rhs }) => {
+            Ok(AssertionOutcome {
+                passed: false,
+                resolved_rhs,
+            }) => {
                 let mut detail = serde_json::Map::from_iter([
                     ("assertion_idx".to_string(), json!(idx)),
                     ("path".to_string(), json!(assertion.path)),
@@ -371,7 +365,9 @@ pub async fn run_test(
                     ("expected".to_string(), assertion.value.clone()),
                     (
                         "actual".to_string(),
-                        navigate(&scope, &assertion.path).cloned().unwrap_or(Value::Null),
+                        navigate(&scope, &assertion.path)
+                            .cloned()
+                            .unwrap_or(Value::Null),
                     ),
                 ]);
                 // Show the resolved RHS only when it differs from the literal
@@ -610,7 +606,9 @@ fn build_start_scope(start_tokens_json: &Value) -> Value {
     };
     let mut tokens_by_block: Vec<(String, Value)> = Vec::new();
     for entry in arr {
-        let Some(obj) = entry.as_object() else { continue };
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
         let Some(block_id) = obj.get("start_block_id").and_then(Value::as_str) else {
             continue;
         };
@@ -693,7 +691,10 @@ fn eval_assertion(scope: &Value, assertion: &Assertion) -> Result<AssertionOutco
             _ => false,
         },
     };
-    Ok(AssertionOutcome { passed, resolved_rhs })
+    Ok(AssertionOutcome {
+        passed,
+        resolved_rhs,
+    })
 }
 
 /// Resolve `{{ … }}` Rhai templates in an assertion's expected value.
@@ -784,8 +785,7 @@ fn eval_rhai_expr(scope: &Value, expr: &str) -> Result<Value, String> {
     let result: rhai::Dynamic = engine
         .eval_expression_with_scope::<rhai::Dynamic>(&mut rhai_scope, expr)
         .map_err(|e| format!("rhai eval of `{expr}`: {e}"))?;
-    rhai::serde::from_dynamic(&result)
-        .map_err(|e| format!("rhai result of `{expr}` → JSON: {e}"))
+    rhai::serde::from_dynamic(&result).map_err(|e| format!("rhai result of `{expr}` → JSON: {e}"))
 }
 
 /// How a Rhai value renders inside an interpolated string. Strings unwrap
@@ -832,7 +832,11 @@ mod tests {
     }
 
     fn a(path: &str, op: AssertOp, value: Value) -> Assertion {
-        Assertion { path: path.to_string(), op, value }
+        Assertion {
+            path: path.to_string(),
+            op,
+            value,
+        }
     }
 
     /// Convenience: assert the eval succeeded with the given pass/fail.
@@ -846,61 +850,124 @@ mod tests {
 
     #[test]
     fn eq_on_string_passes() {
-        assert!(check(&scope(), &a("result.value.approved", AssertOp::Eq, json!("yes"))));
+        assert!(check(
+            &scope(),
+            &a("result.value.approved", AssertOp::Eq, json!("yes"))
+        ));
     }
 
     #[test]
     fn eq_on_string_mismatch_fails() {
-        assert!(!check(&scope(), &a("result.value.approved", AssertOp::Eq, json!("no"))));
+        assert!(!check(
+            &scope(),
+            &a("result.value.approved", AssertOp::Eq, json!("no"))
+        ));
     }
 
     #[test]
     fn nested_step_output_path() {
-        assert!(check(&scope(), &a("steps.review.output.approved", AssertOp::Eq, json!(true))));
+        assert!(check(
+            &scope(),
+            &a("steps.review.output.approved", AssertOp::Eq, json!(true))
+        ));
     }
 
     #[test]
     fn array_index_path() {
-        assert!(check(&scope(), &a("steps.extract.output.items.1", AssertOp::Eq, json!(2))));
+        assert!(check(
+            &scope(),
+            &a("steps.extract.output.items.1", AssertOp::Eq, json!(2))
+        ));
     }
 
     #[test]
     fn gt_on_number() {
-        assert!(check(&scope(), &a("result.value.amount", AssertOp::Gt, json!(1000))));
-        assert!(!check(&scope(), &a("result.value.amount", AssertOp::Gt, json!(9999))));
+        assert!(check(
+            &scope(),
+            &a("result.value.amount", AssertOp::Gt, json!(1000))
+        ));
+        assert!(!check(
+            &scope(),
+            &a("result.value.amount", AssertOp::Gt, json!(9999))
+        ));
     }
 
     #[test]
     fn gt_on_non_numeric_errors() {
-        let err = check_err(&scope(), &a("result.value.approved", AssertOp::Gt, json!(1)));
+        let err = check_err(
+            &scope(),
+            &a("result.value.approved", AssertOp::Gt, json!(1)),
+        );
         assert!(err.contains("not a number"), "got: {err}");
     }
 
     #[test]
     fn exists_handles_missing() {
-        assert!(check(&scope(), &a("result.value.amount", AssertOp::Exists, Value::Null)));
-        assert!(!check(&scope(), &a("result.value.nope", AssertOp::Exists, Value::Null)));
-        assert!(check(&scope(), &a("result.value.nope", AssertOp::NotExists, Value::Null)));
+        assert!(check(
+            &scope(),
+            &a("result.value.amount", AssertOp::Exists, Value::Null)
+        ));
+        assert!(!check(
+            &scope(),
+            &a("result.value.nope", AssertOp::Exists, Value::Null)
+        ));
+        assert!(check(
+            &scope(),
+            &a("result.value.nope", AssertOp::NotExists, Value::Null)
+        ));
     }
 
     #[test]
     fn matches_regex() {
-        assert!(check(&scope(), &a("steps.review.output.comments", AssertOp::Matches, json!("looks .*"))));
-        assert!(!check(&scope(), &a("steps.review.output.comments", AssertOp::Matches, json!("^bad"))));
+        assert!(check(
+            &scope(),
+            &a(
+                "steps.review.output.comments",
+                AssertOp::Matches,
+                json!("looks .*")
+            )
+        ));
+        assert!(!check(
+            &scope(),
+            &a(
+                "steps.review.output.comments",
+                AssertOp::Matches,
+                json!("^bad")
+            )
+        ));
     }
 
     #[test]
     fn contains_substring_and_array() {
-        assert!(check(&scope(), &a("steps.review.output.comments", AssertOp::Contains, json!("good"))));
-        assert!(check(&scope(), &a("steps.extract.output.items", AssertOp::Contains, json!(2))));
-        assert!(!check(&scope(), &a("steps.extract.output.items", AssertOp::Contains, json!(99))));
+        assert!(check(
+            &scope(),
+            &a(
+                "steps.review.output.comments",
+                AssertOp::Contains,
+                json!("good")
+            )
+        ));
+        assert!(check(
+            &scope(),
+            &a("steps.extract.output.items", AssertOp::Contains, json!(2))
+        ));
+        assert!(!check(
+            &scope(),
+            &a("steps.extract.output.items", AssertOp::Contains, json!(99))
+        ));
     }
 
     #[test]
     fn navigate_walks_objects_and_arrays() {
         let s = scope();
-        assert_eq!(navigate(&s, "result.value.amount").and_then(Value::as_f64), Some(1234.5));
-        assert_eq!(navigate(&s, "steps.extract.output.items.0").and_then(Value::as_i64), Some(1));
+        assert_eq!(
+            navigate(&s, "result.value.amount").and_then(Value::as_f64),
+            Some(1234.5)
+        );
+        assert_eq!(
+            navigate(&s, "steps.extract.output.items.0").and_then(Value::as_i64),
+            Some(1)
+        );
         assert!(navigate(&s, "no.such.path").is_none());
     }
 
@@ -929,7 +996,11 @@ mod tests {
             json!("{{ result.value.amount * 2 - 1234.5 }}"),
         );
         let out = eval_assertion(&scope(), &asn).unwrap();
-        assert!(out.passed, "arithmetic identity must hold: {:?}", out.resolved_rhs);
+        assert!(
+            out.passed,
+            "arithmetic identity must hold: {:?}",
+            out.resolved_rhs
+        );
     }
 
     #[test]
@@ -949,7 +1020,11 @@ mod tests {
     fn rhai_template_skipped_for_exists() {
         // Exists ignores the RHS, so a broken expression in `value` must not
         // turn a pure existence check into an error.
-        let asn = a("result.value.amount", AssertOp::Exists, json!("{{ totally_broken !! }}"));
+        let asn = a(
+            "result.value.amount",
+            AssertOp::Exists,
+            json!("{{ totally_broken !! }}"),
+        );
         assert!(check(&scope(), &asn));
     }
 
@@ -974,11 +1049,7 @@ mod tests {
     #[test]
     fn plain_string_not_treated_as_template() {
         // No `{{ }}` wrapper → literal string compare.
-        let asn = a(
-            "result.value.approved",
-            AssertOp::Eq,
-            json!("yes"),
-        );
+        let asn = a("result.value.approved", AssertOp::Eq, json!("yes"));
         assert!(check(&scope(), &asn));
     }
 
@@ -1109,11 +1180,7 @@ mod tests {
             "steps": {},
             "start": { "amount": 1234 }
         });
-        let asn = a(
-            "start.amount",
-            AssertOp::Eq,
-            json!("{{ start.amount }}"),
-        );
+        let asn = a("start.amount", AssertOp::Eq, json!("{{ start.amount }}"));
         let out = eval_assertion(&scope, &asn).unwrap();
         assert!(out.passed, "got: {:?}", out);
         assert_eq!(out.resolved_rhs, json!(1234));

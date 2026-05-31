@@ -85,9 +85,8 @@ fn scan_block(block: &TaskBlockConfig, out: &mut Vec<HumanTaskRef>) {
         // Form fields, dividers, files have no free-form strings the
         // runtime interpolates — `Input.field` is a typed schema, not
         // markdown.
-        TaskBlockConfig::Input { .. }
-        | TaskBlockConfig::Divider
-        | TaskBlockConfig::File { .. } => {}
+        TaskBlockConfig::Input { .. } | TaskBlockConfig::Divider | TaskBlockConfig::File { .. } => {
+        }
         TaskBlockConfig::Mdsvex { content } => scan_into(content, out),
         TaskBlockConfig::Callout { title, content, .. } => {
             if let Some(t) = title {
@@ -195,8 +194,8 @@ fn parse_repeater_ref_head_attr(raw: &str) -> Option<HumanTaskRef> {
 mod tests {
     use super::*;
     use crate::models::template::{
-        CalloutSeverity, Position, TaskBlockConfig, TaskFieldConfig, TaskFieldKind,
-        TaskStepConfig, WorkflowNode, WorkflowNodeData,
+        CalloutSeverity, Position, TaskBlockConfig, TaskFieldConfig, TaskFieldKind, TaskStepConfig,
+        WorkflowNode, WorkflowNodeData,
     };
 
     fn ht(
@@ -348,11 +347,7 @@ mod tests {
 
     #[test]
     fn multiple_placeholders_in_one_string_preserved() {
-        let n = ht(
-            "{{ a.x }} and {{ b.y }} again {{ a.x }}",
-            None,
-            vec![],
-        );
+        let n = ht("{{ a.x }} and {{ b.y }} again {{ a.x }}", None, vec![]);
         assert_eq!(
             pairs(&n),
             vec![
@@ -425,7 +420,13 @@ mod tests {
         // The Repeater contributes one (extract, tasks) pair per ref; the
         // borrow planner dedupes downstream. `item_label_ref` carries the
         // same (head, attr) so we see it twice.
-        assert_eq!(pairs.iter().filter(|p| p.0 == "extract" && p.1 == "tasks").count(), 2);
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|p| p.0 == "extract" && p.1 == "tasks")
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -441,12 +442,9 @@ mod tests {
             blocks: vec![TaskBlockConfig::Repeater {
                 items_ref: "extract.tasks[*]".into(),
                 item_label_ref: None,
-                blocks: vec![
-                    TaskBlockConfig::Mdsvex {
-                        content: "Title: {{ extract.tasks[*].title }} for {{ start.vendor }}"
-                            .into(),
-                    },
-                ],
+                blocks: vec![TaskBlockConfig::Mdsvex {
+                    content: "Title: {{ extract.tasks[*].title }} for {{ start.vendor }}".into(),
+                }],
                 output_slug: "review_tasks".into(),
             }],
         };

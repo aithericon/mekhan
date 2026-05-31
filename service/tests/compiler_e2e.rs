@@ -14,8 +14,8 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 fn load_graph(fixture: &str) -> WorkflowGraph {
-    let json_str =
-        std::fs::read_to_string(format!("tests/fixtures/graphs/{fixture}")).unwrap_or_else(|e| {
+    let json_str = std::fs::read_to_string(format!("tests/fixtures/graphs/{fixture}"))
+        .unwrap_or_else(|e| {
             panic!("failed to read fixture {fixture}: {e}");
         });
     serde_json::from_str(&json_str)
@@ -43,7 +43,11 @@ fn has_place_of_type(air: &Value, place_type: &str) -> bool {
 }
 
 fn has_group(air: &Value, id: &str) -> bool {
-    air["groups"].as_array().unwrap().iter().any(|g| g["id"] == id)
+    air["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|g| g["id"] == id)
 }
 
 /// Every transition must have at least one input and one output arc.
@@ -70,7 +74,10 @@ fn assert_all_transitions_wired(air: &Value) {
 
 /// Every arc in every transition must reference a place that exists.
 fn assert_arcs_reference_existing_places(air: &Value) {
-    let place_ids: Vec<&str> = places(air).iter().map(|p| p["id"].as_str().unwrap()).collect();
+    let place_ids: Vec<&str> = places(air)
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
     for t in transitions(air) {
         let tid = t["id"].as_str().unwrap();
         for arc in t["inputs"].as_array().unwrap() {
@@ -124,7 +131,13 @@ fn ui_simple_start_end_deserializes_and_compiles() {
     assert_eq!(graph.nodes.len(), 2);
     assert_eq!(graph.edges.len(), 1);
 
-    let air = compile_to_air(&graph, "simple", "Simple workflow", &std::collections::HashMap::new()).expect("should compile");
+    let air = compile_to_air(
+        &graph,
+        "simple",
+        "Simple workflow",
+        &std::collections::HashMap::new(),
+    )
+    .expect("should compile");
 
     // Start forks (`park_outputs`): control seed + write-once parked data +
     // forwarded control = 3 places (p_start_ready / _data / _main) via one
@@ -149,7 +162,13 @@ fn ui_linear_human_task_deserializes_and_compiles() {
     assert_eq!(graph.nodes.len(), 3);
     assert_eq!(graph.edges.len(), 2);
 
-    let air = compile_to_air(&graph, "linear", "Linear workflow", &std::collections::HashMap::new()).expect("should compile");
+    let air = compile_to_air(
+        &graph,
+        "linear",
+        "Linear workflow",
+        &std::collections::HashMap::new(),
+    )
+    .expect("should compile");
 
     // HumanTask internal: input, active, signal, errors, output = 5 places
     // + the foundation control/data split adds parked-data + slim-control
@@ -168,7 +187,11 @@ fn ui_linear_human_task_deserializes_and_compiles() {
     for t in transitions(&air) {
         for a in t["inputs"].as_array().cloned().unwrap_or_default() {
             if a["place"] == serde_json::json!("p_ht-1_data") {
-                assert_eq!(a["read"], serde_json::json!(true), "data place must be read-only");
+                assert_eq!(
+                    a["read"],
+                    serde_json::json!(true),
+                    "data place must be read-only"
+                );
             }
         }
     }
@@ -320,18 +343,12 @@ fn ui_invoice_processing_deserializes_and_compiles() {
     assert!(has_transition(&air, "t_join_join"), "Join transition");
 
     // --- Loop: Auto-Validate ---
-    assert!(
-        has_transition(&air, "t_auto-validate_enter"),
-        "Loop enter"
-    );
+    assert!(has_transition(&air, "t_auto-validate_enter"), "Loop enter");
     assert!(
         has_transition(&air, "t_auto-validate_continue"),
         "Loop continue"
     );
-    assert!(
-        has_transition(&air, "t_auto-validate_exit"),
-        "Loop exit"
-    );
+    assert!(has_transition(&air, "t_auto-validate_exit"), "Loop exit");
     assert!(has_group(&air, "grp_auto-validate"), "Loop group");
 
     // --- Merge optimization: no pass-through edge transitions ---
@@ -451,8 +468,8 @@ fn transition_output_places<'a>(air: &'a Value, tid: &str) -> Vec<&'a str> {
 /// resolved-alias path (the only pooled path now).
 #[test]
 fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() {
-    let air = compile_aliased(&known_with_prod_gpu("token_pool"))
-        .expect("pooled step should compile");
+    let air =
+        compile_aliased(&known_with_prod_gpu("token_pool")).expect("pooled step should compile");
     let expected_net = format!("pool-{}", prod_gpu_id());
 
     // Structural sanity the whole suite leans on.
@@ -462,8 +479,14 @@ fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() 
     // The four cross-net bridge places exist.
     assert!(has_place(&air, "p_render_claim_out"), "claim bridge_out");
     assert!(has_place(&air, "p_render_grant_inbox"), "grant reply place");
-    assert!(has_place(&air, "p_render_register_out"), "register bridge_out");
-    assert!(has_place(&air, "p_render_release_out"), "release bridge_out");
+    assert!(
+        has_place(&air, "p_render_register_out"),
+        "register bridge_out"
+    );
+    assert!(
+        has_place(&air, "p_render_release_out"),
+        "release bridge_out"
+    );
 
     // Claim bridge targets the RESOLVED pool net + claim_inbox, and routes
     // the "grant" reply back to the grant inbox place.
@@ -861,7 +884,9 @@ fn aliased_pool_bad_request_is_compile_error() {
     for node in &mut graph.nodes {
         if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
             deployment_model:
-                mekhan_service::models::template::DeploymentModel::Executor { pool: Some(binding) },
+                mekhan_service::models::template::DeploymentModel::Executor {
+                    pool: Some(binding),
+                },
             ..
         } = &mut node.data
         {
@@ -1129,15 +1154,18 @@ fn scheduled_lease_without_scheduler_is_compile_error() {
 /// legitimate `GuardUnresolved`, which is the point: submit ≠ lease).
 #[test]
 fn scheduled_submit_is_not_a_lease_path() {
-    use mekhan_service::models::template::{
-        DeploymentModel, ScheduledOperation, WorkflowNodeData,
-    };
+    use mekhan_service::models::template::{DeploymentModel, ScheduledOperation, WorkflowNodeData};
 
     let mut graph = load_graph("scheduled-lease.json");
     for node in &mut graph.nodes {
         match &mut node.data {
             WorkflowNodeData::AutomatedStep {
-                deployment_model: DeploymentModel::Scheduled { operation, scheduler, .. },
+                deployment_model:
+                    DeploymentModel::Scheduled {
+                        operation,
+                        scheduler,
+                        ..
+                    },
                 ..
             } => {
                 *operation = ScheduledOperation::Submit;
@@ -1153,8 +1181,8 @@ fn scheduled_submit_is_not_a_lease_path() {
         }
     }
     // Submit needs no KnownResources (env-global scheduler-net).
-    let air = compile_to_air(&graph, "t", "", &HashMap::new())
-        .expect("scheduled submit should compile");
+    let air =
+        compile_to_air(&graph, "t", "", &HashMap::new()).expect("scheduled submit should compile");
 
     // Submit = scheduler-net bridge, NOT the pool claim/register/release.
     assert!(
@@ -1214,8 +1242,8 @@ fn compile_leased_loop(known: &KnownResources) -> Result<Value, CompileError> {
 /// downstream `<loop>.lease.alloc_id` borrow read-arcs.
 #[test]
 fn leased_loop_hoists_claim_to_loop_scope_and_releases_on_exit() {
-    let air = compile_leased_loop(&known_with_prod_dc("datacenter"))
-        .expect("leased loop should compile");
+    let air =
+        compile_leased_loop(&known_with_prod_dc("datacenter")).expect("leased loop should compile");
 
     assert_all_transitions_wired(&air);
     assert_arcs_reference_existing_places(&air);
@@ -1421,9 +1449,11 @@ fn leased_loop_hoists_claim_to_loop_scope_and_releases_on_exit() {
         .clone();
     // Consumes the parked counter (NON-read) so continue/exit are structurally
     // disabled once failure parks.
-    let consumes_counter = abort["inputs"].as_array().unwrap().iter().any(|a| {
-        a["place"] == "p_aloop_data" && a["read"] != serde_json::Value::Bool(true)
-    });
+    let consumes_counter = abort["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["place"] == "p_aloop_data" && a["read"] != serde_json::Value::Bool(true));
     assert!(
         consumes_counter,
         "abort must CONSUME p_aloop_data (the §7.3 structural short-circuit): {}",
@@ -1431,8 +1461,7 @@ fn leased_loop_hoists_claim_to_loop_scope_and_releases_on_exit() {
     );
     // Read-arcs the parked failure flag (non-consuming).
     let reads_failure = abort["inputs"].as_array().unwrap().iter().any(|a| {
-        a["place"] == "p_aloop_lease_failed_parked"
-            && a["read"] == serde_json::Value::Bool(true)
+        a["place"] == "p_aloop_lease_failed_parked" && a["read"] == serde_json::Value::Bool(true)
     });
     assert!(
         reads_failure,
@@ -1461,9 +1490,7 @@ fn loop_without_lease_emits_no_lease_topology() {
             mekhan_service::models::template::WorkflowNodeData::Loop { lease, .. } => {
                 *lease = None;
             }
-            mekhan_service::models::template::WorkflowNodeData::Decision {
-                conditions, ..
-            } => {
+            mekhan_service::models::template::WorkflowNodeData::Decision { conditions, .. } => {
                 for c in conditions.iter_mut() {
                     c.guard = "input.status == \"ok\"".to_string();
                 }
@@ -1472,8 +1499,8 @@ fn loop_without_lease_emits_no_lease_topology() {
         }
     }
     // No KnownResources needed — a plain loop resolves no datacenter.
-    let air = compile_to_air(&graph, "t", "", &leased_loop_files())
-        .expect("plain loop should compile");
+    let air =
+        compile_to_air(&graph, "t", "", &leased_loop_files()).expect("plain loop should compile");
 
     assert_all_transitions_wired(&air);
     assert_arcs_reference_existing_places(&air);
@@ -1884,9 +1911,10 @@ use mekhan_service::compiler::scheduler_select::resolve_scheduler_defaults;
 /// default. Mutating the deserialized JSON keeps this decoupled from the
 /// internal `DeploymentModel` field layout.
 fn scheduled_lease_without_node_scheduler() -> WorkflowGraph {
-    let mut v: Value =
-        serde_json::from_str(&std::fs::read_to_string("tests/fixtures/graphs/scheduled-lease.json").unwrap())
-            .unwrap();
+    let mut v: Value = serde_json::from_str(
+        &std::fs::read_to_string("tests/fixtures/graphs/scheduled-lease.json").unwrap(),
+    )
+    .unwrap();
     for node in v["nodes"].as_array_mut().unwrap() {
         if node["id"] == "render" {
             node["data"]["deploymentModel"]
@@ -1969,8 +1997,8 @@ fn selection_node_and_template_omit_uses_workspace_default() {
 #[test]
 fn selection_all_omit_is_scheduler_unresolved() {
     let g = scheduled_lease_without_node_scheduler();
-    let errs = resolve_scheduler_defaults(&g, None)
-        .expect_err("a fully-unresolved lease must hard-fail");
+    let errs =
+        resolve_scheduler_defaults(&g, None).expect_err("a fully-unresolved lease must hard-fail");
     assert_eq!(errs.len(), 1);
     assert_eq!(errs[0].kind(), "scheduler_unresolved");
     assert_eq!(errs[0].node_id(), Some("render"));

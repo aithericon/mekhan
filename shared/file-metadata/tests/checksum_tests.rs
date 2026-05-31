@@ -100,9 +100,7 @@ mod blake3_tests {
 
 #[cfg(all(feature = "checksum-sha256", feature = "csv"))]
 mod checksum_with_extraction {
-    use fmeta::{
-        extract_all, extract_metadata, ChecksumAlgorithm, ExtractAllOptions,
-    };
+    use fmeta::{extract_all, extract_metadata, ChecksumAlgorithm, ExtractAllOptions};
 
     #[test]
     fn extract_metadata_does_not_auto_populate_checksum() {

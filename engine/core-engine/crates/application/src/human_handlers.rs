@@ -167,7 +167,10 @@ impl EffectHandler for HumanTaskHandler {
                 obj.insert("place".to_string(), JsonValue::String(place.clone()));
             }
             if let Some(rs) = &response_subject {
-                obj.insert("response_subject".to_string(), JsonValue::String(rs.clone()));
+                obj.insert(
+                    "response_subject".to_string(),
+                    JsonValue::String(rs.clone()),
+                );
             }
         }
 
@@ -254,9 +257,7 @@ impl EffectHandler for HumanTaskCancelHandler {
                 EffectError::Fatal("Missing place in human cancel handler input".to_string())
             })?;
 
-        let reason = task_data
-            .get("reason")
-            .and_then(|v| v.as_str());
+        let reason = task_data.get("reason").and_then(|v| v.as_str());
 
         self.client
             .cancel_task(task_id, place, reason)
@@ -330,7 +331,9 @@ mod tests {
             if self.should_fail {
                 return Err("mock submit failure".to_string());
             }
-            Ok(request.task_id.unwrap_or_else(|| "mock-task-id".to_string()))
+            Ok(request
+                .task_id
+                .unwrap_or_else(|| "mock-task-id".to_string()))
         }
 
         async fn cancel_task(
@@ -432,10 +435,7 @@ mod tests {
         let client = Arc::new(MockHumanTaskClient::always_fail());
         let handler = HumanTaskCancelHandler::new(client, "task", "cancelled");
 
-        let input = make_input(
-            "task",
-            json!({"task_id": "task-123", "place": "review"}),
-        );
+        let input = make_input("task", json!({"task_id": "task-123", "place": "review"}));
         let result = handler.execute(input).await;
 
         assert!(result.is_err());

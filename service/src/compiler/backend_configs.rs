@@ -225,12 +225,12 @@ pub fn validate_and_transform(
     node_id: &str,
 ) -> Result<(Value, Vec<InputDeclaration>), CompileError> {
     let decl = crate::backends::lookup(*backend_type).ok_or_else(|| {
-        CompileError::Compilation(format!(
-            "backend {:?} has no registered decl",
-            backend_type
-        ))
+        CompileError::Compilation(format!("backend {:?} has no registered decl", backend_type))
     })?;
-    let ctx = crate::backends::ValidationCtx { node_id, node_files };
+    let ctx = crate::backends::ValidationCtx {
+        node_id,
+        node_files,
+    };
     (decl.validate)(config, &ctx)
 }
 
@@ -257,7 +257,8 @@ mod tests {
 
         let config = json!({"entrypoint": "main.py"});
         let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node").unwrap();
+            validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node")
+                .unwrap();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].name, "main.py");
     }
@@ -268,9 +269,10 @@ mod tests {
         files.insert("helper.py".to_string(), raw(""));
 
         let config = json!({"entrypoint": "main.py"});
-        let err = validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node")
-            .unwrap_err()
-            .to_string();
+        let err =
+            validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node")
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("entrypoint 'main.py' not found"));
         assert!(err.contains("'helper.py'"));
     }
@@ -279,18 +281,24 @@ mod tests {
     fn python_rejects_empty_files() {
         let files = HashMap::new();
         let config = json!({"entrypoint": "main.py"});
-        let err = validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node")
-            .unwrap_err()
-            .to_string();
+        let err =
+            validate_and_transform(&ExecutionBackendType::Python, &config, &files, "test_node")
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("node has no files"));
     }
 
     #[test]
     fn process_rejects_empty_command() {
         let config = json!({"command": ""});
-        let err = validate_and_transform(&ExecutionBackendType::Process, &config, &HashMap::new(), "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Process,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("command is required"));
     }
 
@@ -300,7 +308,8 @@ mod tests {
         files.insert("run.sh".to_string(), raw("echo hi"));
         let config = json!({"command": "bash", "args": ["run.sh"]});
         let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::Process, &config, &files, "test_node").unwrap();
+            validate_and_transform(&ExecutionBackendType::Process, &config, &files, "test_node")
+                .unwrap();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].name, "run.sh");
     }
@@ -308,9 +317,14 @@ mod tests {
     #[test]
     fn docker_rejects_empty_image() {
         let config = json!({"image": ""});
-        let err = validate_and_transform(&ExecutionBackendType::Docker, &config, &HashMap::new(), "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Docker,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("image is required"));
     }
 
@@ -321,9 +335,14 @@ mod tests {
             "method": "POST",
             "body_from_input": "payload.json"
         });
-        let err = validate_and_transform(&ExecutionBackendType::Http, &config, &HashMap::new(), "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Http,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("body_from_input"));
         assert!(err.contains("'payload.json'"));
     }
@@ -335,9 +354,14 @@ mod tests {
             "body": {"k": "v"},
             "body_from_input": "payload.json"
         });
-        let err = validate_and_transform(&ExecutionBackendType::Http, &config, &HashMap::new(), "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Http,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("mutually exclusive"));
     }
 
@@ -351,7 +375,8 @@ mod tests {
             "body_from_input": "payload.json"
         });
         let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::Http, &config, &files, "test_node").unwrap();
+            validate_and_transform(&ExecutionBackendType::Http, &config, &files, "test_node")
+                .unwrap();
         assert_eq!(inputs.len(), 1);
     }
 
@@ -363,9 +388,14 @@ mod tests {
             "prompt": "describe",
             "images": [{"path": "diagram.png"}]
         });
-        let err = validate_and_transform(&ExecutionBackendType::Llm, &config, &HashMap::new(), "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Llm,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("images[0].path"));
         assert!(err.contains("'diagram.png'"));
     }
@@ -377,9 +407,14 @@ mod tests {
             "model": "",
             "prompt": "hi"
         });
-        let err = validate_and_transform(&ExecutionBackendType::Llm, &config, &HashMap::new(), "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Llm,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("model is required"));
     }
 
@@ -388,9 +423,14 @@ mod tests {
         let mut files = HashMap::new();
         files.insert("other.pdf".to_string(), raw(""));
         let config = json!({"mode": "single", "file": "missing.pdf"});
-        let err = validate_and_transform(&ExecutionBackendType::Kreuzberg, &config, &files, "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Kreuzberg,
+            &config,
+            &files,
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("kreuzberg config: file"));
         assert!(err.contains("'missing.pdf'"));
     }
@@ -398,19 +438,28 @@ mod tests {
     #[test]
     fn kreuzberg_rejects_empty_files() {
         let config = json!({"mode": "single"});
-        let err =
-            validate_and_transform(&ExecutionBackendType::Kreuzberg, &config, &HashMap::new(), "test_node")
-                .unwrap_err()
-                .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::Kreuzberg,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("no files"));
     }
 
     #[test]
     fn file_ops_validates_operation_tag() {
         let bad = json!({"op": "stat"});
-        let err = validate_and_transform(&ExecutionBackendType::FileOps, &bad, &HashMap::new(), "test_node")
-            .unwrap_err()
-            .to_string();
+        let err = validate_and_transform(
+            &ExecutionBackendType::FileOps,
+            &bad,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("invalid file_ops config"));
     }
 
@@ -421,9 +470,13 @@ mod tests {
             "path": "data/x.csv",
             "storage": {"backend": "local", "endpoint": "/tmp"}
         });
-        let (_, inputs) =
-            validate_and_transform(&ExecutionBackendType::FileOps, &config, &HashMap::new(), "test_node")
-                .unwrap();
+        let (_, inputs) = validate_and_transform(
+            &ExecutionBackendType::FileOps,
+            &config,
+            &HashMap::new(),
+            "test_node",
+        )
+        .unwrap();
         assert!(inputs.is_empty());
     }
 
@@ -449,7 +502,10 @@ mod tests {
         .unwrap_err();
         match err {
             CompileError::BackendPlaceholderSyntax {
-                node_id, backend, site, body,
+                node_id,
+                backend,
+                site,
+                body,
             } => {
                 assert_eq!(node_id, "node-classify");
                 assert_eq!(backend, "llm");
@@ -530,7 +586,10 @@ mod tests {
         .unwrap_err();
         match err {
             CompileError::BackendPlaceholderSyntax {
-                node_id, backend, site, body,
+                node_id,
+                backend,
+                site,
+                body,
             } => {
                 assert_eq!(node_id, "ocr");
                 assert_eq!(backend, "kreuzberg");
@@ -554,14 +613,21 @@ mod tests {
 
     #[test]
     fn smtp_minimal_config_compiles() {
-        let (canonical, inputs) =
-            validate_and_transform(&ExecutionBackendType::Smtp, &smtp_minimal_config(), &HashMap::new(), "send")
-                .unwrap();
+        let (canonical, inputs) = validate_and_transform(
+            &ExecutionBackendType::Smtp,
+            &smtp_minimal_config(),
+            &HashMap::new(),
+            "send",
+        )
+        .unwrap();
         // SMTP doesn't pull node files for templates (they're embedded);
         // attachments would be the only InputDeclaration source — none here.
         assert!(inputs.is_empty());
         // Canonical re-serialization preserves the inline source strings.
-        assert_eq!(canonical["subject"]["source"], "Welcome, {{ intake.name }}!");
+        assert_eq!(
+            canonical["subject"]["source"],
+            "Welcome, {{ intake.name }}!"
+        );
         assert_eq!(canonical["body_text"]["label"], "body.txt.tera");
         assert_eq!(canonical["resource_alias"], "mail");
     }
@@ -570,9 +636,10 @@ mod tests {
     fn smtp_rejects_missing_recipients() {
         let mut cfg = smtp_minimal_config();
         cfg["to"] = json!([]);
-        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
-            .unwrap_err()
-            .to_string();
+        let err =
+            validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("at least one recipient"), "got: {err}");
     }
 
@@ -580,22 +647,21 @@ mod tests {
     fn smtp_rejects_missing_body() {
         let mut cfg = smtp_minimal_config();
         cfg.as_object_mut().unwrap().remove("body_text");
-        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("body_text or body_html"),
-            "got: {err}"
-        );
+        let err =
+            validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("body_text or body_html"), "got: {err}");
     }
 
     #[test]
     fn smtp_rejects_empty_subject_source() {
         let mut cfg = smtp_minimal_config();
         cfg["subject"]["source"] = json!("");
-        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
-            .unwrap_err()
-            .to_string();
+        let err =
+            validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("subject"), "got: {err}");
     }
 
@@ -604,11 +670,15 @@ mod tests {
         let mut cfg = smtp_minimal_config();
         // `{{ user.name + 1 }}` is not a valid dotted-path placeholder.
         cfg["subject"]["source"] = json!("Hi {{ user.name + 1 }}");
-        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
-            .unwrap_err();
+        let err =
+            validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+                .unwrap_err();
         match err {
             CompileError::BackendPlaceholderSyntax {
-                node_id, backend, site, ..
+                node_id,
+                backend,
+                site,
+                ..
             } => {
                 assert_eq!(node_id, "send");
                 assert_eq!(backend, "smtp");
@@ -622,8 +692,9 @@ mod tests {
     fn smtp_rejects_malformed_placeholder_in_recipient() {
         let mut cfg = smtp_minimal_config();
         cfg["to"] = json!(["{{ user.name + 1 }}"]);
-        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
-            .unwrap_err();
+        let err =
+            validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+                .unwrap_err();
         match err {
             CompileError::BackendPlaceholderSyntax { site, .. } => {
                 assert!(site.starts_with("to["), "site was {site}");
@@ -639,9 +710,10 @@ mod tests {
             { "filename": "a.pdf", "input_name": "_att_0" },
             { "filename": "b.pdf", "input_name": "_att_0" }, // duplicate
         ]);
-        let err = validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
-            .unwrap_err()
-            .to_string();
+        let err =
+            validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+                .unwrap_err()
+                .to_string();
         assert!(err.contains("duplicate attachment"), "got: {err}");
     }
 }

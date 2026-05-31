@@ -25,9 +25,7 @@ impl TomlExtractor {
             toml_crate::Value::Float(_) => DataType::Float64,
             toml_crate::Value::String(_) | toml_crate::Value::Datetime(_) => DataType::String,
             toml_crate::Value::Array(_) => DataType::List(Box::new(DataType::String)),
-            toml_crate::Value::Table(_) => {
-                DataType::Struct(vec![])
-            }
+            toml_crate::Value::Table(_) => DataType::Struct(vec![]),
         }
     }
 
@@ -47,9 +45,7 @@ impl TomlExtractor {
 
     fn count_tables(val: &toml_crate::Value) -> usize {
         match val {
-            toml_crate::Value::Table(t) => {
-                1 + t.values().map(Self::count_tables).sum::<usize>()
-            }
+            toml_crate::Value::Table(t) => 1 + t.values().map(Self::count_tables).sum::<usize>(),
             toml_crate::Value::Array(arr) => arr.iter().map(Self::count_tables).sum(),
             _ => 0,
         }
@@ -70,11 +66,13 @@ impl MetadataExtractor for TomlExtractor {
         })?;
 
         let table: toml_crate::Table =
-            content.parse().map_err(|e: toml_crate::de::Error| MetadataError::ParseError {
-                format: "toml".into(),
-                path: path.to_path_buf(),
-                message: e.to_string(),
-            })?;
+            content
+                .parse()
+                .map_err(|e: toml_crate::de::Error| MetadataError::ParseError {
+                    format: "toml".into(),
+                    path: path.to_path_buf(),
+                    message: e.to_string(),
+                })?;
 
         let root = toml_crate::Value::Table(table.clone());
         let max_depth = Self::measure_depth(&root);
@@ -83,32 +81,14 @@ impl MetadataExtractor for TomlExtractor {
 
         // Check for array-of-tables pattern: a top-level key whose value is
         // an array of tables (like [[items]] in TOML).
-        let (column_names, columns, num_rows) =
-            if let Some((_, toml_crate::Value::Array(arr))) = table.iter().find(|(_, v)| {
-                matches!(v, toml_crate::Value::Array(a) if a.iter().all(|x| x.is_table()))
-            }) {
-                // Tabular mode: use first table's keys as columns.
-                if let Some(toml_crate::Value::Table(first)) = arr.first() {
-                    let names: Vec<String> = first.keys().cloned().collect();
-                    let cols: Vec<ColumnInfo> = first
-                        .iter()
-                        .map(|(k, v)| ColumnInfo {
-                            name: k.clone(),
-                            data_type: Self::value_type(v),
-                            nullable: false,
-                            metadata: Default::default(),
-                            statistics: None,
-                            classifications: vec![],
-                        })
-                        .collect();
-                    (names, cols, Some(arr.len() as u64))
-                } else {
-                    (vec![], vec![], Some(0))
-                }
-            } else {
-                // Flat mode: top-level keys as columns, single row.
-                let names: Vec<String> = table.keys().cloned().collect();
-                let cols: Vec<ColumnInfo> = table
+        let (column_names, columns, num_rows) = if let Some((_, toml_crate::Value::Array(arr))) =
+            table.iter().find(
+                |(_, v)| matches!(v, toml_crate::Value::Array(a) if a.iter().all(|x| x.is_table())),
+            ) {
+            // Tabular mode: use first table's keys as columns.
+            if let Some(toml_crate::Value::Table(first)) = arr.first() {
+                let names: Vec<String> = first.keys().cloned().collect();
+                let cols: Vec<ColumnInfo> = first
                     .iter()
                     .map(|(k, v)| ColumnInfo {
                         name: k.clone(),
@@ -119,9 +99,27 @@ impl MetadataExtractor for TomlExtractor {
                         classifications: vec![],
                     })
                     .collect();
-                let n = if cols.is_empty() { None } else { Some(1) };
-                (names, cols, n)
-            };
+                (names, cols, Some(arr.len() as u64))
+            } else {
+                (vec![], vec![], Some(0))
+            }
+        } else {
+            // Flat mode: top-level keys as columns, single row.
+            let names: Vec<String> = table.keys().cloned().collect();
+            let cols: Vec<ColumnInfo> = table
+                .iter()
+                .map(|(k, v)| ColumnInfo {
+                    name: k.clone(),
+                    data_type: Self::value_type(v),
+                    nullable: false,
+                    metadata: Default::default(),
+                    statistics: None,
+                    classifications: vec![],
+                })
+                .collect();
+            let n = if cols.is_empty() { None } else { Some(1) };
+            (names, cols, n)
+        };
 
         let num_columns = if columns.is_empty() {
             None

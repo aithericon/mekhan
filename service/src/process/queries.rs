@@ -21,12 +21,7 @@ const PROCESS_FILTER_FIELDS: &[&str] = &[
 ];
 
 /// Allowed sort fields for hpi_processes (whitelist).
-const PROCESS_SORT_FIELDS: &[&str] = &[
-    "created_at",
-    "updated_at",
-    "name",
-    "status",
-];
+const PROCESS_SORT_FIELDS: &[&str] = &["created_at", "updated_at", "name", "status"];
 
 /// Allowed filter fields for hpi_tasks (whitelist).
 const TASK_FILTER_FIELDS: &[&str] = &[
@@ -40,27 +35,13 @@ const TASK_FILTER_FIELDS: &[&str] = &[
 ];
 
 /// Allowed sort fields for hpi_tasks (whitelist).
-const TASK_SORT_FIELDS: &[&str] = &[
-    "created_at",
-    "completed_at",
-    "title",
-    "status",
-];
+const TASK_SORT_FIELDS: &[&str] = &["created_at", "completed_at", "title", "status"];
 
 /// Allowed filter fields for hpi_logs (whitelist).
-const LOG_FILTER_FIELDS: &[&str] = &[
-    "process_id",
-    "level",
-    "source",
-    "timestamp",
-];
+const LOG_FILTER_FIELDS: &[&str] = &["process_id", "level", "source", "timestamp"];
 
 /// Allowed sort fields for hpi_logs (whitelist).
-const LOG_SORT_FIELDS: &[&str] = &[
-    "timestamp",
-    "level",
-    "source",
-];
+const LOG_SORT_FIELDS: &[&str] = &["timestamp", "level", "source"];
 
 /// List processes with full filter/sort/pagination support.
 pub async fn list_processes(
@@ -88,9 +69,7 @@ pub async fn list_processes(
 
         builder::build_pagination(&mut qb, &params.page);
 
-        qb.build_query_as::<HpiProcess>()
-            .fetch_all(pool)
-            .await?
+        qb.build_query_as::<HpiProcess>().fetch_all(pool).await?
     };
 
     Ok(Paginated::new(entries, count, &params.page))
@@ -145,12 +124,10 @@ pub async fn get_process(
     pool: &PgPool,
     process_id: &str,
 ) -> Result<Option<HpiProcess>, sqlx::Error> {
-    sqlx::query_as::<_, HpiProcess>(
-        "SELECT * FROM hpi_processes WHERE process_id = $1",
-    )
-    .bind(process_id)
-    .fetch_optional(pool)
-    .await
+    sqlx::query_as::<_, HpiProcess>("SELECT * FROM hpi_processes WHERE process_id = $1")
+        .bind(process_id)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Get full process detail: process + tasks + recent metrics + recent logs + artifact count.
@@ -233,9 +210,7 @@ pub async fn list_tasks(
 
         builder::build_pagination(&mut qb, &params.page);
 
-        qb.build_query_as::<HpiTask>()
-            .fetch_all(pool)
-            .await?
+        qb.build_query_as::<HpiTask>().fetch_all(pool).await?
     };
 
     Ok(Paginated::new(entries, count, &params.page))
@@ -282,16 +257,11 @@ fn append_task_where(
 }
 
 /// Get a single task by id.
-pub async fn get_task(
-    pool: &PgPool,
-    id: &str,
-) -> Result<Option<HpiTask>, sqlx::Error> {
-    sqlx::query_as::<_, HpiTask>(
-        "SELECT * FROM hpi_tasks WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
+pub async fn get_task(pool: &PgPool, id: &str) -> Result<Option<HpiTask>, sqlx::Error> {
+    sqlx::query_as::<_, HpiTask>("SELECT * FROM hpi_tasks WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Update a task's status and completed_at timestamp.
@@ -395,7 +365,9 @@ pub async fn list_logs(
 ) -> Result<Paginated<HpiLog>, QueryError> {
     // -- COUNT query --
     let count = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM hpi_logs WHERE process_id = ");
+        let mut qb = QueryBuilder::<Postgres>::new(
+            "SELECT COUNT(*)::bigint FROM hpi_logs WHERE process_id = ",
+        );
         qb.push_bind(process_id.to_string());
         append_log_where(&mut qb, params)?;
         let row: (i64,) = qb.build_query_as().fetch_one(pool).await?;
@@ -416,9 +388,7 @@ pub async fn list_logs(
 
         builder::build_pagination(&mut qb, &params.page);
 
-        qb.build_query_as::<HpiLog>()
-            .fetch_all(pool)
-            .await?
+        qb.build_query_as::<HpiLog>().fetch_all(pool).await?
     };
 
     Ok(Paginated::new(entries, count, &params.page))
@@ -449,11 +419,10 @@ fn append_log_where(
 
 /// Aggregate process stats grouped by status.
 pub async fn process_stats(pool: &PgPool) -> Result<ProcessStats, sqlx::Error> {
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT status, COUNT(*)::bigint FROM hpi_processes GROUP BY status",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT status, COUNT(*)::bigint FROM hpi_processes GROUP BY status")
+            .fetch_all(pool)
+            .await?;
 
     let mut stats = ProcessStats {
         total: 0,
@@ -507,10 +476,20 @@ pub async fn list_process_artifacts(
 ) -> Result<Paginated<CatalogueEntry>, QueryError> {
     // Reuse catalogue's allowed fields for filter/sort
     const ARTIFACT_FILTER_FIELDS: &[&str] = &[
-        "id", "name", "category", "filename", "mime_type", "created_at", "catalogued_at",
+        "id",
+        "name",
+        "category",
+        "filename",
+        "mime_type",
+        "created_at",
+        "catalogued_at",
     ];
     const ARTIFACT_SORT_FIELDS: &[&str] = &[
-        "name", "category", "size_bytes", "created_at", "catalogued_at",
+        "name",
+        "category",
+        "size_bytes",
+        "created_at",
+        "catalogued_at",
     ];
 
     // -- COUNT query --
@@ -519,12 +498,14 @@ pub async fn list_process_artifacts(
             "SELECT COUNT(*)::bigint FROM catalogue_entries WHERE (process_id = ",
         );
         qb.push_bind(process_id.to_string());
-        qb.push(" OR signal_key IN (\
+        qb.push(
+            " OR signal_key IN (\
             SELECT cl.signal_key FROM causality_cross_links cl \
             JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
               AND et.event_seq = cl.egress_seq \
             JOIN causality_process_tags pt ON pt.token_id = et.token_id \
-            WHERE pt.process_id = ");
+            WHERE pt.process_id = ",
+        );
         qb.push_bind(process_id.to_string());
         qb.push("))");
         if let Some(ref filter) = params.filter {
@@ -539,16 +520,17 @@ pub async fn list_process_artifacts(
 
     // -- SELECT query --
     let entries = {
-        let mut qb = QueryBuilder::<Postgres>::new(
-            "SELECT * FROM catalogue_entries WHERE (process_id = ",
-        );
+        let mut qb =
+            QueryBuilder::<Postgres>::new("SELECT * FROM catalogue_entries WHERE (process_id = ");
         qb.push_bind(process_id.to_string());
-        qb.push(" OR signal_key IN (\
+        qb.push(
+            " OR signal_key IN (\
             SELECT cl.signal_key FROM causality_cross_links cl \
             JOIN causality_event_tokens et ON et.net_id = cl.egress_net \
               AND et.event_seq = cl.egress_seq \
             JOIN causality_process_tags pt ON pt.token_id = et.token_id \
-            WHERE pt.process_id = ");
+            WHERE pt.process_id = ",
+        );
         qb.push_bind(process_id.to_string());
         qb.push("))");
         if let Some(ref filter) = params.filter {

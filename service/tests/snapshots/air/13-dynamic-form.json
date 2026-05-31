@@ -404,7 +404,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -511,7 +511,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -676,7 +676,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",
@@ -845,7 +845,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -952,7 +952,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -1117,7 +1117,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",

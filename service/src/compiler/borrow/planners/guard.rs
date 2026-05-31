@@ -533,8 +533,7 @@ pub(crate) fn check_guard(
                 // Opportunistic scalar/comparison type check on the resolved
                 // producer field (same as the control branch, one hop away).
                 if let (Some(shape), Some(lit)) = (node_out.get(&producer_id), &gref.lit) {
-                    let segs: Vec<String> =
-                        producer_path.split('.').map(str::to_string).collect();
+                    let segs: Vec<String> = producer_path.split('.').map(str::to_string).collect();
                     if let Some((TokenShape::Scalar(ty), _)) = shape.resolve(&segs) {
                         if !scalar_satisfies(ty, lit) {
                             out.push(ShapeDiagnostic::GuardTypeMismatch {
@@ -587,9 +586,7 @@ pub(crate) struct ReadArcBind {
 /// data token holds the value and emits the `&`-borrow plan. A reference that
 /// no upstream data-yielding node produces *and* isn't on the pre-yield
 /// control token is a hard `CompileError`.
-pub(crate) fn guard_readarc_plan(
-    graph: &WorkflowGraph,
-) -> Result<Vec<ReadArcBind>, CompileError> {
+pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBind>, CompileError> {
     let report = analyze(graph)?;
     let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
     let mut binds = Vec::new();
@@ -713,15 +710,7 @@ pub(crate) fn guard_readarc_plan(
         let in_shape = report.node_in.get(&node.id);
         for guard in &guards {
             for gref in guard_refs(guard) {
-                match resolve_ref(
-                    &gref,
-                    node,
-                    &slugs,
-                    graph,
-                    in_shape,
-                    &report.node_out,
-                    &pos,
-                ) {
+                match resolve_ref(&gref, node, &slugs, graph, in_shape, &report.node_out, &pos) {
                     // Control-resident — stays on the slim control token, no
                     // read-arc.
                     RefResolution::Control => {}
@@ -814,4 +803,3 @@ impl BorrowSource for GuardSource {
         Ok(out)
     }
 }
-

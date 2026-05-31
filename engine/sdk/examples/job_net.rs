@@ -97,17 +97,18 @@ fn definition(ctx: &mut Context, bridged: bool, upstream: &str) {
     let dead_letter = ctx.state::<DeadLetter>("dead_letter", "Dead Letter");
 
     // Typed reply inboxes — separate, strongly-typed places for results and failures.
-    let result_inbox =
-        ctx.bridge_reply::<SchedulerJobResult>("result_inbox", "Result Inbox");
-    let failure_inbox =
-        ctx.bridge_reply::<SchedulerJobFailure>("failure_inbox", "Failure Inbox");
+    let result_inbox = ctx.bridge_reply::<SchedulerJobResult>("result_inbox", "Result Inbox");
+    let failure_inbox = ctx.bridge_reply::<SchedulerJobFailure>("failure_inbox", "Failure Inbox");
 
     // Typed connector — wires up bridge_out to scheduler-net with named reply channels.
     // Compile error if you forget a channel or use the wrong type.
-    let to_scheduler = connect_to_scheduler(ctx, SchedulerReply {
-        result: &result_inbox,
-        failure: &failure_inbox,
-    });
+    let to_scheduler = connect_to_scheduler(
+        ctx,
+        SchedulerReply {
+            result: &result_inbox,
+            failure: &failure_inbox,
+        },
+    );
 
     // ── Seed data (standalone mode only) ──────────────────────────────────
 
@@ -191,9 +192,7 @@ fn definition(ctx: &mut Context, bridged: bool, upstream: &str) {
         ctx.transition("retry", "Retry Failed Job")
             .auto_input("fail", &failure_inbox)
             .auto_input("pending", &pending_result)
-            .guard(
-                r#"fail.job_id == pending.job_id && pending.retries < pending.max_retries"#,
-            )
+            .guard(r#"fail.job_id == pending.job_id && pending.retries < pending.max_retries"#)
             .auto_output("job", &job_queue)
             .logic(
                 r#"#{
@@ -212,9 +211,7 @@ fn definition(ctx: &mut Context, bridged: bool, upstream: &str) {
         ctx.transition("dead_letter", "Dead Letter")
             .auto_input("fail", &failure_inbox)
             .auto_input("pending", &pending_result)
-            .guard(
-                r#"fail.job_id == pending.job_id && pending.retries >= pending.max_retries"#,
-            )
+            .guard(r#"fail.job_id == pending.job_id && pending.retries >= pending.max_retries"#)
             .auto_output("dead", &dead_letter)
             .logic(
                 r#"#{

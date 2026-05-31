@@ -54,7 +54,11 @@ pub enum MembershipError {
 }
 
 /// Return the user's role in the given workspace, or `NotMember` if absent.
-pub async fn member_role(db: &PgPool, user: &AuthUser, workspace_id: Uuid) -> Result<Role, MembershipError> {
+pub async fn member_role(
+    db: &PgPool,
+    user: &AuthUser,
+    workspace_id: Uuid,
+) -> Result<Role, MembershipError> {
     let user_id = user.subject_as_uuid();
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
@@ -86,7 +90,11 @@ pub async fn require_role(
 
 /// Convenience: `require_role(..., Role::Viewer)` — the basic read-membership
 /// check used by GET / list endpoints scoped to a workspace.
-pub async fn require_member(db: &PgPool, user: &AuthUser, workspace_id: Uuid) -> Result<Role, MembershipError> {
+pub async fn require_member(
+    db: &PgPool,
+    user: &AuthUser,
+    workspace_id: Uuid,
+) -> Result<Role, MembershipError> {
     require_role(db, user, workspace_id, Role::Viewer).await
 }
 
@@ -99,13 +107,16 @@ const VISIBILITY_PUBLIC: &str = "public";
 /// is `visibility = 'public'` OR the user is a member of the template's
 /// workspace. Errors when the template doesn't exist; callers translate
 /// that to 404.
-pub async fn can_read_template(db: &PgPool, user: &AuthUser, template_id: Uuid) -> Result<bool, MembershipError> {
-    let row: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT workspace_id, visibility FROM workflow_templates WHERE id = $1",
-    )
-    .bind(template_id)
-    .fetch_optional(db)
-    .await?;
+pub async fn can_read_template(
+    db: &PgPool,
+    user: &AuthUser,
+    template_id: Uuid,
+) -> Result<bool, MembershipError> {
+    let row: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT workspace_id, visibility FROM workflow_templates WHERE id = $1")
+            .bind(template_id)
+            .fetch_optional(db)
+            .await?;
 
     let (workspace_id, visibility) = row.ok_or(MembershipError::TemplateNotFound(template_id))?;
 
@@ -129,7 +140,8 @@ pub async fn template_workspace(db: &PgPool, template_id: Uuid) -> Result<Uuid, 
             .bind(template_id)
             .fetch_optional(db)
             .await?;
-    row.map(|(w,)| w).ok_or(MembershipError::TemplateNotFound(template_id))
+    row.map(|(w,)| w)
+        .ok_or(MembershipError::TemplateNotFound(template_id))
 }
 
 /// Fused lookup for the petri proxy hot path: given an engine `net_id`,
@@ -162,9 +174,7 @@ pub async fn instance_workspace(
 /// don't re-paste the 8-line pattern.
 pub fn map_to_api_error(err: MembershipError) -> ApiError {
     match err {
-        MembershipError::NotMember(_) => {
-            ApiError::forbidden("not a member of this workspace")
-        }
+        MembershipError::NotMember(_) => ApiError::forbidden("not a member of this workspace"),
         MembershipError::InsufficientRole { need, .. } => {
             ApiError::forbidden(format!("{:?} role required", need).to_lowercase())
         }

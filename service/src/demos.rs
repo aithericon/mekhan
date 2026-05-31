@@ -265,12 +265,11 @@ fn read_tests_dir(tests_dir: &Path) -> Result<Vec<LoadedTest>, DemoLoadError> {
             path: path.clone(),
             source: e,
         })?;
-        let test: LoadedTest = serde_json::from_slice(&bytes).map_err(|e| {
-            DemoLoadError::TestSidecarParse {
+        let test: LoadedTest =
+            serde_json::from_slice(&bytes).map_err(|e| DemoLoadError::TestSidecarParse {
                 path: path.clone(),
                 source: e,
-            }
-        })?;
+            })?;
         out.push(test);
     }
     Ok(out)
@@ -287,10 +286,7 @@ const TASK_SIDECAR_FILENAME: &str = "task.json";
 /// a clear "you forgot the sidecar" failure mode). A sidecar for a node
 /// that isn't a HumanTask (or doesn't exist) is a hard error here so
 /// typos surface at load time, not at publish.
-fn merge_task_sidecars(
-    nodes_dir: &Path,
-    graph: &mut WorkflowGraph,
-) -> Result<(), DemoLoadError> {
+fn merge_task_sidecars(nodes_dir: &Path, graph: &mut WorkflowGraph) -> Result<(), DemoLoadError> {
     use crate::models::template::{TaskStepConfig, WorkflowNodeData};
 
     if !nodes_dir.is_dir() {
@@ -330,9 +326,7 @@ fn merge_task_sidecars(
         let node = graph.nodes.iter_mut().find(|n| n.id == node_id);
         match node {
             Some(n) => match &mut n.data {
-                WorkflowNodeData::HumanTask {
-                    steps: target, ..
-                } => {
+                WorkflowNodeData::HumanTask { steps: target, .. } => {
                     *target = steps;
                 }
                 _ => {
@@ -392,10 +386,12 @@ fn read_node_files(
                 path: entry.path(),
                 source: e,
             })?;
-            let ft = file_entry.file_type().map_err(|e| DemoLoadError::NodeFile {
-                path: file_entry.path(),
-                source: e,
-            })?;
+            let ft = file_entry
+                .file_type()
+                .map_err(|e| DemoLoadError::NodeFile {
+                    path: file_entry.path(),
+                    source: e,
+                })?;
             if !ft.is_file() {
                 continue;
             }
@@ -409,11 +405,12 @@ fn read_node_files(
             if filename == TASK_SIDECAR_FILENAME {
                 continue;
             }
-            let content =
-                std::fs::read_to_string(file_entry.path()).map_err(|e| DemoLoadError::NodeFile {
+            let content = std::fs::read_to_string(file_entry.path()).map_err(|e| {
+                DemoLoadError::NodeFile {
                     path: file_entry.path(),
                     source: e,
-                })?;
+                }
+            })?;
             node_files.insert(filename, content);
         }
 
@@ -484,7 +481,9 @@ pub enum DemoSeedError {
     InvalidOwnerTemplateId(String),
     #[error("visibility `{0}` is invalid — must be `workspace`, `public`, or `private`")]
     InvalidVisibility(String),
-    #[error("visibility `private` requires `ownerTemplateId` (the embedding parent demo's templateId)")]
+    #[error(
+        "visibility `private` requires `ownerTemplateId` (the embedding parent demo's templateId)"
+    )]
     PrivateMissingOwner,
     #[error("`ownerTemplateId` is only valid with `visibility: private`")]
     OwnerOnNonPrivate,
@@ -516,8 +515,7 @@ pub enum SeedOutcome {
 /// `00000000-0000-0000-0000-000000000aaa` — chosen to be obviously
 /// non-Zitadel (real user subjects are random v4 UUIDs) and to sort
 /// distinctly from the nil UUID some test fixtures use.
-const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
-    uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
+const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
 
 /// Workspace that seeded demos belong to: the **default** workspace
 /// (`Uuid::nil()`, slug `default`), NOT the system-owned `demos` workspace.
@@ -580,9 +578,7 @@ async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, Demo
 /// [`DEMO_SEEDER_AUTHOR_ID`], which never flows through the BFF
 /// `ensure_default_workspace_membership` path that real users do — cannot
 /// resolve any workspace resource a demo references. Idempotent.
-async fn ensure_seeder_workspace_membership(
-    state: &crate::AppState,
-) -> Result<(), sqlx::Error> {
+async fn ensure_seeder_workspace_membership(state: &crate::AppState) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
          VALUES ($1, $2, 'owner') \
@@ -752,10 +748,7 @@ pub async fn seed_all(
 
 /// Seed one demo directory. Idempotent — see [`seed_all`] for the
 /// existence check semantics.
-pub async fn seed_one(
-    state: &crate::AppState,
-    dir: &Path,
-) -> Result<SeedOutcome, DemoSeedError> {
+pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome, DemoSeedError> {
     let demo = load_demo(dir)?;
     let template_id: uuid::Uuid = demo
         .metadata
@@ -979,9 +972,7 @@ pub struct DemoResetReport {
 /// (template_tests has no FK to cascade, so it is deleted explicitly).
 ///
 /// Idempotent: a second call finds nothing and returns a zeroed report.
-pub async fn purge_seeded(
-    state: &crate::AppState,
-) -> Result<DemoResetReport, DemoSeedError> {
+pub async fn purge_seeded(state: &crate::AppState) -> Result<DemoResetReport, DemoSeedError> {
     let mut report = DemoResetReport::default();
 
     // Family base ids. Seeded v1 rows set `base_template_id = id`, so COALESCE
@@ -1122,7 +1113,9 @@ mod tests {
             .get("extract")
             .expect("extract node must have files");
         assert!(
-            extract.get("main.py").is_some_and(|s| s.contains("set_output")),
+            extract
+                .get("main.py")
+                .is_some_and(|s| s.contains("set_output")),
             "extract/main.py must be loaded with the SDK calls intact"
         );
 
@@ -1178,9 +1171,7 @@ mod tests {
     /// `MEKHAN__DEMOS__SEED=true` startup time on a developer's machine.
     #[test]
     fn invoice_processing_demo_compiles_with_repeater() {
-        use crate::compiler::{
-            compile_to_air, node_files_inline,
-        };
+        use crate::compiler::{compile_to_air, node_files_inline};
         use crate::models::template::{TaskBlockConfig, WorkflowNodeData};
 
         let demo = load_demo(&repo_root().join("demos/invoice-processing"))
@@ -1235,8 +1226,7 @@ mod tests {
     fn document_pipeline_v1_join_node_round_trips() {
         use crate::models::template::{JoinMode, WorkflowGraph, WorkflowNodeData};
 
-        let graph_path =
-            repo_root().join("demos/document-pipeline-v1/graph.json");
+        let graph_path = repo_root().join("demos/document-pipeline-v1/graph.json");
         let raw = std::fs::read_to_string(&graph_path).expect("graph.json must exist");
         let graph: WorkflowGraph =
             serde_json::from_str(&raw).expect("graph.json must deserialize as WorkflowGraph");
@@ -1618,8 +1608,8 @@ mod tests {
         };
 
         let root = repo_root().join("demos");
-        let demo = load_demo(&root.join("09-agent-tool-loop"))
-            .expect("09-agent-tool-loop must load");
+        let demo =
+            load_demo(&root.join("09-agent-tool-loop")).expect("09-agent-tool-loop must load");
         assert_eq!(demo.metadata.name, "09 · Agent + Tool Loop");
         assert_eq!(
             demo.metadata.template_id,
@@ -1752,7 +1742,9 @@ mod tests {
                 ..Default::default()
             },
         )
-        .unwrap_or_else(|e| panic!("email-welcome must compile to AIR with known resources: {e:?}"));
+        .unwrap_or_else(|e| {
+            panic!("email-welcome must compile to AIR with known resources: {e:?}")
+        });
 
         let send_prepare = air
             .get("transitions")
@@ -1878,9 +1870,17 @@ mod tests {
                 .find(|n| n.id == id)
                 .and_then(|n| n.slug.clone())
         };
-        assert_eq!(slug_of("lp").as_deref(), Some("bo"), "loop slug must be `bo`");
+        assert_eq!(
+            slug_of("lp").as_deref(),
+            Some("bo"),
+            "loop slug must be `bo`"
+        );
         assert_eq!(slug_of("propose").as_deref(), Some("propose"));
-        assert_eq!(slug_of("mp").as_deref(), Some("evals"), "map slug must be `evals`");
+        assert_eq!(
+            slug_of("mp").as_deref(),
+            Some("evals"),
+            "map slug must be `evals`"
+        );
         assert_eq!(slug_of("branin").as_deref(), Some("branin"));
         assert_eq!(slug_of("gather").as_deref(), Some("gather"));
 
@@ -1904,7 +1904,11 @@ mod tests {
         }
         // The Map body lives inside the Loop body (Map-in-Loop): `mp`'s parent
         // is the loop, `branin`'s parent is the map.
-        assert_eq!(mp.parent_id.as_deref(), Some("lp"), "Map nests in the Loop body");
+        assert_eq!(
+            mp.parent_id.as_deref(),
+            Some("lp"),
+            "Map nests in the Loop body"
+        );
 
         // The Loop carries five accumulators, none reserved-named. `budget`
         // captures `input.max_iterations` at enter and is carried constant, so
@@ -1967,8 +1971,7 @@ mod tests {
     fn bo_loop_demo_compiles() {
         use crate::compiler::{compile_to_air_with_options, node_files_inline, CompileOptions};
 
-        let demo = load_demo(&repo_root().join("demos/12-bo-loop"))
-            .expect("12-bo-loop must load");
+        let demo = load_demo(&repo_root().join("demos/12-bo-loop")).expect("12-bo-loop must load");
 
         let files = node_files_inline(&demo.files);
         compile_to_air_with_options(
@@ -2049,8 +2052,10 @@ mod tests {
                     }
                     other => panic!("trigger source must be Catalog, got {other:?}"),
                 }
-                let targets: Vec<&str> =
-                    payload_mapping.iter().map(|m| m.target_field.as_str()).collect();
+                let targets: Vec<&str> = payload_mapping
+                    .iter()
+                    .map(|m| m.target_field.as_str())
+                    .collect();
                 assert_eq!(
                     targets,
                     ["observations", "last_z"],
@@ -2120,19 +2125,58 @@ mod tests {
     fn learning_path_demos_all_load() {
         let root = repo_root().join("demos");
         for (dir_name, expected_id, expected_name) in [
-            ("01-hello-world",      "00000000-0000-0000-0000-000000000011", "01 · Hello World"),
-            ("02-human-form",       "00000000-0000-0000-0000-000000000012", "02 · Human Form"),
-            ("03-decision-routing", "00000000-0000-0000-0000-000000000013", "03 · Decision Routing"),
-            ("04-loop-counter",     "00000000-0000-0000-0000-000000000014", "04 · Loop Counter"),
-            ("05-parallel-fanout",  "00000000-0000-0000-0000-000000000015", "05 · Parallel Fanout"),
-            ("06-subworkflow",      "00000000-0000-0000-0000-000000000016", "06 · SubWorkflow (Flow-in-Flow)"),
-            ("07-ocr-classify-extract", "00000000-0000-0000-0000-000000000017", "07 · OCR Classify & Extract"),
-            ("08-failure-handling",     "00000000-0000-0000-0000-000000000018", "08 · Failure Handling"),
-            ("10-delay-timeout",        "00000000-0000-0000-0000-000000000021", "10 · Delay & Timeout"),
+            (
+                "01-hello-world",
+                "00000000-0000-0000-0000-000000000011",
+                "01 · Hello World",
+            ),
+            (
+                "02-human-form",
+                "00000000-0000-0000-0000-000000000012",
+                "02 · Human Form",
+            ),
+            (
+                "03-decision-routing",
+                "00000000-0000-0000-0000-000000000013",
+                "03 · Decision Routing",
+            ),
+            (
+                "04-loop-counter",
+                "00000000-0000-0000-0000-000000000014",
+                "04 · Loop Counter",
+            ),
+            (
+                "05-parallel-fanout",
+                "00000000-0000-0000-0000-000000000015",
+                "05 · Parallel Fanout",
+            ),
+            (
+                "06-subworkflow",
+                "00000000-0000-0000-0000-000000000016",
+                "06 · SubWorkflow (Flow-in-Flow)",
+            ),
+            (
+                "07-ocr-classify-extract",
+                "00000000-0000-0000-0000-000000000017",
+                "07 · OCR Classify & Extract",
+            ),
+            (
+                "08-failure-handling",
+                "00000000-0000-0000-0000-000000000018",
+                "08 · Failure Handling",
+            ),
+            (
+                "10-delay-timeout",
+                "00000000-0000-0000-0000-000000000021",
+                "10 · Delay & Timeout",
+            ),
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
-            assert_eq!(demo.metadata.template_id, expected_id, "{dir_name} templateId");
+            assert_eq!(
+                demo.metadata.template_id, expected_id,
+                "{dir_name} templateId"
+            );
             assert_eq!(demo.metadata.name, expected_name, "{dir_name} name");
         }
     }
@@ -2164,10 +2208,7 @@ mod tests {
             let air = compile_to_air(
                 &demo.graph,
                 &demo.metadata.name,
-                demo.metadata
-                    .description
-                    .as_deref()
-                    .unwrap_or(""),
+                demo.metadata.description.as_deref().unwrap_or(""),
                 &files,
             )
             .unwrap_or_else(|e| panic!("{dir_name} must compile to AIR: {e:?}"));
@@ -2468,8 +2509,8 @@ mod tests {
             let spec_json = runtime
                 .dynamic_to_json(spec_dyn)
                 .expect("spec dynamic must convert to JSON");
-            let spec: ExecutionSpec = serde_json::from_value(spec_json.clone())
-                .unwrap_or_else(|e| {
+            let spec: ExecutionSpec =
+                serde_json::from_value(spec_json.clone()).unwrap_or_else(|e| {
                     panic!(
                         "ExecutionSpec must deserialize from the prepare \
                          transition's emitted spec (regression for the \
@@ -2661,8 +2702,7 @@ mod tests {
             // serde_json::Value with the `preserve_order` feature OFF (the
             // default) sorts BTreeMap-style on serialization — keys are
             // canonical. `to_string_pretty` is stable across runs.
-            let canonical = serde_json::to_string_pretty(&air)
-                .expect("AIR must serialize");
+            let canonical = serde_json::to_string_pretty(&air).expect("AIR must serialize");
             println!("=== {dir_name} ===");
             println!("{canonical}");
             println!("=== /{dir_name} ===");
@@ -2675,8 +2715,8 @@ mod tests {
     /// demos that carry no `tests/` directory.
     #[test]
     fn hello_world_demo_carries_bundled_test() {
-        let demo = load_demo(&repo_root().join("demos/01-hello-world"))
-            .expect("01-hello-world must load");
+        let demo =
+            load_demo(&repo_root().join("demos/01-hello-world")).expect("01-hello-world must load");
         assert_eq!(demo.tests.len(), 1, "expected the hello-alice fixture");
         let test = &demo.tests[0];
         assert_eq!(test.name, "hello-alice");

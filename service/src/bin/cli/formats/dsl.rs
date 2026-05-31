@@ -88,10 +88,7 @@ impl DslWorkflow {
 
         // Convert steps to nodes
         for (key, step) in &self.steps {
-            let label = step
-                .label
-                .clone()
-                .unwrap_or_else(|| title_case(key));
+            let label = step.label.clone().unwrap_or_else(|| title_case(key));
             let data = WorkflowNodeData::from_dsl_step(key, step, &label)?;
             let (width, height) = if step.step_type == "scope" {
                 (step.width.or(Some(400.0)), step.height.or(Some(300.0)))
@@ -159,7 +156,10 @@ impl DslWorkflow {
         let mut graph = WorkflowGraph {
             nodes,
             edges,
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         // Apply decision edge labels from conditions
@@ -172,10 +172,7 @@ impl DslWorkflow {
     }
 }
 
-fn apply_decision_edge_labels(
-    graph: &mut WorkflowGraph,
-    steps: &IndexMap<String, DslStep>,
-) {
+fn apply_decision_edge_labels(graph: &mut WorkflowGraph, steps: &IndexMap<String, DslStep>) {
     for (key, step) in steps {
         if step.step_type != "decision" {
             continue;
@@ -257,9 +254,7 @@ fn build_flow_chains(edges: &[WorkflowEdge]) -> Vec<String> {
             // Follow simple (no handle) edges where the target has only 1 incoming edge
             let simple: Vec<_> = targets
                 .iter()
-                .filter(|(t, h)| {
-                    h.is_none() && !used_edges.contains(&(current, t, None))
-                })
+                .filter(|(t, h)| h.is_none() && !used_edges.contains(&(current, t, None)))
                 .collect();
 
             if simple.len() == 1 {
@@ -387,8 +382,8 @@ flow:
                     data: WorkflowNodeData::End {
                         label: "Done".to_string(),
                         description: None,
-                    terminal: mekhan_service::models::template::default_terminal_port(),
-                    result_mapping: Vec::new(),
+                        terminal: mekhan_service::models::template::default_terminal_port(),
+                        result_mapping: Vec::new(),
                     },
                     parent_id: Some("container".to_string()),
                     width: None,
@@ -404,7 +399,10 @@ flow:
                 label: None,
                 edge_type: "sequence".to_string(),
             }],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         // Convert to DSL and back
@@ -481,9 +479,15 @@ flow:
             assert_eq!(steps[0].blocks.len(), 2);
 
             // Verify image block
-            if let TaskBlockConfig::Image { filenames, display, .. } = &steps[0].blocks[0] {
+            if let TaskBlockConfig::Image {
+                filenames, display, ..
+            } = &steps[0].blocks[0]
+            {
                 assert_eq!(filenames, &["photo1.png", "photo2.jpg"]);
-                assert_eq!(*display, mekhan_service::models::template::ImageDisplay::Grid);
+                assert_eq!(
+                    *display,
+                    mekhan_service::models::template::ImageDisplay::Grid
+                );
             } else {
                 panic!("expected Image block, got {:?}", steps[0].blocks[0]);
             }
@@ -506,9 +510,7 @@ flow:
     /// interpolation placeholders, which are just opaque strings to the CLI.
     #[test]
     fn url_image_and_download_blocks_roundtrip_dsl_and_hcl() {
-        use mekhan_service::models::template::{
-            DownloadItemConfig, ImageDisplay, TaskStepConfig,
-        };
+        use mekhan_service::models::template::{DownloadItemConfig, ImageDisplay, TaskStepConfig};
 
         let graph = WorkflowGraph {
             nodes: vec![
@@ -605,7 +607,10 @@ flow:
                     edge_type: "sequence".to_string(),
                 },
             ],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         // Assert the url image + download blocks survived a round-trip,
@@ -631,7 +636,11 @@ flow:
                         Some("{{ invoice_file.url }}"),
                         "[{via}] image url placeholder lost"
                     );
-                    assert_eq!(alt.as_deref(), Some("Uploaded invoice"), "[{via}] image alt");
+                    assert_eq!(
+                        alt.as_deref(),
+                        Some("Uploaded invoice"),
+                        "[{via}] image alt"
+                    );
                     assert_eq!(
                         caption.as_deref(),
                         Some("Original document"),
@@ -672,8 +681,7 @@ flow:
             yaml.contains("{{ invoice_file.url }}"),
             "DSL yaml should carry the raw placeholder, got:\n{yaml}"
         );
-        let dsl_back: DslWorkflow =
-            serde_yaml_ng::from_str(&yaml).expect("parse dsl yaml back");
+        let dsl_back: DslWorkflow = serde_yaml_ng::from_str(&yaml).expect("parse dsl yaml back");
         let graph_dsl = dsl_back.to_workflow_graph().expect("dsl -> graph");
         assert_blocks_intact(&graph_dsl, "dsl");
 
@@ -734,7 +742,10 @@ flow:
         // Sanity: every value differs from the historical default so a
         // silent drop -> default would fail the assertions below.
         assert_ne!(custom_retry, RetryPolicy::default());
-        assert_ne!(custom_initial.fields.len(), Port::empty_input().fields.len());
+        assert_ne!(
+            custom_initial.fields.len(),
+            Port::empty_input().fields.len()
+        );
 
         let graph = WorkflowGraph {
             nodes: vec![
@@ -814,7 +825,10 @@ flow:
                     edge_type: "sequence".to_string(),
                 },
             ],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         };
 
         fn assert_fields_intact(
@@ -883,12 +897,16 @@ flow:
         // 1. Direct to/from_dsl_step (no serialization).
         let dsl = DslWorkflow::from_workflow_graph(&graph);
         let graph_direct = dsl.to_workflow_graph().expect("dsl -> graph");
-        assert_fields_intact(&graph_direct, "to/from_dsl_step", &custom_initial, &custom_retry);
+        assert_fields_intact(
+            &graph_direct,
+            "to/from_dsl_step",
+            &custom_initial,
+            &custom_retry,
+        );
 
         // 2. YAML round-trip.
         let yaml = serde_yaml_ng::to_string(&dsl).expect("serialize yaml");
-        let dsl_yaml: DslWorkflow =
-            serde_yaml_ng::from_str(&yaml).expect("parse yaml back");
+        let dsl_yaml: DslWorkflow = serde_yaml_ng::from_str(&yaml).expect("parse yaml back");
         let graph_yaml = dsl_yaml.to_workflow_graph().expect("yaml dsl -> graph");
         assert_fields_intact(&graph_yaml, "yaml", &custom_initial, &custom_retry);
 

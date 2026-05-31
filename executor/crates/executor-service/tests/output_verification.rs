@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use aithericon_executor_domain::{ExecutionStatus, InputDeclaration, InputSource, OutputDeclaration};
+use aithericon_executor_domain::{
+    ExecutionStatus, InputDeclaration, InputSource, OutputDeclaration,
+};
 use aithericon_executor_test_harness::context::ExecutorTestContext;
 use aithericon_executor_test_harness::helpers::*;
 use aithericon_executor_test_harness::ipc_client::ipc_test_client_path;

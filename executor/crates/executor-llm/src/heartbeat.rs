@@ -119,10 +119,7 @@ async fn apply_backoff(backoff: &mut u64, cancel: &CancellationToken) {
     *backoff = (*backoff * 2).min(MAX_BACKOFF_SECS);
 }
 
-async fn build_payload(
-    config: &HeartbeatConfig,
-    ollama: &OllamaSubprocess,
-) -> serde_json::Value {
+async fn build_payload(config: &HeartbeatConfig, ollama: &OllamaSubprocess) -> serde_json::Value {
     let health = if ollama.health_check().await {
         "Ready"
     } else {
@@ -189,10 +186,7 @@ async fn probe_ollama_version(ollama: &OllamaSubprocess) -> String {
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
-                json["version"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .to_string()
+                json["version"].as_str().unwrap_or("unknown").to_string()
             } else {
                 "unknown".to_string()
             }

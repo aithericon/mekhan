@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
-use crate::nats::MekhanNats;
 use super::protocol::*;
 use super::repository::CatalogueRepository;
 use super::subscriptions::SubscriptionManager;
+use crate::nats::MekhanNats;
 
 /// Start the catalogue NATS request-reply responder.
 ///
@@ -55,9 +55,7 @@ pub async fn start_catalogue_responder(
 
         tokio::spawn(async move {
             let reply_payload = if subject.starts_with("catalogue.query.") {
-                let operation = subject
-                    .strip_prefix("catalogue.query.")
-                    .unwrap_or(&subject);
+                let operation = subject.strip_prefix("catalogue.query.").unwrap_or(&subject);
 
                 match operation {
                     "list" => handle_list(&repo, &msg.payload).await,
@@ -85,10 +83,7 @@ pub async fn start_catalogue_responder(
             };
 
             if let Some(reply) = msg.reply {
-                if let Err(e) = client
-                    .publish(reply, reply_payload.into())
-                    .await
-                {
+                if let Err(e) = client.publish(reply, reply_payload.into()).await {
                     tracing::warn!(
                         subject = %subject,
                         "catalogue responder: failed to reply: {e}"
@@ -210,18 +205,15 @@ async fn handle_subscribe(
     };
 
     match sm.subscribe(req, repo.as_ref()).await {
-        Ok(subscription_id) => {
-            serde_json::to_vec(&CatalogueResponse::ok(SubscribeResponse { subscription_id }))
-                .unwrap_or_default()
-        }
+        Ok(subscription_id) => serde_json::to_vec(&CatalogueResponse::ok(SubscribeResponse {
+            subscription_id,
+        }))
+        .unwrap_or_default(),
         Err(e) => serialize_err(format!("subscribe failed: {e}")),
     }
 }
 
-async fn handle_unsubscribe(
-    sm: &Arc<SubscriptionManager>,
-    payload: &[u8],
-) -> Vec<u8> {
+async fn handle_unsubscribe(sm: &Arc<SubscriptionManager>, payload: &[u8]) -> Vec<u8> {
     let req: UnsubscribeRequest = match serde_json::from_slice(payload) {
         Ok(r) => r,
         Err(e) => return serialize_err(format!("invalid request: {e}")),

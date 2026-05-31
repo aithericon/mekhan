@@ -125,7 +125,8 @@ impl<E: EventRepository> NatsEventPublisher<E> {
                         }
                         Err(e) if attempt + 1 < max_attempts => {
                             tracing::warn!(sequence, attempt, error = %e, "NATS ack failed, retrying");
-                            tokio::time::sleep(Duration::from_millis(200 * (attempt as u64 + 1))).await;
+                            tokio::time::sleep(Duration::from_millis(200 * (attempt as u64 + 1)))
+                                .await;
                         }
                         Err(e) => {
                             tracing::warn!(sequence, error = %e, "NATS publish ack failed (final)");
@@ -343,7 +344,8 @@ impl<E: EventRepository> NatsEventPublisher<E> {
                         }
                         Err(e) if attempt + 1 < max_attempts => {
                             tracing::warn!(attempt, error = %e, target_net = %target_net, "Bridge: ack failed, retrying");
-                            tokio::time::sleep(Duration::from_millis(200 * (attempt as u64 + 1))).await;
+                            tokio::time::sleep(Duration::from_millis(200 * (attempt as u64 + 1)))
+                                .await;
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, target_net = %target_net, signal_key = %sig_key, "Bridge: publish ack failed (final)");

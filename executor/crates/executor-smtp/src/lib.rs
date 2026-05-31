@@ -28,9 +28,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use aithericon_executor_backend::traits::{EventStream, ExecutionBackend, StatusCallback};
-use aithericon_executor_backend_configs::smtp::{
-    ResolvedSmtpResource, SmtpConfig, TemplateSource,
-};
+use aithericon_executor_backend_configs::smtp::{ResolvedSmtpResource, SmtpConfig, TemplateSource};
 use aithericon_executor_domain::{
     ExecutionOutcome, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError, RunContext,
 };
@@ -122,11 +120,21 @@ impl ExecutionBackend for SmtpBackend {
             Ok(s) => s,
             Err(out) => return Ok(failure_result(out, start.elapsed(), run_context)),
         };
-        let body_text = match config.body_text.as_ref().map(|t| render_one(t, &tera_ctx)).transpose() {
+        let body_text = match config
+            .body_text
+            .as_ref()
+            .map(|t| render_one(t, &tera_ctx))
+            .transpose()
+        {
             Ok(v) => v,
             Err(out) => return Ok(failure_result(out, start.elapsed(), run_context)),
         };
-        let body_html = match config.body_html.as_ref().map(|t| render_one(t, &tera_ctx)).transpose() {
+        let body_html = match config
+            .body_html
+            .as_ref()
+            .map(|t| render_one(t, &tera_ctx))
+            .transpose()
+        {
             Ok(v) => v,
             Err(out) => return Ok(failure_result(out, start.elapsed(), run_context)),
         };
@@ -153,10 +161,11 @@ impl ExecutionBackend for SmtpBackend {
         };
 
         // Load attachments + parse content types.
-        let attachments = match multipart::load_attachments(&config.attachments, &run_context.staged_inputs) {
-            Ok(v) => v,
-            Err(out) => return Ok(failure_result(out, start.elapsed(), run_context)),
-        };
+        let attachments =
+            match multipart::load_attachments(&config.attachments, &run_context.staged_inputs) {
+                Ok(v) => v,
+                Err(out) => return Ok(failure_result(out, start.elapsed(), run_context)),
+            };
 
         let assembled = match multipart::build(multipart::Inputs {
             from,
@@ -308,10 +317,11 @@ fn resolve_resource(
         .ok_or_else(|| SmtpOutcome::InvalidConfig {
             message: "smtp backend: resource_alias is required".into(),
         })?;
-    aithericon_executor_backend::load_resource::<ResolvedSmtpResource>(run_context, alias)
-        .map_err(|e| SmtpOutcome::InvalidConfig {
+    aithericon_executor_backend::load_resource::<ResolvedSmtpResource>(run_context, alias).map_err(
+        |e| SmtpOutcome::InvalidConfig {
             message: format!("smtp backend: {e}"),
-        })
+        },
+    )
 }
 
 /// Render one template + propagate the outcome on failure.

@@ -262,7 +262,10 @@ pub async fn fire_trigger(
         .unwrap_or_default();
 
     let (payload, body_reply_mode) = if content_type.starts_with("multipart/form-data") {
-        (build_multipart_payload(&state, &node_id, request).await?, None)
+        (
+            build_multipart_payload(&state, &node_id, request).await?,
+            None,
+        )
     } else {
         let bytes = axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024)
             .await
@@ -294,16 +297,14 @@ pub async fn fire_trigger(
         ReplyMode::Sse => {
             use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
             use futures::stream::{self, StreamExt};
-            let result =
-                crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
-                    .await
-                    .map_err(map_trigger_error)?;
+            let result = crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
+                .await
+                .map_err(map_trigger_error)?;
             let instance_id = match &result.outcome {
                 FireOutcome::Spawned { instance_id } => Some(*instance_id),
                 _ => None,
             };
-            let fire_payload =
-                serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+            let fire_payload = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
 
             // Compose: one-shot `fire` event + (jetstream events for the
             // spawned instance | empty). Plain stream::chain rather than a
@@ -333,10 +334,9 @@ pub async fn fire_trigger(
                 .into_response())
         }
         ReplyMode::FireAndForget => {
-            let result =
-                crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
-                    .await
-                    .map_err(map_trigger_error)?;
+            let result = crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
+                .await
+                .map_err(map_trigger_error)?;
             Ok(Json(FireTriggerResponse {
                 result,
                 outcome: None,
@@ -598,8 +598,7 @@ pub async fn set_trigger_enabled(
         )));
     }
 
-    let graph_json =
-        serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
+    let graph_json = serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
 
     let updated = sqlx::query_as::<_, WorkflowTemplate>(
         r#"

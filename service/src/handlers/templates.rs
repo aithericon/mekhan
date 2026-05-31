@@ -80,7 +80,9 @@ fn gate_template_read(
     if template.workspace_id == user_ws {
         return Ok(());
     }
-    Err(ApiError::forbidden("not a member of this template's workspace"))
+    Err(ApiError::forbidden(
+        "not a member of this template's workspace",
+    ))
 }
 
 /// Write gate for mutate paths (update/delete/publish): requires the caller
@@ -94,15 +96,13 @@ async fn gate_template_write(
 ) -> Result<(), ApiError> {
     match require_role(&state.db, user, template.workspace_id, Role::Editor).await {
         Ok(_) => Ok(()),
-        Err(MembershipError::NotMember(_)) => {
-            Err(ApiError::forbidden("not a member of this template's workspace"))
-        }
+        Err(MembershipError::NotMember(_)) => Err(ApiError::forbidden(
+            "not a member of this template's workspace",
+        )),
         Err(MembershipError::InsufficientRole { .. }) => {
             Err(ApiError::forbidden("editor role required"))
         }
-        Err(MembershipError::TemplateNotFound(_)) => {
-            Err(ApiError::not_found("template not found"))
-        }
+        Err(MembershipError::TemplateNotFound(_)) => Err(ApiError::not_found("template not found")),
         Err(MembershipError::Db(e)) => Err(ApiError::internal(e.to_string())),
     }
 }
@@ -169,7 +169,12 @@ pub async fn create_template(
     let file_summary: Vec<String> = req
         .files
         .iter()
-        .map(|(node_id, files)| format!("{node_id}=[{}]", files.keys().cloned().collect::<Vec<_>>().join(",")))
+        .map(|(node_id, files)| {
+            format!(
+                "{node_id}=[{}]",
+                files.keys().cloned().collect::<Vec<_>>().join(",")
+            )
+        })
         .collect();
     tracing::info!(
         template_id = %id,
@@ -343,8 +348,13 @@ pub async fn list_templates(
         append_template_where(&mut qb, workspace_id, &extras, &params).map_err(query_err_to_api)?;
         match params.sort {
             Some(ref sort) => {
-                builder::build_order_by_with_prefix(&mut qb, sort, TEMPLATE_SORT_FIELDS, Some("t."))
-                    .map_err(query_err_to_api)?;
+                builder::build_order_by_with_prefix(
+                    &mut qb,
+                    sort,
+                    TEMPLATE_SORT_FIELDS,
+                    Some("t."),
+                )
+                .map_err(query_err_to_api)?;
             }
             None => {
                 qb.push(" ORDER BY t.updated_at DESC");
@@ -715,7 +725,10 @@ pub async fn publish_template(
 
     // Upload node file contents to S3 so the executor can stage them at
     // runtime. Non-fatal for UI publish (legacy behavior).
-    if let Err(e) = publisher.upload_files(id, existing.version, &ydoc_files).await {
+    if let Err(e) = publisher
+        .upload_files(id, existing.version, &ydoc_files)
+        .await
+    {
         tracing::warn!("S3 file upload failed (non-fatal): {e}");
     }
     // Upload the per-node static configs the compiler offloaded so the
@@ -732,7 +745,8 @@ pub async fn publish_template(
     // Template-test gate. Run every enabled test for this template family
     // against the freshly-compiled AIR before flipping `published`. Failing
     // (or erroring) tests block the publish unless `?force=true`.
-    let failing = run_publish_gate(&state, &existing, &air_json, &graph, user.subject_as_uuid()).await?;
+    let failing =
+        run_publish_gate(&state, &existing, &air_json, &graph, user.subject_as_uuid()).await?;
     if !failing.is_empty() {
         if query.force {
             tracing::warn!(
@@ -741,8 +755,8 @@ pub async fn publish_template(
                 "publish gate bypassed via ?force=true"
             );
         } else {
-            let failing_json = serde_json::to_value(&failing)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let failing_json =
+                serde_json::to_value(&failing).map_err(|e| ApiError::internal(e.to_string()))?;
             return Err(ApiError {
                 status: StatusCode::PRECONDITION_FAILED,
                 body: Some(
@@ -811,17 +825,19 @@ async fn reconstruct_graph_from_ydoc(
         .await
         .map_err(|e| e.to_string())?;
 
-    let result = tokio::task::spawn_blocking(move || -> Result<(WorkflowGraph, HashMap<String, HashMap<String, String>>), String> {
-        use crate::yjs::persistence::YjsPersistence;
-        use crate::yjs::doc_ops;
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<(WorkflowGraph, HashMap<String, HashMap<String, String>>), String> {
+            use crate::yjs::doc_ops;
+            use crate::yjs::persistence::YjsPersistence;
 
-        let doc = YjsPersistence::build_doc_from_raw(snapshot.as_deref(), &updates)
-            .map_err(|e| e.to_string())?;
+            let doc = YjsPersistence::build_doc_from_raw(snapshot.as_deref(), &updates)
+                .map_err(|e| e.to_string())?;
 
-        let graph = doc_ops::doc_to_graph(&doc)?;
-        let files = doc_ops::extract_files_from_doc(&doc);
-        Ok((graph, files))
-    })
+            let graph = doc_ops::doc_to_graph(&doc)?;
+            let files = doc_ops::extract_files_from_doc(&doc);
+            Ok((graph, files))
+        },
+    )
     .await
     .map_err(|e| format!("spawn_blocking: {e}"))??;
 
@@ -963,10 +979,7 @@ where
 }
 
 /// Fetch the newest version (highest `version`) in a template's chain.
-async fn latest_in_chain(
-    pool: &sqlx::PgPool,
-    base_id: Uuid,
-) -> Result<WorkflowTemplate, ApiError> {
+async fn latest_in_chain(pool: &sqlx::PgPool, base_id: Uuid) -> Result<WorkflowTemplate, ApiError> {
     sqlx::query_as::<_, WorkflowTemplate>(
         "SELECT * FROM workflow_templates WHERE base_template_id = $1 ORDER BY version DESC LIMIT 1",
     )
@@ -1017,14 +1030,10 @@ pub async fn new_version(
             Ok(serde_json::from_value(g).unwrap_or_else(|_| WorkflowGraph::default_graph()))
         })
         .await?;
-    let graph_json =
-        serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
+    let graph_json = serde_json::to_value(&graph).map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Start a transaction
-    let mut tx = state
-        .db
-        .begin()
-        .await?;
+    let mut tx = state.db.begin().await?;
 
     // Mark old version as not latest
     mark_not_latest(&mut *tx, id).await?;
@@ -1214,10 +1223,7 @@ pub async fn apply_template(
     // 4. Single transaction: the only persisted, queryable transition. The
     //    row is born in its final published+latest form — there is no
     //    intermediate latest-but-unpublished state to strand on failure.
-    let mut tx = state
-        .db
-        .begin()
-        .await?;
+    let mut tx = state.db.begin().await?;
 
     let applied = match mode {
         ApplyMode::Seed => {
@@ -1573,11 +1579,10 @@ pub async fn compile_graph(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let description = body.description.as_deref().unwrap_or("");
     let files = node_files_inline(&body.files);
-    let air = compile_to_air(&body.graph, &body.name, description, &files)
-        .map_err(|e| {
-            let view = e.to_view();
-            ApiError::compile(format!("compilation failed: {e}"), vec![view])
-        })?;
+    let air = compile_to_air(&body.graph, &body.name, description, &files).map_err(|e| {
+        let view = e.to_view();
+        ApiError::compile(format!("compilation failed: {e}"), vec![view])
+    })?;
     Ok(Json(air))
 }
 

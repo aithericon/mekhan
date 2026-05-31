@@ -165,10 +165,9 @@ impl SlurmTestHarness {
             self.net_id.clone(),
             self.jetstream.clone(),
         ));
-        let listener_handle = signal_listener.clone().start(
-            self.service.clone(),
-            self.eval_notify.clone(),
-        );
+        let listener_handle = signal_listener
+            .clone()
+            .start(self.service.clone(), self.eval_notify.clone());
 
         // Let components start up
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -277,7 +276,10 @@ impl SlurmTestHarness {
     /// Reload scenario: reset service, re-initialize net, re-seed tokens.
     async fn reload_scenario(&self) {
         self.service.clear().await;
-        self.service.initialize(self.scenario.net.clone()).await.unwrap();
+        self.service
+            .initialize(self.scenario.net.clone())
+            .await
+            .unwrap();
         self.service.set_initial_tokens(
             self.scenario
                 .initial_tokens

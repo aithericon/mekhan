@@ -18,20 +18,20 @@ use parking_lot::RwLock;
 use tokio::sync::{broadcast, Notify};
 use tokio_util::sync::CancellationToken;
 
+use crate::slurm_allocator::FlavorDispatchAllocatorClient;
 use petri_application::pre_dispatch::{
     HttpPreDispatchHook, PreDispatchChain, PreDispatchChainEntry, PreDispatchHook,
     PreDispatchHookConfig, PreDispatchRuntime, PreDispatchTransport, RegistrationError,
 };
-use petri_application::{
-    AdapterScheduler, EventRepository, HttpAllocatorClient, MockSchedulerClient, PetriNetService,
-    ProcessCompleteHandler, ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
-    ProcessStartHandler, ProcessStatusDetailHandler, ResourceLeaseAcquireHandler,
-    ResourceLeaseReleaseHandler, SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection,
-    subworkflow_handlers::SubWorkflowCancelHandler, TimerCancelHandler, TimerScheduleHandler,
-    TopologyRepository,
-};
 use petri_application::resource_lease_handlers::AllocatorClient;
-use crate::slurm_allocator::FlavorDispatchAllocatorClient;
+use petri_application::{
+    subworkflow_handlers::SubWorkflowCancelHandler, AdapterScheduler, EventRepository,
+    HttpAllocatorClient, MockSchedulerClient, PetriNetService, ProcessCompleteHandler,
+    ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler, ProcessStartHandler,
+    ProcessStatusDetailHandler, ResourceLeaseAcquireHandler, ResourceLeaseReleaseHandler,
+    SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection, TimerCancelHandler,
+    TimerScheduleHandler, TopologyRepository,
+};
 #[cfg(feature = "catalogue")]
 use petri_application::{
     CatalogueLookupHandler, CatalogueRegisterHandler, CatalogueSubscribeHandler,
@@ -463,10 +463,7 @@ where
     /// `get_or_create`. The registry is also held by main.rs for the
     /// `GET /api/clusters` management surface.
     #[cfg(any(feature = "slurm", feature = "nomad"))]
-    pub fn set_cluster_registry(
-        &self,
-        registry: Arc<crate::cluster_registry::ClusterRegistry>,
-    ) {
+    pub fn set_cluster_registry(&self, registry: Arc<crate::cluster_registry::ClusterRegistry>) {
         *self.cluster_registry.write() = Some(registry);
     }
 
@@ -946,9 +943,9 @@ where
         let cluster_registry = self.cluster_registry.read().clone();
         #[cfg(any(feature = "slurm", feature = "nomad"))]
         let allocator_client: Arc<dyn AllocatorClient> = match cluster_registry {
-            Some(reg) => Arc::new(
-                crate::cluster_registry::ClusterRegistryAllocatorClient::new(reg),
-            ),
+            Some(reg) => {
+                Arc::new(crate::cluster_registry::ClusterRegistryAllocatorClient::new(reg))
+            }
             None => Self::build_env_flavor_dispatch(),
         };
         #[cfg(not(any(feature = "slurm", feature = "nomad")))]
@@ -1153,9 +1150,8 @@ where
         let Some(registry) = self.cluster_registry.read().clone() else {
             return; // no multi-cluster registry installed (plain http dev stack)
         };
-        let allocator: Arc<dyn AllocatorClient> = Arc::new(
-            crate::cluster_registry::ClusterRegistryAllocatorClient::new(registry),
-        );
+        let allocator: Arc<dyn AllocatorClient> =
+            Arc::new(crate::cluster_registry::ClusterRegistryAllocatorClient::new(registry));
 
         // grant_id is `<instance_id>:<loop_id>` where `<instance_id>` is the BARE
         // workflow-instance UUID (`loop_.rs`: `input._instance_id + ":<loop_id>"`),
@@ -1423,12 +1419,9 @@ fn spawn_net_evaluation_loop<E, T, S>(
                             // branch here, so the success path and root
                             // lifecycle are untouched.
                             if let Some(params) = service.net_parameters() {
-                                let parent =
-                                    params.get("parent_net_id").and_then(|v| v.as_str());
-                                let fplace =
-                                    params.get("failure_place").and_then(|v| v.as_str());
-                                if let (Some(parent_net_id), Some(failure_place)) =
-                                    (parent, fplace)
+                                let parent = params.get("parent_net_id").and_then(|v| v.as_str());
+                                let fplace = params.get("failure_place").and_then(|v| v.as_str());
+                                if let (Some(parent_net_id), Some(failure_place)) = (parent, fplace)
                                 {
                                     let payload = serde_json::json!({
                                         "reason":        failure.reason,
@@ -1465,9 +1458,9 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                         let all_events = service.get_events().await;
                                         for event in &all_events {
                                             if event.sequence > last_broadcast_seq {
-                                                let _ = event_tx.send(SseSignal::Event(
-                                                    Box::new(event.clone()),
-                                                ));
+                                                let _ = event_tx.send(SseSignal::Event(Box::new(
+                                                    event.clone(),
+                                                )));
                                             }
                                         }
                                     }
@@ -1870,7 +1863,10 @@ mod tests {
             if tokio::time::Instant::now() > deadline {
                 panic!(
                     "Timed out waiting for NetFailed. Events: {:?}",
-                    events.iter().map(|e| format!("{:?}", e.event)).collect::<Vec<_>>()
+                    events
+                        .iter()
+                        .map(|e| format!("{:?}", e.event))
+                        .collect::<Vec<_>>()
                 );
             }
         }
@@ -1885,9 +1881,7 @@ mod tests {
                     target_net_id,
                     target_place_name,
                     ..
-                } if target_net_id == "parent-xyz"
-                    && target_place_name == "p_sub_failure" =>
-                {
+                } if target_net_id == "parent-xyz" && target_place_name == "p_sub_failure" => {
                     Some(token.clone())
                 }
                 _ => None,
@@ -2595,9 +2589,7 @@ where
         {
             Ok(()) => Ok(true),
             Err(e) if e.starts_with("Net '") && e.ends_with("' not found") => Ok(false),
-            Err(e) => Err(
-                petri_domain::subworkflow::SubWorkflowCancelError::CancellationFailed(e),
-            ),
+            Err(e) => Err(petri_domain::subworkflow::SubWorkflowCancelError::CancellationFailed(e)),
         }
     }
 

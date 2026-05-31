@@ -83,7 +83,7 @@ fn http_config_from_spec() {
             "method": "PUT",
             "url": "https://example.com",
         }),
-            config_ref: None,
+        config_ref: None,
     };
     let config = HttpConfig::from_spec(&spec).unwrap();
     assert_eq!(config.method, HttpMethod::PUT);
@@ -100,7 +100,7 @@ fn http_config_from_spec_invalid() {
             "method": "INVALID_METHOD",
             "url": "https://example.com",
         }),
-            config_ref: None,
+        config_ref: None,
     };
     assert!(HttpConfig::from_spec(&spec).is_err());
 }

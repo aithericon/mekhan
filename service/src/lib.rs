@@ -110,8 +110,7 @@ pub struct AppState {
 /// uptime monitors, or container orchestrators need to reach without a session
 /// cookie belongs here.
 fn build_public_openapi_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::<AppState>::new()
-        .routes(routes!(handlers::health::liveness))
+    OpenApiRouter::<AppState>::new().routes(routes!(handlers::health::liveness))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -323,8 +322,7 @@ pub fn build_router(state: AppState) -> Router {
     // The protected OpenApiRouter holds every authenticated handler; the
     // public one holds only `/healthz`. Both contribute to the same
     // `api_spec` so the published OpenAPI document stays a single document.
-    let (protected_router, mut api_spec) =
-        build_protected_openapi_router().split_for_parts();
+    let (protected_router, mut api_spec) = build_protected_openapi_router().split_for_parts();
     let (public_router, public_spec) = build_public_openapi_router().split_for_parts();
     api_spec.merge(public_spec);
 
@@ -353,18 +351,9 @@ pub fn build_router(state: AppState) -> Router {
     // the protected router requires). Same `/api/auth/*` prefix so the Vite
     // dev proxy and prod same-origin SPA serving work with no new rules.
     let auth_router: Router = Router::new()
-        .route(
-            "/api/auth/login",
-            get(auth::bff::handlers::login),
-        )
-        .route(
-            "/api/auth/callback",
-            get(auth::bff::handlers::callback),
-        )
-        .route(
-            "/api/auth/session",
-            get(auth::bff::handlers::session),
-        )
+        .route("/api/auth/login", get(auth::bff::handlers::login))
+        .route("/api/auth/callback", get(auth::bff::handlers::callback))
+        .route("/api/auth/session", get(auth::bff::handlers::session))
         .route(
             "/api/auth/logout",
             axum::routing::post(auth::bff::handlers::logout),

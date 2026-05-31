@@ -7,8 +7,10 @@ mod common;
 use mekhan_service::models::template::WorkflowGraph;
 use mekhan_service::yjs::persistence::YjsPersistence;
 use uuid::Uuid;
-use yrs::{Doc, GetString, Map, ReadTxn, StateVector, Text, Transact, Update as YrsUpdate, WriteTxn};
 use yrs::updates::decoder::Decode;
+use yrs::{
+    Doc, GetString, Map, ReadTxn, StateVector, Text, Transact, Update as YrsUpdate, WriteTxn,
+};
 
 /// Helper: create a persistence instance from an isolated test DB,
 /// with a template row inserted to satisfy the FK constraint.
@@ -145,13 +147,12 @@ async fn store_update_appends_incrementally() {
         .unwrap();
 
     // Should be 2 rows with sequential seq values
-    let rows: Vec<(i64,)> = sqlx::query_as(
-        "SELECT seq FROM yjs_documents WHERE template_id = $1 ORDER BY seq ASC",
-    )
-    .bind(template_id)
-    .fetch_all(persistence.pool())
-    .await
-    .unwrap();
+    let rows: Vec<(i64,)> =
+        sqlx::query_as("SELECT seq FROM yjs_documents WHERE template_id = $1 ORDER BY seq ASC")
+            .bind(template_id)
+            .fetch_all(persistence.pool())
+            .await
+            .unwrap();
 
     assert_eq!(rows.len(), 2);
     assert!(rows[1].0 > rows[0].0, "seq values should be increasing");
@@ -178,14 +179,8 @@ async fn load_raw_updates_shape() {
         let txn = doc.transact();
         txn.encode_state_as_update_v1(&StateVector::default())
     };
-    persistence
-        .store_update(template_id, &extra)
-        .await
-        .unwrap();
-    persistence
-        .store_update(template_id, &extra)
-        .await
-        .unwrap();
+    persistence.store_update(template_id, &extra).await.unwrap();
+    persistence.store_update(template_id, &extra).await.unwrap();
 
     let (snapshot, updates) = persistence.load_raw_updates(template_id).await.unwrap();
 
@@ -215,10 +210,7 @@ async fn compaction_merges_to_snapshot() {
         txn.encode_state_as_update_v1(&StateVector::default())
     };
     for _ in 0..101 {
-        persistence
-            .store_update(template_id, &extra)
-            .await
-            .unwrap();
+        persistence.store_update(template_id, &extra).await.unwrap();
     }
 
     // Compaction runs in a background tokio::spawn; wait for it to finish
@@ -294,10 +286,7 @@ async fn has_doc_true_after_compaction() {
         txn.encode_state_as_update_v1(&StateVector::default())
     };
     for _ in 0..101 {
-        persistence
-            .store_update(template_id, &extra)
-            .await
-            .unwrap();
+        persistence.store_update(template_id, &extra).await.unwrap();
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -389,7 +378,10 @@ async fn ytext_content_roundtrips_through_persistence() {
                     if let Some(yrs::Out::YText(text_ref)) = file {
                         text_ref.get_string(&txn)
                     } else {
-                        panic!("main.py not found or not a Text, got: {:?}", files_map.get(&txn, "main.py"));
+                        panic!(
+                            "main.py not found or not a Text, got: {:?}",
+                            files_map.get(&txn, "main.py")
+                        );
                     }
                 } else {
                     panic!("files map not found on start node after reload");
@@ -434,7 +426,8 @@ async fn ytext_content_roundtrips_via_diff_updates() {
                 .block_on(persistence.load_raw_updates(template_id))
                 .unwrap();
             let server_state = {
-                let doc = YjsPersistence::build_doc_from_raw(snapshot.as_deref(), &updates).unwrap();
+                let doc =
+                    YjsPersistence::build_doc_from_raw(snapshot.as_deref(), &updates).unwrap();
                 let txn = doc.transact();
                 txn.encode_state_as_update_v1(&StateVector::default())
             };

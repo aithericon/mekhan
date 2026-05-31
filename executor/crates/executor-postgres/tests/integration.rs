@@ -425,7 +425,12 @@ async fn tenant_isolation_two_tenants_one_pool() {
     };
     let prepared_a2 = backend.prepare(&job_a2, ctx_a2).await.expect("prepare A2");
     let result_a2 = backend
-        .execute(&prepared_a2, noop_callback(), None, CancellationToken::new())
+        .execute(
+            &prepared_a2,
+            noop_callback(),
+            None,
+            CancellationToken::new(),
+        )
         .await
         .expect("execute A2");
     let arr_a2 = result_a2.outputs["rows"].as_array().expect("rows A2");

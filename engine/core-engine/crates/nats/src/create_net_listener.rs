@@ -6,7 +6,9 @@
 use async_nats::jetstream::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::message_loop::{run_message_loop_cancellable, MessageHandler, MessageLoopError, ProcessError};
+use crate::message_loop::{
+    run_message_loop_cancellable, MessageHandler, MessageLoopError, ProcessError,
+};
 use crate::subjects::Subjects;
 
 /// A token to inject into a specific place after scenario loading.
@@ -59,10 +61,7 @@ pub struct CreateNetResponse {
 #[async_trait::async_trait]
 pub trait NetCreator: Send + Sync {
     /// Create a new net instance and load the scenario.
-    async fn create_and_load(
-        &self,
-        request: &CreateNetRequest,
-    ) -> Result<(), String>;
+    async fn create_and_load(&self, request: &CreateNetRequest) -> Result<(), String>;
 }
 
 /// Listens for `petri.commands.create_net` messages and creates net instances.
@@ -111,9 +110,7 @@ impl CreateNetListener {
             .jetstream
             .get_or_create_stream(crate::stream_config())
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to get stream: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
         let consumer_config = ConsumerConfig {
             durable_name: Some(self.consumer_name.clone()),
@@ -126,9 +123,7 @@ impl CreateNetListener {
         let consumer = stream
             .get_or_create_consumer(&self.consumer_name, consumer_config)
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to create consumer: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to create consumer: {}", e)))?;
 
         let handler = CreateNetHandler {
             creator: &self.creator,

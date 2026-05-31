@@ -429,10 +429,8 @@ mod tests {
         inputs.insert("x".to_string(), json!(42));
 
         // Test quoted "type" key (as used in bo_oracle_net.rs)
-        let result = runtime.execute_script(
-            r#"#{ source: #{ "type": "inline", value: x } }"#,
-            &inputs,
-        );
+        let result =
+            runtime.execute_script(r#"#{ source: #{ "type": "inline", value: x } }"#, &inputs);
 
         let output = result.unwrap();
         let source = &output["source"];

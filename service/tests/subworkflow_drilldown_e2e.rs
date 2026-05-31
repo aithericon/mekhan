@@ -123,7 +123,8 @@ fn child_graph(tag: &str) -> WorkflowGraph {
         edges: vec![edge("ce", &s, &e)],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -140,7 +141,8 @@ fn parent_graph(child_family: Uuid, pin: VersionPin) -> WorkflowGraph {
         edges: vec![edge("pe1", "pstart", "sub"), edge("pe2", "sub", "pend")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -211,7 +213,9 @@ async fn subworkflow_child_is_registered_and_drillable() {
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
     // Shared sub-manager / nats for the listener + consumers.
-    let base_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let base_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = base_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -224,8 +228,14 @@ async fn subworkflow_child_is_registered_and_drillable() {
         let d = db.clone();
         let s = sub_mgr.clone();
         tokio::spawn(async move {
-            start_lifecycle_listener(n, d, s, None, mekhan_service::triggers::ResultWaiters::new())
-                .await;
+            start_lifecycle_listener(
+                n,
+                d,
+                s,
+                None,
+                mekhan_service::triggers::ResultWaiters::new(),
+            )
+            .await;
         });
     }
 
@@ -265,8 +275,12 @@ async fn subworkflow_child_is_registered_and_drillable() {
     // Child + parent, both published.
     let child = create_with_graph(&app, "Drilldown Child", &child_graph("ddc")).await;
     publish(&app, child).await;
-    let parent =
-        create_with_graph(&app, "Drilldown Parent", &parent_graph(child, VersionPin::Latest)).await;
+    let parent = create_with_graph(
+        &app,
+        "Drilldown Parent",
+        &parent_graph(child, VersionPin::Latest),
+    )
+    .await;
     publish(&app, parent).await;
 
     // Create the parent instance (deploys + runs).
@@ -286,7 +300,11 @@ async fn subworkflow_child_is_registered_and_drillable() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let parent_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
 
     // Parent runs to completion (spawns child, joins reply, reaches End).
@@ -323,7 +341,12 @@ async fn subworkflow_child_is_registered_and_drillable() {
         .await
         .unwrap();
         if !rows.is_empty() {
-            assert_eq!(rows.len(), 1, "exactly one child expected, got {}", rows.len());
+            assert_eq!(
+                rows.len(),
+                1,
+                "exactly one child expected, got {}",
+                rows.len()
+            );
             child_row = Some(rows.into_iter().next().unwrap());
             break;
         }
@@ -332,8 +355,15 @@ async fn subworkflow_child_is_registered_and_drillable() {
     let (child_instance_id, parent_node_id, child_template_id, root_instance_id) =
         child_row.expect("child instance was never registered");
     assert_eq!(parent_node_id.as_deref(), Some("sub"), "parent_node_id");
-    assert_eq!(child_template_id, child, "child template id resolved to the published child");
-    assert_eq!(root_instance_id, Some(parent_id), "root points at the top-level parent");
+    assert_eq!(
+        child_template_id, child,
+        "child template id resolved to the published child"
+    );
+    assert_eq!(
+        root_instance_id,
+        Some(parent_id),
+        "root points at the top-level parent"
+    );
 
     // The child's steps materialize for free via the net_id-keyed projection.
     let started = std::time::Instant::now();
@@ -369,7 +399,10 @@ async fn subworkflow_child_is_registered_and_drillable() {
     let arr = children.as_array().expect("children is an array");
     assert_eq!(arr.len(), 1, "one child via endpoint: {children}");
     assert_eq!(arr[0]["parent_node_id"], "sub");
-    assert_eq!(arr[0]["id"].as_str().unwrap(), child_instance_id.to_string());
+    assert_eq!(
+        arr[0]["id"].as_str().unwrap(),
+        child_instance_id.to_string()
+    );
     assert_eq!(arr[0]["template_name"], "Drilldown Child");
 
     // The child must NOT appear in the top-level instances list — it is a

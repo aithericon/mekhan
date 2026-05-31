@@ -52,7 +52,11 @@ async fn session_store_create_get_update_delete_roundtrip() {
         .await
         .expect("create");
 
-    let got = store.get_session(&sid).await.expect("get").expect("present");
+    let got = store
+        .get_session(&sid)
+        .await
+        .expect("get")
+        .expect("present");
     assert_eq!(got.subject, "alice");
     assert_eq!(got.access_token, "at-1");
     assert_eq!(got.refresh_token.as_deref(), Some("rt-1"));
@@ -239,20 +243,14 @@ async fn bff_authenticator_rejects_missing_and_unknown_cookies() {
         .authenticate(&HeaderMap::new(), &CookieJar::new())
         .await
         .unwrap_err();
-    assert!(matches!(
-        err,
-        mekhan_service::auth::AuthError::MissingToken
-    ));
+    assert!(matches!(err, mekhan_service::auth::AuthError::MissingToken));
 
     // Cookie present but no such session row.
     let err = authn
         .authenticate(&HeaderMap::new(), &jar_with("does-not-exist"))
         .await
         .unwrap_err();
-    assert!(matches!(
-        err,
-        mekhan_service::auth::AuthError::MissingToken
-    ));
+    assert!(matches!(err, mekhan_service::auth::AuthError::MissingToken));
 }
 
 #[tokio::test]
@@ -301,10 +299,7 @@ async fn bff_authenticator_drops_dead_session_when_refresh_unavailable() {
         .authenticate(&HeaderMap::new(), &jar_with(&sid))
         .await
         .unwrap_err();
-    assert!(matches!(
-        err,
-        mekhan_service::auth::AuthError::MissingToken
-    ));
+    assert!(matches!(err, mekhan_service::auth::AuthError::MissingToken));
     // The dead session row was deleted so the next login starts clean.
     assert!(store.get_session(&sid).await.unwrap().is_none());
 }

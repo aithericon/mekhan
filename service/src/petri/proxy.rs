@@ -120,12 +120,10 @@ async fn proxy(State(state): State<AppState>, req: Request) -> Result<Response, 
         .await
         .map_err(ProxyError::Upstream)?;
 
-    let status = StatusCode::from_u16(upstream.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let resp_headers = upstream.headers().clone();
-    let stream = upstream
-        .bytes_stream()
-        .map_err(std::io::Error::other);
+    let stream = upstream.bytes_stream().map_err(std::io::Error::other);
 
     let mut out = Response::new(Body::from_stream(stream));
     *out.status_mut() = status;
@@ -287,4 +285,3 @@ mod tests {
         assert_eq!(extract_net_id("/api/something-else"), None);
     }
 }
-

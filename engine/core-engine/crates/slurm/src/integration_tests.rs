@@ -292,8 +292,11 @@ mod tests {
             .exec("squeue -o '%i' -h")
             .await
             .expect("squeue snapshot");
-        let pre_ids: std::collections::HashSet<String> =
-            pre.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        let pre_ids: std::collections::HashSet<String> = pre
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
         println!("Pre-dispatch job ids: {:?}", pre_ids);
 
         // 2. Dispatch a body ONTO the held allocation. The L2 wire: alloc_id
@@ -370,7 +373,8 @@ mod tests {
         assert!(
             new_ids.is_empty(),
             "srun must NOT mint a new batch job; unexpected new job ids {:?} (squeue:\n{})",
-            new_ids, post
+            new_ids,
+            post
         );
 
         // 4. Release the allocation (single-node cluster — never leak it).

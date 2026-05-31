@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use aithericon_executor_backend::ExecutionBackend;
-use aithericon_executor_process::{ProcessBackend, ProcessConfig};
 use aithericon_executor_domain::{ExecutionSpec, RunContext, RunDirectory};
+use aithericon_executor_process::{ProcessBackend, ProcessConfig};
 
 use super::kit::BackendTestKit;
 

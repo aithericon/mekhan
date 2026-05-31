@@ -119,10 +119,10 @@ pub fn read_tests(dir: &Path) -> Result<Vec<TestFile>> {
         {
             continue;
         }
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let test: TestFile = serde_yaml_ng::from_str(&text)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let test: TestFile =
+            serde_yaml_ng::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
         out.push(test);
     }
     // Deterministic order so push diffs are stable.
@@ -213,8 +213,10 @@ pub async fn sync_to_server(
             if same {
                 continue;
             }
-            let patch_url =
-                format!("{server}/api/v1/templates/{template_id}/tests/{}", remote_row.id);
+            let patch_url = format!(
+                "{server}/api/v1/templates/{template_id}/tests/{}",
+                remote_row.id
+            );
             let body = serde_json::json!({
                 "enabled": test.enabled,
                 "start_tokens": test.start_tokens,
@@ -259,7 +261,10 @@ pub async fn sync_to_server(
         if local_names.contains(remote_row.name.as_str()) {
             continue;
         }
-        let url = format!("{server}/api/v1/templates/{template_id}/tests/{}", remote_row.id);
+        let url = format!(
+            "{server}/api/v1/templates/{template_id}/tests/{}",
+            remote_row.id
+        );
         let resp = crate::http::auth(client.delete(&url))
             .send()
             .await

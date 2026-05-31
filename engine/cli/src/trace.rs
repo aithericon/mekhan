@@ -7,11 +7,7 @@ use crate::client::EngineClient;
 
 /// Trace a signal key across all nets, building a cross-net timeline.
 pub fn run_trace(client: &EngineClient, key: &str) {
-    eprintln!(
-        "{} {} (signal_key)",
-        "Tracing".dimmed(),
-        key.bold(),
-    );
+    eprintln!("{} {} (signal_key)", "Tracing".dimmed(), key.bold(),);
 
     // 1. Discover all nets
     let nets: Vec<String> = match client.get::<Value>("/api/nets/metadata") {
@@ -89,12 +85,14 @@ pub fn run_trace(client: &EngineClient, key: &str) {
         }
 
         let inner = m.event.get("event").unwrap_or(&m.event);
-        let type_name = inner
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
+        let type_name = inner.get("type").and_then(|v| v.as_str()).unwrap_or("?");
         let detail = format_trace_detail(inner, type_name);
-        println!("    #{:<5} {:<20} {}", m.sequence, type_name.green(), detail);
+        println!(
+            "    #{:<5} {:<20} {}",
+            m.sequence,
+            type_name.green(),
+            detail
+        );
     }
 
     println!();
@@ -186,7 +184,13 @@ fn token_color_contains(token: &Value, key: &str) -> bool {
     // For Data tokens, check the value
     if let Some(value) = color.get("value") {
         // Check common fields that carry signal keys
-        for field in &["job_id", "signal_key", "campaign_id", "candidate_id", "execution_id"] {
+        for field in &[
+            "job_id",
+            "signal_key",
+            "campaign_id",
+            "candidate_id",
+            "execution_id",
+        ] {
             if let Some(v) = value.get(field).and_then(|v| v.as_str()) {
                 if v.contains(key) {
                     return true;
@@ -206,17 +210,21 @@ fn token_color_contains(token: &Value, key: &str) -> bool {
 
 fn format_trace_detail(event: &Value, type_name: &str) -> String {
     match type_name {
-        "TransitionFired" | "EffectCompleted" => {
-            event
-                .get("transition_name")
-                .and_then(|v| v.as_str())
-                .or_else(|| event.get("transition_id").and_then(|v| v.as_str()))
-                .unwrap_or("")
-                .to_string()
-        }
+        "TransitionFired" | "EffectCompleted" => event
+            .get("transition_name")
+            .and_then(|v| v.as_str())
+            .or_else(|| event.get("transition_id").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string(),
         "TokenBridgedOut" => {
-            let target_net = event.get("target_net_id").and_then(|v| v.as_str()).unwrap_or("?");
-            let target_place = event.get("target_place_name").and_then(|v| v.as_str()).unwrap_or("?");
+            let target_net = event
+                .get("target_net_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let target_place = event
+                .get("target_place_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             format!("→ {target_net}:{target_place}")
         }
         "TokenCreated" => {

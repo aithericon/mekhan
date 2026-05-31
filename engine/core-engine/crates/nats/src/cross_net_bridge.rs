@@ -181,7 +181,10 @@ impl CrossNetBridge {
             pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy,
         };
 
-        let stream = self.jetstream.get_or_create_stream(crate::stream_config()).await?;
+        let stream = self
+            .jetstream
+            .get_or_create_stream(crate::stream_config())
+            .await?;
         let filter = Subjects::bridge_inbox_filter(&self.net_id);
         let consumer_name = format!("bridge-inbound-{}", self.net_id);
 

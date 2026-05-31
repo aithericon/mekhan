@@ -40,13 +40,10 @@ async fn test_clockmaster_schedule_and_fire() {
     // signals_stream captures "tns.{prefix}.signals.>"
     let signal_prefix = format!("tns.{}.signals", ctx.prefix);
 
-    let clockmaster = Clockmaster::with_options(
-        ctx.jetstream.clone(),
-        &bucket_name,
-        &signal_prefix,
-    )
-    .await
-    .expect("create clockmaster");
+    let clockmaster =
+        Clockmaster::with_options(ctx.jetstream.clone(), &bucket_name, &signal_prefix)
+            .await
+            .expect("create clockmaster");
 
     // Create consumer for signals FIRST (before anything is published)
     let consumer = ctx
@@ -179,7 +176,10 @@ async fn test_activity_mark_hibernating() {
     tracker.touch("net-1").await.expect("touch");
     assert!(tracker.is_hot("net-1").await.expect("is_hot"));
 
-    tracker.mark_hibernating("net-1").await.expect("mark_hibernating");
+    tracker
+        .mark_hibernating("net-1")
+        .await
+        .expect("mark_hibernating");
     assert!(!tracker.is_hot("net-1").await.expect("is_hot after mark"));
 
     ctx.cleanup().await.ok();
@@ -392,7 +392,11 @@ async fn test_metadata_kv_put_and_get_roundtrip() {
 
     let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv);
 
-    let fetched = projection.get("test-net").await.expect("get").expect("should exist");
+    let fetched = projection
+        .get("test-net")
+        .await
+        .expect("get")
+        .expect("should exist");
     assert_eq!(fetched.net_id, "test-net");
     assert_eq!(fetched.status, NetStatus::Created);
     assert_eq!(fetched.template_id, Some("tmpl-1".to_string()));
@@ -426,7 +430,9 @@ async fn test_metadata_projection_list_all() {
             cancel_reason: None,
         };
         let value = serde_json::to_vec(&meta).unwrap();
-        kv.put(&format!("net-{}", i), value.into()).await.expect("put");
+        kv.put(&format!("net-{}", i), value.into())
+            .await
+            .expect("put");
     }
 
     let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv);
@@ -461,14 +467,18 @@ async fn test_metadata_status_transitions() {
         cancel_reason: None,
     };
     let value = serde_json::to_vec(&meta).unwrap();
-    kv.put("lifecycle-net", value.into()).await.expect("put created");
+    kv.put("lifecycle-net", value.into())
+        .await
+        .expect("put created");
 
     let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv.clone());
 
     // Update to Running
     meta.status = NetStatus::Running;
     let value = serde_json::to_vec(&meta).unwrap();
-    kv.put("lifecycle-net", value.into()).await.expect("put running");
+    kv.put("lifecycle-net", value.into())
+        .await
+        .expect("put running");
 
     let fetched = projection.get("lifecycle-net").await.expect("get").unwrap();
     assert_eq!(fetched.status, NetStatus::Running);
@@ -478,7 +488,9 @@ async fn test_metadata_status_transitions() {
     meta.completed_at = Some(chrono::Utc::now().to_rfc3339());
     meta.exit_code = Some(serde_json::json!(0));
     let value = serde_json::to_vec(&meta).unwrap();
-    kv.put("lifecycle-net", value.into()).await.expect("put completed");
+    kv.put("lifecycle-net", value.into())
+        .await
+        .expect("put completed");
 
     let fetched = projection.get("lifecycle-net").await.expect("get").unwrap();
     assert_eq!(fetched.status, NetStatus::Completed);
@@ -562,8 +574,8 @@ async fn test_metadata_tombstone_completed_net() {
     assert_eq!(fetched.status, NetStatus::Completed);
 
     // This is the pattern used in RegistryResolver to reject signals:
-    let is_tombstone = fetched.status == NetStatus::Completed
-        || fetched.status == NetStatus::Cancelled;
+    let is_tombstone =
+        fetched.status == NetStatus::Completed || fetched.status == NetStatus::Cancelled;
     assert!(is_tombstone, "Completed net should be treated as tombstone");
 
     ctx.cleanup().await.ok();
@@ -593,13 +605,19 @@ async fn test_metadata_tombstone_cancelled_net() {
         cancel_reason: Some("manual stop".to_string()),
     };
     let value = serde_json::to_vec(&meta).unwrap();
-    kv.put("cancelled-tombstone", value.into()).await.expect("put");
+    kv.put("cancelled-tombstone", value.into())
+        .await
+        .expect("put");
 
     let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv.clone());
 
-    let fetched = projection.get("cancelled-tombstone").await.expect("get").unwrap();
-    let is_tombstone = fetched.status == NetStatus::Completed
-        || fetched.status == NetStatus::Cancelled;
+    let fetched = projection
+        .get("cancelled-tombstone")
+        .await
+        .expect("get")
+        .unwrap();
+    let is_tombstone =
+        fetched.status == NetStatus::Completed || fetched.status == NetStatus::Cancelled;
     assert!(is_tombstone, "Cancelled net should be treated as tombstone");
 
     ctx.cleanup().await.ok();
@@ -634,9 +652,12 @@ async fn test_metadata_running_net_not_tombstone() {
     let projection = NetMetadataProjection::new(ctx.jetstream.clone(), kv.clone());
 
     let fetched = projection.get("running-net").await.expect("get").unwrap();
-    let is_tombstone = fetched.status == NetStatus::Completed
-        || fetched.status == NetStatus::Cancelled;
-    assert!(!is_tombstone, "Running net should NOT be treated as tombstone");
+    let is_tombstone =
+        fetched.status == NetStatus::Completed || fetched.status == NetStatus::Cancelled;
+    assert!(
+        !is_tombstone,
+        "Running net should NOT be treated as tombstone"
+    );
 
     ctx.cleanup().await.ok();
 }
@@ -694,10 +715,7 @@ async fn test_global_signal_rejects_tombstone_accepts_running() {
 
     #[async_trait::async_trait]
     impl NetResolver for TombstoneCheckingResolver {
-        async fn resolve_net(
-            &self,
-            net_id: &str,
-        ) -> Result<Arc<dyn SignalTarget>, String> {
+        async fn resolve_net(&self, net_id: &str) -> Result<Arc<dyn SignalTarget>, String> {
             self.resolve_calls.lock().await.push(net_id.to_string());
 
             // Check metadata KV — same pattern as RegistryResolver in main.rs
@@ -907,10 +925,7 @@ async fn test_global_signal_rejects_cancelled_net() {
 
     #[async_trait::async_trait]
     impl NetResolver for TombstoneResolver {
-        async fn resolve_net(
-            &self,
-            net_id: &str,
-        ) -> Result<Arc<dyn SignalTarget>, String> {
+        async fn resolve_net(&self, net_id: &str) -> Result<Arc<dyn SignalTarget>, String> {
             match self.metadata_kv.get(net_id).await {
                 Ok(Some(entry)) => {
                     if let Ok(meta) = serde_json::from_slice::<NetMetadata>(&entry) {
@@ -1020,7 +1035,11 @@ async fn test_create_net_request_nats_publish_roundtrip() {
         .expect("ensure stream");
 
     // Create consumer FIRST with DeliverPolicy::New to avoid seeing stale messages
-    let stream = ctx.jetstream.get_stream("PETRI_GLOBAL").await.expect("get stream");
+    let stream = ctx
+        .jetstream
+        .get_stream("PETRI_GLOBAL")
+        .await
+        .expect("get stream");
     let consumer = stream
         .create_consumer(async_nats::jetstream::consumer::pull::Config {
             durable_name: Some(format!("{}_create_net", ctx.prefix)),
@@ -1092,7 +1111,7 @@ impl crate::create_net_listener::NetCreator for CapturingNetCreator {
 
 #[tokio::test]
 async fn test_create_net_listener_delivers_initial_tokens() {
-    use crate::create_net_listener::{CreateNetRequest, CreateNetListener, InitialToken};
+    use crate::create_net_listener::{CreateNetListener, CreateNetRequest, InitialToken};
 
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
@@ -1129,13 +1148,11 @@ async fn test_create_net_listener_delivers_initial_tokens() {
         parameters: Some(serde_json::json!({"parent_net_id": "parent-abc"})),
         created_by: Some("spawn:parent-abc".to_string()),
         label: None,
-        initial_tokens: Some(vec![
-            InitialToken {
-                place_id: "inbox".to_string(),
-                token: serde_json::json!({"job_id": "j1", "spec": {"model": "gpt-4"}}),
-                reply_routing: None,
-            },
-        ]),
+        initial_tokens: Some(vec![InitialToken {
+            place_id: "inbox".to_string(),
+            token: serde_json::json!({"job_id": "j1", "spec": {"model": "gpt-4"}}),
+            reply_routing: None,
+        }]),
     };
 
     let payload = serde_json::to_vec(&request).unwrap();
@@ -1172,7 +1189,10 @@ async fn test_create_net_listener_delivers_initial_tokens() {
         .expect("our request should be present");
     assert_eq!(req.created_by, Some("spawn:parent-abc".to_string()));
 
-    let tokens = req.initial_tokens.as_ref().expect("initial_tokens should be present");
+    let tokens = req
+        .initial_tokens
+        .as_ref()
+        .expect("initial_tokens should be present");
     assert_eq!(tokens.len(), 1);
     assert_eq!(tokens[0].place_id, "inbox");
     assert_eq!(tokens[0].token["job_id"], "j1");
@@ -1188,7 +1208,7 @@ async fn test_create_net_listener_delivers_initial_tokens() {
 
 #[tokio::test]
 async fn test_create_net_listener_works_without_initial_tokens() {
-    use crate::create_net_listener::{CreateNetRequest, CreateNetListener};
+    use crate::create_net_listener::{CreateNetListener, CreateNetRequest};
 
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
@@ -1255,7 +1275,10 @@ async fn test_create_net_listener_works_without_initial_tokens() {
         .find(|r| r.net_id == expected_net_id)
         .expect("our request should be present");
     assert_eq!(req.template_id, Some("my-template".to_string()));
-    assert!(req.initial_tokens.is_none(), "initial_tokens should be None");
+    assert!(
+        req.initial_tokens.is_none(),
+        "initial_tokens should be None"
+    );
 
     listener_handle.abort();
     ctx.cleanup().await.ok();
@@ -1263,7 +1286,7 @@ async fn test_create_net_listener_works_without_initial_tokens() {
 
 #[tokio::test]
 async fn test_create_net_listener_multiple_initial_tokens() {
-    use crate::create_net_listener::{CreateNetRequest, CreateNetListener, InitialToken};
+    use crate::create_net_listener::{CreateNetListener, CreateNetRequest, InitialToken};
 
     let url = shared_nats_url().await;
     let ctx = NatsTestContext::with_url(url).await.expect("context");
@@ -1377,7 +1400,7 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     use crate::NatsConfig;
     use crate::NatsEventStore;
     use petri_application::{EventRepository, TopologyRepository};
-    use petri_domain::{DomainEvent, Place, PetriNet, TokenColor};
+    use petri_domain::{DomainEvent, PetriNet, Place, TokenColor};
     use petri_infrastructure::{MemoryEventStore, MemoryTopologyStore};
     use std::sync::Arc;
 
@@ -1399,12 +1422,7 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     let (applied_tx1, applied_rx1) = tokio::sync::watch::channel(0u64);
     let (ready_tx1, ready_rx1) = tokio::sync::oneshot::channel();
 
-    let consumer1 = EventConsumer::new(
-        cache1.clone(),
-        topo1.clone(),
-        applied_tx1,
-        ready_tx1,
-    );
+    let consumer1 = EventConsumer::new(cache1.clone(), topo1.clone(), applied_tx1, ready_tx1);
 
     let js1 = ctx.jetstream.clone();
     let net_id1 = net_id.clone();
@@ -1423,12 +1441,7 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
 
     let mut config = NatsConfig::from_env();
     config.net_id = Some(net_id.clone());
-    let store1 = NatsEventStore::new(
-        cache1.clone(),
-        ctx.jetstream.clone(),
-        config,
-        applied_rx1,
-    );
+    let store1 = NatsEventStore::new(cache1.clone(), ctx.jetstream.clone(), config, applied_rx1);
 
     // Initialize topology
     let mut net = PetriNet::new();
@@ -1443,9 +1456,7 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     // Create some tokens
     store1
         .append(DomainEvent::TokenCreated {
-            token: petri_domain::Token::new(TokenColor::Data(
-                serde_json::json!({"value": 42}),
-            )),
+            token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({"value": 42}))),
             place_id: place_a.clone(),
             place_name: Some("place_a".to_string()),
             workflow_id: None,
@@ -1457,9 +1468,7 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
 
     store1
         .append(DomainEvent::TokenCreated {
-            token: petri_domain::Token::new(TokenColor::Data(
-                serde_json::json!({"value": 99}),
-            )),
+            token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({"value": 99}))),
             place_id: place_b.clone(),
             place_name: Some("place_b".to_string()),
             workflow_id: None,
@@ -1471,7 +1480,11 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
 
     // Verify we have 3 events (init + 2 tokens)
     let events_before = store1.all_events().await;
-    assert_eq!(events_before.len(), 3, "Should have 3 events before hibernation");
+    assert_eq!(
+        events_before.len(),
+        3,
+        "Should have 3 events before hibernation"
+    );
 
     // ── Phase 2: Simulate hibernation — cancel consumer, drop stores ──
     shutdown.cancel();
@@ -1487,14 +1500,13 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
     let (ready_tx2, ready_rx2) = tokio::sync::oneshot::channel();
 
     // Verify the cache starts empty
-    assert_eq!(cache2.all_events().await.len(), 0, "Cache should be empty before re-hydration");
-
-    let consumer2 = EventConsumer::new(
-        cache2.clone(),
-        topo2.clone(),
-        applied_tx2,
-        ready_tx2,
+    assert_eq!(
+        cache2.all_events().await.len(),
+        0,
+        "Cache should be empty before re-hydration"
     );
+
+    let consumer2 = EventConsumer::new(cache2.clone(), topo2.clone(), applied_tx2, ready_tx2);
 
     let js2 = ctx.jetstream.clone();
     let net_id2 = net_id.clone();
@@ -1536,26 +1548,24 @@ async fn test_event_consumer_rehydrates_after_hibernation() {
 
     // Verify topology was re-hydrated
     let topology = topo2.get_topology();
-    assert!(topology.is_some(), "Topology should be re-hydrated from NetInitialized event");
+    assert!(
+        topology.is_some(),
+        "Topology should be re-hydrated from NetInitialized event"
+    );
 
     // Verify we can append new events after wake (store still works)
     let mut config2 = NatsConfig::from_env();
     config2.net_id = Some(net_id.clone());
-    let store2 = NatsEventStore::new(
-        cache2.clone(),
-        ctx.jetstream.clone(),
-        config2,
-        applied_rx2,
-    );
+    let store2 = NatsEventStore::new(cache2.clone(), ctx.jetstream.clone(), config2, applied_rx2);
 
     store2
         .append(DomainEvent::TokenCreated {
-            token: petri_domain::Token::new(TokenColor::Data(
-                serde_json::json!({"value": 200}),
-            )),
+            token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({"value": 200}))),
             place_id: place_a.clone(),
             place_name: Some("place_a".to_string()),
-            workflow_id: None, signal_key: None, dedup_id: None,
+            workflow_id: None,
+            signal_key: None,
+            dedup_id: None,
         })
         .await
         .expect("create token after wake");
@@ -1863,9 +1873,8 @@ async fn test_event_consumer_ephemeral_no_conflict() {
     let js1 = ctx.jetstream.clone();
     let net_id1 = net_id.clone();
     let shutdown1_clone = shutdown1.clone();
-    let handle1 = tokio::spawn(async move {
-        consumer1.start(&js1, &net_id1, shutdown1_clone).await
-    });
+    let handle1 =
+        tokio::spawn(async move { consumer1.start(&js1, &net_id1, shutdown1_clone).await });
 
     tokio::time::timeout(Duration::from_secs(5), ready_rx1)
         .await
@@ -1915,7 +1924,11 @@ async fn test_event_consumer_ephemeral_no_conflict() {
         .await
         .expect("consumer1 join timeout")
         .expect("consumer1 join");
-    assert!(result1.is_ok(), "Consumer #1 should stop cleanly, got: {:?}", result1.err());
+    assert!(
+        result1.is_ok(),
+        "Consumer #1 should stop cleanly, got: {:?}",
+        result1.err()
+    );
 
     drop(store1);
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1927,15 +1940,18 @@ async fn test_event_consumer_ephemeral_no_conflict() {
     let (applied_tx2, _applied_rx2) = tokio::sync::watch::channel(0u64);
     let (ready_tx2, ready_rx2) = tokio::sync::oneshot::channel();
 
-    assert_eq!(cache2.all_events().await.len(), 0, "Cache2 should start empty");
+    assert_eq!(
+        cache2.all_events().await.len(),
+        0,
+        "Cache2 should start empty"
+    );
 
     let consumer2 = EventConsumer::new(cache2.clone(), topo2.clone(), applied_tx2, ready_tx2);
     let js2 = ctx.jetstream.clone();
     let net_id2 = net_id.clone();
     let shutdown2_clone = shutdown2.clone();
-    let handle2 = tokio::spawn(async move {
-        consumer2.start(&js2, &net_id2, shutdown2_clone).await
-    });
+    let handle2 =
+        tokio::spawn(async move { consumer2.start(&js2, &net_id2, shutdown2_clone).await });
 
     // Wait for hydration — should succeed with all 3 events
     tokio::time::timeout(Duration::from_secs(5), ready_rx2)
@@ -1963,7 +1979,11 @@ async fn test_event_consumer_ephemeral_no_conflict() {
         .await
         .expect("consumer2 join timeout")
         .expect("consumer2 join");
-    assert!(result2.is_ok(), "Consumer #2 should stop cleanly, got: {:?}", result2.err());
+    assert!(
+        result2.is_ok(),
+        "Consumer #2 should stop cleanly, got: {:?}",
+        result2.err()
+    );
 
     ctx.cleanup().await.ok();
 }
@@ -2016,7 +2036,10 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
 
         let mut net = PetriNet::new();
         let p = net.add_place(Place::internal("p"));
-        store.append(DomainEvent::NetInitialized { net }).await.expect("init a");
+        store
+            .append(DomainEvent::NetInitialized { net })
+            .await
+            .expect("init a");
         store
             .append(DomainEvent::TokenCreated {
                 token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({"net": "a"}))),
@@ -2058,10 +2081,15 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
 
         let mut net = PetriNet::new();
         let p = net.add_place(Place::internal("p"));
-        store.append(DomainEvent::NetInitialized { net }).await.expect("init b");
+        store
+            .append(DomainEvent::NetInitialized { net })
+            .await
+            .expect("init b");
         store
             .append(DomainEvent::TokenCreated {
-                token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({"net": "b", "i": 1}))),
+                token: petri_domain::Token::new(TokenColor::Data(
+                    serde_json::json!({"net": "b", "i": 1}),
+                )),
                 place_id: p.clone(),
                 place_name: Some("p".to_string()),
                 workflow_id: None,
@@ -2072,7 +2100,9 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
             .expect("token b1");
         store
             .append(DomainEvent::TokenCreated {
-                token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({"net": "b", "i": 2}))),
+                token: petri_domain::Token::new(TokenColor::Data(
+                    serde_json::json!({"net": "b", "i": 2}),
+                )),
                 place_id: p,
                 place_name: Some("p".to_string()),
                 workflow_id: None,
@@ -2125,8 +2155,18 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
     let events_a = cache_a.all_events().await;
     let events_b = cache_b.all_events().await;
 
-    assert_eq!(events_a.len(), 2, "Net A should have 2 events (init + 1 token), got {}", events_a.len());
-    assert_eq!(events_b.len(), 3, "Net B should have 3 events (init + 2 tokens), got {}", events_b.len());
+    assert_eq!(
+        events_a.len(),
+        2,
+        "Net A should have 2 events (init + 1 token), got {}",
+        events_a.len()
+    );
+    assert_eq!(
+        events_b.len(),
+        3,
+        "Net B should have 3 events (init + 2 tokens), got {}",
+        events_b.len()
+    );
 
     shutdown_a.cancel();
     shutdown_b.cancel();
@@ -2240,7 +2280,10 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
 
     let subject = Subjects::bridge_transfer(&target_net_id, "inbox");
     ctx.jetstream
-        .publish(subject.clone(), serde_json::to_vec(&transfer1).unwrap().into())
+        .publish(
+            subject.clone(),
+            serde_json::to_vec(&transfer1).unwrap().into(),
+        )
         .await
         .expect("publish 1")
         .await
@@ -2276,7 +2319,10 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
     };
 
     ctx.jetstream
-        .publish(subject.clone(), serde_json::to_vec(&transfer2).unwrap().into())
+        .publish(
+            subject.clone(),
+            serde_json::to_vec(&transfer2).unwrap().into(),
+        )
         .await
         .expect("publish during downtime")
         .await
@@ -2341,7 +2387,10 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
 
     let final_injections = injections.lock().await;
     assert_eq!(final_injections.len(), 3, "Should have 3 injections total");
-    assert_eq!(final_injections[2].1, serde_json::json!({"value": "after-restart"}));
+    assert_eq!(
+        final_injections[2].1,
+        serde_json::json!({"value": "after-restart"})
+    );
 
     handle2.abort();
     ctx.cleanup().await.ok();
@@ -2482,7 +2531,11 @@ async fn test_net_metadata_discovery_across_lifecycle() {
     let ctx = NatsTestContext::with_url(url).await.expect("context");
 
     // Create a unique KV bucket for this test
-    let bucket_name = format!("{}_{}", METADATA_KV_BUCKET, ctx.prefix.replace('-', "_").to_uppercase());
+    let bucket_name = format!(
+        "{}_{}",
+        METADATA_KV_BUCKET,
+        ctx.prefix.replace('-', "_").to_uppercase()
+    );
 
     let kv = ctx
         .jetstream
@@ -2518,12 +2571,9 @@ async fn test_net_metadata_discovery_across_lifecycle() {
             cancelled_by: None,
             cancel_reason: None,
         };
-        kv.put(
-            net_id,
-            serde_json::to_vec(&metadata).unwrap().into(),
-        )
-        .await
-        .expect(&format!("put metadata for {}", net_id));
+        kv.put(net_id, serde_json::to_vec(&metadata).unwrap().into())
+            .await
+            .expect(&format!("put metadata for {}", net_id));
     }
 
     // ── Read all entries from KV and deserialize ──
@@ -2546,7 +2596,11 @@ async fn test_net_metadata_discovery_across_lifecycle() {
         .filter(|m| m.status == NetStatus::Running || m.status == NetStatus::Created)
         .collect();
 
-    assert_eq!(active_nets.len(), 3, "Should have 3 active nets (2 running + 1 created)");
+    assert_eq!(
+        active_nets.len(),
+        3,
+        "Should have 3 active nets (2 running + 1 created)"
+    );
 
     let active_ids: Vec<&str> = active_nets.iter().map(|m| m.net_id.as_str()).collect();
     assert!(active_ids.contains(&"orchestrator-net"));
@@ -2556,15 +2610,17 @@ async fn test_net_metadata_discovery_across_lifecycle() {
     assert!(!active_ids.contains(&"cancelled-net"));
 
     // ── Cross-reference with in-memory set (simulate hot vs hibernated) ──
-    let in_memory: std::collections::HashSet<&str> =
-        vec!["orchestrator-net"].into_iter().collect();
+    let in_memory: std::collections::HashSet<&str> = vec!["orchestrator-net"].into_iter().collect();
 
     for net in &active_nets {
         let is_hot = in_memory.contains(net.net_id.as_str());
         match net.net_id.as_str() {
             "orchestrator-net" => assert!(is_hot, "orchestrator-net should be in memory (hot)"),
             "job-net-1" => assert!(!is_hot, "job-net-1 should NOT be in memory (hibernated)"),
-            "job-net-2" => assert!(!is_hot, "job-net-2 should NOT be in memory (created, not yet loaded)"),
+            "job-net-2" => assert!(
+                !is_hot,
+                "job-net-2 should NOT be in memory (created, not yet loaded)"
+            ),
             other => panic!("Unexpected active net: {}", other),
         }
     }

@@ -19,7 +19,10 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
     let latest = crate::http::resolve_latest(server_url, base_id).await?;
     let template_id = latest.id.as_str();
 
-    println!("Publishing template {} (v{})...", template_id, latest.version);
+    println!(
+        "Publishing template {} (v{})...",
+        template_id, latest.version
+    );
 
     let url = format!("{}/api/v1/templates/{}/publish", server_url, template_id);
     let client = reqwest::Client::new();

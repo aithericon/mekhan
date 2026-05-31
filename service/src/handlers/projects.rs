@@ -126,7 +126,9 @@ pub async fn create_project(
 
     match row {
         Ok(p) => Ok((StatusCode::CREATED, Json(p))),
-        Err(sqlx::Error::Database(e)) if e.constraint() == Some("projects_workspace_id_slug_key") => {
+        Err(sqlx::Error::Database(e))
+            if e.constraint() == Some("projects_workspace_id_slug_key") =>
+        {
             Err(ApiError::conflict(format!(
                 "project slug '{}' already exists in this workspace",
                 req.slug
@@ -401,13 +403,11 @@ pub async fn set_template_tags(
     let base_id = template_base_id(&state, template_id).await?;
 
     let mut tx = state.db.begin().await?;
-    sqlx::query(
-        "DELETE FROM template_tags WHERE workspace_id = $1 AND base_template_id = $2",
-    )
-    .bind(workspace_id)
-    .bind(base_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("DELETE FROM template_tags WHERE workspace_id = $1 AND base_template_id = $2")
+        .bind(workspace_id)
+        .bind(base_id)
+        .execute(&mut *tx)
+        .await?;
     for tag in &req.tags {
         let tag = tag.trim();
         if tag.is_empty() {
@@ -505,7 +505,9 @@ pub async fn set_template_visibility(
             ApiError::bad_request("owner_template_id must reference a template in this workspace")
         })?;
         if owner_family == base_id {
-            return Err(ApiError::bad_request("a template cannot be private to itself"));
+            return Err(ApiError::bad_request(
+                "a template cannot be private to itself",
+            ));
         }
         Some(owner_family)
     } else {
@@ -530,11 +532,10 @@ pub async fn set_template_visibility(
 
 /// Look up the workspace owning a project, mapping not-found to 404.
 async fn project_workspace(state: &AppState, project_id: Uuid) -> Result<Uuid, ApiError> {
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT workspace_id FROM projects WHERE id = $1")
-            .bind(project_id)
-            .fetch_optional(&state.db)
-            .await?;
+    let row: Option<(Uuid,)> = sqlx::query_as("SELECT workspace_id FROM projects WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&state.db)
+        .await?;
     row.map(|(w,)| w)
         .ok_or_else(|| ApiError::not_found("project not found"))
 }
@@ -542,12 +543,11 @@ async fn project_workspace(state: &AppState, project_id: Uuid) -> Result<Uuid, A
 /// Resolve a template id to its chain root (`COALESCE(base_template_id, id)`).
 /// Returns 404 on missing template.
 async fn template_base_id(state: &AppState, template_id: Uuid) -> Result<Uuid, ApiError> {
-    let row: Option<(Option<Uuid>, Uuid)> = sqlx::query_as(
-        "SELECT base_template_id, id FROM workflow_templates WHERE id = $1",
-    )
-    .bind(template_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(Option<Uuid>, Uuid)> =
+        sqlx::query_as("SELECT base_template_id, id FROM workflow_templates WHERE id = $1")
+            .bind(template_id)
+            .fetch_optional(&state.db)
+            .await?;
     row.map(|(base, id)| base.unwrap_or(id))
         .ok_or_else(|| ApiError::not_found("template not found"))
 }

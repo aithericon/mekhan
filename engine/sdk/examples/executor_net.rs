@@ -144,21 +144,24 @@ fn definition(ctx: &mut Context, bridged: bool, process: bool) {
     if !bridged {
         ctx.seed(
             &exec_queue,
-            vec![serde_json::from_value::<ExecutorSubmitInput>(serde_json::json!({
-                "job_id": "train-alpha",
-                "run": 0,
-                "retries": 0,
-                "max_retries": 3,
-                "spec": {
-                    "backend": "process",
-                    "inputs": [],
-                    "outputs": [],
-                    "config": {
-                        "command": "echo",
-                        "args": ["training complete"]
+            vec![
+                serde_json::from_value::<ExecutorSubmitInput>(serde_json::json!({
+                    "job_id": "train-alpha",
+                    "run": 0,
+                    "retries": 0,
+                    "max_retries": 3,
+                    "spec": {
+                        "backend": "process",
+                        "inputs": [],
+                        "outputs": [],
+                        "config": {
+                            "command": "echo",
+                            "args": ["training complete"]
+                        }
                     }
-                }
-            })).unwrap()],
+                }))
+                .unwrap(),
+            ],
         );
     }
 

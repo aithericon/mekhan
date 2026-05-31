@@ -120,7 +120,11 @@ fn fm(target: &str, expr: &str) -> FieldMapping {
 fn start_with(id: &str, fields: Vec<PortField>) -> WorkflowNode {
     let mut n = start(id);
     if let WorkflowNodeData::Start { initial, .. } = &mut n.data {
-        *initial = Port { id: "in".to_string(), label: "Input".to_string(), fields };
+        *initial = Port {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields,
+        };
     }
     n
 }
@@ -128,7 +132,10 @@ fn start_with(id: &str, fields: Vec<PortField>) -> WorkflowNode {
 /// End node with a `result_mapping` (defines the workflow's return contract).
 fn end_with(id: &str, result_mapping: Vec<FieldMapping>) -> WorkflowNode {
     let mut n = end(id);
-    if let WorkflowNodeData::End { result_mapping: rm, .. } = &mut n.data {
+    if let WorkflowNodeData::End {
+        result_mapping: rm, ..
+    } = &mut n.data
+    {
         *rm = result_mapping;
     }
     n
@@ -164,7 +171,10 @@ fn child_graph(tag: &str) -> WorkflowGraph {
     WorkflowGraph {
         nodes: vec![start(&s), end(&e)],
         edges: vec![edge("ce", &s, &e)],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -176,19 +186,15 @@ fn parent_graph(child_family: Uuid, pin: VersionPin) -> WorkflowGraph {
             subworkflow("sub", child_family, pin),
             end("pend"),
         ],
-        edges: vec![
-            edge("pe1", "pstart", "sub"),
-            edge("pe2", "sub", "pend"),
-        ],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        edges: vec![edge("pe1", "pstart", "sub"), edge("pe2", "sub", "pend")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
-async fn create_with_graph(
-    app: &axum::Router,
-    name: &str,
-    graph: &WorkflowGraph,
-) -> Uuid {
+async fn create_with_graph(app: &axum::Router, name: &str, graph: &WorkflowGraph) -> Uuid {
     let resp = app
         .clone()
         .oneshot(
@@ -249,9 +255,12 @@ async fn subworkflow_pins_child_at_parent_publish() {
     assert!(cv1["air_json"].is_object(), "child v1 air");
 
     // Parent pins child v1 explicitly.
-    let parent =
-        create_with_graph(&app, "Parent", &parent_graph(child_v1, VersionPin::Pinned { version: 1 }))
-            .await;
+    let parent = create_with_graph(
+        &app,
+        "Parent",
+        &parent_graph(child_v1, VersionPin::Pinned { version: 1 }),
+    )
+    .await;
     let pub_body = publish(&app, parent).await;
     let parent_air_v1 = pub_body["air_json"].clone();
     assert!(parent_air_v1.is_object(), "parent air populated");
@@ -308,7 +317,9 @@ async fn subworkflow_pins_child_at_parent_publish() {
     }
     let cv2 = publish(&app, child_v2).await;
     assert!(
-        serde_json::to_string(&cv2["air_json"]).unwrap().contains("cv2start"),
+        serde_json::to_string(&cv2["air_json"])
+            .unwrap()
+            .contains("cv2start"),
         "child v2 should compile its own new graph"
     );
 
@@ -335,9 +346,12 @@ async fn subworkflow_pins_child_at_parent_publish() {
     // A NEW parent on `Latest`, published *after* child v2, re-resolves to v2
     // — proving the freeze is specific to already-published parents, not the
     // resolver ignoring newer versions.
-    let parent2 =
-        create_with_graph(&app, "Parent Latest", &parent_graph(child_v1, VersionPin::Latest))
-            .await;
+    let parent2 = create_with_graph(
+        &app,
+        "Parent Latest",
+        &parent_graph(child_v1, VersionPin::Latest),
+    )
+    .await;
     let p2 = publish(&app, parent2).await;
     let p2_air = serde_json::to_string(&p2["air_json"]).unwrap();
     assert!(
@@ -359,8 +373,7 @@ async fn private_subworkflow_embeddable_only_by_owner() {
     publish(&app, child).await;
 
     // The owner references the child and is pinned as the child's sole owner.
-    let owner =
-        create_with_graph(&app, "Owner", &parent_graph(child, VersionPin::Latest)).await;
+    let owner = create_with_graph(&app, "Owner", &parent_graph(child, VersionPin::Latest)).await;
 
     // Mark the child private to the owner family via the visibility endpoint.
     let resp = app
@@ -436,7 +449,8 @@ async fn publish_io_child(app: &axum::Router, tag: &str) -> Uuid {
         edges: vec![edge("ce", &s, &e)],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let id = create_with_graph(app, "IO Child", &graph).await;
     publish(app, id).await;
@@ -450,7 +464,13 @@ async fn get_io_contract(app: &axum::Router, family: Uuid, version: Option<i32>)
     };
     let resp = app
         .clone()
-        .oneshot(Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
@@ -478,7 +498,11 @@ async fn io_contract_endpoint_derives_input_and_output() {
     let child = publish_io_child(&app, "ioc").await;
 
     let latest = get_io_contract(&app, child, None).await;
-    assert_eq!(field_names(&latest["input"]), vec!["message"], "input ← Start.initial");
+    assert_eq!(
+        field_names(&latest["input"]),
+        vec!["message"],
+        "input ← Start.initial"
+    );
     assert_eq!(
         field_names(&latest["output"]),
         vec!["invoice_amount", "status"],
@@ -496,7 +520,10 @@ async fn io_contract_endpoint_derives_input_and_output() {
 
     // Pinned v1 resolves to the same contract (only one version exists).
     let pinned = get_io_contract(&app, child, Some(1)).await;
-    assert_eq!(field_names(&pinned["output"]), vec!["invoice_amount", "status"]);
+    assert_eq!(
+        field_names(&pinned["output"]),
+        vec!["invoice_amount", "status"]
+    );
 }
 
 /// The keystone of this feature: a SubWorkflow node's output port is DERIVED
@@ -520,7 +547,8 @@ async fn subworkflow_output_derived_and_borrowable() {
         edges: vec![edge("pe1", "ps", "sub"), edge("pe2", "sub", "pe")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let parent = create_with_graph(&app, "Borrowing Parent", &parent_graph).await;
     let body = publish(&app, parent).await;
@@ -553,7 +581,8 @@ async fn subworkflow_borrow_of_undeclared_child_field_rejected() {
         edges: vec![edge("pe1", "ps", "sub"), edge("pe2", "sub", "pe")],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     };
     let parent = create_with_graph(&app, "Bad Borrow Parent", &parent_graph).await;
 
@@ -601,13 +630,13 @@ async fn subworkflow_spawns_child_and_completes() {
         );
     }
 
-    let engine_nats_url =
-        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
-    let (app, db) =
-        common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
     // Lifecycle listener on the engine's NATS so instance status reaches the DB.
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -631,12 +660,8 @@ async fn subworkflow_spawns_child_and_completes() {
     // Child + parent, both published.
     let child = create_with_graph(&app, "E2E Child", &child_graph("e2ec")).await;
     publish(&app, child).await;
-    let parent = create_with_graph(
-        &app,
-        "E2E Parent",
-        &parent_graph(child, VersionPin::Latest),
-    )
-    .await;
+    let parent =
+        create_with_graph(&app, "E2E Parent", &parent_graph(child, VersionPin::Latest)).await;
     publish(&app, parent).await;
 
     // Create an instance of the parent (deploys + sets running).
@@ -697,11 +722,7 @@ async fn subworkflow_spawns_child_and_completes() {
 /// Like `create_with_graph`, but takes an already-shaped JSON graph so the
 /// child + parent can declare custom Start input fields, End result mappings,
 /// and a slug on the SubWorkflow node without rebuilding the typed helpers.
-async fn create_with_graph_json(
-    app: &axum::Router,
-    name: &str,
-    graph: &Value,
-) -> Uuid {
+async fn create_with_graph_json(app: &axum::Router, name: &str, graph: &Value) -> Uuid {
     let resp = app
         .clone()
         .oneshot(
@@ -752,14 +773,14 @@ async fn subworkflow_borrows_child_output_field() {
         );
     }
 
-    let engine_nats_url =
-        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
-    let (app, db) =
-        common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
     // Lifecycle listener — without this the instance status never advances
     // past `running` in Postgres even though the engine completes the net.
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -919,13 +940,12 @@ async fn subworkflow_borrows_child_output_field() {
             break;
         }
         if status == "failed" {
-            let result: Option<Value> = sqlx::query_scalar(
-                "SELECT result FROM workflow_instances WHERE id = $1",
-            )
-            .bind(instance_id)
-            .fetch_one(&db)
-            .await
-            .unwrap();
+            let result: Option<Value> =
+                sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+                    .bind(instance_id)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap();
             panic!("parent instance failed (result: {result:?})");
         }
         if started.elapsed() > deadline {
@@ -934,22 +954,23 @@ async fn subworkflow_borrows_child_output_field() {
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
 
-    let result: Value =
-        sqlx::query_scalar::<_, Option<Value>>(
-            "SELECT result FROM workflow_instances WHERE id = $1",
-        )
-        .bind(instance_id)
-        .fetch_one(&db)
-        .await
-        .unwrap()
-        .expect("result column was null — End's resultMapping produced no envelope");
+    let result: Value = sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT result FROM workflow_instances WHERE id = $1",
+    )
+    .bind(instance_id)
+    .fetch_one(&db)
+    .await
+    .unwrap()
+    .expect("result column was null — End's resultMapping produced no envelope");
 
     assert_eq!(
-        result["ok"], json!(true),
+        result["ok"],
+        json!(true),
         "expected success envelope on parent, got: {result}"
     );
     assert_eq!(
-        result["value"]["greeting"], json!("Hello, world"),
+        result["value"]["greeting"],
+        json!("Hello, world"),
         "parent End should borrow `sub.greeting` from the child via read-arc \
          on p_sub_data. Got: {result}. If null/missing, the parked envelope \
          isn't reaching the End — check t_sub_join's exit_code.value unwrap \

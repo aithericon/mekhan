@@ -49,12 +49,10 @@ pub fn check_auth(
     match &trigger.auth {
         WebhookAuth::None => Ok(()),
         WebhookAuth::SharedSecret { header, secret_ref } => {
-            let provided = lookup_header(headers, header).ok_or_else(|| {
-                format!("missing required auth header '{header}'")
-            })?;
-            let expected = secret_resolver(secret_ref).ok_or_else(|| {
-                format!("secret '{secret_ref}' not configured")
-            })?;
+            let provided = lookup_header(headers, header)
+                .ok_or_else(|| format!("missing required auth header '{header}'"))?;
+            let expected = secret_resolver(secret_ref)
+                .ok_or_else(|| format!("secret '{secret_ref}' not configured"))?;
             if constant_eq(provided.as_bytes(), expected.as_bytes()) {
                 Ok(())
             } else {
@@ -66,8 +64,10 @@ pub fn check_auth(
             // out until we wire a real signing helper. Reject with a clear
             // message so test traffic doesn't silently slip through.
             let _ = (header, secret_ref, body);
-            Err("SignedHmac webhook auth is not yet implemented (Phase 5e ships SharedSecret only)"
-                .to_string())
+            Err(
+                "SignedHmac webhook auth is not yet implemented (Phase 5e ships SharedSecret only)"
+                    .to_string(),
+            )
         }
     }
 }
