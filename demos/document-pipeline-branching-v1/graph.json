@@ -195,7 +195,7 @@
       "data": {
         "type": "automated_step",
         "label": "Extract — Bloodwork (OCR-text)",
-        "description": "Lab-result extractor driven by the OCR text. Each row of the result table becomes one field. For every field the model returns a word_range [start_word_index, end_word_index] (inclusive) pointing at the VALUE in the OCR words — used downstream to union per-word boxes into a visual_ref.",
+        "description": "Lab-result extractor driven by the OCR text. Each row of the result table becomes one field (key = exact test-name spelling, value, unit, reference_range). Bounding boxes are NOT emitted here — resolve-bbox grounds each field to the document using Surya's word geometry, matched by the test-name key.",
         "executionSpec": {
           "backendType": "llm",
           "config": {
@@ -204,8 +204,8 @@
             "base_url": "http://localhost:11434",
             "temperature": 0,
             "max_tokens": 8192,
-            "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. For each field return word_range = [start_word_index, end_word_index] (inclusive) pointing at the VALUE in the OCR words.",
-            "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, word_range:[start,end]}]}.",
+            "system_prompt": "You are a medical lab-result extractor. Each row of the lab table = one test. Distinguish test NAME (text label like GOT, GPT, ALT, Hämoglobin, Leukozyten, Glucose) from VALUE (the number). NEVER put the test name in the value field. Use the EXACT test-name spelling as it appears in the document for `key` — it is matched back to the document layout downstream.",
+            "prompt": "Extract every lab value from this document.\n\nOCR text:\n---\n{{ ocr.full_text }}\n---\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence}]}.",
             "response_format": {
               "type": "json_schema",
               "schema": {
@@ -230,7 +230,7 @@
       "data": {
         "type": "automated_step",
         "label": "Resolve bbox (Python)",
-        "description": "Per field, union the OCR word boxes whose word_index falls in the field's word_range into a visual_ref {page (1-based), bbox{x,y,w,h ∈ 0..1}}. Fuzzy value-match fallback when word_range is absent. Reads ocr.words (read-arc borrow) + extract_bloodwork.fields. Ports the clinic's deleted visual_references::bbox_from_word_range cascade.",
+        "description": "Grounds each extracted field to a visual_ref {page (1-based), bbox{x,y,w,h ∈ 0..1}} using Surya's OCR word geometry DIRECTLY — never the LLM. Matches the field's test-name key to its OCR row (value-match fallback) and unions that row's word boxes. Reads ocr.words (read-arc borrow) + extract_bloodwork.fields.",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -269,7 +269,7 @@
             "temperature": 0,
             "max_tokens": 6144,
             "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field from the document image.",
-            "prompt": "Extract every identifiable field from this {{ classify.document_type }} document.\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, word_range:[start,end]}]}. You have no OCR word index, so set word_range to null.",
+            "prompt": "Extract every identifiable field from this {{ classify.document_type }} document.\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence}]}.",
             "images": [
               { "path": "{{ render.page_1 }}" }
             ],
@@ -459,13 +459,7 @@
               "value": { "type": "string" },
               "unit": { "type": ["string", "null"] },
               "reference_range": { "type": ["string", "null"] },
-              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-              "word_range": {
-                "type": ["array", "null"],
-                "items": { "type": "integer", "minimum": 0 },
-                "minItems": 2,
-                "maxItems": 2
-              }
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
             },
             "additionalProperties": false
           }

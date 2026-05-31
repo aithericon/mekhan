@@ -1240,7 +1240,7 @@ mod tests {
             .expect("extract-bloodwork config")
             .to_string();
         assert!(
-            bw.contains("word_range"),
+            bw.contains("reference_range"),
             "extract-bloodwork config must contain the expanded ExtractionFields schema: {bw}"
         );
         assert!(
