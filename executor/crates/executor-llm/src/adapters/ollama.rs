@@ -64,6 +64,12 @@ struct OllamaChatRequest<'a> {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     format: Option<&'a serde_json::Value>,
+    /// Reasoning toggle. `Some(false)` disables a reasoning model's
+    /// chain-of-thought (critical for bounded structured-output extraction —
+    /// a reasoning model left on can loop under `format`); omitted when `None`
+    /// to keep the model's default. Non-reasoning models ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
     /// Tool declarations in Ollama's native shape — `{type:"function",
@@ -272,6 +278,7 @@ async fn ollama_complete(
         messages,
         stream: false,
         format,
+        think: request.reasoning,
         options,
         tools,
     };
@@ -390,6 +397,7 @@ mod tests {
             messages: vec![],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![],
         };
@@ -398,6 +406,7 @@ mod tests {
             messages: vec![],
             stream: false,
             format: None,
+            think: None,
             options: None,
             tools: None,
         };
@@ -434,6 +443,7 @@ mod tests {
             messages: vec![],
             stream: false,
             format: None,
+            think: None,
             options: None,
             tools: Some(vec![decl]),
         };
@@ -442,6 +452,40 @@ mod tests {
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "lookup_order");
         assert_eq!(tools[0]["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn reasoning_toggle_maps_to_ollama_think_field() {
+        // Some(false) -> wire `think: false` (disable a reasoning model's
+        // chain-of-thought, e.g. for bounded structured-output extraction).
+        let off = OllamaChatRequest {
+            model: "qwen3.6:35b-a3b",
+            messages: vec![],
+            stream: false,
+            format: None,
+            think: Some(false),
+            options: None,
+            tools: None,
+        };
+        let wire = serde_json::to_value(&off).unwrap();
+        assert_eq!(wire["think"], serde_json::json!(false));
+
+        // None -> `think` elided entirely so non-reasoning requests stay
+        // byte-identical to pre-toggle behaviour (model's own default).
+        let unset = OllamaChatRequest {
+            model: "qwen3.6:35b-a3b",
+            messages: vec![],
+            stream: false,
+            format: None,
+            think: None,
+            options: None,
+            tools: None,
+        };
+        let wire = serde_json::to_value(&unset).unwrap();
+        assert!(
+            !wire.as_object().unwrap().contains_key("think"),
+            "think must be elided when reasoning is None: {wire}"
+        );
     }
 
     #[test]

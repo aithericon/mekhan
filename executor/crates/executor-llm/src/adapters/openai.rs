@@ -558,6 +558,7 @@ mod tests {
             messages: vec![Message::text(Role::User, "say hi".into())],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: format,
             tools: vec![],
         }
@@ -659,6 +660,7 @@ mod tests {
             ],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![],
         };

@@ -189,6 +189,10 @@ pub(crate) async fn run_completion(
         messages,
         temperature: req.temperature,
         max_tokens: req.max_tokens,
+        // HTTP pool path: reasoning toggle not yet plumbed through the
+        // inference wire request; the NATS-async backend path (from_config)
+        // carries it. Leave provider default here.
+        reasoning: None,
         response_format,
         tools,
     };

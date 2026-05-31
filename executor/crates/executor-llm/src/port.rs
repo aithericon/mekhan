@@ -28,6 +28,10 @@ pub struct CompletionRequest {
     pub messages: Vec<Message>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
+    /// Reasoning toggle ("thinking"). `None` = provider default, `Some(false)`
+    /// disables it, `Some(true)` forces it. Mapped to Ollama's `think` param;
+    /// ignored by adapters whose models don't reason.
+    pub reasoning: Option<bool>,
     pub response_format: ResponseFormat,
     /// Tools the LLM may call. Empty for non-agent single-shot calls.
     /// Adapters serialize these into provider-specific tool blocks.
@@ -172,6 +176,7 @@ impl CompletionRequest {
             messages,
             temperature: config.temperature,
             max_tokens: config.max_tokens,
+            reasoning: config.reasoning,
             response_format,
             tools: config.tools.clone(),
         }

@@ -104,6 +104,7 @@ pub async fn run_agent_loop(
             messages: messages.clone(),
             temperature,
             max_tokens,
+            reasoning: initial_request.reasoning,
             response_format: ResponseFormat::Text,
             tools: tools.clone(),
         };
@@ -344,6 +345,7 @@ mod tests {
             messages: vec![],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![],
         };
@@ -376,6 +378,7 @@ mod tests {
             messages: vec![],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![ToolSchema {
                 name: "search_patient_context".to_string(),
@@ -433,6 +436,7 @@ mod tests {
             messages: vec![],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![ToolSchema {
                 name: "loop_tool".to_string(),
@@ -477,6 +481,7 @@ mod tests {
             messages: vec![],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![
                 ToolSchema {
@@ -541,6 +546,7 @@ mod tests {
             messages: vec![],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![ToolSchema {
                 name: "failing_tool".to_string(),

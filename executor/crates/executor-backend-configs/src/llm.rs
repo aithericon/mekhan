@@ -216,6 +216,17 @@ pub struct LlmConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
 
+    /// Whether the model uses reasoning / chain-of-thought ("thinking").
+    /// Maps to Ollama's `think` request parameter. `None` = leave the model's
+    /// provider default; `Some(false)` disables reasoning; `Some(true)` forces
+    /// it on. Disabling matters for reasoning-capable models (e.g. qwen3.6)
+    /// doing structured-output extraction: with reasoning on under a
+    /// `format`/json-schema constraint they can loop and generate to the token
+    /// cap without emitting valid JSON. Adapters for non-reasoning models
+    /// ignore this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+
     /// Response format constraint. When set to `json_schema`, the provider
     /// will use constrained decoding to guarantee valid JSON output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
