@@ -121,6 +121,7 @@ async fn secret_template_stays_on_disk_plaintext_only_reaches_child() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 
@@ -294,6 +295,7 @@ async fn no_secret_store_means_no_resolution_at_all() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 
@@ -418,6 +420,7 @@ async fn inline_input_secret_is_resolved_in_staged_file_only() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 
@@ -551,6 +554,7 @@ async fn inline_input_without_secret_template_is_not_diverted() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 

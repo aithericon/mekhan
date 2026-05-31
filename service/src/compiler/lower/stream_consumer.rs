@@ -66,24 +66,18 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
         unreachable!("lower_stream_consumer on non-StreamConsumer node")
     };
 
-    // `LiveReduce` is a Phase-3 capability (one long-lived Python reducer fed
-    // chunks over IPC). Reject cleanly here so the build is green and the editor
-    // rings the node — no IPC/feed wiring this phase.
-    if matches!(dispatch, StreamDispatch::LiveReduce) {
-        return Err(CompileError::StreamConsumerLiveReduceUnsupported {
-            node_id: id.clone(),
-        });
-    }
-
-    // Body-dispatch modes (Sequential/Parallel) require a wired body — at least
-    // one child (`parent_id == consumer.id`). Mirrors `lower_map`'s `MapEmpty`
-    // gate; the structural `body_in`/`body_out` edge presence is the publish-time
-    // mirror in `validate_stream_consumer`.
+    // Body-dispatch modes (Sequential/Parallel/LiveReduce) require a wired body
+    // — at least one child (`parent_id == consumer.id`). Mirrors `lower_map`'s
+    // `MapEmpty` gate; the structural `body_in`/`body_out` edge presence is the
+    // publish-time mirror in `validate_stream_consumer`.
     let body_mode = matches!(
         dispatch,
-        StreamDispatch::SequentialBody | StreamDispatch::ParallelBody
+        StreamDispatch::SequentialBody
+            | StreamDispatch::ParallelBody
+            | StreamDispatch::LiveReduce
     );
     let sequential = matches!(dispatch, StreamDispatch::SequentialBody);
+    let live_reduce = matches!(dispatch, StreamDispatch::LiveReduce);
     if body_mode && cx.children.is_empty() {
         return Err(CompileError::StreamConsumerBodyEmpty {
             node_id: id.clone(),
@@ -221,22 +215,89 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
             // declared `<resultVar>` output and RETURN the permit so the next
             // chunk can dispatch. Copy of `lower_map`'s collect plus the permit
             // return (`#{ result: .., permit: .. }`).
-            //
-            // BODY FAILURE: the permit is returned only on a normal `p_body_out`
-            // token, so a body that fails WITHOUT reaching `body_out` strands the
-            // permit. This is by design and matches `lower_map` (a failed Map body
-            // likewise wedges the gather — neither container adds a failure arc):
-            // an unwired body error propagates as `NetFailed` (the merged
-            // panic-on-unconnected-failure contract), failing the whole net
-            // cleanly rather than wedging. The only wedge case is a body whose
-            // error handle is explicitly wired to a handler that swallows it — an
-            // advanced misuse, identical for Map.
             ctx.transition(format!("t_{id}_collect"), format!("{label} - Collect"))
                 .auto_input("body", &p_body_out)
                 .auto_output("result", &p_results)
                 .auto_output("permit", &p_lock)
                 .logic_rhai(format!(
                     "#{{ result: #{{ value: body.detail.outputs.{result_var}, \"__map_idx\": body.__map_idx, \"__map_id\": body.__map_id }}, permit: #{{ permit: true }} }}"
+                ))
+                .done();
+        } else if live_reduce {
+            // ── LiveReduce: one long-lived reducer, fed chunks over IPC ─────
+            // t_<id>_start_reducer: fire on the FIRST chunk to arrive at
+            // `p_stream_in`. Consumes the chunk + a singleton `p_started` lock;
+            // emits a "start" token to `p_body_in` (the reducer job's inbox)
+            // and re-emits the chunk to `p_stream_in` so `t_feed` can catch it.
+            let p_started: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_started"), format!("{label} - Start Lock"));
+            ctx.seed_one(&p_started, DynamicToken::new(json!({ "started": false })));
+
+            ctx.transition(
+                format!("t_{id}_start_reducer"),
+                format!("{label} - Start Reducer"),
+            )
+            .auto_input("chunk", &p_stream_in)
+            .auto_input("lock", &p_started)
+            .auto_output("body", &p_body_in)
+            .auto_output("chunk", &p_stream_in)
+            .logic_rhai(format!(
+                "#{{ body: #{{ {result_var}: chunk.detail.value, \"__map_idx\": chunk.sequence, \"__map_id\": \"{id_lit}\" }}, chunk: chunk }}"
+            ))
+            .done();
+
+            // The reducer's execution_id is captured from its lifecycle's
+            // `submitted` place and parked at `p_exec_id`.
+            let p_exec_id: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_exec_id"),
+                format!("{label} - Reducer Execution ID"),
+            );
+            let child_id = &cx.children[0].id;
+            let p_child_submitted = PlaceHandle::<DynamicToken>::external(format!("p_{child_id}_submitted"));
+
+            ctx.transition(
+                format!("t_{id}_capture_exec_id"),
+                format!("{label} - Capture Exec ID"),
+            )
+            .read_input("submitted", &p_child_submitted)
+            .auto_output("exec_id", &p_exec_id)
+            .logic_rhai("#{ exec_id: #{ id: submitted.execution_id } }".to_string())
+            .done();
+
+            // t_<id>_feed: fire for every chunk at `p_stream_in`. Requires
+            // `p_exec_id` to be present (the reducer must have started).
+            let p_feed_inbox: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_feed_inbox"), format!("{label} - Feed Inbox"));
+            ctx.transition(format!("t_{id}_feed"), format!("{label} - Feed Chunk"))
+                .auto_input("chunk", &p_stream_in)
+                .read_input("exec", &p_exec_id)
+                .auto_output("feed", &p_feed_inbox)
+                .logic_rhai("#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: chunk.sequence } }".to_string())
+                .done();
+
+            ctx.transition(
+                format!("t_{id}_feed_effect"),
+                format!("{label} - Stream Feed Effect"),
+            )
+            .auto_input("feed", &p_feed_inbox)
+            .builtin_effect(&petri_domain::effects::EXECUTOR_STREAM_FEED);
+
+            // t_<id>_eof: fire on producer EOS. Send EOF sentinel to reducer.
+            ctx.transition(format!("t_{id}_eof"), format!("{label} - Feed EOF"))
+                .auto_input("ctrl", &p_control_in)
+                .read_input("exec", &p_exec_id)
+                .auto_output("feed", &p_feed_inbox)
+                .logic_rhai("let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; \
+                             #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }".to_string())
+                .done();
+
+            // Collect the reducer's final output. `p_body_out` receives the
+            // terminal token from the body child (the reducer's completion).
+            ctx.transition(format!("t_{id}_collect"), format!("{label} - Collect"))
+                .auto_input("body", &p_body_out)
+                .auto_output("result", &p_gathered)
+                .logic_rhai(format!(
+                    "#{{ result: #{{ output: body.detail.outputs.{result_var} }} }}"
                 ))
                 .done();
         } else {

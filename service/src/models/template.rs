@@ -332,6 +332,10 @@ pub enum WorkflowNodeData {
         /// `retry_policy`/`deployment_model`).
         #[serde(rename = "streamOutput", default)]
         stream_output: bool,
+        /// Opt-in for the INbound live chunk feed (the "live IPC reducer").
+        /// Chunks are fed into the still-running job over IPC.
+        #[serde(rename = "feedChunks", default)]
+        feed_chunks: bool,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -2837,6 +2841,7 @@ pub mod dsl {
                         // DSL does not model resource pools (yet).
                         // DSL does not model streaming output (prototype flag).
                         stream_output: false,
+                        feed_chunks: false,
                     })
                 }
                 "decision" => {

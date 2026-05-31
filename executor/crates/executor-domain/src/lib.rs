@@ -100,6 +100,7 @@ mod tests {
             timeout: Some(std::time::Duration::from_secs(300)),
             priority: JobPriority::High,
             stream_events: Some(vec![EventCategory::Metric, EventCategory::Log]),
+            feed_chunks: false,
             wrapped_secrets: None,
         };
 
@@ -149,6 +150,7 @@ mod tests {
             timeout: None,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         };
 
@@ -189,6 +191,7 @@ mod tests {
             timeout: None,
             priority: JobPriority::Medium,
             stream_events: Some(vec![EventCategory::Metric, EventCategory::Log]),
+            feed_chunks: false,
             wrapped_secrets: None,
         };
         let json = serde_json::to_string(&job).unwrap();
@@ -447,6 +450,7 @@ mod tests {
             timeout: None,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         };
 

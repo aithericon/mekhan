@@ -784,6 +784,7 @@ flow:
                         retry_policy: custom_retry,
                         deployment_model: Default::default(),
                         stream_output: false,
+                        feed_chunks: false,
                     },
                     parent_id: None,
                     width: None,

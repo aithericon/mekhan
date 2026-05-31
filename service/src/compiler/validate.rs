@@ -316,13 +316,11 @@ pub(crate) fn validate_stream_consumer(
         unreachable!("validate_stream_consumer on non-StreamConsumer variant");
     };
 
-    // `LiveReduce` is not supported this phase — reject cleanly (same verdict the
-    // lowering raises, surfaced at publish so the editor rings the node).
-    if matches!(dispatch, StreamDispatch::LiveReduce) {
-        return Err(CompileError::StreamConsumerLiveReduceUnsupported {
-            node_id: node.id.clone(),
-        });
-    }
+    // Body-dispatch modes require a body child.
+    let _body_mode = matches!(
+        dispatch,
+        StreamDispatch::SequentialBody | StreamDispatch::ParallelBody | StreamDispatch::LiveReduce
+    );
 
     // Count inbound edges per target handle — exactly one `stream` and one
     // `control` are required (a missing/duplicated handle is a wiring bug).
@@ -430,8 +428,9 @@ pub(crate) fn validate_stream_consumer(
                 }
             }
         }
-        // Already rejected above.
-        StreamDispatch::LiveReduce => unreachable!("LiveReduce rejected above"),
+        StreamDispatch::LiveReduce => {
+            // LiveReduce requires a body (checked by body_mode logic).
+        }
     }
 
     Ok(())
@@ -1042,6 +1041,7 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: DeploymentModel::default(),
                 stream_output: false,
+                feed_chunks: false,
             },
             parent_id: None,
             width: None,

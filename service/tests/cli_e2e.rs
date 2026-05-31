@@ -511,6 +511,7 @@ async fn graph_topology_roundtrip() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Process Data".to_string(),
                     description: Some("Processes input data".to_string()),
+                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
@@ -778,6 +779,7 @@ async fn yaml_format_roundtrip() {
                         retry_policy: Default::default(),
                         deployment_model: Default::default(),
                         stream_output: false,
+                        feed_chunks: false,
                     },
                     parent_id: None,
                     width: None,

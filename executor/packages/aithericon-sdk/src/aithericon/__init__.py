@@ -28,6 +28,9 @@ from aithericon._inputs import load_inputs, token, Token
 # Outputs
 from aithericon._outputs import set_output
 
+# Inbound live chunk feed (live IPC reducer)
+from aithericon._chunks import chunks
+
 # Artifacts
 from aithericon._artifacts import log_artifact
 
@@ -51,6 +54,7 @@ __all__ = [
     "token",
     "Token",
     "set_output",
+    "chunks",
     "log_artifact",
     "update_progress",
     "define_phases",

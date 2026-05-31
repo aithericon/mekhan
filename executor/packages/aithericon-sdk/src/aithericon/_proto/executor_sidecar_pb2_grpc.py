@@ -5,7 +5,7 @@ import warnings
 
 from aithericon._proto import executor_sidecar_pb2 as executor__sidecar__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -79,6 +79,11 @@ class ExecutorSidecarStub(object):
                 request_serializer=executor__sidecar__pb2.ShutdownAckRequest.SerializeToString,
                 response_deserializer=executor__sidecar__pb2.SidecarResponse.FromString,
                 _registered_method=True)
+        self.StreamChunks = channel.unary_stream(
+                '/aithericon.executor.ipc.ExecutorSidecar/StreamChunks',
+                request_serializer=executor__sidecar__pb2.StreamChunksRequest.SerializeToString,
+                response_deserializer=executor__sidecar__pb2.ChunkMessage.FromString,
+                _registered_method=True)
 
 
 class ExecutorSidecarServicer(object):
@@ -138,6 +143,17 @@ class ExecutorSidecarServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def StreamChunks(self, request, context):
+        """Inbound live data feed: the child opens this server-stream and pulls
+        chunks the executor receives (over the EXECUTOR_CHUNKS JetStream feed)
+        while the child is still running. Drives the Python SDK's
+        `for chunk in aithericon.chunks()` live-reducer loop. The stream ends
+        when an in-band EOF sentinel (`ChunkMessage{is_eof:true}`) is reached.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ExecutorSidecarServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -185,6 +201,11 @@ def add_ExecutorSidecarServicer_to_server(servicer, server):
                     servicer.ShutdownAck,
                     request_deserializer=executor__sidecar__pb2.ShutdownAckRequest.FromString,
                     response_serializer=executor__sidecar__pb2.SidecarResponse.SerializeToString,
+            ),
+            'StreamChunks': grpc.unary_stream_rpc_method_handler(
+                    servicer.StreamChunks,
+                    request_deserializer=executor__sidecar__pb2.StreamChunksRequest.FromString,
+                    response_serializer=executor__sidecar__pb2.ChunkMessage.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -430,6 +451,33 @@ class ExecutorSidecar(object):
             '/aithericon.executor.ipc.ExecutorSidecar/ShutdownAck',
             executor__sidecar__pb2.ShutdownAckRequest.SerializeToString,
             executor__sidecar__pb2.SidecarResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StreamChunks(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/aithericon.executor.ipc.ExecutorSidecar/StreamChunks',
+            executor__sidecar__pb2.StreamChunksRequest.SerializeToString,
+            executor__sidecar__pb2.ChunkMessage.FromString,
             options,
             channel_credentials,
             insecure,
