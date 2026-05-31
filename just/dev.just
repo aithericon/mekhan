@@ -34,7 +34,7 @@ work_dir  := ".dev/work"
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,vault"
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,surya,smtp,vault"
 
 # Local infra endpoints (also baked into service/mekhan.toml + engine env)
 nats_url     := "nats://localhost:4333"

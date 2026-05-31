@@ -49,6 +49,7 @@ impl PetriClient {
         net_id: &str,
         air_json: &Value,
         dispatch_options: DispatchOptions,
+        net_parameters: Option<Value>,
     ) -> Result<(), PetriError> {
         let url = format!("{}/api/nets/{}/scenario", self.base_url, net_id);
         // The engine consumes a typed `ScenarioDefinition`; the launcher's
@@ -61,10 +62,16 @@ impl PetriClient {
                 body: format!("parameterized AIR is not a valid ScenarioDefinition: {e}"),
             },
         )?;
+        // Tenant propagation D1-A: `net_parameters` rides the same envelope and
+        // is stored on the engine's net service via `set_net_parameters`, where
+        // the firing path reads `net_parameters.tenant_id` into the pre-dispatch
+        // metadata. Serialize-skips when `None`, so a fire without parameters
+        // renders byte-identically to the prior wire shape.
         let envelope = LoadScenarioRequest {
             scenario,
             skip_mask: dispatch_options.skip_mask,
             stage_overrides: dispatch_options.stage_overrides,
+            net_parameters,
         };
         let resp = self.client.post(&url).json(&envelope).send().await?;
         if !resp.status().is_success() {

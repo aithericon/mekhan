@@ -115,6 +115,10 @@ pub async fn create_instance(
             // harness drives via fire_trigger). Plain create-instance →
             // empty dispatch options.
             dispatch_options: petri_api_types::DispatchOptions::default(),
+            // Tenant propagation (D1-A) is surfaced at the trigger-fire
+            // boundary; the user POST create-instance path does not carry
+            // a net-parameter bag today.
+            net_parameters: None,
         })
         .await
         .map_err(|e| match e {

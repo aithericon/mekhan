@@ -397,6 +397,7 @@ where
         scenario,
         skip_mask,
         stage_overrides,
+        net_parameters,
     } = envelope;
 
     if let Err((status, message)) = validate_dispatch_options(&scenario, &skip_mask, &stage_overrides) {
@@ -459,6 +460,15 @@ where
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     app_state.service.set_initial_tokens(initial_tokens.clone());
+
+    // Store the submitter-supplied net parameter bag on the service so the
+    // firing path can consult it for `$params.` resolution and pre-dispatch
+    // metadata (e.g. `tenant_id`). Opaque, generic infra — no domain semantics
+    // ascribed here. Mirrors the NATS create-net path's `set_net_parameters`
+    // call in the engine binary; absent parameters leave the prior `None`.
+    if let Some(params) = net_parameters {
+        app_state.service.set_net_parameters(params);
+    }
 
     // Build and register schema registry if definitions are present
     if !parsed.definitions.is_empty() {

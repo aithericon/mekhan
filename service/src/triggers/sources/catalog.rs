@@ -69,6 +69,7 @@ pub async fn evaluate(dispatcher: &TriggerDispatcher, entry: &CatalogueEntry) {
                 &rec.node_id,
                 payload,
                 petri_api_types::DispatchOptions::default(),
+                None,
             )
             .await
         {
@@ -151,6 +152,7 @@ pub async fn backfill_one(
                 &node_id,
                 payload,
                 petri_api_types::DispatchOptions::default(),
+                None,
             )
             .await
         {

@@ -105,6 +105,13 @@ pub enum LaunchSpec<'a> {
         /// `DispatchOptions::default()` when the create-instance handler
         /// does not surface ablation.
         dispatch_options: DispatchOptions,
+        /// Submitter-supplied net-level parameter bag (tenant propagation
+        /// D1-A). Threaded into the engine's `LoadScenarioRequest.net_parameters`
+        /// where it is stored via `set_net_parameters` on the spawned net's
+        /// service. Opaque, generic infra — the firing path reads it for
+        /// `$params.` resolution and pre-dispatch metadata (e.g. `tenant_id`).
+        /// `None` when the caller surfaces no parameters.
+        net_parameters: Option<Value>,
     },
     PreAir {
         instance_id: Uuid,
@@ -127,6 +134,10 @@ pub enum LaunchSpec<'a> {
         /// through trigger-fired runs identically to the prior
         /// scenario-submit path.
         dispatch_options: DispatchOptions,
+        /// Submitter-supplied net-level parameter bag (tenant propagation
+        /// D1-A). Threaded into the engine's `LoadScenarioRequest.net_parameters`.
+        /// See the `Templated` variant for full semantics.
+        net_parameters: Option<Value>,
     },
 }
 
@@ -165,6 +176,7 @@ impl<'a> InstanceLauncher<'a> {
             created_by,
             metadata,
             dispatch_options,
+            net_parameters,
             mode,
             test_id,
         ) = match spec {
@@ -181,6 +193,7 @@ impl<'a> InstanceLauncher<'a> {
                 mode,
                 test_id,
                 dispatch_options,
+                net_parameters,
             } => {
                 let parameterized = parameterize_air(
                     air_json,
@@ -200,6 +213,7 @@ impl<'a> InstanceLauncher<'a> {
                     created_by,
                     metadata,
                     dispatch_options,
+                    net_parameters,
                     mode,
                     test_id,
                 )
@@ -215,6 +229,7 @@ impl<'a> InstanceLauncher<'a> {
                 air_target_place_id,
                 token,
                 dispatch_options,
+                net_parameters,
             } => {
                 let parameterized = parameterize_for_place(
                     air_json,
@@ -234,6 +249,7 @@ impl<'a> InstanceLauncher<'a> {
                     created_by,
                     metadata,
                     dispatch_options,
+                    net_parameters,
                     // Pre-AIR triggers are headless service calls — no
                     // template-test runner / experiment-mode framing applies.
                     None,
@@ -265,7 +281,10 @@ impl<'a> InstanceLauncher<'a> {
             LaunchError::Database(e.to_string())
         })?;
 
-        if let Err(e) = deploy_instance(self.petri, &net_id, &parameterized, dispatch_options).await {
+        if let Err(e) =
+            deploy_instance(self.petri, &net_id, &parameterized, dispatch_options, net_parameters)
+                .await
+        {
             tracing::error!("failed to deploy instance to petri-lab: {e}");
             // Roll the row back so lifecycle never observes a phantom /
             // never-deployed instance.

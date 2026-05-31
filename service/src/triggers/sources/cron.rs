@@ -177,7 +177,12 @@ async fn fire_once(
         "scheduled_time": scheduled_time.to_rfc3339(),
     });
     match dispatcher
-        .fire(node_id, payload, petri_api_types::DispatchOptions::default())
+        .fire(
+            node_id,
+            payload,
+            petri_api_types::DispatchOptions::default(),
+            None,
+        )
         .await
     {
         Ok(result) => {

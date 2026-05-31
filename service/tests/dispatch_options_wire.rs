@@ -70,6 +70,7 @@ fn load_scenario_request_wire_carries_skip_mask_and_stage_overrides() {
         scenario,
         skip_mask: vec!["t_skip".to_string()],
         stage_overrides: overrides,
+        net_parameters: None,
     };
 
     let wire = serde_json::to_value(&envelope).expect("envelope must serialize");

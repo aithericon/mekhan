@@ -558,7 +558,16 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                 if !rt.chain.is_empty() {
                     let metadata_template = PreDispatchMetadata {
                         scenario_id: None,
-                        tenant_id: None,
+                        // Generic infra: submitter-supplied `net_parameters.tenant_id`
+                        // (set on the spawned net at scenario-load) populates the
+                        // pre-dispatch metadata's `tenant_id`, which threads onward
+                        // into `HttpPreDispatchRequest.metadata.tenant_id`. The
+                        // engine ascribes no semantics to the value — it is an opaque
+                        // string the net's parameter bag declares.
+                        tenant_id: net_parameters
+                            .and_then(|p| p.get("tenant_id"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
                         correlation_id: None,
                         process_step: process_step.clone(),
                         hook_chain_index: 0,

@@ -14,18 +14,28 @@ JSON-schema enum values, never as mekhan engine/pool/backend vocabulary.
 ## Shape
 
 ```
-trigger ─► start ─► classify (vision LLM, raw file) ─► route-by-class (decision)
-                                                          │
-        branch-bloodwork (lab_result / laborergebnis) ────┤
-          ocr (Surya) ─► extract-bloodwork (LLM) ─► resolve-bbox (python) ──┐
-                                                                            ├─► merge-extraction (join, mode:"any") ─► validate (python) ─► end-ok
-        default (everything else, incl. befund) ──────────────────────────┘
-          extract-generic (vision LLM) ─────────────────────────────────────┘
+trigger ─► start ─► render (PDF → page PNGs, python) ─► classify (vision LLM) ─► route-by-class (decision)
+                                                                                   │
+        branch-bloodwork (lab_result / laborergebnis) ─────────────────────────────┤
+          ocr (Surya, raw file) ─► extract-bloodwork (LLM) ─► resolve-bbox (python) ──┐
+                                                                                      ├─► merge-extraction (join, mode:"any") ─► validate (python) ─► end-ok
+        default (everything else, incl. befund) ────────────────────────────────────┘
+          extract-generic (vision LLM) ───────────────────────────────────────────────┘
 ```
 
-- **`classify`** runs on the **raw file** *before* OCR (Phase-1 Decision 3).
-  No OCR text is available, so the vision model judges from layout alone.
-  ⚠️ **needs-live-experimentation** — classify→ocr ordering is unvalidated.
+- **`render`** rasterizes the uploaded document to per-page PNGs (PyMuPDF,
+  150 dpi) **before** the vision steps. Vision models can't read a raw PDF —
+  Ollama rejects a `.pdf` in `images[].path` with HTTP 500 `image: unknown
+  format`. It emits `page_1` (kind: `file`, the lead-page vision-borrow
+  target) + `pages` (all page file-refs) + `page_count`. Generic stage, no
+  clinic vocabulary. ⚠️ See **Known limitations** below — a Python step has no
+  File path-site borrow, so it acquires the document bytes by HTTP-fetching the
+  file-ref `url`/`key`; and only the lead page (`page_1`) is borrow-wired into
+  the vision steps (single-image, fixed-arity `images[]`).
+- **`classify`** runs on the **rendered page image** *before* OCR (Phase-1
+  Decision 3). No OCR text is available, so the vision model judges from
+  layout alone. ⚠️ **needs-live-experimentation** — classify→ocr ordering is
+  unvalidated.
 - **`route-by-class`** routes only explicit lab classes
   (`lab_result` / `laborergebnis`) into the bloodwork branch. **`befund` is
   NOT pinned to bloodwork** in Phase 1; it (and every other class) falls
@@ -38,23 +48,28 @@ trigger ─► start ─► classify (vision LLM, raw file) ─► route-by-clas
 
 | Step | Backend | Model | Notes |
 |---|---|---|---|
-| `classify` | llm (vision) | `llama3.2-vision:11b` | Image = `{{ start.document_file }}`. No OCR text. JSON-schema `{document_type, confidence}`. |
-| `ocr` | surya | — | Surya IS the OCR engine (no model). Emits `full_text`, `words` (per-word boxes 0..1 + `word_index` + `page`), `pages`, `page_count`. |
-| `extract-bloodwork` | llm | `qwen3.5:9b` | OCR-text-driven (`{{ ocr.full_text }}`). Per field returns `word_range:[start,end]`. Schema via top-level `definitions.ExtractionFields`. |
+| `render` | python | — (PyMuPDF) | Rasterize document → per-page PNGs @150 dpi. Reads `start.document_file` (Envelope borrow → file-ref metadata; fetches bytes from its `url`/`key`). Emits `page_1` (kind: `file`), `pages` (json), `page_count`. `requirements: ["pymupdf"]`. |
+| `classify` | llm (vision) | `qwen3.6:35b-a3b` | Image = `{{ render.page_1 }}` (rendered lead page). No OCR text. JSON-schema `{document_type, confidence}`. |
+| `ocr` | surya | — | Surya IS the OCR engine (no model). Target = `{{ start.document_file }}` (raw file — Surya rasterizes PDFs internally via `pdf2image`). Emits `full_text`, `words` (per-word boxes 0..1 + `word_index` + `page`), `pages`, `page_count`. |
+| `extract-bloodwork` | llm | `qwen3.6:35b-a3b` | OCR-text-driven (`{{ ocr.full_text }}`). Per field returns `word_range:[start,end]`. Schema via top-level `definitions.ExtractionFields`. |
 | `resolve-bbox` | python | — | Unions `ocr.words` boxes by each field's `word_range` → `visual_ref{page, bbox 0..1}`; fuzzy value fallback. Reads `ocr.words` (read-arc) + `extract_bloodwork.fields`. |
-| `extract-generic` | llm (vision) | `llama3.2-vision:11b` | Generic fallback. Raw-file vision, no bbox grounding. |
+| `extract-generic` | llm (vision) | `qwen3.6:35b-a3b` | Generic fallback. Vision on `{{ render.page_1 }}` (rendered lead page), no bbox grounding. |
 | `merge-extraction` | join (`mode: "any"`) | — | XOR-join; re-parks the firing branch's payload under slug `extraction`. |
 | `validate` | python | — | Shape-coerces `extraction.fields` (preserving `visual_ref`), stamps `document_type` from the classifier. |
 
 ## Data passing
 
-- LLM image input: `images: [{ path: "{{ start.document_file }}" }]`
-- Surya target: `file: "{{ start.document_file }}"`
+- LLM image input: `images: [{ path: "{{ render.page_1 }}" }]` (the rendered
+  lead-page PNG — a `file`-kind output; the borrow's File arm stages it as a
+  path-site)
+- Surya target: `file: "{{ start.document_file }}"` (raw upload — Surya
+  rasterizes PDFs internally, so it does NOT use the render output)
 - LLM prompt borrow: `{{ ocr.full_text }}`
 - Decision guard: `classify.document_type == "lab_result" || classify.document_type == "laborergebnis"`
 - Python borrows are bare `slug.field` accesses in `main.py` — the Python
-  `ref_scanner` stages each producer envelope as a read-arc. `resolve-bbox`
-  reads `ocr.words` + `extract_bloodwork.fields`; `validate` reads
+  `ref_scanner` stages each producer envelope as a read-arc. `render` reads
+  `start.document_file` (the file-ref envelope); `resolve-bbox` reads
+  `ocr.words` + `extract_bloodwork.fields`; `validate` reads
   `extraction.fields` + `classify.document_type`.
 - End mapping: `{ targetField: "document_type", expression: "classify.document_type" }`,
   `{ targetField: "fields", expression: "validate.fields" }`
@@ -82,6 +97,42 @@ when no word matched.
 - **Single document, multi-page** — Surya `page_count` / per-word `page`
   carry pagination; `visual_ref.page` is 1-based.
 - **classify→ocr ordering is unvalidated** — flagged needs-live-experimentation.
+
+## Known limitations — the `render` step (needs-live-experimentation)
+
+The render step is wired so the graph compiles and the AIR exports cleanly.
+Gap #2 (file-output → shared store) is now RESOLVED in executor-worker; the
+remaining gaps are the input-bytes acquisition (#1) and multi-page fan-in (#3):
+
+1. **Python steps have no File path-site borrow.** Every Python `automated_step`
+   borrow is `BorrowShape::Envelope` — it stages the producer's **JSON
+   envelope** (`<slug>.json`), never the raw binary. So `start.document_file`
+   gives `render` the file-ref *metadata* (`{key, url, filename, content_type}`),
+   not the PDF bytes. Contrast surya `file:` and LLM `images[].path`, which are
+   File **path-sites** that download the binary into the run dir. `render`
+   therefore HTTP-fetches the upload from the file-ref `url` (or `key` +
+   `DOCUMENT_STORAGE_BASE_URL`) itself. The clean fix is a mekhan Python File
+   path-site borrow (or a dedicated rasterize backend); until then the live
+   fetch needs the upload URL to be reachable + auth-compatible from the
+   executor.
+2. **~~A Python `file` output is not auto-uploaded to the shared object
+   store.~~ RESOLVED** (executor-worker). On successful completion, the
+   executor now promotes every `kind: file` output into the shared
+   `ArtifactStore`: it reads the file-ref's local `key` path, `put()`s the
+   bytes at `artifacts/{execution_id}/outputs/{name}/{filename}`, and rewrites
+   `key` to that shared object key. So `render.detail.outputs.page_1.key` is a
+   key the downstream `images[].path` File-borrow downloads through the SAME
+   global store (symmetric `put`/`download` namespace). Generic platform
+   behaviour, keyed off the declared output `kind` the compiler already emits —
+   no `upload_to` / per-step config needed. See
+   `executor/crates/executor-worker/src/executor.rs`
+   (`promote_file_output_to_store`). **Needs the executor worker binary rebuilt
+   + redeployed to take effect** (compiler output / AIR is unchanged).
+3. **Single lead-page vision input.** `images[]` is fixed-arity at compile time
+   and each `images[].path` borrow stages exactly one File — there is no
+   array fan-out. So only `page_1` is borrow-wired into `classify` /
+   `extract-generic`. All pages are still in `render.pages` (+ `log_artifact`);
+   multi-page vision fan-in needs engine support for array-valued image borrows.
 
 ## Loading
 

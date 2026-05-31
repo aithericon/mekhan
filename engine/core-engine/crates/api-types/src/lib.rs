@@ -454,6 +454,14 @@ pub struct LoadScenarioRequest {
     /// [`DispatchOptions::stage_overrides`].
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub stage_overrides: HashMap<String, serde_json::Value>,
+    /// Net-level parameter bag for the spawned instance. Stored on the engine's
+    /// `PetriNetService` via `set_net_parameters` at load time and consulted by
+    /// the firing path for `$params.` resolution and pre-dispatch metadata
+    /// (e.g. `tenant_id`). Opaque, submitter-owned JSON — the engine ascribes
+    /// no domain semantics to its contents. Serialize-skips when absent so a
+    /// load without parameters renders byte-identically to the prior shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_parameters: Option<serde_json::Value>,
 }
 
 impl LoadScenarioRequest {
@@ -479,6 +487,7 @@ impl LoadScenarioRequest {
             scenario,
             skip_mask: Vec::new(),
             stage_overrides: HashMap::new(),
+            net_parameters: None,
         }
     }
 }

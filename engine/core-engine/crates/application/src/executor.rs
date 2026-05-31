@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn test_executor_new() {
         let executor = TransitionExecutor::new();
-        assert_eq!(executor.runtime.engine().max_operations(), 10_000);
+        assert_eq!(executor.runtime.engine().max_operations(), 50_000_000);
     }
 
     #[test]

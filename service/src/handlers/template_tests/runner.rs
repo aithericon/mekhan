@@ -111,6 +111,8 @@ pub async fn run_test(
             test_id: Some(test.id),
             // Template-tests don't surface ablation today.
             dispatch_options: petri_api_types::DispatchOptions::default(),
+            // Template-tests don't surface a net-parameter bag today.
+            net_parameters: None,
         })
         .await;
 

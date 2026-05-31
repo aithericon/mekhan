@@ -393,6 +393,7 @@ impl TriggerDispatcher {
                 &follow_up_node_id,
                 follow_up_payload,
                 petri_api_types::DispatchOptions::default(),
+                None,
             )
             .await
         {
@@ -440,8 +441,9 @@ impl TriggerDispatcher {
         node_id: &str,
         event_payload: Value,
         dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
     ) -> Result<FireResult, TriggerError> {
-        self.fire_impl(node_id, event_payload, dispatch_options, None)
+        self.fire_impl(node_id, event_payload, dispatch_options, net_parameters, None)
             .await
             .map(|(result, _rx)| result)
     }
@@ -454,10 +456,17 @@ impl TriggerDispatcher {
         node_id: &str,
         event_payload: Value,
         dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         waiters: &ResultWaiters,
     ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
-        self.fire_impl(node_id, event_payload, dispatch_options, Some(waiters))
-            .await
+        self.fire_impl(
+            node_id,
+            event_payload,
+            dispatch_options,
+            net_parameters,
+            Some(waiters),
+        )
+        .await
     }
 
     /// Core fire path. Resolves the trigger, evaluates `payload_mapping`
@@ -469,6 +478,7 @@ impl TriggerDispatcher {
         node_id: &str,
         event_payload: Value,
         dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         wait: Option<&ResultWaiters>,
     ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let record = self
@@ -574,7 +584,15 @@ impl TriggerDispatcher {
                 }
             };
             return match self
-                .fire_spawn(&record, &template, &graph, token, dispatch_options, wait)
+                .fire_spawn(
+                    &record,
+                    &template,
+                    &graph,
+                    token,
+                    dispatch_options,
+                    net_parameters,
+                    wait,
+                )
                 .await
             {
                 Ok((outcome, rx)) => Ok((finalize(outcome, false), rx)),
@@ -695,7 +713,15 @@ impl TriggerDispatcher {
         ) = match record.kind {
             TriggerKind::Spawn => {
                 match self
-                    .fire_spawn(&record, &template, &graph, token, dispatch_options, wait)
+                    .fire_spawn(
+                        &record,
+                        &template,
+                        &graph,
+                        token,
+                        dispatch_options,
+                        net_parameters,
+                        wait,
+                    )
                     .await
                 {
                     Ok((outcome, rx)) => (Ok(outcome), rx),
@@ -728,6 +754,7 @@ impl TriggerDispatcher {
         graph: &WorkflowGraph,
         token: Value,
         dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         wait: Option<&ResultWaiters>,
     ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         // SingleActiveCoalesce: atomic check-and-set against the per-template
@@ -778,6 +805,7 @@ impl TriggerDispatcher {
                         graph,
                         token,
                         dispatch_options,
+                        net_parameters,
                         wait,
                         placeholder,
                     )
@@ -791,6 +819,7 @@ impl TriggerDispatcher {
             graph,
             token,
             dispatch_options,
+            net_parameters,
             wait,
             Uuid::new_v4(),
         )
@@ -808,6 +837,7 @@ impl TriggerDispatcher {
         graph: &WorkflowGraph,
         token: Value,
         dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         wait: Option<&ResultWaiters>,
         instance_id: Uuid,
     ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
@@ -851,6 +881,7 @@ impl TriggerDispatcher {
                         air_target_place_id: place_id,
                         token: &token,
                         dispatch_options,
+                        net_parameters,
                     })
                     .await
             }
@@ -873,6 +904,7 @@ impl TriggerDispatcher {
                         mode: None,
                         test_id: None,
                         dispatch_options,
+                        net_parameters,
                     })
                     .await
             }

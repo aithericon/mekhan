@@ -96,6 +96,13 @@ pub struct FireTriggerRequest {
     /// Same surface + provenance as `skip_mask`. #126.2.
     #[serde(default)]
     pub stage_overrides: std::collections::HashMap<String, serde_json::Value>,
+    /// Submitter-supplied net-level parameter bag for the spawned instance.
+    /// Threaded into `LoadScenarioRequest.net_parameters` and stored on the
+    /// engine's `PetriNetService`, where the firing path consults it for
+    /// `$params.` resolution and pre-dispatch metadata (e.g. `tenant_id`).
+    /// Opaque, generic infra — no domain semantics ascribed here.
+    #[serde(default)]
+    pub net_parameters: Option<serde_json::Value>,
 }
 
 /// Query selector for the reply mode: `?reply=wait|nowait|stream`.
@@ -273,22 +280,28 @@ pub async fn fire_trigger(
         .map(|Query(q)| q)
         .unwrap_or_default();
 
-    let (payload, body_reply_mode, dispatch_options) = if content_type
+    let (payload, body_reply_mode, dispatch_options, net_parameters) = if content_type
         .starts_with("multipart/form-data")
     {
         // Multipart fires (file-bearing) don't carry skip_mask /
-        // stage_overrides — those land via the JSON body shape.
+        // stage_overrides / net_parameters — those land via the JSON body shape.
         (
             build_multipart_payload(&state, &node_id, request).await?,
             None,
             petri_api_types::DispatchOptions::default(),
+            None,
         )
     } else {
         let bytes = axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024)
             .await
             .map_err(|e| ApiError::bad_request(format!("failed to read body: {e}")))?;
         if bytes.is_empty() {
-            (Value::Null, None, petri_api_types::DispatchOptions::default())
+            (
+                Value::Null,
+                None,
+                petri_api_types::DispatchOptions::default(),
+                None,
+            )
         } else {
             let req: FireTriggerRequest = serde_json::from_slice(&bytes)
                 .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
@@ -296,7 +309,7 @@ pub async fn fire_trigger(
                 skip_mask: req.skip_mask,
                 stage_overrides: req.stage_overrides,
             };
-            (req.payload, req.reply_mode, dispatch)
+            (req.payload, req.reply_mode, dispatch, req.net_parameters)
         }
     };
 
@@ -323,6 +336,7 @@ pub async fn fire_trigger(
                 &node_id,
                 payload,
                 dispatch_options,
+                net_parameters,
             )
             .await
             .map_err(map_trigger_error)?;
@@ -366,6 +380,7 @@ pub async fn fire_trigger(
                 &node_id,
                 payload,
                 dispatch_options,
+                net_parameters,
             )
             .await
             .map_err(map_trigger_error)?;
@@ -381,6 +396,7 @@ pub async fn fire_trigger(
                 &node_id,
                 payload,
                 dispatch_options,
+                net_parameters,
                 &state.result_waiters,
             )
             .await
@@ -870,6 +886,7 @@ pub async fn webhook_receiver(
             &trigger.node_id,
             payload,
             petri_api_types::DispatchOptions::default(),
+            None,
         )
         .await
         .map_err(map_trigger_error)?;

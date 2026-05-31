@@ -75,15 +75,37 @@ impl SuryaConfig {
         &self,
         staged_inputs: &HashMap<String, PathBuf>,
     ) -> Result<(String, PathBuf), ExecutorError> {
-        if let Some(ref name) = self.file {
-            let path = staged_inputs.get(name).ok_or_else(|| {
-                ExecutorError::Config(format!(
-                    "surya: input '{}' not found in staged inputs (available: {:?})",
-                    name,
-                    staged_inputs.keys().collect::<Vec<_>>()
-                ))
-            })?;
-            Ok((name.clone(), path.clone()))
+        if let Some(ref spec) = self.file {
+            // `spec` may be either a staged-input NAME or — after the
+            // executor's `{{input_path:NAME}}` resolver runs over the config
+            // (the compiler rewrites a `file:` borrow to that placeholder) —
+            // the resolved absolute path. Try the name lookup first, then
+            // accept an absolute path. Mirrors KreuzbergConfig::resolve_target_file
+            // (surya previously only did the name lookup, so an upstream file-ref
+            // borrow that resolved to a path failed with "not found in staged
+            // inputs").
+            if let Some(path) = staged_inputs.get(spec) {
+                return Ok((spec.clone(), path.clone()));
+            }
+            let p = PathBuf::from(spec);
+            if p.is_absolute() {
+                let name = staged_inputs
+                    .iter()
+                    .find(|(_, sp)| *sp == &p)
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_else(|| {
+                        p.file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("file")
+                            .to_string()
+                    });
+                return Ok((name, p));
+            }
+            Err(ExecutorError::Config(format!(
+                "surya: input '{}' not found in staged inputs (available: {:?})",
+                spec,
+                staged_inputs.keys().collect::<Vec<_>>()
+            )))
         } else if staged_inputs.len() == 1 {
             let (name, path) = staged_inputs.iter().next().unwrap();
             Ok((name.clone(), path.clone()))

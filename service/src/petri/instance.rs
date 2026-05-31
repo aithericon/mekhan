@@ -300,9 +300,12 @@ pub async fn deploy_instance(
     net_id: &str,
     air_json: &Value,
     dispatch_options: petri_api_types::DispatchOptions,
+    net_parameters: Option<Value>,
 ) -> Result<(), PetriError> {
     // Deploy the scenario
-    client.deploy_scenario(net_id, air_json, dispatch_options).await?;
+    client
+        .deploy_scenario(net_id, air_json, dispatch_options, net_parameters)
+        .await?;
 
     // Start execution
     client

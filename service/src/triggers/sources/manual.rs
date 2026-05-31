@@ -25,8 +25,11 @@ pub async fn fire(
     node_id: &str,
     payload: Value,
     dispatch_options: petri_api_types::DispatchOptions,
+    net_parameters: Option<Value>,
 ) -> Result<FireResult, TriggerError> {
-    dispatcher.fire(node_id, payload, dispatch_options).await
+    dispatcher
+        .fire(node_id, payload, dispatch_options, net_parameters)
+        .await
 }
 
 /// Fire a manual trigger in WaitForResult mode: a Spawn additionally
@@ -37,9 +40,10 @@ pub async fn fire_waiting(
     node_id: &str,
     payload: Value,
     dispatch_options: petri_api_types::DispatchOptions,
+    net_parameters: Option<Value>,
     waiters: &ResultWaiters,
 ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
     dispatcher
-        .fire_waiting(node_id, payload, dispatch_options, waiters)
+        .fire_waiting(node_id, payload, dispatch_options, net_parameters, waiters)
         .await
 }
