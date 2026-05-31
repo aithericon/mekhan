@@ -16,30 +16,15 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // into it). `matches!` drops the borrow immediately so each delegate can
     // take `cx` mutably.
     //
-    //   - Scheduled { op: Submit } → lower_automated_step_scheduled (today's
+    //   - Scheduled                → lower_automated_step_scheduled (today's
     //                                scheduler-net path, byte-identical).
-    //   - Scheduled { op: Lease }  → lower_automated_step_scheduled_lease (R4 —
-    //                                hold a datacenter lease, REUSES the pooled
-    //                                claim/grant/register/release body-wrapping).
     //   - Executor { pool: Some }  → lower_automated_step_pooled (token_pool
     //                                admission, R2/R3 machinery — same wrapping).
     //   - Executor { pool: None }  → falls through to the plain executor lowering
     //                                below (BYTE-IDENTICAL — guarded by
     //                                `automated_step_executor_unchanged`).
-    if matches!(
-        &cx.node.data,
-        WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled {
-                operation: ScheduledOperation::Lease,
-                ..
-            },
-            ..
-        }
-    ) {
-        return lower_automated_step_scheduled_lease(cx);
-    }
 
-    // A `Scheduled { operation: Submit }` body that runs ON a held lease is NO
+    // A `Scheduled` body that runs ON a held lease is NO
     // LONGER a scheduler-net submit. The rework retargets it to the EXECUTOR
     // enqueue path with a per-job `executor_namespace` borrowed from the
     // enclosing lease holder — the held alloc runs ONE persistent drain executor
@@ -50,16 +35,12 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // `enclosing_leased_scope_slug` walking the `parent_id` chain. There is no
     // per-step flag — the enclosure is the only signal.
     //
-    // A `Submit` with NO enclosing lease holder still bridges to the
-    // scheduler-net via `lower_automated_step_scheduled`. `Lease` was already
-    // routed above, so this arm only ever sees `Submit` here.
+    // A `Scheduled` node with NO enclosing lease holder still bridges to the
+    // scheduler-net via `lower_automated_step_scheduled`.
     let scheduled_submit = matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled {
-                operation: ScheduledOperation::Submit,
-                ..
-            },
+            deployment_model: DeploymentModel::Scheduled { .. },
             ..
         }
     );
@@ -441,24 +422,15 @@ fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileErr
         scheduler,
         job_template,
         resources,
-        operation,
         ..
     } = deployment_model
     else {
         unreachable!("lower_automated_step_scheduled on non-Scheduled step")
     };
-    // This entry handles a NON-lease `operation: Submit` only. The dispatcher
-    // routes `operation: Lease` to `lower_automated_step_scheduled_lease` (R4)
-    // and a lease-enclosed Submit (inside a LeaseScope / leased Loop) to the
-    // EXECUTOR enqueue path (`lower_automated_step`, stamping
-    // `d.executor_namespace`) — neither reaches here.
-    debug_assert!(
-        matches!(operation, ScheduledOperation::Submit),
-        "lower_automated_step_scheduled must only see a non-lease operation: submit"
-    );
-    // `scheduler` binds a `datacenter` resource (docs/13) for the LEASE path;
-    // for SUBMIT it is unused — the env-global scheduler-net services the submit
-    // (byte-identical). Bound to acknowledge the field without changing AIR.
+    // This entry handles all `Scheduled` steps that aren't enclosed by a `LeaseScope`.
+
+    // `scheduler` binds a `datacenter` resource (docs/13).
+    // Bound to acknowledge the field without changing AIR.
     let _scheduler = scheduler.clone();
     let job_template = job_template.clone();
     let resources: Option<ResourceConfig> = resources.clone();
@@ -622,7 +594,7 @@ pub(super) struct PoolBinding {
 /// Shared by the two claim/grant/register/release entry points — they differ
 /// ONLY in which alias they resolve and which kind they require:
 /// - `Executor { pool: { alias } }` → `expected_kind = "token_pool"` (R2/R3).
-/// - `Scheduled { scheduler: alias, operation: lease }` → `expected_kind =
+/// - `Scheduled { scheduler: alias, .. }` → `expected_kind =
 ///   "datacenter"` (R4). The downstream body-wrapping is identical; only the
 ///   backing net + `Lease__<kind>` differ, which this binding carries.
 ///
@@ -881,48 +853,8 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     lower_pooled_body(cx, pool_binding)
 }
 
-/// `Scheduled { operation: Lease }` (R4): hold a lease on an external cluster
-/// (`datacenter` resource) for the step's duration. REUSES the exact same
-/// claim/grant/register/release body-wrapping as the token-pool path — the
-/// instance side is identical; only the backing net (`pool-<id>` = the R4b
-/// datacenter lease-adapter) and the lease kind (`Lease__datacenter`) differ,
-/// both of which `resolve_binding` carries on the [`PoolBinding`].
-///
-/// `Scheduled { operation: Submit }` stays the byte-identical scheduler-net
-/// path in [`lower_automated_step_scheduled`]; only the `Lease` operation routes
-/// here.
-fn lower_automated_step_scheduled_lease(cx: &mut LoweringCtx) -> Result<(), CompileError> {
-    let WorkflowNodeData::AutomatedStep {
-        deployment_model: DeploymentModel::Scheduled {
-            scheduler, request, ..
-        },
-        ..
-    } = &cx.node.data
-    else {
-        unreachable!("lower_automated_step_scheduled_lease only runs for Scheduled operation:lease")
-    };
-    // `operation: lease` REQUIRES a `scheduler` alias — there is no env-global
-    // lease (the lease lifecycle is owned by a specific datacenter's allocator).
-    let Some(alias) = scheduler.as_deref().filter(|a| !a.is_empty()) else {
-        return Err(CompileError::Compilation(format!(
-            "node '{}': Scheduled `operation: lease` requires a `scheduler` datacenter alias \
-             (there is no env-global lease — the lease is held against a specific allocator)",
-            cx.node.id
-        )));
-    };
-    let binding = resolve_binding(
-        &cx.node.id,
-        alias,
-        request.as_ref(),
-        "datacenter",
-        cx.known_resources,
-    )?;
-    lower_pooled_body(cx, binding)
-}
-
 /// The shared claim/grant/register/release body-wrapping, parameterized by the
-/// resolved [`PoolBinding`]. Both `Executor { pool: Some }` and
-/// `Scheduled { operation: Lease }` call this with their respective binding;
+/// resolved [`PoolBinding`]. `Executor { pool: Some }` calls this;
 /// the topology + executor job-spec are byte-identical regardless of backend.
 fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<(), CompileError> {
     let id = cx.node.id.clone();

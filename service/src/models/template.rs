@@ -1315,29 +1315,13 @@ pub enum DeploymentModel {
     /// `Submit` (today's queued dispatch) or `Lease` (R4: hold an allocation,
     /// run on it).
     Scheduled {
-        /// `datacenter` resource alias. `None` = env-global scheduler-net (only
-        /// valid for `operation: Submit`; `Lease` requires a concrete alias).
+        /// `datacenter` resource alias. `None` = env-global scheduler-net.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduler: Option<String>,
         #[serde(rename = "jobTemplate")]
         job_template: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
-        /// `Submit` (default) = today's proven dispatch. `Lease` = R4.
-        /// NOTE: a DIFFERENT field name from the `mode` tag on purpose — `mode`
-        /// already discriminates inline/scheduled, so the submit/lease selector
-        /// is `operation`.
-        #[serde(default)]
-        operation: ScheduledOperation,
-        /// Claim-schema-shaped lease request params (the `datacenter` kind's
-        /// `claim_schema` in `aithericon_resources::pool` — `{ gpu_count,
-        /// gpu_type, max_duration_secs }`). Used only by `operation: Lease`,
-        /// where it is validated against the kind's `claim_schema` and carried
-        /// into the `ClaimRequest`. Ignored for `Submit`. `None` ⇒ the
-        /// allocator's default placement. Optional + skip-if-none so today's
-        /// `Submit` wire shape round-trips byte-identically.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        request: Option<serde_json::Value>,
     },
 }
 
@@ -1349,20 +1333,6 @@ impl Default for DeploymentModel {
     fn default() -> Self {
         DeploymentModel::Executor { pool: None }
     }
-}
-
-/// The two operations a `Scheduled` step can perform against its cluster.
-/// Internally a plain snake_case enum: `"submit"` / `"lease"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ScheduledOperation {
-    /// Today's behaviour: submit a job to the scheduler-net (sbatch / Nomad
-    /// dispatch) and await its result. Proven end-to-end.
-    #[default]
-    Submit,
-    /// Hold an allocation/lease on the cluster and run the body on it (R4 —
-    /// the `resource_lease` engine effect + datacenter lease-adapter).
-    Lease,
 }
 
 /// Optional resource hints forwarded to the scheduler for a `Scheduled` step.
@@ -1525,7 +1495,6 @@ pub enum StreamReduce {
     /// `#{ value, __map_idx, __map_id }`), returning the reduced value.
     Custom { expr: String },
 }
-
 
 /// How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.
 /// Tagged on `mode` (camelCase), mirroring the other config enums.

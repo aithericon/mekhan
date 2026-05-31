@@ -59,8 +59,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     default_output_port, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding,
-    LoopAccumulator, Port, Position, ScheduledOperation, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    LoopAccumulator, Port, Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -162,8 +161,6 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                     scheduler: None,
                     job_template: "mekhan-executor-worker".to_string(),
                     resources: None,
-                    operation: ScheduledOperation::Submit,
-                    request: None,
                 },
             },
             parent_id: Some(loop_id.to_string()),

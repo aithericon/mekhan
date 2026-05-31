@@ -695,11 +695,7 @@ pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBin
             // `enclosing_leased_scope_slug` walks the `parent_id` chain. No
             // enclosing holder ⇒ the lowering injects nothing, so we emit nothing.
             WorkflowNodeData::AutomatedStep {
-                deployment_model:
-                    crate::models::template::DeploymentModel::Scheduled {
-                        operation: crate::models::template::ScheduledOperation::Submit,
-                        ..
-                    },
+                deployment_model: crate::models::template::DeploymentModel::Scheduled { .. },
                 ..
             } => match lease_holder_slug(node, graph) {
                 Some(holder_slug) => vec![format!("{holder_slug}.lease.executor_namespace")],

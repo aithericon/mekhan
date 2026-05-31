@@ -2723,28 +2723,8 @@ export interface components {
             jobTemplate: string;
             /** @enum {string} */
             mode: "scheduled";
-            /**
-             * @description `Submit` (default) = today's proven dispatch. `Lease` = R4.
-             *     NOTE: a DIFFERENT field name from the `mode` tag on purpose — `mode`
-             *     already discriminates inline/scheduled, so the submit/lease selector
-             *     is `operation`.
-             */
-            operation?: components["schemas"]["ScheduledOperation"];
-            /**
-             * @description Claim-schema-shaped lease request params (the `datacenter` kind's
-             *     `claim_schema` in `aithericon_resources::pool` — `{ gpu_count,
-             *     gpu_type, max_duration_secs }`). Used only by `operation: Lease`,
-             *     where it is validated against the kind's `claim_schema` and carried
-             *     into the `ClaimRequest`. Ignored for `Submit`. `None` ⇒ the
-             *     allocator's default placement. Optional + skip-if-none so today's
-             *     `Submit` wire shape round-trips byte-identically.
-             */
-            request?: unknown;
             resources?: null | components["schemas"]["ResourceConfig"];
-            /**
-             * @description `datacenter` resource alias. `None` = env-global scheduler-net (only
-             *     valid for `operation: Submit`; `Lease` requires a concrete alias).
-             */
+            /** @description `datacenter` resource alias. `None` = env-global scheduler-net. */
             scheduler?: string | null;
         };
         /**
@@ -4457,12 +4437,6 @@ export interface components {
             total: number;
         };
         /**
-         * @description The two operations a `Scheduled` step can perform against its cluster.
-         *     Internally a plain snake_case enum: `"submit"` / `"lease"`.
-         * @enum {string}
-         */
-        ScheduledOperation: "submit" | "lease";
-        /**
          * @description One reachable, producer-attributed reference the guard picker should
          *     offer at a node. The single source of truth for editor scope —
          *     replaces the deleted client-side `computeScopes` reimplementation.
@@ -4804,7 +4778,7 @@ export interface components {
          *     `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]`
          *     section in `executor.toml`.
          *
-         *     Credential fields support `{{secret:KEY}}` patterns that are resolved
+         *     Credential fields support `{{ secret:KEY }}` patterns that are resolved
          *     by the staging pipeline before use.
          */
         StorageCredentials: {

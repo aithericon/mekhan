@@ -448,12 +448,6 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
         WorkflowNodeData::AutomatedStep {
             deployment_model: DeploymentModel::Executor { pool: Some(_) },
             ..
-        } | WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled {
-                operation: crate::models::template::ScheduledOperation::Lease,
-                ..
-            },
-            ..
         }
     );
     if holds_lease {

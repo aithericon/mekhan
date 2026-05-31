@@ -688,7 +688,7 @@ mod tests {
     fn loop_lease_survives_ydoc_roundtrip() {
         use crate::models::template::{
             DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding, Port,
-            RetryPolicy, ScheduledOperation, WorkflowEdge, WorkflowNode,
+            RetryPolicy, WorkflowEdge, WorkflowNode,
         };
 
         let graph = WorkflowGraph {
@@ -734,8 +734,6 @@ mod tests {
                             scheduler: None,
                             job_template: "mekhan-executor-worker".to_string(),
                             resources: None,
-                            operation: ScheduledOperation::Submit,
-                            request: None,
                         },
                     },
                     parent_id: Some("lp".to_string()),
@@ -770,13 +768,9 @@ mod tests {
         }
         match find("body") {
             WorkflowNodeData::AutomatedStep {
-                deployment_model: DeploymentModel::Scheduled { operation, .. },
+                deployment_model: DeploymentModel::Scheduled { .. },
                 ..
-            } => assert_eq!(
-                *operation,
-                ScheduledOperation::Submit,
-                "scheduled Submit body must survive Y.Doc round-trip"
-            ),
+            } => {}
             other => panic!("expected Scheduled AutomatedStep, got {other:?}"),
         }
         // Lease enclosure is now purely structural: the body's `parent_id` ties

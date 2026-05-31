@@ -773,7 +773,8 @@ async fn timeout_drains_mid_body_human_task() {
         // Latest iteration for `review` (one row here) — mirrors the badge,
         // which reads the last execution.
         let status = rows.as_array().and_then(|rs| {
-            rs.iter().rfind(|r| r["node_id"] == json!("review"))
+            rs.iter()
+                .rfind(|r| r["node_id"] == json!("review"))
                 .and_then(|r| r["status"].as_str().map(str::to_string))
         });
         if let Some(s) = &status {

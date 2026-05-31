@@ -19,18 +19,16 @@
 //! — then read the already-resolved alias from the node data. A single
 //! resolution site means collection and lowering cannot drift.
 //!
-//! Back-compat for the env-global submit path: a `Scheduled { operation:
-//! Submit, scheduler: None }` with no template/workspace default stays `None`
+//! Back-compat for the env-global submit path: a `Scheduled { scheduler: None }`
+//! with no template/workspace default stays `None`
 //! (today's env-global scheduler-net) — it is framed as "the dev-bootstrap
 //! cluster", never truly unresolved while `SLURM_*`/`NOMAD_*` env is set, so
-//! `just dev scheduler-up` keeps working. Only `operation: Lease` (and a
+//! `just dev scheduler-up` keeps working. A `LeaseScope` (and a
 //! `Loop.lease`) — which REQUIRE a concrete cluster — hard-error when the chain
 //! bottoms out.
 
 use crate::compiler::error::CompileError;
-use crate::models::template::{
-    DeploymentModel, ScheduledOperation, WorkflowGraph, WorkflowNodeData,
-};
+use crate::models::template::{DeploymentModel, WorkflowGraph, WorkflowNodeData};
 
 /// Resolve the multi-cluster selection chain over a graph, returning a rewritten
 /// clone with each Scheduled/leased node's effective cluster alias stamped into
@@ -61,12 +59,7 @@ pub fn resolve_scheduler_defaults(
         match &mut node.data {
             // ── Per-step Scheduled (submit or lease) ──────────────────────
             WorkflowNodeData::AutomatedStep {
-                deployment_model:
-                    DeploymentModel::Scheduled {
-                        scheduler,
-                        operation,
-                        ..
-                    },
+                deployment_model: DeploymentModel::Scheduled { scheduler, .. },
                 ..
             } => {
                 let node_scheduler = scheduler.as_deref().and_then(non_blank);
@@ -82,14 +75,8 @@ pub fn resolve_scheduler_defaults(
                         *scheduler = Some(alias.to_string());
                     }
                     None => {
-                        // No default. A `Lease` REQUIRES a concrete cluster, so
-                        // it is unresolved. A `Submit` stays the env-global /
+                        // No default. A `Scheduled` step stays the env-global /
                         // dev-bootstrap path (None) — never errors here.
-                        if *operation == ScheduledOperation::Lease {
-                            errors.push(CompileError::SchedulerUnresolved {
-                                node_id: node.id.clone(),
-                            });
-                        }
                     }
                 }
             }
@@ -153,24 +140,14 @@ mod tests {
     use crate::models::template::WorkflowNode;
 
     /// Build a `Scheduled` AutomatedStep node from the wire shape (robust to the
-    /// struct's many fields — we only care about `deploymentModel.scheduler` +
-    /// `operation`).
-    fn scheduled_node(
-        id: &str,
-        scheduler: Option<&str>,
-        operation: ScheduledOperation,
-    ) -> WorkflowNode {
-        let op = match operation {
-            ScheduledOperation::Submit => "submit",
-            ScheduledOperation::Lease => "lease",
-        };
+    /// struct's many fields — we only care about `deploymentModel.scheduler`).
+    fn scheduled_node(id: &str, scheduler: Option<&str>) -> WorkflowNode {
         let mut dm = serde_json::json!({
             "mode": "scheduled",
-            "operation": op,
             "jobTemplate": "jt",
         });
         if let Some(s) = scheduler {
-            dm["scheduler"] = serde_json::Value::String(s.to_string());
+            dm["scheduler"] = serde_json::json!(s);
         }
         serde_json::from_value(serde_json::json!({
             "id": id,
@@ -237,14 +214,7 @@ mod tests {
     // node.scheduler set → it wins; template/workspace defaults ignored.
     #[test]
     fn node_level_alias_wins() {
-        let g = graph(
-            vec![scheduled_node(
-                "a",
-                Some("node_dc"),
-                ScheduledOperation::Lease,
-            )],
-            Some("tmpl_dc"),
-        );
+        let g = graph(vec![scheduled_node("a", Some("node_dc"))], Some("tmpl_dc"));
         let out = resolve_scheduler_defaults(&g, Some("ws_dc")).unwrap();
         assert_eq!(node_scheduler(&out, "a"), Some("node_dc"));
     }
@@ -252,10 +222,7 @@ mod tests {
     // node omits scheduler → the template default fills in.
     #[test]
     fn template_default_used_when_node_omits() {
-        let g = graph(
-            vec![scheduled_node("a", None, ScheduledOperation::Lease)],
-            Some("tmpl_dc"),
-        );
+        let g = graph(vec![scheduled_node("a", None)], Some("tmpl_dc"));
         let out = resolve_scheduler_defaults(&g, Some("ws_dc")).unwrap();
         assert_eq!(node_scheduler(&out, "a"), Some("tmpl_dc"));
     }
@@ -263,39 +230,16 @@ mod tests {
     // node + template omit → the workspace default fills in.
     #[test]
     fn workspace_default_used_when_node_and_template_omit() {
-        let g = graph(
-            vec![scheduled_node("a", None, ScheduledOperation::Lease)],
-            None,
-        );
+        let g = graph(vec![scheduled_node("a", None)], None);
         let out = resolve_scheduler_defaults(&g, Some("ws_dc")).unwrap();
         assert_eq!(node_scheduler(&out, "a"), Some("ws_dc"));
-    }
-
-    // Lease + all rungs absent → SchedulerUnresolved.
-    #[test]
-    fn lease_all_absent_is_unresolved() {
-        let g = graph(
-            vec![scheduled_node("a", None, ScheduledOperation::Lease)],
-            None,
-        );
-        let errs = resolve_scheduler_defaults(&g, None).unwrap_err();
-        assert_eq!(errs.len(), 1);
-        match &errs[0] {
-            CompileError::SchedulerUnresolved { node_id } => assert_eq!(node_id, "a"),
-            other => panic!("expected SchedulerUnresolved, got {other:?}"),
-        }
-        assert_eq!(errs[0].kind(), "scheduler_unresolved");
-        assert_eq!(errs[0].node_id(), Some("a"));
     }
 
     // Submit + all rungs absent → NOT an error; stays None (env-global /
     // dev-bootstrap path) so `just dev scheduler-up` keeps working.
     #[test]
     fn submit_all_absent_stays_env_global() {
-        let g = graph(
-            vec![scheduled_node("a", None, ScheduledOperation::Submit)],
-            None,
-        );
+        let g = graph(vec![scheduled_node("a", None)], None);
         let out = resolve_scheduler_defaults(&g, None).unwrap();
         assert_eq!(node_scheduler(&out, "a"), None);
     }
@@ -317,10 +261,7 @@ mod tests {
     // Template default beats the workspace default when both present.
     #[test]
     fn template_beats_workspace() {
-        let g = graph(
-            vec![scheduled_node("a", None, ScheduledOperation::Lease)],
-            Some("tmpl_dc"),
-        );
+        let g = graph(vec![scheduled_node("a", None)], Some("tmpl_dc"));
         let out = resolve_scheduler_defaults(&g, Some("ws_dc")).unwrap();
         assert_eq!(node_scheduler(&out, "a"), Some("tmpl_dc"));
     }

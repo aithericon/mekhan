@@ -4967,8 +4967,6 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
                     scheduler: None,
                     job_template: "petri-mumax3-worker".to_string(),
                     resources: None,
-                    operation: Default::default(),
-                    request: None,
                 },
             ),
             end_node("e"),
@@ -6473,9 +6471,7 @@ fn automated_step_success_preserves_control_metadata_leaves() {
 ///   byte-identical.
 #[test]
 fn deployment_model_surface_round_trips() {
-    use mekhan_service::models::template::{
-        DeploymentModel, ResourcePoolBinding, ScheduledOperation,
-    };
+    use mekhan_service::models::template::{DeploymentModel, ResourcePoolBinding};
 
     // Default = plain executor dispatch, no pool. Serializes to a bare
     // `{"mode":"executor"}`.
@@ -6522,13 +6518,11 @@ fn deployment_model_surface_round_trips() {
             scheduler: None,
             job_template: "petri-mumax3-worker".to_string(),
             resources: None,
-            operation: ScheduledOperation::Submit,
-            request: None,
         }
     );
     assert_eq!(
         serde_json::to_value(&sched_today).unwrap(),
-        json!({ "mode": "scheduled", "jobTemplate": "petri-mumax3-worker", "operation": "submit" })
+        json!({ "mode": "scheduled", "jobTemplate": "petri-mumax3-worker" })
     );
 
     // The new Scheduled knobs parse.
@@ -6536,13 +6530,11 @@ fn deployment_model_surface_round_trips() {
         "mode": "scheduled",
         "scheduler": "prod_dc",
         "jobTemplate": "render",
-        "operation": "lease"
     }))
     .unwrap();
     assert!(matches!(
         sched_full,
         DeploymentModel::Scheduled {
-            operation: ScheduledOperation::Lease,
             scheduler: Some(_),
             ..
         }

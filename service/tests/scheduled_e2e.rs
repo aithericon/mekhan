@@ -43,7 +43,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     default_output_port, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, Port,
-    Position, ScheduledOperation, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -126,8 +126,6 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                         scheduler: None,
                         job_template: "petri-executor-worker".to_string(),
                         resources: None,
-                        operation: ScheduledOperation::Submit,
-                        request: None,
                     },
                     stream_output: false,
                 },
