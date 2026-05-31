@@ -14,7 +14,8 @@
 
 from aithericon import set_output
 
-# `item` is the per-chunk value injected by the StreamConsumer body dispatch.
-chunk = item  # noqa: F821 — promoted to a global by the runner via read-arc.
+# `input.item` is the per-chunk value injected by the StreamConsumer body dispatch.
+# (Scalars on the inbound token are reachable via `input.<field>`).
+chunk = input.item
 
 set_output("item", str(chunk).upper())
