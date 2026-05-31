@@ -185,7 +185,6 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                         resources: None,
                         operation: ScheduledOperation::Submit,
                         request: None,
-                        run_on_lease: true,
                     },
                 },
                 parent_id: Some(loop_id.to_string()),

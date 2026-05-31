@@ -123,6 +123,17 @@
 		{/if}
 	</div>
 
+	<!--
+		Warm allocation is no longer authored on the Loop itself. To hold ONE
+		cluster allocation across iterations (warm-start the body), drop the Loop
+		inside a Lease Scope container — every step in that scope, including this
+		Loop's body, then runs on the held lease.
+	-->
+	<p class="text-sm italic text-muted-foreground">
+		To reuse one cluster allocation across iterations, wrap this Loop in a
+		<span class="font-medium">Lease Scope</span> — the held allocation warms the body across runs.
+	</p>
+
 	{#each accumulators as acc, i (i)}
 		<div class="space-y-1.5 rounded-lg border border-border bg-muted/30 p-2 text-sm">
 			<div class="flex items-center gap-2">

@@ -90,16 +90,6 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     };
 
     let scope_group = cx.fixups.scope_groups.get(id).cloned();
-    let ctx = &mut *cx.ctx;
-
-    let p_input: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
-    let p_body_in: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_body_in"), format!("{label} - Body In"));
-    let p_body_out: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_body_out"), format!("{label} - Body Out"));
-    let p_output: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
 
     // Loop iteration counter lives in a *parked* `p_{id}_data` place —
     // independent of the workflow token. This is required for AutomatedStep
@@ -117,7 +107,6 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     //     (is_parked_producer recognizes Loop), which stages `<slug>.json`
     //     and promotes the namespace as a Python global.
     let slug = cx.node.slug();
-    let d_slug = format!("d_{}", id.replace('-', "_"));
 
     // Accumulator fragments for the parked `data` map. Each accumulator adds a
     // `<var>: (<expr>)` field alongside `iteration`. ENTER uses the user `init`
@@ -134,39 +123,46 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         .iter()
         .map(|a| format!(", {}: ({})", a.var, a.merge_expr))
         .collect();
-    let p_data: PlaceHandle<DynamicToken> = ctx.state(
-        format!("p_{id}_data"),
-        format!("{label} - Iteration Counter (parked)"),
-    );
 
-    // Pre-wire the consuming arc + input port `d_<slug>` on continue and the
-    // read-arc on exit — both binding `p_{id}_data` for the parked counter.
-    // Guards and logic stay in the user-source `<slug>.iteration` form; the
-    // standard (c) read-arc synthesis pass picks them up via Borrow
-    // resolution and rewrites them to `d_<slug>.iteration` with word-
-    // boundary matching (so the pre-wired port name `d_<slug>` doesn't get
-    // double-prefixed). The (c) pass's "any arc to this place" guard then
-    // leaves the pre-wired arcs alone (skipping the read-arc add that would
-    // otherwise duplicate). One rewrite pipeline, one binding name.
-
-    // ── Lease-carrying data fragments ──────────────────────────────────────
-    // When the loop holds a lease, the held grant (incl. `alloc_id`) lives in
-    // the parked `p_{id}_data` envelope under a `lease` key. ENTER seeds it from
-    // the freshly-acquired grant; CONTINUE re-folds `{slug}.lease` forward so
-    // the SAME lease survives every iteration (read off the parked place via the
-    // pre-wired `d_<slug>` binding, like `iteration`). Body iterations and
-    // downstream blocks then borrow `<slug>.lease.alloc_id` through the standard
-    // read-arc pipeline — that is how each iteration's body dispatches ONTO the
-    // held allocation (the L2 `spec.alloc_id` wire reads `<slug>.lease.alloc_id`).
-    let lease_enter_frag = if leased.is_some() { ", lease: grant" } else { "" };
+    // ── Lease-carrying data fragment (continue side) ───────────────────────
+    // When the loop holds a lease, the held grant (incl. `alloc_id`/
+    // `executor_namespace`) lives in the parked `p_{id}_data` envelope under a
+    // `lease` key. ENTER seeds it from the freshly-acquired grant (the shared
+    // `emit_lease_bridge`); CONTINUE re-folds `{slug}.lease` forward so the SAME
+    // lease survives every iteration (read off the parked place via the pre-wired
+    // `d_<slug>` binding, like `iteration`). Body iterations + downstream blocks
+    // then borrow `<slug>.lease.<field>` through the standard read-arc pipeline.
     let lease_continue_frag = if leased.is_some() {
         format!(", lease: {slug}.lease")
     } else {
         String::new()
     };
 
-    match &leased {
+    let ctx = &mut *cx.ctx;
+
+    // Per-branch place set. Both branches mint the SAME interface places
+    // (`p_input` consumed via wire, `p_body_in`/`p_body_out`/`p_output`/`p_data`
+    // + the `d_<slug>` binding) so the shared `t_continue` + ports registration
+    // below are branch-agnostic. The leased branch delegates the
+    // claim/grant/register/release handshake to `emit_lease_bridge` (shared with
+    // `lower_lease_scope`); the non-leased branch is byte-identical to the
+    // pre-L3 topology.
+    let d_slug = format!("d_{}", id.replace('-', "_"));
+    let (p_input, p_body_in, p_body_out, p_output, p_data) = match &leased {
         None => {
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_body_in: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_body_in"), format!("{label} - Body In"));
+            let p_body_out: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_body_out"), format!("{label} - Body Out"));
+            let p_output: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
+            let p_data: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_data"),
+                format!("{label} - Iteration Counter (parked)"),
+            );
+
             // ── No lease (byte-identical to the pre-L3 topology) ────────────
             // t_{id}_enter — initialize the parked counter, hand off to body via
             // p_body_in. The workflow token (input) passes through unchanged: no
@@ -183,115 +179,24 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
                     "#{{ body: input, data: #{{ iteration: 0{acc_enter} }} }}"
                 ))
                 .done();
+
+            (p_input, p_body_in, p_body_out, p_output, p_data)
         }
         Some(binding) => {
-            // ── Loop-scoped lease: HOIST claim/grant/register/release here so
-            //    ONE allocation backs every iteration. Mirrors
-            //    `lower_pooled_body` but at loop scope: the grant_id is keyed on
-            //    the LOOP node id (not a body id), so exactly one grant exists
-            //    per (instance, loop) and the hold persists across iterations.
-            let pool_net_id: &str = &binding.backing_net_id;
-            let grant_inbox_place = format!("p_{id}_grant_inbox");
-
-            // Grant reply lands here (typed `Lease__datacenter` via the fixup).
-            let p_grant_inbox: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
-                grant_inbox_place.clone(),
-                format!("{label} - Grant Inbox"),
-                "grant",
+            // ── Loop-scoped lease: HOIST claim/grant/register/release via the
+            //    shared `emit_lease_bridge` so ONE allocation backs every
+            //    iteration. The grant_id is keyed on the LOOP node id, so exactly
+            //    one grant exists per (instance, loop) and the hold persists
+            //    across iterations. `data_enter_extra` carries the loop's own
+            //    `iteration: 0` (+ accumulator inits); the helper appends the
+            //    always-present `lease: grant` seed itself.
+            let bridge = super::lease_bridge::emit_lease_bridge(
+                ctx,
+                id,
+                label,
+                binding,
+                &format!(", iteration: 0{acc_enter}"),
             );
-            // Held-allocation-death reply inbox (docs/16 §7 fail-fast). The
-            // lease-adapter net's `t_lease_died` routes a `{ grant_id }` failure
-            // token here over the "fail" reply channel when the held salloc /
-            // dispatched drain-executor dies mid-lease. A register transition
-            // parks it write-once so the loop's continue-guard can READ-ARC it
-            // (non-consuming) — the in-flight iteration's completion can't
-            // re-arm the loop once failure is parked (§7.3).
-            let lease_failed_inbox_place = format!("p_{id}_lease_failed");
-            let p_lease_failed_inbox: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
-                lease_failed_inbox_place.clone(),
-                format!("{label} - Lease Failed Inbox"),
-                "fail",
-            );
-            // Parked lease-failure flag (write-once) the continue-guard read-arcs
-            // and `t_lease_abort` consumes (alongside the live body token) to
-            // fail-fast.
-            let p_lease_failed: PlaceHandle<DynamicToken> = ctx.state(
-                format!("p_{id}_lease_failed_parked"),
-                format!("{label} - Lease Failed (parked)"),
-            );
-            // Claim bridge_out, routing the pool's "grant" reply back to
-            // grant_inbox AND the "fail" reply (held-alloc death) back to the
-            // lease-failed inbox. Both channels ride the SAME claim token's reply
-            // routing so the death signal reaches the right instance/loop.
-            let p_claim_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
-                format!("p_{id}_claim_out"),
-                format!("{label} - Claim Lease"),
-                pool_net_id,
-                well_known::POOL_CLAIM_INBOX,
-                &[
-                    ("grant", grant_inbox_place.as_str()),
-                    ("fail", lease_failed_inbox_place.as_str()),
-                ],
-            );
-            // Register + release bridges are PLAIN (no reply routing) so the
-            // pool's recycled capacity tokens stay clean (docs/14 taint note).
-            let p_register_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
-                format!("p_{id}_register_out"),
-                format!("{label} - Register Hold"),
-                pool_net_id,
-                well_known::POOL_REGISTER_INBOX,
-            );
-            let p_release_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
-                format!("p_{id}_release_out"),
-                format!("{label} - Release Lease"),
-                pool_net_id,
-                well_known::POOL_RELEASE_INBOX,
-            );
-            // Internal parking places.
-            let p_pending: PlaceHandle<DynamicToken> = ctx.state(
-                format!("p_{id}_pending"),
-                format!("{label} - Pending (input + grant_id, awaiting grant)"),
-            );
-            let p_held: PlaceHandle<DynamicToken> = ctx.state(
-                format!("p_{id}_held"),
-                format!("{label} - Held (lease, release echo)"),
-            );
-
-            // grant_id = pure fn of journaled token data: `<_instance_id>:<loop_id>`.
-            // Keyed on the LOOP id so the grant is loop-scoped (one per loop
-            // instance), replay-deterministic (no RNG/clock) — the same argument
-            // as `lower_pooled_body`.
-            let grant_id_expr = format!(r#"(input._instance_id + ":{id}")"#);
-            let claim_payload =
-                format!("#{{ grant_id: gid, request: {} }}", binding.request_rhai);
-
-            // t_{id}_claim — mint grant_id, emit ClaimRequest, park {input, grant_id}.
-            ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim Lease"))
-                .auto_input("input", &p_input)
-                .auto_output("claim", &p_claim_out)
-                .auto_output("pending", &p_pending)
-                .logic_rhai(format!(
-                    r#"let gid = {grant_id_expr}; #{{ claim: {claim_payload}, pending: #{{ input: input, grant_id: gid }} }}"#
-                ))
-                .done();
-
-            // t_{id}_enter (acquire) — grant arrived: correlate {pending, grant}
-            // on grant_id, register the hold (plain bridge), park the whole lease
-            // on p_held for the release echo, and ENTER the loop (seed the parked
-            // counter envelope with `lease: grant`). The body token is the
-            // original upstream input parked in `pending.input`.
-            ctx.transition(format!("t_{id}_enter"), format!("{label} - Enter Loop (acquire)"))
-                .auto_input("pending", &p_pending)
-                .auto_input("grant", &p_grant_inbox)
-                .correlate("grant", "pending", "grant_id")
-                .auto_output("body", &p_body_in)
-                .auto_output("data", &p_data)
-                .auto_output("reg", &p_register_out)
-                .auto_output("held", &p_held)
-                .logic_rhai(format!(
-                    "let input = pending.input; #{{ body: input, data: #{{ iteration: 0{acc_enter}{lease_enter_frag} }}, reg: grant, held: grant }}"
-                ))
-                .done();
 
             // t_{id}_exit (release) — single normal terminal. Consume the body's
             // final token + the read-arced counter AND the held lease, forward
@@ -301,65 +206,30 @@ pub(crate) fn lower_loop(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // failure propagates out the body's own error output and is handled
             // by the surrounding graph; the loop's own terminal is this exit.
             ctx.transition(format!("t_{id}_exit"), format!("{label} - Exit (release)"))
-                .auto_input("input", &p_body_out)
-                .read_input(d_slug.clone(), &p_data)
-                .auto_input("held", &p_held)
-                .auto_output("output", &p_output)
-                .auto_output("release", &p_release_out)
+                .auto_input("input", &bridge.p_body_out)
+                .read_input(d_slug.clone(), &bridge.p_data)
+                .auto_input("held", &bridge.p_held)
+                .auto_output("output", &bridge.p_output)
+                .auto_output("release", &bridge.p_release_out)
                 .guard_rhai(format!(
                     "{slug}.iteration >= {max_iterations} || !({loop_condition})"
                 ))
                 .logic_rhai("#{ output: input, release: #{ grant_id: held.grant_id } }")
                 .done();
 
-            // ── Fail-fast on held-allocation death (docs/16 §7) ─────────────
-            // t_{id}_lease_failed_register — park the held-alloc-death notice
-            // write-once into `p_{id}_lease_failed_parked`. A register step
-            // (rather than abort consuming the inbox directly) keeps the death
-            // observation DURABLE: once parked, `t_lease_abort` can consume the
-            // parked counter to fail fast even if the body is still mid-flight
-            // (no `body_out` yet) — the failure is not lost while waiting.
-            ctx.transition(
-                format!("t_{id}_lease_failed_register"),
-                format!("{label} - Register Lease Failure"),
+            // The lease-failed register + abort transitions are owned by
+            // `emit_lease_bridge`; the loop's own guards never read
+            // `bridge.p_lease_failed` directly (the abort already consumes
+            // `p_data`, which structurally short-circuits continue/exit).
+            (
+                bridge.p_input,
+                bridge.p_body_in,
+                bridge.p_body_out,
+                bridge.p_output,
+                bridge.p_data,
             )
-            .auto_input("fail", &p_lease_failed_inbox)
-            .auto_output("flag", &p_lease_failed)
-            .logic_rhai("#{ flag: #{ grant_id: fail.grant_id, failed: true } }")
-            .done();
-
-            // t_{id}_lease_abort — fail fast. CONSUME the parked iteration
-            // envelope `p_{id}_data` (which `t_continue` AND `t_exit` both
-            // require) so once a failure is parked the loop can NEVER re-arm or
-            // exit normally — this is the structural short-circuit the §7.3
-            // Review note demands, and it is INDEPENDENT of `body_out` (the held
-            // alloc can die while the body is still running, before any
-            // `body_out` arrives). Then `throw` a permanent ScriptError → the
-            // engine emits ErrorOccurred + NetFailed (the existing
-            // panic-on-unconnected-failure / subworkflow-failure-propagation
-            // machinery carries it to the caller, symmetric with the success
-            // reply). The parked failure flag is read-arced (non-consuming) so a
-            // duplicate death signal can't double-fire abort once the counter is
-            // gone — it just finds no `p_{id}_data` and stays disabled.
-            let d_fail = format!("df_{}", id.replace('-', "_"));
-            let d_counter = format!("dc_{}", id.replace('-', "_"));
-            let abort_msg = format!(
-                "loop {}: held lease allocation died mid-run — failing fast (the salloc / drain \
-                 executor is gone; enqueuing the next iteration would hang in a dead namespace)",
-                label
-            );
-            ctx.transition(
-                format!("t_{id}_lease_abort"),
-                format!("{label} - Lease Died (abort)"),
-            )
-            .auto_input(d_counter.clone(), &p_data)
-            .read_input(d_fail.clone(), &p_lease_failed)
-            .guard_rhai(format!("{d_fail}.failed == true"))
-            .priority("100")
-            .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&abort_msg)))
-            .done();
         }
-    }
+    };
 
     // t_{id}_continue — loop back: consume body_out + the parked counter,
     // increment, produce a fresh body_in token AND a new parked counter.

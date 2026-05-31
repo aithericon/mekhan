@@ -55,6 +55,7 @@ export type JoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'join' }>;
 export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
 export type MapNodeData = Extract<SchemaWorkflowNodeData, { type: 'map' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
+export type LeaseScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'lease_scope' }>;
 export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
 export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
 export type FailureNodeData = Extract<SchemaWorkflowNodeData, { type: 'failure' }>;
@@ -158,6 +159,8 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 			};
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };
+		case 'lease_scope':
+			return { type: 'lease_scope', label: 'Lease Scope', lease: { scheduler: '' } };
 		case 'phase_update':
 			return {
 				type: 'phase_update',

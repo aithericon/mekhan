@@ -206,6 +206,28 @@ pub(crate) fn validate_loop(
     Ok(())
 }
 
+/// LeaseScope: must carry a non-empty `lease.scheduler` alias (a lease is held
+/// against a specific allocator; an empty alias is a config error). The empty-
+/// body check lives in `lower_lease_scope` (it needs the children slice, which
+/// the lowering ctx carries and this structural validator does not).
+pub(crate) fn validate_lease_scope(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::LeaseScope { lease, .. } = &node.data else {
+        unreachable!("validate_lease_scope on non-LeaseScope variant");
+    };
+    if lease.scheduler.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "lease scope '{}' must name a datacenter resource in `lease.scheduler` \
+             (a lease is held against a specific allocator)",
+            node.id
+        )));
+    }
+    Ok(())
+}
+
 /// Delay: non-empty `durationMsExpr` (parse + ref-resolution happens in
 /// `validate_guards` alongside other Rhai surfaces).
 pub(crate) fn validate_delay(

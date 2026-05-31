@@ -376,6 +376,19 @@ async fn discover_known_resources(
             }
         }
 
+        // A `LeaseScope` holds a datacenter lease for its whole child region
+        // (docs/17). Like `Loop.lease` it's a declared binding on the node data,
+        // and a LeaseScope node hits the `_ => continue` arm below — so collect
+        // its `lease.scheduler` here too, or `lower_lease_scope`'s
+        // `resolve_binding(.., "datacenter")` hard-fails at publish.
+        if let WorkflowNodeData::LeaseScope { lease, .. } = &node.data {
+            let alias = lease.scheduler.trim();
+            if !alias.is_empty() {
+                heads.insert(alias.to_string());
+                declared.push((node.id.clone(), alias.to_string()));
+            }
+        }
+
         // Single projection path: both AutomatedStep and Agent feed the
         // same scanner with the same shape. Agent uses the central
         // `agent_to_llm_config` so any future LLM-backend scan rules

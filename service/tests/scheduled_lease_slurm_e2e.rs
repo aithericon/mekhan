@@ -199,9 +199,10 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
                     stream_output: false,
-                    // Drain seam: Scheduled Submit + `runOnLease`. Because the
-                    // body's parent is the leased Loop, the compiler RE-ROUTES it
-                    // off the scheduler-net onto the executor lifecycle and stamps
+                    // Drain seam: a plain Scheduled Submit. Because the body's
+                    // parent is the leased Loop (lease enclosure BY CONTAINMENT —
+                    // no per-step flag), the compiler RE-ROUTES it off the
+                    // scheduler-net onto the executor lifecycle and stamps
                     // `d.executor_namespace = lp.lease.executor_namespace` into the
                     // body's `prepare`, with the matching Guard read-arc into the
                     // loop's parked `p_lp_data` envelope — so the iteration enqueues
@@ -212,11 +213,10 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                         resources: None,
                         operation: ScheduledOperation::Submit,
                         request: None,
-                        run_on_lease: true,
                     },
                 },
                 // The body ALWAYS sits inside the leasing loop — this parentage
-                // is what `enclosing_leased_loop_slug` walks to find `lp`.
+                // is what `enclosing_leased_scope_slug` walks to find `lp`.
                 parent_id: Some(loop_id.to_string()),
                 width: None,
                 height: None,

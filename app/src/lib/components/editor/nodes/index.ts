@@ -11,6 +11,7 @@ import JoinNode from './JoinNode.svelte';
 import LoopNode from './LoopNode.svelte';
 import MapNode from './MapNode.svelte';
 import ScopeNode from './ScopeNode.svelte';
+import LeaseScopeNode from './LeaseScopeNode.svelte';
 import PhaseUpdateNode from './PhaseUpdateNode.svelte';
 import ProgressUpdateNode from './ProgressUpdateNode.svelte';
 import FailureNode from './FailureNode.svelte';
@@ -38,6 +39,7 @@ export const nodeTypes = {
 	loop: LoopNode,
 	map: MapNode,
 	scope: ScopeNode,
+	lease_scope: LeaseScopeNode,
 	phase_update: PhaseUpdateNode,
 	progress_update: ProgressUpdateNode,
 	failure: FailureNode,

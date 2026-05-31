@@ -2742,24 +2742,6 @@ export interface components {
             request?: unknown;
             resources?: null | components["schemas"]["ResourceConfig"];
             /**
-             * @description Opt-in: ENQUEUE this body to the enclosing leased loop's lease
-             *     namespace instead of submitting a fresh scheduler job. The body
-             *     step ALWAYS sits inside the leasing loop (`parent_id == loop.id`)
-             *     and there is exactly one loop lease in scope — no ambiguity. When
-             *     set (and the enclosing Loop carries a `lease`), the body lowers via
-             *     the EXECUTOR enqueue path (NOT the scheduler-net) and the compiler
-             *     injects `d.executor_namespace = <loop_slug>.lease.executor_namespace`
-             *     onto the job token via the standard read-arc borrow pipeline. The
-             *     engine's `ExecutorSubmitHandler` reads that per-job namespace and
-             *     publishes to the lease-scoped NATS queue (`lease-<grant_id>`) drained
-             *     by the ONE persistent executor the acquire path launched on the held
-             *     allocation — so every iteration's body runs WARM on the same held
-             *     instance (venv/model/GPU state persists). `false` (default) = an
-             *     independent scheduler submit. The namespace rides the job token's
-             *     top-level `executor_namespace` key — no typed engine field.
-             */
-            runOnLease?: boolean;
-            /**
              * @description `datacenter` resource alias. `None` = env-global scheduler-net (only
              *     valid for `operation: Submit`; `Lease` requires a concrete alias).
              */
@@ -5705,6 +5687,19 @@ export interface components {
             label: string;
             /** @enum {string} */
             type: "scope";
+        } | {
+            description?: string | null;
+            label: string;
+            /**
+             * @description REQUIRED datacenter lease binding (a LeaseScope with no lease is a
+             *     pointless empty container). Reuses [`LeaseBinding`] verbatim — the
+             *     `scheduler` alias resolves via `resolve_binding(..., "datacenter",
+             *     ...)` exactly as the Loop-lease path does — and is NOT `Option`;
+             *     `validate_lease_scope` rejects an empty `scheduler` alias.
+             */
+            lease: components["schemas"]["LeaseBinding"];
+            /** @enum {string} */
+            type: "lease_scope";
         } | {
             description?: string | null;
             /**
