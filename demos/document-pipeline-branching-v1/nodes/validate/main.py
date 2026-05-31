@@ -14,6 +14,8 @@
 # Outputs:
 #   fields, document_type
 
+_ALLOWED_CATEGORIES = {"patient_info", "lab_info", "test_result", "other"}
+
 define_phases(["Coerce fields", "Stamp document_type"])
 
 update_phase("Coerce fields", "running")
@@ -39,6 +41,17 @@ for f in raw_fields:
 
     unit = f.get("unit") if isinstance(f.get("unit"), str) else None
     ref_range = f.get("reference_range") if isinstance(f.get("reference_range"), str) else None
+    # Empty strings (the "not applicable" sentinel the extractor uses for
+    # metadata rows under a required, non-nullable reference_range) collapse to None.
+    if ref_range is not None and not ref_range.strip():
+        ref_range = None
+
+    # Carry the extractor's per-field category through to the clinic. EVERY
+    # field is contracted to have one; fall back to "other" if it is missing
+    # or outside the allowed set so the downstream schema never sees garbage.
+    category = f.get("category")
+    if category not in _ALLOWED_CATEGORIES:
+        category = "other"
 
     coerced = {
         "key": key,
@@ -46,6 +59,7 @@ for f in raw_fields:
         "unit": unit,
         "reference_range": ref_range,
         "confidence": conf,
+        "category": category,
     }
     # Preserve the bloodwork branch's per-field grounding when present.
     if isinstance(f.get("visual_ref"), dict):

@@ -206,7 +206,7 @@
             "temperature": 0,
             "reasoning": false,
             "max_tokens": 8192,
-            "system_prompt": "You are a medical lab-report extractor. You are given the page IMAGE plus the same report as OCR text rows (one row per line; columns left-to-right: test-name, value, unit, reference-range). Use the image for layout and structure and the OCR text for exact characters; cross-check them. Extract two kinds of fields, each tagged with `category`:\n(1) DOCUMENT METADATA (category 'patient_info' or 'lab_info') for patient cross-checking and report provenance — use these stable English keys (value = the text as printed; omit any the document lacks): patient_name, patient_date_of_birth, patient_sex, patient_id, lab_name, report_date, lab_number.\n(2) LAB RESULTS (category 'test_result'), one per analyte row — `key` = the test name EXACTLY as spelled (it is matched back to the document layout downstream); `value` = the patient's measured number; `unit` = the unit; `reference_range` = the normal-range column (the value containing <, >, or a min-max like 28-100). Fill reference_range whenever the row has it. value and reference_range are DIFFERENT columns — never copy the range into value.",
+            "system_prompt": "You are a medical lab-report extractor. You are given the page IMAGE plus the same report as OCR text rows (one row per line; columns left-to-right: test-name, value, unit, reference-range). Use the image for layout and structure and the OCR text for exact characters; cross-check them. EVERY field you output MUST have a `category`. Extract two kinds of fields:\n(1) DOCUMENT METADATA (category 'patient_info' or 'lab_info') for patient cross-checking and report provenance — use these stable English keys (value = the text as printed; omit any the document lacks): patient_name, patient_date_of_birth, patient_sex, patient_id, lab_name, report_date, lab_number.\n(2) LAB RESULTS (category 'test_result'), one per analyte row — `key` = the test name EXACTLY as spelled (it is matched back to the document layout downstream); `value` = the patient's measured number; `unit` = the unit; `reference_range` = the normal-range column. `reference_range` is REQUIRED on every field: for a test_result set it to the printed normal-range column (e.g. <35, 0.-129, 28-100, 0.50-1.20, 60-100 — present on essentially every analyte row); for metadata fields (patient_info/lab_info) set it to the empty string \"\". value and reference_range are DIFFERENT columns — never copy the range into value, and never leave reference_range empty when the row shows a range.",
             "prompt": "Extract the patient/report metadata AND every lab value from this lab report. The OCR rows below mirror the page image (analyte rows: test-name, value, unit, reference-range, left-to-right).\n\nOCR rows:\n---\n{{ ocr_layout.layout_text }}\n---\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, category}]}.",
             "images": [
               { "path": "{{ render.page_1 }}" }
@@ -303,8 +303,8 @@
             "temperature": 0,
             "reasoning": false,
             "max_tokens": 6144,
-            "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field from the document image.",
-            "prompt": "Extract every identifiable field from this {{ classify.document_type }} document.\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence}]}.",
+            "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field from the document image. EVERY field MUST have a `category`: 'patient_info' for patient identity, 'lab_info' for issuing-lab/report provenance, 'test_result' for a measured result with a value, otherwise 'other'.",
+            "prompt": "Extract every identifiable field from this {{ classify.document_type }} document.\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, category}]}.",
             "images": [
               { "path": "{{ render.page_1 }}" }
             ],
@@ -495,14 +495,14 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["key", "value", "confidence"],
+            "required": ["key", "value", "confidence", "category", "reference_range"],
             "properties": {
               "key": { "type": "string" },
               "value": { "type": "string" },
               "unit": { "type": ["string", "null"] },
-              "reference_range": { "type": ["string", "null"] },
+              "reference_range": { "type": "string" },
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-              "category": { "type": ["string", "null"], "enum": ["patient_info", "lab_info", "test_result", null] }
+              "category": { "type": "string", "enum": ["patient_info", "lab_info", "test_result", "other"] }
             },
             "additionalProperties": false
           }
