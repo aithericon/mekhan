@@ -60,12 +60,11 @@
 			<Button
 				variant="ghost"
 				size="sm"
-				href="/nets/resource-pool"
-				data-testid="nav-resource-pool"
-				class="text-muted-foreground"
-				title="Resource pool contention dashboard"
+				href="/clusters"
+				data-testid="nav-clusters"
+				title="Registered datacenters + live lease state"
 			>
-				Pool
+				Clusters
 			</Button>
 			<Button
 				variant="ghost"
