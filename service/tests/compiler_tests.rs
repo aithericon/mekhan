@@ -130,7 +130,6 @@ fn automated_step_node_streaming(id: &str, label: &str, stream_output: bool) -> 
         data: WorkflowNodeData::AutomatedStep {
             label: label.to_string(),
             description: None,
-            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -553,7 +552,6 @@ fn automated_step_produces_executor_lifecycle() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
                     description: None,
-                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
@@ -679,7 +677,6 @@ fn automated_step_wired_error_routes_to_handler() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
                     description: None,
-                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
@@ -1700,7 +1697,6 @@ fn automated_step_has_scoped_effect_errors() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Script".to_string(),
                     description: None,
-                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Docker,
                         entrypoint: None,
@@ -1750,7 +1746,6 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
         data: WorkflowNodeData::AutomatedStep {
             label: label.to_string(),
             description: None,
-            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -2709,7 +2704,6 @@ fn guard_multi_hop_scope_walk() {
         data: WorkflowNodeData::AutomatedStep {
             label: "A".to_string(),
             description: None,
-            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -2945,7 +2939,6 @@ fn loop_with_accumulators_graph(
         data: WorkflowNodeData::AutomatedStep {
             label: "Body".to_string(),
             description: None,
-            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -4916,7 +4909,6 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
         data: WorkflowNodeData::AutomatedStep {
             label: "Run".to_string(),
             description: None,
-            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -5054,7 +5046,6 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Lookup".to_string(),
                     description: None,
-                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::CatalogueQuery,
                         entrypoint: None,
@@ -6202,7 +6193,6 @@ fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
         data: WorkflowNodeData::AutomatedStep {
             label: "Score Item".to_string(),
             description: None,
-            feed_chunks: false,
             execution_spec: ExecutionSpecConfig {
                 backend_type: ExecutionBackendType::Docker,
                 entrypoint: None,
@@ -7109,15 +7099,70 @@ fn stream_consumer_body_mode_without_body_is_rejected() {
 }
 
 #[test]
-fn stream_consumer_live_reduce_is_cleanly_rejected_placeholder() {
-    // LiveReduce is a Phase-3 capability — it must reject cleanly (the inert
-    // placeholder), NOT panic, with both no body and with a body.
+fn stream_consumer_live_reduce_without_body_is_rejected() {
     let graph = sc_graph(StreamDispatch::LiveReduce, false);
     let err = compile_to_air(&graph, "sc_live", "", &std::collections::HashMap::new())
-        .expect_err("LiveReduce must be rejected this phase");
+        .expect_err("LiveReduce without body must be rejected");
     assert_eq!(
         err.kind(),
-        "stream_consumer_live_reduce_unsupported",
-        "expected StreamConsumerLiveReduceUnsupported, got: {err:?}"
+        "stream_consumer_body_empty",
+        "expected StreamConsumerBodyEmpty, got: {err:?}"
+    );
+}
+
+#[test]
+fn stream_consumer_live_reduce_lowers_dense_seq_and_immediate_bootstrap() {
+    let graph = sc_graph(StreamDispatch::LiveReduce, true);
+    let air = compile_to_air(&graph, "sc_live", "", &std::collections::HashMap::new())
+        .expect("LiveReduce with body must compile");
+
+    assert!(has_place(&air, "p_consumer_dense_seq"), "dense sequence counter place");
+    assert!(has_place(&air, "p_consumer_exec_id"), "reducer execution ID place");
+    assert!(has_place(&air, "p_consumer_feed_inbox"), "feed inbox place");
+    assert!(has_place(&air, "p_consumer_body_in"), "body entry place");
+    assert!(has_place(&air, "p_consumer_body_out"), "body terminal place");
+
+    get_transition(&air, "t_consumer_feed").expect("per-chunk feed transition");
+    get_transition(&air, "t_consumer_feed_effect").expect("feed effect transition");
+    get_transition(&air, "t_consumer_eof").expect("EOF sentinel transition");
+    get_transition(&air, "t_consumer_capture_exec_id").expect("exec ID capture");
+    get_transition(&air, "t_consumer_collect").expect("collect transition");
+
+    assert!(
+        get_transition(&air, "t_consumer_start_reducer").is_none(),
+        "no start_reducer gate (immediate bootstrap)"
+    );
+    assert!(
+        get_transition(&air, "t_consumer_close").is_none(),
+        "no t_close (LiveReduce bypasses gather)"
+    );
+    assert!(
+        get_transition(&air, "t_consumer_gather").is_none(),
+        "no t_gather (LiveReduce bypasses gather)"
+    );
+
+    let feed = get_transition(&air, "t_consumer_feed").unwrap();
+    let feed_json = serde_json::to_string(feed).unwrap();
+    assert!(
+        feed_json.contains("seq.n"),
+        "feed uses dense seq.n, not chunk.sequence, got: {feed_json}"
+    );
+    assert!(
+        feed_json.contains("seq.n + 1"),
+        "feed increments dense counter, got: {feed_json}"
+    );
+    assert!(
+        !feed_json.contains("chunk.sequence"),
+        "feed must NOT use raw chunk.sequence (sparse), got: {feed_json}"
+    );
+
+    let body_in = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_consumer_body_in")
+        .unwrap();
+    let body_in_json = serde_json::to_string(body_in).unwrap();
+    assert!(
+        body_in_json.contains("initial") || body_in_json.contains("marking"),
+        "p_body_in must be seeded (immediate bootstrap), got: {body_in_json}"
     );
 }

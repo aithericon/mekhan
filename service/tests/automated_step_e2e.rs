@@ -104,7 +104,6 @@ fn python_graph(step_id: &str) -> WorkflowGraph {
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
                     stream_output: false,
-                    feed_chunks: false,
                 },
                 parent_id: None,
                 width: None,

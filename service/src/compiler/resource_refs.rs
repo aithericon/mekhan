@@ -265,7 +265,6 @@ mod tests {
                 retry_policy: Default::default(),
                 deployment_model: Default::default(),
                 stream_output: false,
-                feed_chunks: false,
             },
             parent_id: None,
             width: None,

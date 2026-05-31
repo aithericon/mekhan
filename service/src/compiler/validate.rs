@@ -1041,7 +1041,6 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: DeploymentModel::default(),
                 stream_output: false,
-                feed_chunks: false,
             },
             parent_id: None,
             width: None,

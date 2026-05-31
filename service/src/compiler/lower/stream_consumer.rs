@@ -225,35 +225,38 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
                 .done();
         } else if live_reduce {
             // ── LiveReduce: one long-lived reducer, fed chunks over IPC ─────
-            // t_<id>_start_reducer: fire on the FIRST chunk to arrive at
-            // `p_stream_in`. Consumes the chunk + a singleton `p_started` lock;
-            // emits a "start" token to `p_body_in` (the reducer job's inbox)
-            // and re-emits the chunk to `p_stream_in` so `t_feed` can catch it.
-            let p_started: PlaceHandle<DynamicToken> =
-                ctx.state(format!("p_{id}_started"), format!("{label} - Start Lock"));
-            ctx.seed_one(&p_started, DynamicToken::new(json!({ "started": false })));
+            // Post-mortem fixes (2026-05-31):
+            //  1. Dense renumbering — p_dense_seq renumbers chunks 0..N-1 so
+            //     the executor ReorderBuffer never sees sparse-sequence gaps.
+            //  2. Immediate bootstrapping — seed p_body_in so the reducer job
+            //     starts on node entry (p_exec_id is always populated for EOF).
+            //  3. Clean EOF — uses stream_count from the control token (equals
+            //     the dense total), always one past the last chunk sequence.
+            //  4. No first-chunk duplication — all chunks arrive via IPC only;
+            //     the seed token carries null (no data injection into input).
 
-            ctx.transition(
-                format!("t_{id}_start_reducer"),
-                format!("{label} - Start Reducer"),
-            )
-            .auto_input("chunk", &p_stream_in)
-            .auto_input("lock", &p_started)
-            .auto_output("body", &p_body_in)
-            .auto_output("chunk", &p_stream_in)
-            .logic_rhai(format!(
-                "#{{ body: #{{ {result_var}: chunk.detail.value, \"__map_idx\": chunk.sequence, \"__map_id\": \"{id_lit}\" }}, chunk: chunk }}"
-            ))
-            .done();
+            ctx.seed_one(
+                &p_body_in,
+                DynamicToken::new(json!({
+                    &result_var: null,
+                    "__map_idx": 0,
+                    "__map_id": id_lit
+                })),
+            );
 
-            // The reducer's execution_id is captured from its lifecycle's
-            // `submitted` place and parked at `p_exec_id`.
+            let p_dense_seq: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_dense_seq"),
+                format!("{label} - Dense Sequence Counter"),
+            );
+            ctx.seed_one(&p_dense_seq, DynamicToken::new(json!({ "n": 0 })));
+
             let p_exec_id: PlaceHandle<DynamicToken> = ctx.state(
                 format!("p_{id}_exec_id"),
                 format!("{label} - Reducer Execution ID"),
             );
             let child_id = &cx.children[0].id;
-            let p_child_submitted = PlaceHandle::<DynamicToken>::external(format!("p_{child_id}_submitted"));
+            let p_child_submitted =
+                PlaceHandle::<DynamicToken>::external(format!("p_{child_id}_submitted"));
 
             ctx.transition(
                 format!("t_{id}_capture_exec_id"),
@@ -264,15 +267,18 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
             .logic_rhai("#{ exec_id: #{ id: submitted.execution_id } }".to_string())
             .done();
 
-            // t_<id>_feed: fire for every chunk at `p_stream_in`. Requires
-            // `p_exec_id` to be present (the reducer must have started).
             let p_feed_inbox: PlaceHandle<DynamicToken> =
                 ctx.state(format!("p_{id}_feed_inbox"), format!("{label} - Feed Inbox"));
             ctx.transition(format!("t_{id}_feed"), format!("{label} - Feed Chunk"))
                 .auto_input("chunk", &p_stream_in)
+                .auto_input("seq", &p_dense_seq)
                 .read_input("exec", &p_exec_id)
                 .auto_output("feed", &p_feed_inbox)
-                .logic_rhai("#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: chunk.sequence } }".to_string())
+                .auto_output("seq", &p_dense_seq)
+                .logic_rhai(
+                    "#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: seq.n }, seq: #{ n: seq.n + 1 } }"
+                        .to_string(),
+                )
                 .done();
 
             ctx.transition(
@@ -282,17 +288,17 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
             .auto_input("feed", &p_feed_inbox)
             .builtin_effect(&petri_domain::effects::EXECUTOR_STREAM_FEED);
 
-            // t_<id>_eof: fire on producer EOS. Send EOF sentinel to reducer.
             ctx.transition(format!("t_{id}_eof"), format!("{label} - Feed EOF"))
                 .auto_input("ctrl", &p_control_in)
                 .read_input("exec", &p_exec_id)
                 .auto_output("feed", &p_feed_inbox)
-                .logic_rhai("let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; \
-                             #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }".to_string())
+                .logic_rhai(
+                    "let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; \
+                     #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }"
+                        .to_string(),
+                )
                 .done();
 
-            // Collect the reducer's final output. `p_body_out` receives the
-            // terminal token from the body child (the reducer's completion).
             ctx.transition(format!("t_{id}_collect"), format!("{label} - Collect"))
                 .auto_input("body", &p_body_out)
                 .auto_output("result", &p_gathered)
@@ -347,35 +353,42 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
         None
     };
 
-    // t_<id>_close — consume the producer's control/EOS token and emit the
-    // gather coordinator. `stream_count` rides as a TOP-LEVEL leaf on the
-    // streaming producer's slim control token: `split_outputs_streaming`
-    // surfaces it there because the plain `YIELD_LOGIC` strips `detail` down to
-    // `{status, task_id}` (so `ctrl.detail.stream_count` would not survive). If
-    // absent (a non-streaming producer mis-wired into the control handle)
-    // default to 0 so the gather fires immediately on an empty stream rather
-    // than wedging.
-    ctx.transition(format!("t_{id}_close"), format!("{label} - Close Stream"))
-        .auto_input("ctrl", &p_control_in)
-        .auto_output("count", &p_count)
-        .logic_rhai(format!(
-            "let __n = if \"stream_count\" in ctrl {{ ctrl.stream_count }} else {{ 0 }}; \
-             #{{ count: #{{ expected: __n, \"__map_id\": \"{id_lit}\" }} }}"
-        ))
-        .done();
+    // LiveReduce bypasses t_close + t_gather: t_eof consumes p_control_in
+    // (sending the EOF sentinel to the reducer) and t_collect populates
+    // p_gathered directly from the reducer's terminal output. Emitting
+    // t_close/t_gather alongside would create two transitions competing for
+    // p_control_in — a structural deadlock.
+    if !live_reduce {
+        // t_<id>_close — consume the producer's control/EOS token and emit the
+        // gather coordinator. `stream_count` rides as a TOP-LEVEL leaf on the
+        // streaming producer's slim control token: `split_outputs_streaming`
+        // surfaces it there because the plain `YIELD_LOGIC` strips `detail` down to
+        // `{status, task_id}` (so `ctrl.detail.stream_count` would not survive). If
+        // absent (a non-streaming producer mis-wired into the control handle)
+        // default to 0 so the gather fires immediately on an empty stream rather
+        // than wedging.
+        ctx.transition(format!("t_{id}_close"), format!("{label} - Close Stream"))
+            .auto_input("ctrl", &p_control_in)
+            .auto_output("count", &p_count)
+            .logic_rhai(format!(
+                "let __n = if \"stream_count\" in ctrl {{ ctrl.stream_count }} else {{ 0 }}; \
+                 #{{ count: #{{ expected: __n, \"__map_id\": \"{id_lit}\" }} }}"
+            ))
+            .done();
 
-    // t_<id>_gather — COUNTED BARRIER. Read the coordinator (non-consuming) for
-    // `expected` + `__map_id`; `gather_input` the results with
-    // `count_from = "count.expected"` and `correlate_on = "__map_id"`. Fires
-    // only when `expected` results sharing this node's `__map_id` are present,
-    // consumes exactly those, sorts by `__map_idx` (stream sequence order), and
-    // reduces per the node's `StreamReduce`.
-    ctx.transition(format!("t_{id}_gather"), format!("{label} - Gather"))
-        .read_input("count", &p_count)
-        .gather_input("results", &p_results, "count.expected", Some("__map_id"))
-        .auto_output("gathered", &p_gathered)
-        .logic_rhai(reduce_logic(&reduce))
-        .done();
+        // t_<id>_gather — COUNTED BARRIER. Read the coordinator (non-consuming) for
+        // `expected` + `__map_id`; `gather_input` the results with
+        // `count_from = "count.expected"` and `correlate_on = "__map_id"`. Fires
+        // only when `expected` results sharing this node's `__map_id` are present,
+        // consumes exactly those, sorts by `__map_idx` (stream sequence order), and
+        // reduces per the node's `StreamReduce`.
+        ctx.transition(format!("t_{id}_gather"), format!("{label} - Gather"))
+            .read_input("count", &p_count)
+            .gather_input("results", &p_results, "count.expected", Some("__map_id"))
+            .auto_output("gathered", &p_gathered)
+            .logic_rhai(reduce_logic(&reduce))
+            .done();
+    }
 
     // Foundation tail — park the reduced output write-once at `p_<id>_data`
     // and forward a slim control token. Same `split_outputs` helper as

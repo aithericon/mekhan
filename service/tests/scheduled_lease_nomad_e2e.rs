@@ -163,7 +163,6 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Python (Scheduled Nomad, on lease)".to_string(),
                     description: None,
-                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Python,
                         entrypoint: Some("main.py".to_string()),

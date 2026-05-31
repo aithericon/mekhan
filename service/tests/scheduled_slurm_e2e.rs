@@ -107,7 +107,6 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                 data: WorkflowNodeData::AutomatedStep {
                     label: "Run Python (Scheduled Slurm)".to_string(),
                     description: None,
-                    feed_chunks: false,
                     execution_spec: ExecutionSpecConfig {
                         backend_type: ExecutionBackendType::Python,
                         entrypoint: Some("main.py".to_string()),

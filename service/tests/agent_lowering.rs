@@ -139,7 +139,7 @@ fn llm_step_node(id: &str) -> WorkflowNode {
                 ExecutionBackendType::Llm,
             ),
             retry_policy: RetryPolicy::default(),
-            deployment_model: DeploymentModel::default(), feed_chunks: false,
+            deployment_model: DeploymentModel::default(),
             stream_output: false,
         },
         parent_id: None,

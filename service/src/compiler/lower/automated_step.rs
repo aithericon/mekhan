@@ -105,14 +105,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         retry_policy,
         output,
         stream_output,
-        feed_chunks,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
     let stream_output = *stream_output;
-    let feed_chunks = *feed_chunks;
+    let feed_chunks = is_live_reduce_body_child(cx.graph, cx.node.parent_id.as_deref());
 
     // Is this the terminal node of a Map body? If so it must forward its FULL
     // completed envelope (park data AND the whole token) so the Map's
