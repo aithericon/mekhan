@@ -15,7 +15,6 @@ use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
 use crate::cancel::CancellationRegistry;
-use crate::chunks::ChunkRegistry;
 use crate::completion::CompletionTracker;
 use crate::config::CleanupPolicy;
 use crate::event_emitter::StreamContext;
@@ -41,11 +40,6 @@ pub struct JobExecutor {
     pub metric_sink: Option<Arc<dyn MetricSink>>,
     pub log_sink: Option<Arc<dyn LogSink>>,
     pub cancel_registry: CancellationRegistry,
-    /// Inbound live chunk feed registry (the "live IPC reducer"). A per-job
-    /// channel is registered here only when `job.feed_chunks` is set, then
-    /// threaded into the IPC sidecar's `StreamChunks` stream. The
-    /// `NatsChunkListener` drains `EXECUTOR_CHUNKS` into these channels.
-    pub chunk_registry: ChunkRegistry,
     pub log_config: SidecarLogConfig,
     /// Completion tracker for drain-mode shutdown. `None` in daemon/manifest modes.
     pub completion_tracker: Option<Arc<CompletionTracker>>,
@@ -93,16 +87,6 @@ impl JobExecutor {
         let timeout = job.timeout.unwrap_or(self.registry.default_timeout());
         let cancel = self.cancel_registry.register(execution_id);
 
-        // Inbound live chunk feed (the "live IPC reducer"): only when the job
-        // opted in. `Some(rx)` is threaded into the IPC sidecar's `StreamChunks`
-        // stream; `None` means non-reducer jobs spin up nothing. Deregistered on
-        // every exit path alongside the cancel token.
-        let chunk_rx = if job.feed_chunks {
-            Some(self.chunk_registry.register(execution_id))
-        } else {
-            None
-        };
-
         // Build initial RunContext
         let run_dir = RunDirectory::new(&self.base_dir, execution_id);
 
@@ -114,7 +98,6 @@ impl JobExecutor {
         if let Err(e) = tokio::fs::create_dir_all(&run_dir.root).await {
             error!(%execution_id, error = %e, "failed to create run directory for lock");
             self.cancel_registry.deregister(execution_id);
-            self.chunk_registry.deregister(execution_id);
             return ExecutionStatus::Failed;
         }
         let lock_path = run_dir.root.join(".lock");
@@ -131,7 +114,6 @@ impl JobExecutor {
                     "execution already in progress (lock file exists), skipping duplicate"
                 );
                 self.cancel_registry.deregister(execution_id);
-                self.chunk_registry.deregister(execution_id);
                 // Return Failed so apalis nacks and the message is redelivered
                 // after the primary executor finishes and cleans up.
                 return ExecutionStatus::Failed;
@@ -174,7 +156,6 @@ impl JobExecutor {
                     )
                     .await;
                 self.cancel_registry.deregister(execution_id);
-                self.chunk_registry.deregister(execution_id);
                 return ExecutionStatus::Failed;
             }
         };
@@ -227,7 +208,6 @@ impl JobExecutor {
             self.log_config.clone(),
             child_exited.clone(),
             stream_ctx,
-            chunk_rx,
         )
         .await
         {
@@ -704,8 +684,6 @@ impl JobExecutor {
 
         // Deregister cancellation token (execution finished, regardless of outcome)
         self.cancel_registry.deregister(execution_id);
-        // Deregister the inbound chunk feed (no-op when never registered).
-        self.chunk_registry.deregister(execution_id);
 
         // Cleanup run directory per policy
         let should_cleanup = match &self.cleanup_policy {

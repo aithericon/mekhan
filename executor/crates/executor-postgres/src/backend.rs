@@ -804,7 +804,6 @@ mod tests {
             timeout: Some(Duration::from_secs(10)),
             priority: JobPriority::Medium,
             stream_events: None,
-            feed_chunks: false,
             wrapped_secrets: None,
         };
         let ctx = RunContext {
@@ -858,7 +857,6 @@ mod tests {
             timeout: Some(Duration::from_secs(10)),
             priority: JobPriority::Medium,
             stream_events: None,
-            feed_chunks: false,
             wrapped_secrets: None,
         };
         let ctx = RunContext {
@@ -910,7 +908,6 @@ mod tests {
             timeout: Some(Duration::from_secs(10)),
             priority: JobPriority::Medium,
             stream_events: None,
-            feed_chunks: false,
             wrapped_secrets: None,
         };
         let ctx = RunContext {

@@ -358,7 +358,6 @@ async fn tenant_isolation_two_tenants_one_pool() {
         timeout: Some(Duration::from_secs(10)),
         priority: aithericon_executor_domain::JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
     let prepared_a = backend.prepare(&job_a, ctx_a).await.expect("prepare A");
@@ -390,7 +389,6 @@ async fn tenant_isolation_two_tenants_one_pool() {
         timeout: Some(Duration::from_secs(10)),
         priority: aithericon_executor_domain::JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
     let prepared_b = backend.prepare(&job_b, ctx_b).await.expect("prepare B");
@@ -423,7 +421,6 @@ async fn tenant_isolation_two_tenants_one_pool() {
         timeout: Some(Duration::from_secs(10)),
         priority: aithericon_executor_domain::JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
     let prepared_a2 = backend.prepare(&job_a2, ctx_a2).await.expect("prepare A2");
@@ -500,7 +497,6 @@ async fn fail_closed_when_tenant_metadata_missing() {
         timeout: Some(Duration::from_secs(10)),
         priority: aithericon_executor_domain::JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
 
@@ -586,7 +582,6 @@ async fn jsonb_output_projection_roundtrip() {
         timeout: Some(Duration::from_secs(10)),
         priority: aithericon_executor_domain::JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
     let prepared = backend.prepare(&job, ctx).await.expect("prepare");
@@ -632,7 +627,6 @@ async fn jsonb_output_projection_roundtrip() {
         timeout: Some(Duration::from_secs(10)),
         priority: aithericon_executor_domain::JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
     let prepared2 = backend.prepare(&job2, ctx2).await.expect("prepare 2");
@@ -690,7 +684,6 @@ async fn pool_is_reused_across_jobs() {
             timeout: Some(Duration::from_secs(10)),
             priority: aithericon_executor_domain::JobPriority::Medium,
             stream_events: None,
-            feed_chunks: false,
             wrapped_secrets: None,
         };
         let prepared = backend.prepare(&job, ctx).await.expect("prepare");
@@ -759,7 +752,6 @@ async fn set_local_security_invariant() {
             timeout: Some(Duration::from_secs(10)),
             priority: aithericon_executor_domain::JobPriority::Medium,
             stream_events: None,
-            feed_chunks: false,
             wrapped_secrets: None,
         };
         let prepared = backend.prepare(&job, ctx).await.expect("prepare");
@@ -833,7 +825,6 @@ async fn read_only_transaction_blocks_writes() {
         timeout: Some(Duration::from_secs(10)),
         priority: aithericon_executor_domain::JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
     let prepared = backend.prepare(&job, ctx).await.expect("prepare");

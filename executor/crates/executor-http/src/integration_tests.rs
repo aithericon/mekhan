@@ -113,7 +113,6 @@ fn dummy_job() -> ExecutionJob {
         timeout: None,
         priority: Default::default(),
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     }
 }

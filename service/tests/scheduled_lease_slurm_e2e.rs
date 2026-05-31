@@ -199,7 +199,6 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
                     stream_output: false,
-                    feed_chunks: false,
                     // Drain seam: a plain Scheduled Submit. Because the body's
                     // parent is the leased Loop (lease enclosure BY CONTAINMENT —
                     // no per-step flag), the compiler RE-ROUTES it off the

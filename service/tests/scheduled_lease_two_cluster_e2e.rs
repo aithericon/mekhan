@@ -142,7 +142,6 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
             data: WorkflowNodeData::AutomatedStep {
                 label: format!("Run Python on lease ({dc_alias})"),
                 description: None,
-                feed_chunks: false,
                 execution_spec: ExecutionSpecConfig {
                     backend_type: ExecutionBackendType::Python,
                     entrypoint: Some("main.py".to_string()),

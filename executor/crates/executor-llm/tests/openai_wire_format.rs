@@ -127,7 +127,6 @@ async fn run_spec(spec: ExecutionSpec, tmp: std::path::PathBuf, eid: &str) -> Ex
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
-        feed_chunks: false,
         wrapped_secrets: None,
     };
     let backend = LlmBackend::new();

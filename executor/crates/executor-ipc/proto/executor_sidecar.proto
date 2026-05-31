@@ -11,13 +11,6 @@ service ExecutorSidecar {
     rpc LogMetrics(LogMetricsRequest) returns (SidecarResponse);
     rpc HealthCheck(HealthCheckRequest) returns (SidecarResponse);
     rpc ShutdownAck(ShutdownAckRequest) returns (SidecarResponse);
-
-    // Inbound live data feed: the child opens this server-stream and pulls
-    // chunks the executor receives (over the EXECUTOR_CHUNKS JetStream feed)
-    // while the child is still running. Drives the Python SDK's
-    // `for chunk in aithericon.chunks()` live-reducer loop. The stream ends
-    // when an in-band EOF sentinel (`ChunkMessage{is_eof:true}`) is reached.
-    rpc StreamChunks(StreamChunksRequest) returns (stream ChunkMessage);
 }
 
 enum ArtifactCategory {
@@ -128,19 +121,4 @@ message ShutdownAckRequest {
 message SidecarResponse {
     ResponseStatus status = 1;
     string error_message = 2;
-}
-
-// Request to open the inbound chunk feed. Carries no parameters — the
-// executor already knows which execution this IPC connection belongs to.
-message StreamChunksRequest {}
-
-// A single chunk fed into a running reducer job, or the end-of-stream
-// sentinel. `value_json` is the JSON-serialized chunk value; `sequence`
-// is the producer's monotonically-increasing chunk index (used for
-// ordering/dedup); `is_eof` marks the in-band terminator (after which
-// `value_json` is empty and the server-stream ends).
-message ChunkMessage {
-    string value_json = 1;
-    uint64 sequence = 2;
-    bool is_eof = 3;
 }

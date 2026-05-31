@@ -105,14 +105,12 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         retry_policy,
         output,
         stream_output,
-        feed_chunks,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
     let stream_output = *stream_output;
-    let feed_chunks = *feed_chunks;
 
     // Is this the terminal node of a Map body? If so it must forward its FULL
     // completed envelope (park data AND the whole token) so the Map's
@@ -272,7 +270,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             r#"["metric", "progress", "phase", "log"]"#
         };
         let prepare_logic = format!(
-            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; d.feed_chunks = {feed_chunks};{ns_frag} #{{ job: d }}"#
+            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }};{ns_frag} #{{ job: d }}"#
         );
         let prepare = ctx
             .transition("prepare", format!("{label} - Prepare"))

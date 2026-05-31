@@ -64,7 +64,6 @@ async fn start_test_sidecar(socket: PathBuf, artifacts_dir: PathBuf) -> JoinHand
         SidecarLogConfig::default(),
         tokio_util::sync::CancellationToken::new(),
         None,
-        None,
     )
     .await
     .expect("failed to start sidecar")
