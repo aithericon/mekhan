@@ -51,10 +51,7 @@ fn make_short_temp_dir() -> tempfile::TempDir {
 }
 
 /// Start a sidecar listening on the given socket path.
-async fn start_test_sidecar(
-    socket: PathBuf,
-    artifacts_dir: PathBuf,
-) -> JoinHandle<SidecarResult> {
+async fn start_test_sidecar(socket: PathBuf, artifacts_dir: PathBuf) -> JoinHandle<SidecarResult> {
     start_ipc_sidecar(
         socket,
         "test-exec-id".into(),
@@ -66,6 +63,7 @@ async fn start_test_sidecar(
         None,
         SidecarLogConfig::default(),
         tokio_util::sync::CancellationToken::new(),
+        None,
         None,
     )
     .await
@@ -142,7 +140,10 @@ async fn run_cli_no_socket(args: &[&str]) -> Output {
 async fn run_cli_no_socket_with_env(args: &[&str], env: &[(&str, &str)]) -> Output {
     let bin = cli_binary_path().clone();
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let env: Vec<(String, String)> = env
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     tokio::task::spawn_blocking(move || {
         let mut cmd = Command::new(bin);
         cmd.args(&args).env_remove("AITHERICON_IPC_SOCKET");
@@ -174,8 +175,16 @@ async fn test_output_set_json_value() {
     let handle = start_test_sidecar(socket.clone(), tmp.path().to_path_buf()).await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let out = run_cli(socket.to_str().unwrap(), &["output", "set", "result", r#"{"score":42}"#]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_cli(
+        socket.to_str().unwrap(),
+        &["output", "set", "result", r#"{"score":42}"#],
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     assert_eq!(result.outputs["result"], serde_json::json!({"score": 42}));
@@ -191,8 +200,13 @@ async fn test_output_set_raw_string() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["output", "set", "greeting", "--raw", "hello"],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     assert_eq!(result.outputs["greeting"], serde_json::json!("hello"));
@@ -205,8 +219,16 @@ async fn test_output_set_numeric() {
     let handle = start_test_sidecar(socket.clone(), tmp.path().to_path_buf()).await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let out = run_cli(socket.to_str().unwrap(), &["output", "set", "accuracy", "0.95"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_cli(
+        socket.to_str().unwrap(),
+        &["output", "set", "accuracy", "0.95"],
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     assert_eq!(result.outputs["accuracy"], serde_json::json!(0.95));
@@ -224,7 +246,8 @@ async fn test_output_set_invalid_json() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["output", "set", "key", "not valid json"],
-    ).await;
+    )
+    .await;
     assert_eq!(out.status.code(), Some(3));
 }
 
@@ -235,8 +258,16 @@ async fn test_output_set_json_mode() {
     let handle = start_test_sidecar(socket.clone(), tmp.path().to_path_buf()).await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let out = run_cli(socket.to_str().unwrap(), &["--json", "output", "set", "key", "42"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_cli(
+        socket.to_str().unwrap(),
+        &["--json", "output", "set", "key", "42"],
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains(r#""status":"ok""#), "stdout: {stdout}");
@@ -252,8 +283,13 @@ async fn test_output_set_fallback() {
     let out = run_cli_no_socket_with_env(
         &["output", "set", "result", r#"{"score":42}"#],
         &[("AITHERICON_OUTPUTS_DIR", outputs_dir.to_str().unwrap())],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let content = std::fs::read_to_string(outputs_dir.join("result.json")).unwrap();
     assert_eq!(content, r#"{"score":42}"#);
@@ -267,8 +303,13 @@ async fn test_output_set_fallback_raw() {
     let out = run_cli_no_socket_with_env(
         &["output", "set", "greeting", "--raw", "hello"],
         &[("AITHERICON_OUTPUTS_DIR", outputs_dir.to_str().unwrap())],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let content = std::fs::read_to_string(outputs_dir.join("greeting.json")).unwrap();
     assert_eq!(content, r#""hello""#);
@@ -292,7 +333,11 @@ async fn test_progress_update_basic() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let out = run_cli(socket.to_str().unwrap(), &["progress", "update", "0.5"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let progress = result.progress.expect("no progress");
@@ -309,13 +354,23 @@ async fn test_progress_with_message_and_steps() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &[
-            "progress", "update", "0.75",
-            "--message", "Training",
-            "--step", "75",
-            "--total-steps", "100",
+            "progress",
+            "update",
+            "0.75",
+            "--message",
+            "Training",
+            "--step",
+            "75",
+            "--total-steps",
+            "100",
         ],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let progress = result.progress.expect("no progress");
@@ -333,7 +388,11 @@ async fn test_progress_fraction_one() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let out = run_cli(socket.to_str().unwrap(), &["progress", "update", "1.0"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let progress = result.progress.expect("no progress");
@@ -348,7 +407,11 @@ async fn test_progress_fraction_negative() {
     let _handle = start_test_sidecar(socket.clone(), tmp.path().to_path_buf()).await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let out = run_cli(socket.to_str().unwrap(), &["progress", "update", "--", "-0.1"]).await;
+    let out = run_cli(
+        socket.to_str().unwrap(),
+        &["progress", "update", "--", "-0.1"],
+    )
+    .await;
     assert_eq!(out.status.code(), Some(3));
 }
 
@@ -377,8 +440,13 @@ async fn test_phase_define() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["phase", "define", "prep", "train", "eval"],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let progress = result.progress.expect("no progress");
@@ -398,7 +466,8 @@ async fn test_phase_update_not_found() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["phase", "update", "nonexistent", "running"],
-    ).await;
+    )
+    .await;
     assert_eq!(out.status.code(), Some(1));
 
     let _ = await_sidecar(handle).await;
@@ -416,7 +485,11 @@ async fn test_log_info() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let out = run_cli(socket.to_str().unwrap(), &["log", "info", "hello world"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.log_summary.expect("no log summary");
@@ -431,8 +504,16 @@ async fn test_log_error() {
     let handle = start_test_sidecar(socket.clone(), tmp.path().to_path_buf()).await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let out = run_cli(socket.to_str().unwrap(), &["log", "error", "something broke"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_cli(
+        socket.to_str().unwrap(),
+        &["log", "error", "something broke"],
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.log_summary.expect("no log summary");
@@ -450,8 +531,13 @@ async fn test_log_with_fields() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["log", "error", "fail", "--field", "key=val"],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.log_summary.expect("no log summary");
@@ -466,7 +552,11 @@ async fn test_log_debug() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let out = run_cli(socket.to_str().unwrap(), &["log", "debug", "debug msg"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.log_summary.expect("no log summary");
@@ -487,8 +577,13 @@ async fn test_metric_log_scalar() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["metric", "log", "train/loss", "0.05"],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.metric_summary.expect("no metric summary");
@@ -506,9 +601,23 @@ async fn test_metric_with_step_and_type() {
 
     let out = run_cli(
         socket.to_str().unwrap(),
-        &["metric", "log", "cpu_usage", "0.85", "--step", "100", "--type", "gauge"],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+        &[
+            "metric",
+            "log",
+            "cpu_usage",
+            "0.85",
+            "--step",
+            "100",
+            "--type",
+            "gauge",
+        ],
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.metric_summary.expect("no metric summary");
@@ -526,8 +635,13 @@ async fn test_metric_with_labels() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["metric", "log", "latency", "50.0", "--label", "env=prod"],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.metric_summary.expect("no metric summary");
@@ -546,8 +660,13 @@ async fn test_metric_batch_stdin() {
         socket.to_str().unwrap(),
         &["metric", "batch"],
         batch.as_bytes(),
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     let summary = result.metric_summary.expect("no metric summary");
@@ -567,7 +686,8 @@ async fn test_metric_batch_invalid_json() {
         socket.to_str().unwrap(),
         &["metric", "batch"],
         b"not valid json",
-    ).await;
+    )
+    .await;
     assert_eq!(out.status.code(), Some(4));
 }
 
@@ -588,13 +708,21 @@ async fn test_artifact_log() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &[
-            "artifact", "log",
+            "artifact",
+            "log",
             artifact_file.to_str().unwrap(),
-            "--name", "my-model",
-            "--category", "model",
+            "--name",
+            "my-model",
+            "--category",
+            "model",
         ],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     assert_eq!(result.artifacts.len(), 1);
@@ -614,8 +742,13 @@ async fn test_artifact_defaults_name() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &["artifact", "log", artifact_file.to_str().unwrap()],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     assert_eq!(result.artifacts[0].name, "weights.bin");
@@ -634,12 +767,19 @@ async fn test_artifact_with_metadata() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &[
-            "artifact", "log",
+            "artifact",
+            "log",
             artifact_file.to_str().unwrap(),
-            "--metadata", "k=v",
+            "--metadata",
+            "k=v",
         ],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     assert_eq!(result.artifacts[0].metadata.get("k").unwrap(), "v");
@@ -658,12 +798,19 @@ async fn test_artifact_with_mime_type() {
     let out = run_cli(
         socket.to_str().unwrap(),
         &[
-            "artifact", "log",
+            "artifact",
+            "log",
             artifact_file.to_str().unwrap(),
-            "--mime-type", "image/png",
+            "--mime-type",
+            "image/png",
         ],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let result = await_sidecar(handle).await;
     assert_eq!(result.artifacts[0].mime_type.as_deref(), Some("image/png"));
@@ -681,7 +828,11 @@ async fn test_health_check() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let out = run_cli(socket.to_str().unwrap(), &["health"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let _ = await_sidecar(handle).await;
 }
@@ -694,7 +845,11 @@ async fn test_shutdown_default() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let out = run_cli(socket.to_str().unwrap(), &["shutdown"]).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let _ = await_sidecar(handle).await;
 }
@@ -706,11 +861,12 @@ async fn test_shutdown_with_exit_code() {
     let handle = start_test_sidecar(socket.clone(), tmp.path().to_path_buf()).await;
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let out = run_cli(
-        socket.to_str().unwrap(),
-        &["shutdown", "--exit-code", "42"],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let out = run_cli(socket.to_str().unwrap(), &["shutdown", "--exit-code", "42"]).await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let _ = await_sidecar(handle).await;
 }
@@ -756,8 +912,13 @@ async fn test_inputs_list() {
     let out = run_cli_no_socket_with_env(
         &["inputs", "list"],
         &[("AITHERICON_INPUTS_DIR", inputs_dir.to_str().unwrap())],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("alpha.json"));
@@ -774,8 +935,13 @@ async fn test_inputs_list_json() {
     let out = run_cli_no_socket_with_env(
         &["--json", "inputs", "list"],
         &[("AITHERICON_INPUTS_DIR", inputs_dir.to_str().unwrap())],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Output may contain both the JSON array and {"status":"ok"} on separate lines.
@@ -794,8 +960,13 @@ async fn test_inputs_get() {
     let out = run_cli_no_socket_with_env(
         &["inputs", "get", "config.json"],
         &[("AITHERICON_INPUTS_DIR", inputs_dir.to_str().unwrap())],
-    ).await;
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("lr"));
@@ -810,7 +981,8 @@ async fn test_inputs_get_not_found() {
     let out = run_cli_no_socket_with_env(
         &["inputs", "get", "missing.json"],
         &[("AITHERICON_INPUTS_DIR", inputs_dir.to_str().unwrap())],
-    ).await;
+    )
+    .await;
     assert_eq!(out.status.code(), Some(3));
 }
 

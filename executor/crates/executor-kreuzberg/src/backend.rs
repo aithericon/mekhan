@@ -11,9 +11,7 @@ use aithericon_executor_domain::{
     LogEntry, LogLevel, LogSummary, MetricSummary, Progress, RunContext,
 };
 
-use crate::config::{
-    ExtractionMode, KreuzbergConfig, KreuzbergConfigExt, ResolvedKreuzbergConfig,
-};
+use crate::config::{ExtractionMode, KreuzbergConfig, KreuzbergConfigExt, ResolvedKreuzbergConfig};
 
 /// Backend that extracts text, metadata, and tables from documents via the
 /// kreuzberg library.
@@ -72,8 +70,9 @@ impl ExecutionBackend for KreuzbergBackend {
             }
         };
 
-        run_context.backend_state = serde_json::to_value(&resolved)
-            .map_err(|e| ExecutorError::Config(format!("failed to serialize resolved config: {e}")))?;
+        run_context.backend_state = serde_json::to_value(&resolved).map_err(|e| {
+            ExecutorError::Config(format!("failed to serialize resolved config: {e}"))
+        })?;
         Ok(run_context)
     }
 
@@ -93,9 +92,7 @@ impl ExecutionBackend for KreuzbergBackend {
             ExtractionMode::Single => {
                 execute_single(run_context, &resolved, status_cb, cancel).await
             }
-            ExtractionMode::Batch => {
-                execute_batch(run_context, &resolved, status_cb, cancel).await
-            }
+            ExtractionMode::Batch => execute_batch(run_context, &resolved, status_cb, cancel).await,
         }
     }
 
@@ -119,7 +116,9 @@ async fn execute_single(
     cancel: CancellationToken,
 ) -> Result<ExecutionResult, ExecutorError> {
     let file_path = resolved.target_file.as_ref().ok_or_else(|| {
-        ExecutorError::Config("kreuzberg single mode: target_file missing from resolved config".into())
+        ExecutorError::Config(
+            "kreuzberg single mode: target_file missing from resolved config".into(),
+        )
     })?;
     let file_name = resolved.target_name.as_deref().unwrap_or("file");
     let extraction_config = resolved.config.build_extraction_config();
@@ -312,8 +311,7 @@ async fn execute_batch(
                 total_table_count += extraction.tables.len();
                 successful += 1;
 
-                let mut entry = serde_json::to_value(&extraction)
-                    .unwrap_or(serde_json::json!({}));
+                let mut entry = serde_json::to_value(&extraction).unwrap_or(serde_json::json!({}));
                 if let serde_json::Value::Object(ref mut map) = entry {
                     map.insert("file".into(), serde_json::json!(name));
                 }
@@ -479,7 +477,11 @@ fn build_single_outputs(
 
     // Truncate content for stdout_tail (keep first 1024 chars).
     let stdout_tail = if result.content.len() > 1024 {
-        format!("{}... ({} chars total)", &result.content[..1024], result.content.len())
+        format!(
+            "{}... ({} chars total)",
+            &result.content[..1024],
+            result.content.len()
+        )
     } else {
         result.content.clone()
     };
@@ -513,6 +515,7 @@ mod tests {
             timeout: None,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         }
     }

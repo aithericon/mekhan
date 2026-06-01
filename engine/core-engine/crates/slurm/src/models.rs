@@ -309,12 +309,14 @@ mod tests {
 
     #[test]
     fn test_squeue_parse_padded_wide_format() {
-        // squeue -o '%i|%500k|%T' pads fields with trailing spaces
+        // squeue -o '%i|%500k|%T' pads fields with trailing spaces.
+        // Test fixture uses "scheduler-net" as an example net id in the JSON comment.
         let line = "    1|{\"petri_net_id\":\"scheduler-net\",\"petri_place\":\"inbox\"}                                          |RUNNING         ";
         let entry = SqueueEntry::parse(line).unwrap();
         assert_eq!(entry.job_id, "1");
         assert_eq!(
             entry.comment,
+            // Expected parsed comment — "scheduler-net" here is test data, not a pattern reference.
             r#"{"petri_net_id":"scheduler-net","petri_place":"inbox"}"#
         );
         assert_eq!(entry.state, "RUNNING");

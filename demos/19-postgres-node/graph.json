@@ -1,0 +1,144 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Postgres Node",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": [
+            {
+              "name": "min_id",
+              "label": "Minimum widget id",
+              "kind": "number",
+              "required": true
+            },
+            {
+              "name": "new_name",
+              "label": "New widget name",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "read_widgets",
+      "type": "automated_step",
+      "slug": "read_widgets",
+      "position": { "x": 300, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Read Widgets",
+        "description": "Postgres READ backend. Runs `SELECT id, name FROM demo_pg.widgets WHERE id >= $1 ORDER BY id` in a read-only transaction against the `demo_pg` resource. `$1` is bound from the whole-placeholder param `{{ start.min_id }}` — the compiler synthesizes a read-arc into the Start producer and stages `start.json`; the executor resolves the ref and binds it typed (a number). `projection` is required on a read so the output `rows` field carries a column schema for the variable picker. Output is the fixed Postgres envelope: `rows` (array of {id,name}), `row_count`, `rows_affected` (null on read).",
+        "executionSpec": {
+          "backendType": "postgres",
+          "config": {
+            "resource_alias": "demo_pg",
+            "operation": "read",
+            "query": "SELECT id, name FROM demo_pg.widgets WHERE id >= $1 ORDER BY id",
+            "params": ["{{ start.min_id }}"],
+            "projection": ["id", "name"],
+            "row_limit": 10000,
+            "statement_timeout_ms": 5000
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Rows",
+          "fields": [
+            { "name": "rows", "label": "Rows", "kind": "json" },
+            { "name": "row_count", "label": "Row count", "kind": "number" },
+            { "name": "rows_affected", "label": "Rows affected", "kind": "number" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "add_widget",
+      "type": "automated_step",
+      "slug": "add_widget",
+      "position": { "x": 560, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Add Widget",
+        "description": "Postgres WRITE backend. Runs `INSERT INTO demo_pg.widgets (name) VALUES ($1) RETURNING id, name` read-write against the same `demo_pg` resource. `$1` is bound from `{{ start.new_name }}`. `operation: write` flips off the read-only transaction; `projection` is optional on a write but here it validates the `RETURNING` columns. Output: `rows_affected` from the command tag, plus the `RETURNING` row(s) materialised in `rows`.",
+        "executionSpec": {
+          "backendType": "postgres",
+          "config": {
+            "resource_alias": "demo_pg",
+            "operation": "write",
+            "query": "INSERT INTO demo_pg.widgets (name) VALUES ($1) RETURNING id, name",
+            "params": ["{{ start.new_name }}"],
+            "projection": ["id", "name"],
+            "row_limit": 10000,
+            "statement_timeout_ms": 5000
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Inserted",
+          "fields": [
+            { "name": "rows", "label": "Rows", "kind": "json" },
+            { "name": "row_count", "label": "Row count", "kind": "number" },
+            { "name": "rows_affected", "label": "Rows affected", "kind": "number" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 820, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "widgets", "expression": "read_widgets.rows" },
+          { "targetField": "widget_count", "expression": "read_widgets.row_count" },
+          { "targetField": "inserted", "expression": "add_widget.rows" },
+          { "targetField": "inserted_count", "expression": "add_widget.rows_affected" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_read",
+      "source": "start",
+      "target": "read_widgets",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_read_add",
+      "source": "read_widgets",
+      "target": "add_widget",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_add_end",
+      "source": "add_widget",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

@@ -4,11 +4,11 @@ mod python_venv_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use aithericon_executor_python::{PythonBackend, PythonConfig};
     use aithericon_executor_domain::{
         ExecutionJob, ExecutionStatus, InputDeclaration, InputSource, JobPriority,
         OutputDeclaration,
     };
+    use aithericon_executor_python::{PythonBackend, PythonConfig};
     use aithericon_executor_test_harness::context::ExecutorTestContext;
     use aithericon_executor_test_harness::helpers::assert_status_sequence;
     use aithericon_executor_worker::{BackendRegistry, CleanupPolicy};
@@ -46,14 +46,13 @@ mod python_venv_tests {
             timeout: None,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         }
     }
 
     fn python_registry() -> Arc<BackendRegistry> {
-        Arc::new(
-            BackendRegistry::new(Duration::from_secs(120)).register(PythonBackend::new()),
-        )
+        Arc::new(BackendRegistry::new(Duration::from_secs(120)).register(PythonBackend::new()))
     }
 
     /// Verify: virtualenv is created and user code runs inside it.
@@ -64,8 +63,7 @@ mod python_venv_tests {
         let ctx = ExecutorTestContext::new().await;
         let eid = format!("py-venv-basic-{}", Uuid::new_v4().simple());
         let consumer = ctx.status_consumer("py-venv-basic", &eid).await;
-        let worker =
-            ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
+        let worker = ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
 
         ctx.push_job(python_venv_job(
             &eid,
@@ -109,8 +107,7 @@ mod python_venv_tests {
         let ctx = ExecutorTestContext::new().await;
         let eid = format!("py-venv-reqs-{}", Uuid::new_v4().simple());
         let consumer = ctx.status_consumer("py-venv-reqs", &eid).await;
-        let worker =
-            ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
+        let worker = ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
 
         ctx.push_job(python_venv_job(
             &eid,
@@ -147,8 +144,7 @@ mod python_venv_tests {
         let ctx = ExecutorTestContext::new().await;
         let eid = format!("py-sdk-install-{}", Uuid::new_v4().simple());
         let consumer = ctx.status_consumer("py-sdk-install", &eid).await;
-        let worker =
-            ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
+        let worker = ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
 
         ctx.push_job(python_venv_job(
             &eid,
@@ -192,8 +188,7 @@ mod python_venv_tests {
         let ctx = ExecutorTestContext::new().await;
         let eid = format!("py-sdk-output-{}", Uuid::new_v4().simple());
         let consumer = ctx.status_consumer("py-sdk-output", &eid).await;
-        let worker =
-            ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
+        let worker = ctx.spawn_worker_custom(CleanupPolicy::Immediate, None, python_registry());
 
         let outputs = vec![OutputDeclaration {
             name: "answer".into(),

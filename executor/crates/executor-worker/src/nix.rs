@@ -121,7 +121,12 @@ impl StagingHook for NixEnvironmentHook {
 
         // Auto-include SDK when spec.config.sdk == true and we have an sdk_path
         let local_packages = if self.sdk_path.is_some()
-            && ctx.spec.config.get("sdk").and_then(|v| v.as_bool()).unwrap_or(false)
+            && ctx
+                .spec
+                .config
+                .get("sdk")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
         {
             let sdk = self.sdk_path.as_ref().unwrap();
             info!(sdk_path = %sdk.display(), "including aithericon SDK in nix environment");
@@ -131,8 +136,7 @@ impl StagingHook for NixEnvironmentHook {
         };
 
         // Resolve (cache hit or build)
-        let store_path =
-            resolve_environment(&nix_spec, &local_packages, &self.cache_dir).await?;
+        let store_path = resolve_environment(&nix_spec, &local_packages, &self.cache_dir).await?;
         info!(store_path = %store_path.display(), "nix environment resolved");
 
         // Enrich PATH
@@ -195,10 +199,7 @@ fn pip_to_nixpkgs(pip_name: &str) -> String {
 }
 
 /// Build a NixSpec from pip requirements, auto-detecting the Python version from config.
-fn nix_spec_from_requirements(
-    requirements: &[String],
-    config: &serde_json::Value,
-) -> NixSpec {
+fn nix_spec_from_requirements(requirements: &[String], config: &serde_json::Value) -> NixSpec {
     // Detect Python version from config.python field (e.g. "python3.11" → "python311")
     let python_attr = config
         .get("python")
@@ -379,9 +380,11 @@ async fn resolve_environment(
 
     // Cache miss: generate expression and build
     let expression = generate_expression(spec, local_packages);
-    tokio::fs::write(&expr_file, &expression).await.map_err(|e| {
-        ExecutorError::StagingFailed(format!("failed to write nix expression: {e}"))
-    })?;
+    tokio::fs::write(&expr_file, &expression)
+        .await
+        .map_err(|e| {
+            ExecutorError::StagingFailed(format!("failed to write nix expression: {e}"))
+        })?;
 
     debug!(hash = %hash, expr = %expr_file.display(), "nix cache miss, building");
 
@@ -425,9 +428,7 @@ async fn nix_build(expr_path: &Path) -> Result<PathBuf, ExecutorError> {
         .trim()
         .lines()
         .last()
-        .ok_or_else(|| {
-            ExecutorError::StagingFailed("nix-build produced no output".into())
-        })?;
+        .ok_or_else(|| ExecutorError::StagingFailed("nix-build produced no output".into()))?;
 
     Ok(PathBuf::from(store_path))
 }
@@ -529,9 +530,18 @@ mod tests {
         let spec = sample_spec();
         let expr = generate_expression(&spec, &[]);
         assert!(expr.contains("import <nixpkgs> {}"));
-        assert!(expr.contains("withPackages"), "should use withPackages for Python deps");
-        assert!(expr.contains("ps.numpy"), "numpy should be in withPackages closure");
-        assert!(expr.contains("ps.gpytorch"), "gpytorch should be in withPackages closure");
+        assert!(
+            expr.contains("withPackages"),
+            "should use withPackages for Python deps"
+        );
+        assert!(
+            expr.contains("ps.numpy"),
+            "numpy should be in withPackages closure"
+        );
+        assert!(
+            expr.contains("ps.gpytorch"),
+            "gpytorch should be in withPackages closure"
+        );
         assert!(expr.contains("buildEnv"));
         assert!(expr.contains("ignoreCollisions = true"));
     }
@@ -593,17 +603,12 @@ mod tests {
             return;
         }
 
-        let cache_dir = std::env::temp_dir().join(format!(
-            "nix-integration-test-{}",
-            std::process::id()
-        ));
+        let cache_dir =
+            std::env::temp_dir().join(format!("nix-integration-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&cache_dir);
 
         let spec = NixSpec {
-            packages: vec![
-                "python311".into(),
-                "python311Packages.numpy".into(),
-            ],
+            packages: vec!["python311".into(), "python311Packages.numpy".into()],
             nixpkgs_pin: None,
         };
 
@@ -611,10 +616,17 @@ mod tests {
         let t0 = std::time::Instant::now();
         let store_path = resolve_environment(&spec, &[], &cache_dir).await.unwrap();
         let first_duration = t0.elapsed();
-        eprintln!("first resolve: {:?} -> {}", first_duration, store_path.display());
+        eprintln!(
+            "first resolve: {:?} -> {}",
+            first_duration,
+            store_path.display()
+        );
 
         // Store path exists and has bin/python3
-        assert!(store_path.join("bin/python3").exists(), "python3 binary missing");
+        assert!(
+            store_path.join("bin/python3").exists(),
+            "python3 binary missing"
+        );
 
         // Cache files were written
         let hash = content_hash(&spec, &[]);
@@ -658,7 +670,11 @@ mod tests {
             .output()
             .await
             .unwrap();
-        assert!(output.status.success(), "python failed: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "python failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.starts_with("numpy "), "unexpected output: {stdout}");
         eprintln!("python output: {}", stdout.trim());
@@ -669,8 +685,8 @@ mod tests {
 
     #[tokio::test]
     async fn hook_is_noop_without_nix_key() {
-        use aithericon_executor_process::ProcessConfig;
         use aithericon_executor_domain::{JobPriority, RunDirectory};
+        use aithericon_executor_process::ProcessConfig;
         use std::collections::HashMap;
         use std::time::Duration;
 
@@ -688,6 +704,7 @@ mod tests {
             timeout: None,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         };
 
@@ -736,13 +753,14 @@ mod tests {
     #[test]
     fn nix_spec_from_requirements_basic() {
         let config = serde_json::json!({});
-        let spec = nix_spec_from_requirements(
-            &["numpy".into(), "scipy".into()],
-            &config,
-        );
+        let spec = nix_spec_from_requirements(&["numpy".into(), "scipy".into()], &config);
         assert!(spec.packages.contains(&"python311".to_string()));
-        assert!(spec.packages.contains(&"python311Packages.numpy".to_string()));
-        assert!(spec.packages.contains(&"python311Packages.scipy".to_string()));
+        assert!(spec
+            .packages
+            .contains(&"python311Packages.numpy".to_string()));
+        assert!(spec
+            .packages
+            .contains(&"python311Packages.scipy".to_string()));
     }
 
     #[test]

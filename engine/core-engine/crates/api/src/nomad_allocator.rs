@@ -21,7 +21,8 @@
 //!     `DispatchedJobID` becomes the lease `alloc_id`. The lease env
 //!     (`LEASE_NAMESPACE`/`LEASE_MAX_JOBS`/`LEASE_IDLE_TIMEOUT`) rides as Nomad
 //!     dispatch `Meta` (payload-free; meta is ≤16KB). Returns the lease JSON
-//!     `{ node, gpu_uuid, alloc_id, expiry, executor_namespace }`.
+//!     `{ alloc_id, executor_namespace, scheduler: { flavor: "nomad", eval_id } }`
+//!     (node/expiry omitted — placement is async).
 //!   - **release** → `nomad job stop` (`DELETE /v1/job/{id}`) on the dispatched
 //!     job — SIGTERM → the drain executor graceful-drains in-flight + exits,
 //!     freeing the alloc. Tolerant of an already-gone job (idempotent release).
@@ -30,7 +31,7 @@
 //! types every field as a required String): unlike Slurm's synchronous
 //! `scontrol`, the Nomad alloc placement is not resolved at dispatch time
 //! (`NomadWatcher` streams running/completed signals asynchronously; acquire does
-//! not block on placement). `gpu_uuid` is `""` on the CPU dev cluster.
+//! not block on placement). No device/`gpu_uuid` field — no allocator reports it.
 //!
 //! ## Idempotency
 //!
@@ -213,16 +214,18 @@ impl NomadAllocatorClient {
             "nomad lease: dispatched persistent drain executor",
         );
 
-        // `Lease__datacenter` types every field as a required String — empty,
-        // not null. node/expiry are unresolved at dispatch (the watcher streams
-        // placement asynchronously); the drain executor self-identifies via the
-        // namespace, so those are "" here.
+        // `DatacenterLease`: only `alloc_id` is required. node/expiry are
+        // unresolved at dispatch (the watcher streams placement asynchronously),
+        // so they're OMITTED rather than emitted as empty strings — the drain
+        // executor self-identifies via the namespace. The `scheduler` detail is
+        // the typed `nomad` variant carrying the dispatch evaluation id.
         Ok(json!({
-            "node": "",
-            "gpu_uuid": "",
             "alloc_id": dispatch_resp.dispatched_job_id,
-            "expiry": "",
             "executor_namespace": executor_namespace,
+            "scheduler": {
+                "flavor": "nomad",
+                "eval_id": dispatch_resp.eval_id,
+            },
         }))
     }
 
@@ -350,33 +353,58 @@ mod tests {
 
     #[tokio::test]
     async fn acquire_dispatches_lease_job_and_returns_namespaced_lease() {
-        let (addr, captured) =
-            fake_nomad(r#"{"DispatchedJobID":"petri-lease-executor/dispatch-99","EvalID":"e1","Index":7}"#)
-                .await;
+        let (addr, captured) = fake_nomad(
+            r#"{"DispatchedJobID":"petri-lease-executor/dispatch-99","EvalID":"e1","Index":7}"#,
+        )
+        .await;
         let client = client_for(&addr);
 
         // grant_id is instance_id:node_id — the ':' MUST be sanitised.
         let lease = client
-            .acquire_lease("inst-1:loop-node", &json!({ "max_jobs": 5, "idle_timeout_secs": 120 }))
+            .acquire_lease(
+                "inst-1:loop-node",
+                &json!({ "max_jobs": 5, "idle_timeout_secs": 120 }),
+            )
             .await
             .unwrap();
 
-        // dispatched job id → alloc_id; namespace sanitised; empty-not-null fields.
-        assert_eq!(lease.get("alloc_id").unwrap(), "petri-lease-executor/dispatch-99");
-        assert_eq!(lease.get("executor_namespace").unwrap(), "lease-inst-1-loop-node");
-        assert_eq!(lease.get("node").unwrap(), "");
-        assert_eq!(lease.get("gpu_uuid").unwrap(), "");
-        assert_eq!(lease.get("expiry").unwrap(), "");
+        // dispatched job id → alloc_id; namespace sanitised; node/expiry OMITTED
+        // (async placement) rather than empty-string; typed nomad scheduler detail.
+        assert_eq!(
+            lease.get("alloc_id").unwrap(),
+            "petri-lease-executor/dispatch-99"
+        );
+        assert_eq!(
+            lease.get("executor_namespace").unwrap(),
+            "lease-inst-1-loop-node"
+        );
+        assert!(lease.get("node").is_none(), "node omitted until placed: {lease}");
+        assert!(lease.get("expiry").is_none(), "expiry omitted: {lease}");
+        assert!(lease.get("gpu_uuid").is_none(), "gpu_uuid retired: {lease}");
+        assert_eq!(lease["scheduler"]["flavor"], "nomad");
+        assert_eq!(lease["scheduler"]["eval_id"], "e1");
 
         let cap = captured.lock().unwrap().clone();
         assert_eq!(cap.method, "POST");
         assert_eq!(cap.path, "/v1/job/petri-lease-executor/dispatch");
         // lease env rides as Meta (no payload)
         assert!(cap.body.contains("\"Meta\""), "body: {}", cap.body);
-        assert!(cap.body.contains("lease-inst-1-loop-node"), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("lease-inst-1-loop-node"),
+            "body: {}",
+            cap.body
+        );
         assert!(cap.body.contains("LEASE_NAMESPACE"), "body: {}", cap.body);
-        assert!(cap.body.contains("\"LEASE_MAX_JOBS\":\"5\""), "body: {}", cap.body);
-        assert!(cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"120\""), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("\"LEASE_MAX_JOBS\":\"5\""),
+            "body: {}",
+            cap.body
+        );
+        assert!(
+            cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"120\""),
+            "body: {}",
+            cap.body
+        );
         // payload-free dispatch (meta-only)
         assert!(!cap.body.contains("\"Payload\""), "body: {}", cap.body);
     }
@@ -404,7 +432,11 @@ mod tests {
             .await
             .unwrap();
         let cap = captured.lock().unwrap().clone();
-        assert!(cap.body.contains("petri_signal_failed"), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("petri_signal_failed"),
+            "body: {}",
+            cap.body
+        );
         assert!(cap.body.contains("pool-rid-9"), "body: {}", cap.body);
         assert!(cap.body.contains("lease_failed"), "body: {}", cap.body);
     }
@@ -418,8 +450,16 @@ mod tests {
         let _ = client.acquire_lease("g:n", &json!({})).await.unwrap();
 
         let cap = captured.lock().unwrap().clone();
-        assert!(cap.body.contains("\"LEASE_MAX_JOBS\":\"100000\""), "body: {}", cap.body);
-        assert!(cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"300\""), "body: {}", cap.body);
+        assert!(
+            cap.body.contains("\"LEASE_MAX_JOBS\":\"100000\""),
+            "body: {}",
+            cap.body
+        );
+        assert!(
+            cap.body.contains("\"LEASE_IDLE_TIMEOUT\":\"300\""),
+            "body: {}",
+            cap.body
+        );
     }
 
     #[tokio::test]

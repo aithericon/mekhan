@@ -119,7 +119,10 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
     let list = body_json(resp.into_body()).await;
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert_eq!(list[0]["id"], "u-1");
-    assert!(list[0].get("secret").is_none(), "list must not leak secrets");
+    assert!(
+        list[0].get("secret").is_none(),
+        "list must not leak secrets"
+    );
 
     // Revoke.
     let resp = app

@@ -21,11 +21,11 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use aithericon_executor_backend::ExecutionBackend;
-use aithericon_executor_process::{ProcessBackend, ProcessConfig};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionStatus, InputDeclaration, InputSource, JobPriority, RunContext,
     RunDirectory,
 };
+use aithericon_executor_process::{ProcessBackend, ProcessConfig};
 use aithericon_executor_worker::staging::default_pipeline;
 use aithericon_secrets::{SecretError, SecretStore};
 
@@ -121,6 +121,7 @@ async fn secret_template_stays_on_disk_plaintext_only_reaches_child() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 
@@ -212,12 +213,7 @@ async fn secret_template_stays_on_disk_plaintext_only_reaches_child() {
     // ---- 8. Execute the process and assert the child actually received
     //         the plaintext value via Command::env. ----
     let exec_result = backend
-        .execute(
-            &ctx,
-            noop_callback(),
-            None,
-            CancellationToken::new(),
-        )
+        .execute(&ctx, noop_callback(), None, CancellationToken::new())
         .await
         .expect("backend.execute failed");
 
@@ -299,6 +295,7 @@ async fn no_secret_store_means_no_resolution_at_all() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 
@@ -423,6 +420,7 @@ async fn inline_input_secret_is_resolved_in_staged_file_only() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 
@@ -456,8 +454,7 @@ async fn inline_input_secret_is_resolved_in_staged_file_only() {
         .staged_inputs
         .get("local_pg.json")
         .expect("local_pg.json should have been staged");
-    let staged_contents =
-        std::fs::read_to_string(staged_path).expect("staged file must exist");
+    let staged_contents = std::fs::read_to_string(staged_path).expect("staged file must exist");
     assert!(
         staged_contents.contains(RESOURCE_FIELD_PLAINTEXT),
         "staged inputs/local_pg.json must contain the resolved plaintext, got: {staged_contents}"
@@ -557,6 +554,7 @@ async fn inline_input_without_secret_template_is_not_diverted() {
         timeout: Some(Duration::from_secs(30)),
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 

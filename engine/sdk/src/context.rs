@@ -105,12 +105,7 @@ impl<TReply: Token> SpawnHandles<TReply> {
     /// ```ignore
     /// ocr.on_failure(ctx, &workflow_failed, "ocr");
     /// ```
-    pub fn on_failure<T: Token>(
-        &self,
-        ctx: &mut Context,
-        target: &PlaceHandle<T>,
-        phase: &str,
-    ) {
+    pub fn on_failure<T: Token>(&self, ctx: &mut Context, target: &PlaceHandle<T>, phase: &str) {
         ctx.transition(
             format!("fail_{}", self.name),
             format!("Fail {} Step", phase),
@@ -145,11 +140,7 @@ impl<TReply: Token> SpawnHandles<TReply> {
     ///         #{ job_id: "ocr:" + entry.dept, run: 0, retries: 0, max_retries: 2, spec: spec }
     ///     "#);
     /// ```
-    pub fn prepare<'ctx>(
-        &self,
-        ctx: &'ctx mut Context,
-        label: &str,
-    ) -> TransitionBuilder<'ctx> {
+    pub fn prepare<'ctx>(&self, ctx: &'ctx mut Context, label: &str) -> TransitionBuilder<'ctx> {
         ctx.transition(format!("prepare_{}", self.name), label)
             .auto_output("spawn_request", &self.request)
     }
@@ -166,11 +157,7 @@ impl<TReply: Token> SpawnHandles<TReply> {
     ///     .auto_output("invoice", &extracted_data)
     ///     .logic(r#"#{ invoice: #{ data: result.detail.outputs.response } }"#);
     /// ```
-    pub fn join<'ctx>(
-        &self,
-        ctx: &'ctx mut Context,
-        label: &str,
-    ) -> TransitionBuilder<'ctx> {
+    pub fn join<'ctx>(&self, ctx: &'ctx mut Context, label: &str) -> TransitionBuilder<'ctx> {
         ctx.transition(format!("join_{}", self.name), label)
             .auto_input("result", &self.reply)
     }
@@ -1022,7 +1009,7 @@ impl Context {
     /// ```ignore
     /// let (to_scheduler, from_scheduler) = ctx.bridge_channel::<Request, Response>(
     ///     "scheduler",
-    ///     "scheduler-net",
+    ///     "scheduler-relay", // example net id — any deployed scheduler relay net
     ///     "job_inbox",
     ///     "result_outbox",
     /// );
@@ -1184,10 +1171,8 @@ impl Context {
         );
 
         // 2. Intermediate place for the effect input
-        let timer_data_place = self.state::<DynamicToken>(
-            format!("{}_data", prefix),
-            format!("{} (Data)", prefix),
-        );
+        let timer_data_place =
+            self.state::<DynamicToken>(format!("{}_data", prefix), format!("{} (Data)", prefix));
 
         // 3. Output place for the scheduled timer metadata
         let scheduled_place = self.state::<DynamicToken>(
@@ -1196,24 +1181,18 @@ impl Context {
         );
 
         // 4. Preparation transition
-        self.transition(
-            format!("{}_prep", prefix),
-            format!("{} (Prep)", prefix),
-        )
-        .auto_input("input", input_place)
-        .auto_output("timer", &timer_data_place)
-        .logic(logic);
+        self.transition(format!("{}_prep", prefix), format!("{} (Prep)", prefix))
+            .auto_input("input", input_place)
+            .auto_output("timer", &timer_data_place)
+            .logic(logic);
 
         // 5. Effect transition with scheduled output
         self.record_service_requirement(&effects::TIMER_SCHEDULE);
-        self.transition(
-            format!("{}_exec", prefix),
-            format!("{} (Schedule)", prefix),
-        )
-        .auto_input("timer", &timer_data_place)
-        .auto_output("scheduled", &scheduled_place)
-        .causes(signal_place)
-        .timer_schedule();
+        self.transition(format!("{}_exec", prefix), format!("{} (Schedule)", prefix))
+            .auto_input("timer", &timer_data_place)
+            .auto_output("scheduled", &scheduled_place)
+            .causes(signal_place)
+            .timer_schedule();
 
         scheduled_place
     }
@@ -1358,29 +1337,35 @@ impl Context {
             // If the token lacks these fields, fall through to the DLQ transitions below.
             ctx.transition("retry_effect_err", "Retry Effect Error")
                 .auto_input("err", errors)
-                .guard(r#"err.retryable == true && {
+                .guard(
+                    r#"err.retryable == true && {
                     let job = err.inputs.job;
                     let retries = if job.contains("retries") { job.retries } else { 0 };
                     let max_retries = if job.contains("max_retries") { job.max_retries } else { 3 };
                     retries < max_retries
-                }"#)
+                }"#,
+                )
                 .auto_output("job", retry_to)
-                .logic(r#"{
+                .logic(
+                    r#"{
                     let job = err.inputs.job;
                     let retries = if job.contains("retries") { job.retries } else { 0 };
                     job.retries = retries + 1;
                     #{ job: job }
-                }"#);
+                }"#,
+                );
 
             // DLQ: non-retryable errors OR retries exhausted
             ctx.transition("dlq_effect_err", "Dead Letter Effect Error")
                 .auto_input("err", errors)
-                .guard(r#"err.retryable != true || {
+                .guard(
+                    r#"err.retryable != true || {
                     let job = err.inputs.job;
                     let retries = if job.contains("retries") { job.retries } else { 0 };
                     let max_retries = if job.contains("max_retries") { job.max_retries } else { 3 };
                     retries >= max_retries
-                }"#)
+                }"#,
+                )
                 .auto_output("dead", dead_letter)
                 .logic(dlq_logic);
         });
@@ -1443,36 +1428,27 @@ impl Context {
             delay_ms,
             signal_place.id()
         );
-        self.transition(
-            format!("{}_prep", prefix),
-            format!("{} (Prep)", prefix),
-        )
-        .auto_input("input", input_place)
-        .auto_output("timer", &timer_data)
-        .logic(logic);
+        self.transition(format!("{}_prep", prefix), format!("{} (Prep)", prefix))
+            .auto_input("input", input_place)
+            .auto_output("timer", &timer_data)
+            .logic(logic);
 
         // 3. Schedule effect transition
         self.record_service_requirement(&effects::TIMER_SCHEDULE);
-        self.transition(
-            format!("{}_exec", prefix),
-            format!("{} (Schedule)", prefix),
-        )
-        .auto_input("timer", &timer_data)
-        .auto_output("scheduled", &scheduled)
-        .error_output(errors)
-        .causes(signal_place)
-        .timer_schedule();
+        self.transition(format!("{}_exec", prefix), format!("{} (Schedule)", prefix))
+            .auto_input("timer", &timer_data)
+            .auto_output("scheduled", &scheduled)
+            .error_output(errors)
+            .causes(signal_place)
+            .timer_schedule();
 
         // 4. Cancel effect transition
         self.record_service_requirement(&effects::TIMER_CANCEL);
-        self.transition(
-            format!("{}_cancel", prefix),
-            format!("{} (Cancel)", prefix),
-        )
-        .auto_input("timer", &cancel_input)
-        .auto_output("cancelled", &cancelled)
-        .error_output(errors)
-        .timer_cancel();
+        self.transition(format!("{}_cancel", prefix), format!("{} (Cancel)", prefix))
+            .auto_input("timer", &cancel_input)
+            .auto_output("cancelled", &cancelled)
+            .error_output(errors)
+            .timer_cancel();
 
         TimerHandles {
             scheduled,
@@ -1702,15 +1678,18 @@ impl Context {
             "failure_place",
         );
 
-        child_builder(&mut child_ctx, SpawnChildIO {
-            inbox,
-            reply: reply_out,
-            failure: fail_out,
-        });
+        child_builder(
+            &mut child_ctx,
+            SpawnChildIO {
+                inbox,
+                reply: reply_out,
+                failure: fail_out,
+            },
+        );
 
         let child_scenario = child_ctx.build();
-        let child_json = serde_json::to_value(&child_scenario)
-            .expect("Failed to serialize child scenario");
+        let child_json =
+            serde_json::to_value(&child_scenario).expect("Failed to serialize child scenario");
 
         // 2. Merge child definitions into parent (so schemas validate across bridge)
         for (key, schema) in child_scenario.definitions {
@@ -1722,10 +1701,8 @@ impl Context {
         let failure_place_id = format!("{}_failure", name);
 
         // Request state place (input to spawn effect)
-        let request = self.state::<DynamicToken>(
-            format!("{}_request", name),
-            format!("{} (Request)", name),
-        );
+        let request =
+            self.state::<DynamicToken>(format!("{}_request", name), format!("{} (Request)", name));
 
         // Bridge-in places with source annotation for RemoteNetNode grouping.
         // source_net_id = child_scenario_name matches the bridge_out label below.
@@ -1743,10 +1720,8 @@ impl Context {
         );
 
         // Confirmation state place (spawn metadata)
-        let spawned = self.state::<DynamicToken>(
-            format!("{}_spawned", name),
-            format!("{} (Spawned)", name),
-        );
+        let spawned =
+            self.state::<DynamicToken>(format!("{}_spawned", name), format!("{} (Spawned)", name));
 
         // Bridge-out place: forwards initial token to spawned child.
         // target_net_id uses $result.child_net_id (resolved at firing time),
@@ -1773,23 +1748,11 @@ impl Context {
         // - "spawned" → confirmation state place
         // - "bridge" → bridge_out place (forwards initial token to child)
         self.record_service_requirement(&effects::SPAWN_NET);
-        self.transition(
-            format!("{}_do_spawn", name),
-            format!("{} (Spawn)", name),
-        )
-        .auto_input(
-            effects::SPAWN_NET.default_input_port,
-            &request,
-        )
-        .auto_output(
-            effects::SPAWN_NET.default_output_port,
-            &spawned,
-        )
-        .auto_output("bridge", &outbox)
-        .effect_with_config(
-            effects::SPAWN_NET.handler_id,
-            effect_config,
-        );
+        self.transition(format!("{}_do_spawn", name), format!("{} (Spawn)", name))
+            .auto_input(effects::SPAWN_NET.default_input_port, &request)
+            .auto_output(effects::SPAWN_NET.default_output_port, &spawned)
+            .auto_output("bridge", &outbox)
+            .effect_with_config(effects::SPAWN_NET.handler_id, effect_config);
 
         SpawnHandles {
             reply,
@@ -2242,11 +2205,7 @@ mod tests {
         assert_eq!(reply_place.place_type, "bridge_in");
 
         // Verify failure is bridge_in
-        let fail_place = ctx
-            .places
-            .iter()
-            .find(|p| p.id == "ocr_failure")
-            .unwrap();
+        let fail_place = ctx.places.iter().find(|p| p.id == "ocr_failure").unwrap();
         assert_eq!(fail_place.place_type, "bridge_in");
 
         // Verify spawn transition created
@@ -2266,11 +2225,7 @@ mod tests {
             .find(|a| a.port == "spawned")
             .unwrap();
         assert_eq!(spawned_arc.place, "ocr_spawned");
-        let bridge_arc = spawn_t
-            .outputs
-            .iter()
-            .find(|a| a.port == "bridge")
-            .unwrap();
+        let bridge_arc = spawn_t.outputs.iter().find(|a| a.port == "bridge").unwrap();
         assert_eq!(bridge_arc.place, "ocr_outbox");
 
         // Verify handles point to correct places
@@ -2356,9 +2311,6 @@ mod tests {
 
         // Both spawn transitions exist
         assert!(ctx.transitions.iter().any(|t| t.id == "ocr_do_spawn"));
-        assert!(ctx
-            .transitions
-            .iter()
-            .any(|t| t.id == "validate_do_spawn"));
+        assert!(ctx.transitions.iter().any(|t| t.id == "validate_do_spawn"));
     }
 }

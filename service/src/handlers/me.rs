@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::auth::active_workspace::{clear_cookie, set_cookie};
 use crate::auth::extractor::CookieAuthUser;
-use crate::auth::{require_member, map_to_api_error};
+use crate::auth::{map_to_api_error, require_member};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::AppState;
 

@@ -27,16 +27,15 @@ pub async fn run(
     //      pins `baseTemplateId` — stable across `mekhan apply` bumps —
     //      so we ask the server which version is currently live before
     //      enqueueing the run.
-    let (server_url, chain_id): (String, String) =
-        if uuid::Uuid::parse_str(template_arg).is_ok() {
-            (cli_server.to_string(), template_arg.to_string())
-        } else {
-            let (meta, _graph, _files) = fs_ops::import_from_dir(Path::new(template_arg))
-                .with_context(|| {
-                    format!("could not resolve '{template_arg}' as a UUID or template directory")
-                })?;
-            (meta.server_url, meta.base_template_id)
-        };
+    let (server_url, chain_id): (String, String) = if uuid::Uuid::parse_str(template_arg).is_ok() {
+        (cli_server.to_string(), template_arg.to_string())
+    } else {
+        let (meta, _graph, _files) = fs_ops::import_from_dir(Path::new(template_arg))
+            .with_context(|| {
+                format!("could not resolve '{template_arg}' as a UUID or template directory")
+            })?;
+        (meta.server_url, meta.base_template_id)
+    };
     let latest = crate::http::resolve_latest(&server_url, &chain_id).await?;
     let template_id = latest.id;
 
@@ -101,8 +100,8 @@ fn build_start_tokens_from_inputs(inputs: &[String]) -> Result<Vec<Value>> {
             anyhow!("invalid --input '{raw}': missing block prefix (BLOCK.FIELD=VALUE)")
         })?;
         // Try JSON first so `42` / `true` / `{...}` round-trip; bare strings fall back.
-        let value: Value =
-            serde_json::from_str(value_raw).unwrap_or_else(|_| Value::String(value_raw.to_string()));
+        let value: Value = serde_json::from_str(value_raw)
+            .unwrap_or_else(|_| Value::String(value_raw.to_string()));
         grouped
             .entry(block.to_string())
             .or_default()

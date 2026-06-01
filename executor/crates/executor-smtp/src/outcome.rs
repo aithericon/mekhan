@@ -24,10 +24,7 @@ pub enum SmtpOutcome {
         dry_run: bool,
     },
     /// A template (subject / body / recipient / from) failed to render.
-    TemplateRender {
-        file: String,
-        error: String,
-    },
+    TemplateRender { file: String, error: String },
     /// `to` / `cc` / `bcc` / `from` rendered to a non-RFC-5322 address.
     InvalidAddress {
         field: String,
@@ -36,9 +33,7 @@ pub enum SmtpOutcome {
     },
     /// Bad config combination (e.g. port=465 with starttls flag mismatch,
     /// no `from` anywhere, attachment file missing, body too large).
-    InvalidConfig {
-        message: String,
-    },
+    InvalidConfig { message: String },
     /// TCP connect / DNS failure before SMTP dialog began.
     ConnectFailed {
         host: String,
@@ -46,13 +41,9 @@ pub enum SmtpOutcome {
         error: String,
     },
     /// TLS handshake / negotiation failure.
-    TlsFailed {
-        error: String,
-    },
+    TlsFailed { error: String },
     /// SMTP AUTH rejected the credentials.
-    AuthFailed {
-        server_response: Option<String>,
-    },
+    AuthFailed { server_response: Option<String> },
     /// SMTP server rejected one or more recipients (5xx on RCPT).
     RecipientRejected {
         failed_recipients: Vec<String>,
@@ -67,10 +58,7 @@ pub enum SmtpOutcome {
     /// Connection / send exceeded the run timeout.
     Timeout,
     /// One of the attachments exceeded the soft cap or was missing on disk.
-    AttachmentError {
-        filename: String,
-        error: String,
-    },
+    AttachmentError { filename: String, error: String },
 }
 
 impl SmtpOutcome {
@@ -164,7 +152,10 @@ fn extract_response_code(msg: &str) -> Option<u16> {
     let bytes = msg.as_bytes();
     let mut i = 0;
     while i + 3 <= bytes.len() {
-        if bytes[i].is_ascii_digit() && bytes[i + 1].is_ascii_digit() && bytes[i + 2].is_ascii_digit() {
+        if bytes[i].is_ascii_digit()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes[i + 2].is_ascii_digit()
+        {
             // Boundary: previous byte (if any) is non-digit AND next byte (if
             // any) is non-digit. Avoids matching the middle of '1234'.
             let left_ok = i == 0 || !bytes[i - 1].is_ascii_digit();
@@ -220,8 +211,14 @@ mod tests {
 
     #[test]
     fn extract_response_code_finds_codes_with_boundaries() {
-        assert_eq!(extract_response_code("535 5.7.8 authentication failed"), Some(535));
-        assert_eq!(extract_response_code("permanent failure: 550 user unknown"), Some(550));
+        assert_eq!(
+            extract_response_code("535 5.7.8 authentication failed"),
+            Some(535)
+        );
+        assert_eq!(
+            extract_response_code("permanent failure: 550 user unknown"),
+            Some(550)
+        );
         // 4-digit number is bounded by digits on at least one side at every
         // candidate start, so we extract nothing.
         assert_eq!(extract_response_code("port 1025 connection refused"), None);

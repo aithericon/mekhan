@@ -220,6 +220,9 @@ export class YjsGraphBinding {
 				// back here or the editor reconstruction drops the flag and the
 				// handle never renders even though the backend seeded it `true`.
 				const streamOutput = config?.streamOutput === true;
+				// `streamInput` makes the node a streaming reducer (exposes a
+				// "stream" INPUT handle). Same round-trip rationale as streamOutput.
+				const streamInput = config?.streamInput === true;
 				return {
 					...base,
 					type: 'automated_step',
@@ -227,7 +230,8 @@ export class YjsGraphBinding {
 					...(output ? { output: output as never } : {}),
 					retryPolicy,
 					...(deploymentModel ? { deploymentModel } : {}),
-					...(streamOutput ? { streamOutput } : {})
+					...(streamOutput ? { streamOutput } : {}),
+					...(streamInput ? { streamInput } : {})
 				};
 			}
 			case 'decision':
@@ -285,6 +289,16 @@ export class YjsGraphBinding {
 			}
 			case 'scope':
 				return { ...base, type: 'scope' };
+			case 'lease_scope': {
+				type LeaseScopeDataT = Extract<WorkflowNodeData, { type: 'lease_scope' }>;
+				return {
+					...base,
+					type: 'lease_scope',
+					lease:
+						(config?.lease as LeaseScopeDataT['lease'] | undefined) ??
+						({ scheduler: '' } as LeaseScopeDataT['lease'])
+				};
+			}
 			case 'phase_update':
 				return {
 					...base,
@@ -402,18 +416,13 @@ export class YjsGraphBinding {
 					type: 'timeout',
 					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
-			case 'stream_consumer': {
-				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_consumer' }>['reduce'];
-				type StreamDispatchT = Extract<
-					WorkflowNodeData,
-					{ type: 'stream_consumer' }
-				>['dispatch'];
+			case 'stream_fold': {
+				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_fold' }>['reduce'];
 				return {
 					...base,
-					type: 'stream_consumer',
+					type: 'stream_fold',
 					resultVar: (config?.resultVar as string) ?? 'item',
-					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' },
-					dispatch: (config?.dispatch as StreamDispatchT) ?? { mode: 'rhai' }
+					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' }
 				};
 			}
 		}
@@ -782,6 +791,7 @@ export class YjsGraphBinding {
 				// second "stream" handle renders. Written unconditionally (mirrors
 				// the backend's `streamOutput` Y.Map key) so clearing it persists.
 				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
+				config.set('streamInput', (data as AutomatedStepNodeData).streamInput ?? false);
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);
@@ -813,6 +823,9 @@ export class YjsGraphBinding {
 				config.set('output', data.output ?? { id: 'out', label: 'Element', fields: [] });
 				break;
 			case 'scope':
+				break;
+			case 'lease_scope':
+				config.set('lease', data.lease);
 				break;
 			case 'phase_update':
 				config.set('phaseName', data.phaseName);
@@ -911,10 +924,9 @@ export class YjsGraphBinding {
 			case 'timeout':
 				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
 				break;
-			case 'stream_consumer':
+			case 'stream_fold':
 				config.set('resultVar', data.resultVar ?? 'item');
 				config.set('reduce', data.reduce ?? { kind: 'array' });
-				config.set('dispatch', data.dispatch ?? { mode: 'rhai' });
 				break;
 		}
 	}

@@ -16,12 +16,15 @@ use async_trait::async_trait;
 use axum::http::HeaderMap;
 use axum_extra::extract::cookie::CookieJar;
 use mekhan_service::auth::authenticator::SESSION_COOKIE;
-use mekhan_service::auth::{AuthError, Authenticator, AuthUser, TokenVerifier, VerifiedClaims};
+use mekhan_service::auth::{AuthError, AuthUser, Authenticator, TokenVerifier, VerifiedClaims};
 
 #[derive(Debug, Clone)]
 pub enum MockOutcome {
     /// Verifier accepts every token and returns these claims.
-    Accept { subject: String, email: Option<String> },
+    Accept {
+        subject: String,
+        email: Option<String>,
+    },
     /// Verifier rejects every token with `InvalidToken`.
     Reject,
     /// Verifier rejects every token with `Expired`.

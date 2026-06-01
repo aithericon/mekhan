@@ -136,7 +136,8 @@ pub async fn salloc_no_shell(
     let command = salloc_no_shell_command(grant_id, request);
     let output = ssh.exec(&command).await?;
 
-    models::parse_granted_job_id(&output).ok_or_else(|| AllocError::NoAllocId(output.trim().to_string()))
+    models::parse_granted_job_id(&output)
+        .ok_or_else(|| AllocError::NoAllocId(output.trim().to_string()))
 }
 
 /// Look up an existing (still-live) allocation held for `grant_id`.
@@ -442,7 +443,11 @@ mod tests {
             "/opt/petri/templates/default.sh",
         );
         assert!(cmd.starts_with("srun --jobid='12345'"), "{}", cmd);
-        assert!(cmd.contains("--comment='{\"petri_net_id\":\"n\"}'"), "{}", cmd);
+        assert!(
+            cmd.contains("--comment='{\"petri_net_id\":\"n\"}'"),
+            "{}",
+            cmd
+        );
         assert!(cmd.contains("--job-name='petri-key:0'"), "{}", cmd);
         assert!(
             cmd.contains("--export=ALL,PETRI_TOKEN_DATA='{\"run_id\":\"r\"}',EXECUTOR_TARGET_EXEC_ID='exec-1'"),
@@ -457,14 +462,7 @@ mod tests {
     #[test]
     fn test_srun_template_command_escapes() {
         // A signal key with a quote must not break out of the single-quoted arg.
-        let cmd = srun_into_alloc_template_command(
-            "a'b",
-            "{}",
-            "k'1",
-            "{}",
-            "e'1",
-            "/t.sh",
-        );
+        let cmd = srun_into_alloc_template_command("a'b", "{}", "k'1", "{}", "e'1", "/t.sh");
         assert!(cmd.contains("--jobid='a'\\''b'"), "{}", cmd);
         assert!(cmd.contains("--job-name='petri-k'\\''1'"), "{}", cmd);
     }
@@ -511,8 +509,16 @@ mod tests {
         // exec returns immediately while the executor runs for the whole lease.
         let inner = "srun --jobid='12345' /opt/petri/templates/mekhan-lease-executor.sh";
         let detached = detached_launch(inner, "12345");
-        assert!(detached.starts_with("nohup srun --jobid='12345'"), "{}", detached);
-        assert!(detached.contains("> '/tmp/petri-lease-exec-12345.out' 2>&1"), "{}", detached);
+        assert!(
+            detached.starts_with("nohup srun --jobid='12345'"),
+            "{}",
+            detached
+        );
+        assert!(
+            detached.contains("> '/tmp/petri-lease-exec-12345.out' 2>&1"),
+            "{}",
+            detached
+        );
         assert!(detached.contains("< /dev/null &"), "{}", detached);
         assert!(detached.ends_with("echo dispatched"), "{}", detached);
     }

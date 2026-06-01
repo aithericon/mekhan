@@ -29,10 +29,7 @@ pub async fn process_response(
         })
         .collect();
 
-    let content_type = headers
-        .get("content-type")
-        .cloned()
-        .unwrap_or_default();
+    let content_type = headers.get("content-type").cloned().unwrap_or_default();
 
     // Read body with size limit
     let body_bytes = read_body_limited(resp, config.max_response_bytes).await?;
@@ -49,9 +46,15 @@ pub async fn process_response(
         "status_code".into(),
         serde_json::Value::Number(status_code.into()),
     );
-    outputs.insert("headers".into(), serde_json::to_value(&headers).unwrap_or_default());
+    outputs.insert(
+        "headers".into(),
+        serde_json::to_value(&headers).unwrap_or_default(),
+    );
     outputs.insert("body".into(), body_value);
-    outputs.insert("content_type".into(), serde_json::Value::String(content_type));
+    outputs.insert(
+        "content_type".into(),
+        serde_json::Value::String(content_type),
+    );
     outputs.insert(
         "response_time_ms".into(),
         serde_json::Value::Number(response_time_ms.into()),
@@ -132,7 +135,9 @@ fn parse_body(
         ResponseMode::Json => {
             let text = String::from_utf8_lossy(bytes).to_string();
             let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
-                ExecutorError::Config(format!("response_mode is json but body is not valid JSON: {e}"))
+                ExecutorError::Config(format!(
+                    "response_mode is json but body is not valid JSON: {e}"
+                ))
             })?;
             Ok((value, Some(text)))
         }
@@ -177,9 +182,18 @@ mod tests {
 
     #[test]
     fn default_success_2xx() {
-        assert!(matches!(determine_outcome(200, &[]), ExecutionOutcome::Success));
-        assert!(matches!(determine_outcome(201, &[]), ExecutionOutcome::Success));
-        assert!(matches!(determine_outcome(204, &[]), ExecutionOutcome::Success));
+        assert!(matches!(
+            determine_outcome(200, &[]),
+            ExecutionOutcome::Success
+        ));
+        assert!(matches!(
+            determine_outcome(201, &[]),
+            ExecutionOutcome::Success
+        ));
+        assert!(matches!(
+            determine_outcome(204, &[]),
+            ExecutionOutcome::Success
+        ));
     }
 
     #[test]

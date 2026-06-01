@@ -32,7 +32,7 @@
 //! still exercising the exact ingest line BO depends on — production
 //! workflows just produce the same NATS event the test publishes.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). Run
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`).
 
 mod common;
@@ -61,7 +61,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -149,12 +149,7 @@ fn catalogue_register_event(sequence: u64, cmd: Value) -> Value {
     })
 }
 
-async fn publish_event(
-    js: &jetstream::Context,
-    net_id: &str,
-    suffix: &str,
-    payload: &Value,
-) {
+async fn publish_event(js: &jetstream::Context, net_id: &str, suffix: &str, payload: &Value) {
     let subject = format!("petri.events.{net_id}.{suffix}");
     let bytes = serde_json::to_vec(payload).unwrap();
     js.publish(subject, bytes.into())
@@ -196,12 +191,11 @@ async fn wait_for_instance_count(
 async fn wait_for_status(db: &sqlx::PgPool, id: Uuid, expected: &str, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if st == expected {
             return;
         }
@@ -385,25 +379,18 @@ async fn live_catalogue_register_event_fires_catalog_trigger() {
     // inserts a row → catalog::evaluate(dispatcher, &entry) fires the
     // Catalog trigger → dispatcher.fire spawns an instance of the
     // template. We wait for the workflow_instances row.
-    let instances = wait_for_instance_count(
-        &db,
-        template,
-        1,
-        Duration::from_secs(15),
-    )
-    .await;
+    let instances = wait_for_instance_count(&db, template, 1, Duration::from_secs(15)).await;
     let (instance_id, _) = instances[0].clone();
     wait_for_status(&db, instance_id, "completed", Duration::from_secs(15)).await;
 
     // Cross-check: the catalogue row exists with our category — proves
     // ingest's projection path ran (not just the trigger fire).
-    let cat_row: Option<(String, String)> = sqlx::query_as(
-        "SELECT id, category FROM catalogue_entries WHERE category = $1",
-    )
-    .bind(&category)
-    .fetch_optional(&db)
-    .await
-    .unwrap();
+    let cat_row: Option<(String, String)> =
+        sqlx::query_as("SELECT id, category FROM catalogue_entries WHERE category = $1")
+            .bind(&category)
+            .fetch_optional(&db)
+            .await
+            .unwrap();
     let (_, got_category) =
         cat_row.expect("catalogue_entries should hold the row ingest projected");
     assert_eq!(got_category, category);
@@ -708,10 +695,12 @@ async fn poll_dlq_for_sentinel(
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         let records: Vec<mekhan_service::observability::SilentDropRecord> =
             serde_json::from_value(body["records"].clone()).unwrap();
-        if records
-            .iter()
-            .any(|r| r.payload.as_deref().map(|p| p.contains(sentinel)).unwrap_or(false))
-        {
+        if records.iter().any(|r| {
+            r.payload
+                .as_deref()
+                .map(|p| p.contains(sentinel))
+                .unwrap_or(false)
+        }) {
             return records;
         }
         if start.elapsed() > timeout {

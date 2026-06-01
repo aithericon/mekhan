@@ -65,11 +65,7 @@ pub trait KreuzbergTestKit: Send + Sync {
     ) -> (RunContext, Vec<tempfile::NamedTempFile>);
 
     /// Build a RunContext with no staged inputs (for missing-input tests).
-    async fn make_empty_run_context(
-        &self,
-        spec: ExecutionSpec,
-        timeout: Duration,
-    ) -> RunContext;
+    async fn make_empty_run_context(&self, spec: ExecutionSpec, timeout: Duration) -> RunContext;
 
     /// Cleanup after a backend-level test (best-effort).
     async fn cleanup_run_context(&self, _ctx: &RunContext) {}
@@ -88,8 +84,8 @@ pub trait KreuzbergTestKit: Send + Sync {
             timeout,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         }
     }
 }
-

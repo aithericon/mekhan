@@ -150,9 +150,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let derived_output = crate::backends::lookup(ExecutionBackendType::Llm)
         .and_then(|d| d.derive_output_port)
         .map(|f| f(&llm_config))
-        .unwrap_or_else(|| {
-            crate::models::template::default_output_port(ExecutionBackendType::Llm)
-        });
+        .unwrap_or_else(|| crate::models::template::default_output_port(ExecutionBackendType::Llm));
 
     let virtual_node = WorkflowNode {
         id: cx.node.id.clone(),
@@ -179,6 +177,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // Agent's degenerate single-shot LLM body does not expose the
             // prototype streaming side-channel.
             stream_output: false,
+            stream_input: false,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,
@@ -411,8 +410,7 @@ fn lower_agent_loop(
     // is the executor envelope, not the control token), collapsing every such
     // instance onto a shared instance-less key.
     let storage_key_esc = rhai_str_escape(&storage_key);
-    let write_key_expr =
-        format!(r#""instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json""#);
+    let write_key_expr = format!(r#""instances/__INSTANCE_ID__/{id}/turn-" + s.turn + ".json""#);
     // Build the overlay as a Rhai statement (`ov`) so we can conditionally
     // null `system_prompt` + `prompt` on turns > 0: by then those two opening
     // messages already sit at the head of `history` (read back from the prior
@@ -920,7 +918,10 @@ fn port_to_input_schema(port: &crate::models::template::Port) -> serde_json::Val
     }
     let mut schema = serde_json::Map::new();
     schema.insert("type".to_string(), json!("object"));
-    schema.insert("properties".to_string(), serde_json::Value::Object(properties));
+    schema.insert(
+        "properties".to_string(),
+        serde_json::Value::Object(properties),
+    );
     if !required.is_empty() {
         schema.insert("required".to_string(), json!(required));
     }

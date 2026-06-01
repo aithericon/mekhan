@@ -61,7 +61,7 @@ impl EffectHandler for ExecutorSubmitHandler {
 
         let signal_key = uuid::Uuid::new_v4().to_string();
 
-        // Honour an upstream-stamped execution_id (the scheduler-net submit
+        // Honour an upstream-stamped execution_id (the scheduler submit
         // handler authoritatively stamps this so the sbatch's
         // `EXECUTOR_TARGET_EXEC_ID` and this NATS publish target the same
         // PerJob consumer). Absent => the client falls back to auto-generation.
@@ -82,6 +82,13 @@ impl EffectHandler for ExecutorSubmitHandler {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(String::from);
+
+        // Opt-in for the inbound live chunk feed. Read off the job token's top
+        // level (mirrors `executor_namespace` / `execution_id`).
+        let feed_chunks = job_data
+            .get("feed_chunks")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // Extract per-job signal routes from effect_config (scoped place names).
         // When the executor lifecycle is inside a scoped_prefix, the SDK embeds
@@ -106,6 +113,7 @@ impl EffectHandler for ExecutorSubmitHandler {
                 event_routes,
                 execution_id,
                 namespace,
+                feed_chunks,
             })
             .await
             .map_err(|e| match e {
@@ -241,6 +249,71 @@ impl EffectHandler for ExecutorCancelHandler {
     }
 }
 
+/// Effect handler that feeds a data chunk into a running reducer job.
+///
+/// Reads `execution_id`, `value`, `sequence`, and `is_eof` from the input token
+/// and calls `client.feed_chunk()`.
+pub struct ExecutorStreamFeedHandler {
+    client: Arc<dyn ExecutorClient>,
+}
+
+impl ExecutorStreamFeedHandler {
+    pub fn new(client: Arc<dyn ExecutorClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait::async_trait]
+impl EffectHandler for ExecutorStreamFeedHandler {
+    async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
+        // Find any input token — there's only one.
+        let data = input.inputs.values().next().ok_or_else(|| {
+            EffectError::Fatal("ExecutorStreamFeedHandler requires an input".into())
+        })?;
+
+        let execution_id = data
+            .get("execution_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                EffectError::Fatal("Missing execution_id in stream feed input".to_string())
+            })?;
+
+        // `is_eof` defaults to false.
+        let is_eof = data.get("is_eof").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        // Value is required unless is_eof is true.
+        let value = data.get("value").cloned().unwrap_or(JsonValue::Null);
+        if !is_eof && value.is_null() {
+            return Err(EffectError::Fatal(
+                "Missing value in stream feed input".to_string(),
+            ));
+        }
+
+        // Sequence is required.
+        let sequence = data.get("sequence").and_then(|v| v.as_u64()).ok_or_else(|| {
+            EffectError::Fatal("Missing sequence in stream feed input".to_string())
+        })?;
+
+        self.client
+            .feed_chunk(execution_id, value, sequence, is_eof)
+            .await
+            .map_err(|e| EffectError::ExecutionFailed(e.to_string()))?;
+
+        Ok(EffectOutput {
+            tokens: HashMap::new(), // No output token needed
+            result: serde_json::json!({ "fed": true }),
+        })
+    }
+
+    fn replay(&self, _input: &EffectInput, _stored_result: &JsonValue) {
+        // Stateless
+    }
+
+    fn name(&self) -> &str {
+        "executor_stream_feed"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +368,20 @@ mod tests {
                 Err(ExecutorError::CancellationFailed(
                     "mock failure".to_string(),
                 ))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn feed_chunk(
+            &self,
+            _execution_id: &str,
+            _value: serde_json::Value,
+            _sequence: u64,
+            _is_eof: bool,
+        ) -> Result<(), ExecutorError> {
+            if self.should_fail.load(Ordering::Relaxed) {
+                Err(ExecutorError::Fatal("mock failure".to_string()))
             } else {
                 Ok(())
             }

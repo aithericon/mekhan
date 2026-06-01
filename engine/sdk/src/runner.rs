@@ -64,8 +64,9 @@ where
         .iter()
         .position(|a| a == "--url")
         .and_then(|i| args.get(i + 1))
-        .map(|s| s.as_str())
-        .unwrap_or("http://localhost:3030");
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("PETRI_ENGINE_URL").ok())
+        .unwrap_or_else(|| "http://localhost:3030".to_string());
     let net_id = args
         .iter()
         .position(|a| a == "--net-id")
@@ -96,10 +97,8 @@ where
     // Output or Deploy
     if deploy {
         let id = net_id.or(Some(name));
-        upload_staged_files(&staged_files, url);
-        deploy_scenario(&scenario, url, id);
-    } else {
-        println!("{}", scenario.to_json().unwrap());
+        upload_staged_files(&staged_files, &url);
+        deploy_scenario(&scenario, &url, id);
     }
 }
 

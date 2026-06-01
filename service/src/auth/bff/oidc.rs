@@ -188,8 +188,10 @@ impl OidcClient {
     /// confirmation prompt.
     pub fn end_session_url(&self, id_token: Option<&str>, post_logout: &str) -> Option<String> {
         let endpoint = self.discovery.end_session_endpoint.as_ref()?;
-        let mut params: Vec<(&str, &str)> =
-            vec![("post_logout_redirect_uri", post_logout), ("client_id", self.cfg.client_id.as_str())];
+        let mut params: Vec<(&str, &str)> = vec![
+            ("post_logout_redirect_uri", post_logout),
+            ("client_id", self.cfg.client_id.as_str()),
+        ];
         if let Some(hint) = id_token {
             params.push(("id_token_hint", hint));
         }
@@ -252,13 +254,7 @@ fn trim_trailing_slash(s: &str) -> String {
 fn encode_query(pairs: &[(&str, &str)]) -> String {
     pairs
         .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                urlencoding::encode(k),
-                urlencoding::encode(v)
-            )
-        })
+        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
         .collect::<Vec<_>>()
         .join("&")
 }
@@ -276,7 +272,9 @@ mod tests {
             v.len()
         );
         // base64url alphabet only, no padding.
-        assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(v
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]

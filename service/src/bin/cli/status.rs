@@ -36,7 +36,12 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
     // Compute diff (ignore positions for DSL formats)
     let local_format = formats::detect_format(&dir).unwrap_or(formats::WorkflowFormat::Json);
     let result = if local_format != formats::WorkflowFormat::Json {
-        diff::compute_diff_ignoring_positions(&local_graph, &local_files, &remote_graph, &remote_files)
+        diff::compute_diff_ignoring_positions(
+            &local_graph,
+            &local_files,
+            &remote_graph,
+            &remote_files,
+        )
     } else {
         diff::compute_diff(&local_graph, &local_files, &remote_graph, &remote_files)
     };

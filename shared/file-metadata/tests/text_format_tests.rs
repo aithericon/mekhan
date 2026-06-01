@@ -3,10 +3,7 @@
 use std::io::Write;
 
 fn write_temp(suffix: &str, content: &str) -> tempfile::NamedTempFile {
-    let mut tmp = tempfile::Builder::new()
-        .suffix(suffix)
-        .tempfile()
-        .unwrap();
+    let mut tmp = tempfile::Builder::new().suffix(suffix).tempfile().unwrap();
     tmp.write_all(content.as_bytes()).unwrap();
     tmp.flush().unwrap();
     tmp
@@ -72,10 +69,7 @@ mod txt_tests {
     #[test]
     fn txt_bom_detection() {
         let bom = b"\xEF\xBB\xBFHello BOM\n";
-        let mut tmp = tempfile::Builder::new()
-            .suffix(".txt")
-            .tempfile()
-            .unwrap();
+        let mut tmp = tempfile::Builder::new().suffix(".txt").tempfile().unwrap();
         tmp.write_all(bom).unwrap();
         tmp.flush().unwrap();
 
@@ -102,15 +96,20 @@ mod env_tests {
 
     #[test]
     fn basic_env_extraction() {
-        let tmp = write_temp(".env", "DATABASE_URL=postgres://localhost\nSECRET_KEY=abc123\n");
+        let tmp = write_temp(
+            ".env",
+            "DATABASE_URL=postgres://localhost\nSECRET_KEY=abc123\n",
+        );
         let meta = extract_metadata(tmp.path()).unwrap();
 
         assert_eq!(meta.format, fmeta::format::FileFormat::Env);
         assert_eq!(meta.column_names, vec!["DATABASE_URL", "SECRET_KEY"]);
         assert_eq!(meta.num_rows, Some(2));
 
-        if let Some(FormatMetadata::Env(EnvMetadata { num_variables, num_comments })) =
-            &meta.format_specific
+        if let Some(FormatMetadata::Env(EnvMetadata {
+            num_variables,
+            num_comments,
+        })) = &meta.format_specific
         {
             assert_eq!(*num_variables, 2);
             assert_eq!(*num_comments, 0);
@@ -167,8 +166,12 @@ mod ini_tests {
         assert!(meta.column_names.contains(&"database.port".to_string()));
         assert!(meta.column_names.contains(&"app.debug".to_string()));
 
-        if let Some(FormatMetadata::Ini(IniMetadata { num_sections, section_names, num_keys, .. })) =
-            &meta.format_specific
+        if let Some(FormatMetadata::Ini(IniMetadata {
+            num_sections,
+            section_names,
+            num_keys,
+            ..
+        })) = &meta.format_specific
         {
             assert_eq!(*num_sections, 2);
             assert_eq!(*num_keys, 3);
@@ -186,7 +189,12 @@ mod ini_tests {
         );
         let meta = extract_metadata(tmp.path()).unwrap();
 
-        let find = |name: &str| meta.columns.iter().find(|c| c.name.ends_with(name)).unwrap();
+        let find = |name: &str| {
+            meta.columns
+                .iter()
+                .find(|c| c.name.ends_with(name))
+                .unwrap()
+        };
         assert_eq!(find("flag").data_type, fmeta::DataType::Boolean);
         assert_eq!(find("count").data_type, fmeta::DataType::Int64);
         assert_eq!(find("ratio").data_type, fmeta::DataType::Float64);
@@ -213,7 +221,10 @@ mod toml_tests {
 
     #[test]
     fn basic_toml_extraction() {
-        let tmp = write_temp(".toml", "name = \"test\"\nversion = \"1.0\"\nenabled = true\n");
+        let tmp = write_temp(
+            ".toml",
+            "name = \"test\"\nversion = \"1.0\"\nenabled = true\n",
+        );
         let meta = extract_metadata(tmp.path()).unwrap();
 
         assert_eq!(meta.format, fmeta::format::FileFormat::Toml);
@@ -238,14 +249,15 @@ mod toml_tests {
 
     #[test]
     fn toml_nested_depth() {
-        let tmp = write_temp(
-            ".toml",
-            "[a]\n[a.b]\n[a.b.c]\nkey = 1\n",
-        );
+        let tmp = write_temp(".toml", "[a]\n[a.b]\n[a.b.c]\nkey = 1\n");
         let meta = extract_metadata(tmp.path()).unwrap();
 
         if let Some(FormatMetadata::Toml(TomlMetadata { max_depth, .. })) = &meta.format_specific {
-            assert!(*max_depth >= 3, "depth should be at least 3, got {}", max_depth);
+            assert!(
+                *max_depth >= 3,
+                "depth should be at least 3, got {}",
+                max_depth
+            );
         } else {
             panic!("expected Toml format_specific");
         }
@@ -402,9 +414,7 @@ mod xml_tests {
 #[cfg(feature = "markdown")]
 mod markdown_tests {
     use super::*;
-    use fmeta::{
-        extract_metadata, format::FormatMetadata,
-    };
+    use fmeta::{extract_metadata, format::FormatMetadata};
 
     #[test]
     fn basic_markdown_extraction() {

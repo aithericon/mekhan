@@ -88,8 +88,20 @@ async fn evaluate_moves_tokens() {
     server.evaluate(10).await;
 
     let state = server.get("/api/state").await;
-    assert_eq!(state["marking"]["tokens"]["inbox"].as_array().unwrap().len(), 0);
-    assert_eq!(state["marking"]["tokens"]["outbox"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        state["marking"]["tokens"]["inbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        state["marking"]["tokens"]["outbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -97,7 +109,12 @@ async fn evaluate_returns_steps() {
     let server = TestServer::start().await;
     server.deploy(&simple_scenario()).await;
 
-    let resp = server.post("/api/command/evaluate", &serde_json::json!({"max_steps": 10})).await;
+    let resp = server
+        .post(
+            "/api/command/evaluate",
+            &serde_json::json!({"max_steps": 10}),
+        )
+        .await;
     assert!(resp["success"].as_bool().unwrap());
     assert!(resp["steps_executed"].as_u64().unwrap() >= 1);
 }
@@ -109,7 +126,10 @@ async fn events_include_transition_fired() {
     server.evaluate(10).await;
 
     let resp = server.get("/api/events").await;
-    let has_fired = resp["events"].as_array().unwrap().iter()
+    let has_fired = resp["events"]
+        .as_array()
+        .unwrap()
+        .iter()
         .any(|e| e["event"]["type"] == "TransitionFired");
     assert!(has_fired);
 }
@@ -127,7 +147,13 @@ async fn inject_token() {
     assert!(resp["success"].as_bool().unwrap());
 
     let state = server.get("/api/state").await;
-    assert_eq!(state["marking"]["tokens"]["inbox"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        state["marking"]["tokens"]["inbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -136,21 +162,41 @@ async fn full_workflow() {
     server.deploy(&simple_scenario()).await;
 
     // Inject second token
-    server.post("/api/command/create-token", &serde_json::json!({
-        "place_id": "inbox",
-        "color": {"type": "Data", "value": {"task": "T-extra"}}
-    })).await;
+    server
+        .post(
+            "/api/command/create-token",
+            &serde_json::json!({
+                "place_id": "inbox",
+                "color": {"type": "Data", "value": {"task": "T-extra"}}
+            }),
+        )
+        .await;
 
     // Evaluate
     server.evaluate(10).await;
 
     let state = server.get("/api/state").await;
-    assert_eq!(state["marking"]["tokens"]["outbox"].as_array().unwrap().len(), 2);
-    assert_eq!(state["marking"]["tokens"]["inbox"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        state["marking"]["tokens"]["outbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        state["marking"]["tokens"]["inbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
 
     // 2 TransitionFired events
     let resp = server.get("/api/events").await;
-    let fired = resp["events"].as_array().unwrap().iter()
+    let fired = resp["events"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|e| e["event"]["type"] == "TransitionFired")
         .count();
     assert_eq!(fired, 2);
@@ -195,8 +241,20 @@ async fn multi_net_evaluate_moves_tokens() {
     server.evaluate_net("net-a", 10).await;
 
     let state = server.get("/api/nets/net-a/state").await;
-    assert_eq!(state["marking"]["tokens"]["inbox"].as_array().unwrap().len(), 0);
-    assert_eq!(state["marking"]["tokens"]["outbox"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        state["marking"]["tokens"]["inbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        state["marking"]["tokens"]["outbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -226,10 +284,16 @@ async fn multi_net_events_per_net() {
     let events_a = server.get("/api/nets/net-a/events").await;
     let events_b = server.get("/api/nets/net-b/events").await;
 
-    let fired_a = events_a["events"].as_array().unwrap().iter()
+    let fired_a = events_a["events"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|e| e["event"]["type"] == "TransitionFired")
         .count();
-    let fired_b = events_b["events"].as_array().unwrap().iter()
+    let fired_b = events_b["events"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|e| e["event"]["type"] == "TransitionFired")
         .count();
 
@@ -246,11 +310,19 @@ async fn multi_net_inject_token() {
         "place_id": "inbox",
         "color": {"type": "Data", "value": {"task": "T-injected"}}
     });
-    let resp = server.post("/api/nets/net-a/command/create-token", &body).await;
+    let resp = server
+        .post("/api/nets/net-a/command/create-token", &body)
+        .await;
     assert!(resp["success"].as_bool().unwrap());
 
     let state = server.get("/api/nets/net-a/state").await;
-    assert_eq!(state["marking"]["tokens"]["inbox"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        state["marking"]["tokens"]["inbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -262,10 +334,15 @@ async fn multi_net_full_workflow() {
     server.deploy_net("pipeline-b", &simple_scenario()).await;
 
     // Inject extra token into pipeline-a only
-    server.post("/api/nets/pipeline-a/command/create-token", &serde_json::json!({
-        "place_id": "inbox",
-        "color": {"type": "Data", "value": {"task": "T-extra"}}
-    })).await;
+    server
+        .post(
+            "/api/nets/pipeline-a/command/create-token",
+            &serde_json::json!({
+                "place_id": "inbox",
+                "color": {"type": "Data", "value": {"task": "T-extra"}}
+            }),
+        )
+        .await;
 
     // Evaluate both
     server.evaluate_net("pipeline-a", 10).await;
@@ -273,19 +350,37 @@ async fn multi_net_full_workflow() {
 
     // pipeline-a: 2 tokens in outbox (1 initial + 1 injected)
     let state_a = server.get("/api/nets/pipeline-a/state").await;
-    assert_eq!(state_a["marking"]["tokens"]["outbox"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        state_a["marking"]["tokens"]["outbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 
     // pipeline-b: 1 token in outbox (only initial)
     let state_b = server.get("/api/nets/pipeline-b/state").await;
-    assert_eq!(state_b["marking"]["tokens"]["outbox"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        state_b["marking"]["tokens"]["outbox"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     // Events are isolated
     let events_a = server.get("/api/nets/pipeline-a/events").await;
     let events_b = server.get("/api/nets/pipeline-b/events").await;
-    let fired_a = events_a["events"].as_array().unwrap().iter()
+    let fired_a = events_a["events"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|e| e["event"]["type"] == "TransitionFired")
         .count();
-    let fired_b = events_b["events"].as_array().unwrap().iter()
+    let fired_b = events_b["events"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|e| e["event"]["type"] == "TransitionFired")
         .count();
     assert_eq!(fired_a, 2);
@@ -309,13 +404,17 @@ async fn cli_events_format_with_missing_names() {
     let events = resp["events"].as_array().unwrap();
 
     // Find a TransitionFired event and check its shape
-    let fired = events.iter()
+    let fired = events
+        .iter()
         .find(|e| e["event"]["type"] == "TransitionFired")
         .expect("should have TransitionFired event");
 
     let inner = &fired["event"];
     // Engine must include transition_id
-    assert!(inner.get("transition_id").is_some(), "TransitionFired should have transition_id");
+    assert!(
+        inner.get("transition_id").is_some(),
+        "TransitionFired should have transition_id"
+    );
     // consumed_tokens/produced_tokens should be present
     assert!(inner.get("consumed_tokens").is_some());
     assert!(inner.get("produced_tokens").is_some());
@@ -520,20 +619,27 @@ async fn cli_activate_all_nets() {
 #[tokio::test]
 async fn cli_activate_returns_422_on_bridge_error() {
     let server = TestServer::multi_net().await;
-    server.deploy_net("bridge-net", &bridge_scenario_broken()).await;
+    server
+        .deploy_net("bridge-net", &bridge_scenario_broken())
+        .await;
 
     // Use the raw PUT helper to check for 422 instead of calling
     // run_activate_one (which calls process::exit)
-    let (code, body) = server.put_raw(
-        "/api/nets/bridge-net/run-mode",
-        &serde_json::json!({"mode": "running"}),
-    ).await;
+    let (code, body) = server
+        .put_raw(
+            "/api/nets/bridge-net/run-mode",
+            &serde_json::json!({"mode": "running"}),
+        )
+        .await;
 
-    assert_eq!(code, 422, "Expected 422 for broken bridge, got {code}: {body}");
+    assert_eq!(
+        code, 422,
+        "Expected 422 for broken bridge, got {code}: {body}"
+    );
 
     // Verify the response is a valid AnalysisReport
-    let report: serde_json::Value = serde_json::from_str(&body)
-        .expect("422 body should be valid JSON");
+    let report: serde_json::Value =
+        serde_json::from_str(&body).expect("422 body should be valid JSON");
     assert_eq!(report["is_valid"], false);
     assert!(report["issues"].as_array().unwrap().len() > 0);
     assert!(report["summary"]["error_count"].as_u64().unwrap() > 0);
@@ -543,12 +649,16 @@ async fn cli_activate_returns_422_on_bridge_error() {
 #[tokio::test]
 async fn cli_activate_422_report_deserializes() {
     let server = TestServer::multi_net().await;
-    server.deploy_net("bridge-net", &bridge_scenario_broken()).await;
+    server
+        .deploy_net("bridge-net", &bridge_scenario_broken())
+        .await;
 
-    let (code, body) = server.put_raw(
-        "/api/nets/bridge-net/run-mode",
-        &serde_json::json!({"mode": "running"}),
-    ).await;
+    let (code, body) = server
+        .put_raw(
+            "/api/nets/bridge-net/run-mode",
+            &serde_json::json!({"mode": "running"}),
+        )
+        .await;
 
     assert_eq!(code, 422);
 
@@ -623,10 +733,16 @@ async fn engine_client_put_raw_success_and_error() {
     .unwrap();
 
     // Should succeed
-    assert!(result.is_ok(), "Expected Ok, got {:?}", result.err().map(|e| e.to_string()));
+    assert!(
+        result.is_ok(),
+        "Expected Ok, got {:?}",
+        result.err().map(|e| e.to_string())
+    );
 
     // Now deploy a net with broken bridges and test 422
-    server.deploy_net("bad-net", &bridge_scenario_broken()).await;
+    server
+        .deploy_net("bad-net", &bridge_scenario_broken())
+        .await;
 
     let client2 = server.client();
     let result2 = tokio::task::spawn_blocking(move || {
@@ -667,9 +783,7 @@ async fn cli_errors_surfaces_script_failures() {
     // 1. Verify ErrorOccurred event exists via HTTP API
     let resp = server.get("/api/nets/broken-net/events").await;
     let events = resp["events"].as_array().unwrap();
-    let has_error = events
-        .iter()
-        .any(|e| e["event"]["type"] == "ErrorOccurred");
+    let has_error = events.iter().any(|e| e["event"]["type"] == "ErrorOccurred");
     assert!(
         has_error,
         "Expected an ErrorOccurred event after broken script evaluation, got: {:?}",
@@ -704,18 +818,17 @@ async fn cli_errors_surfaces_script_failures() {
 #[tokio::test]
 async fn cli_errors_clean_on_healthy_net() {
     let server = TestServer::multi_net().await;
-    server
-        .deploy_net("healthy-net", &simple_scenario())
-        .await;
+    server.deploy_net("healthy-net", &simple_scenario()).await;
     server.evaluate_net("healthy-net", 10).await;
 
     // Verify no ErrorOccurred events
     let resp = server.get("/api/nets/healthy-net/events").await;
     let events = resp["events"].as_array().unwrap();
-    let has_error = events
-        .iter()
-        .any(|e| e["event"]["type"] == "ErrorOccurred");
-    assert!(!has_error, "Healthy net should have no ErrorOccurred events");
+    let has_error = events.iter().any(|e| e["event"]["type"] == "ErrorOccurred");
+    assert!(
+        !has_error,
+        "Healthy net should have no ErrorOccurred events"
+    );
 
     // `aithericon errors` should not panic
     let client = server.client();

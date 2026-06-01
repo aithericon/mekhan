@@ -1,7 +1,7 @@
 //! End-to-end coverage for ParallelSplit/Join — live engine forks the token,
 //! each branch resolves, the join fires once, the net completes.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). Run
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`) — the lifecycle listener writes back to the
 //! shared `workflow_instances` table.
 
@@ -28,7 +28,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -57,9 +57,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream
-                .delete_consumer(&format!("{prefix}_{base}"))
-                .await;
+            let _ = stream.delete_consumer(&format!("{prefix}_{base}")).await;
         }
     }
 }
@@ -104,29 +102,30 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    (TaskHandle(causality.abort_handle()), TaskHandle(lifecycle.abort_handle()))
+    (
+        TaskHandle(causality.abort_handle()),
+        TaskHandle(lifecycle.abort_handle()),
+    )
 }
 
 async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
-        if st == "completed" {
-            return;
-        }
-        if st == "failed" {
-            let result: Option<Value> = sqlx::query_scalar(
-                "SELECT result FROM workflow_instances WHERE id = $1",
-            )
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_one(db)
             .await
             .unwrap();
+        if st == "completed" {
+            return;
+        }
+        if st == "failed" {
+            let result: Option<Value> =
+                sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(db)
+                    .await
+                    .unwrap();
             panic!("instance {id} reached `failed` (result: {result:?})");
         }
         if start.elapsed() > timeout {
@@ -265,11 +264,7 @@ async fn publish_and_start(app: &axum::Router, graph: Value) -> (Uuid, String) {
 /// Wait until BOTH human tasks for this net appear in `hpi_tasks`, then return
 /// their ids. Times out with a diagnostic if only one shows up (would indicate
 /// the ParallelSplit only forked one branch).
-async fn wait_for_two_tasks(
-    db: &sqlx::PgPool,
-    net_id: &str,
-    timeout: Duration,
-) -> Vec<String> {
+async fn wait_for_two_tasks(db: &sqlx::PgPool, net_id: &str, timeout: Duration) -> Vec<String> {
     let start = std::time::Instant::now();
     loop {
         let ids: Vec<String> = sqlx::query_scalar(

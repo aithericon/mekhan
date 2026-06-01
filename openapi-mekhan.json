@@ -14,7 +14,7 @@
       "description": "Same-origin BFF (production single-origin posture)."
     },
     {
-      "url": "http://localhost:13100",
+      "url": "http://localhost:3100",
       "description": "Local mekhan-service direct."
     },
     {
@@ -3799,6 +3799,58 @@
         }
       }
     },
+    "/api/v1/templates/apply-air": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "POST /api/v1/templates/apply-air",
+        "description": "Clinic-style headless template upload: accepts pre-compiled AIR\n(`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,\nbypassing the editor's `WorkflowGraph` → AIR compile pass entirely.\nThe supplied `air_json` is stored verbatim into the `air_json` column;\na synthetic stub graph containing just the `Trigger` node is stored\ninto the `graph` column so the trigger dispatcher's `register_triggers`\nfinds it post-commit.\n\nIdempotency: name-based, scoped per workspace. A first apply with a\ngiven `name` in the caller's workspace Seeds a fresh v1 chain\n(`is_latest = true`); subsequent applies with the same `(name,\nworkspace_id)` pair Bump the chain. Cross-workspace name collisions\nare independent chains.\n\nDistinct from `POST /api/v1/templates/{id}/apply` (the GitOps path for\ngraph-authored templates): that one demands an existing `{id}` and a\n`WorkflowGraph`, then runs the compile pass. This endpoint takes\nneither.",
+        "operationId": "apply_air_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyAirTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Applied: seeded v1 or a new born-published version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid AIR or trigger spec",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}": {
       "get": {
         "tags": [
@@ -6245,6 +6297,43 @@
           }
         }
       },
+      "ApplyAirTemplateRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/templates/apply-air` — clinic-style\nheadless template upload.\n\nAccepts pre-compiled AIR directly: no `WorkflowGraph` compile pass,\nno Y.Doc init, no S3 file upload. The supplied `air_json` is stored\nverbatim into the `air_json` column; a synthetic stub graph (one\nTrigger node, no edges) is stored into the `graph` column so the\ntrigger dispatcher's `register_triggers` finds it.\n\nIdempotency: name-based. Re-apply with the same `name` Bumps the\nchain (new version row, prior version's triggers forgotten); first\napply Seeds (fresh chain at v1).",
+        "required": [
+          "name",
+          "air_json",
+          "trigger"
+        ],
+        "properties": {
+          "air_json": {
+            "description": "Pre-compiled AIR. Stored verbatim. The endpoint runs no compile\npass; the AIR is consumed by the engine at trigger-fire time."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRef",
+                "description": "Optional git provenance, recorded into `source_ref` exactly like\nthe existing GitOps `apply` endpoint."
+              }
+            ]
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/PreAirTriggerSpec"
+          }
+        }
+      },
       "ApplyTemplateRequest": {
         "type": "object",
         "description": "Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.\nThe `graph` REPLACES the chain head wholesale (no CRDT merge); binary\nassets are uploaded out-of-band via the files endpoint before this call.",
@@ -7556,7 +7645,7 @@
           },
           {
             "type": "object",
-            "description": "Submit/lease through an external cluster. `scheduler` names a\n`datacenter` resource (docs/13); `None` = today's env-global\nscheduler-net (byte-identical). `job_template` selects the scheduler's\nparameterized job (e.g. `petri-mumax3-worker`). `operation` picks\n`Submit` (today's queued dispatch) or `Lease` (R4: hold an allocation,\nrun on it).",
+            "description": "Lease through an external cluster. `scheduler` names a `datacenter`\nresource (docs/13). `job_template` selects the scheduler's parameterized\njob (e.g. `petri-mumax3-worker`).",
             "required": [
               "jobTemplate",
               "mode"
@@ -7571,13 +7660,6 @@
                   "scheduled"
                 ]
               },
-              "operation": {
-                "$ref": "#/components/schemas/ScheduledOperation",
-                "description": "`Submit` (default) = today's proven dispatch. `Lease` = R4.\nNOTE: a DIFFERENT field name from the `mode` tag on purpose — `mode`\nalready discriminates inline/scheduled, so the submit/lease selector\nis `operation`."
-              },
-              "request": {
-                "description": "Claim-schema-shaped lease request params (the `datacenter` kind's\n`claim_schema` in `aithericon_resources::pool` — `{ gpu_count,\ngpu_type, max_duration_secs }`). Used only by `operation: Lease`,\nwhere it is validated against the kind's `claim_schema` and carried\ninto the `ClaimRequest`. Ignored for `Submit`. `None` ⇒ the\nallocator's default placement. Optional + skip-if-none so today's\n`Submit` wire shape round-trips byte-identically."
-              },
               "resources": {
                 "oneOf": [
                   {
@@ -7588,16 +7670,12 @@
                   }
                 ]
               },
-              "runOnLease": {
-                "type": "boolean",
-                "description": "Opt-in: ENQUEUE this body to the enclosing leased loop's lease\nnamespace instead of submitting a fresh scheduler job. The body\nstep ALWAYS sits inside the leasing loop (`parent_id == loop.id`)\nand there is exactly one loop lease in scope — no ambiguity. When\nset (and the enclosing Loop carries a `lease`), the body lowers via\nthe EXECUTOR enqueue path (NOT the scheduler-net) and the compiler\ninjects `d.executor_namespace = <loop_slug>.lease.executor_namespace`\nonto the job token via the standard read-arc borrow pipeline. The\nengine's `ExecutorSubmitHandler` reads that per-job namespace and\npublishes to the lease-scoped NATS queue (`lease-<grant_id>`) drained\nby the ONE persistent executor the acquire path launched on the held\nallocation — so every iteration's body runs WARM on the same held\ninstance (venv/model/GPU state persists). `false` (default) = an\nindependent scheduler submit. The namespace rides the job token's\ntop-level `executor_namespace` key — no typed engine field."
-              },
               "scheduler": {
                 "type": [
                   "string",
                   "null"
                 ],
-                "description": "`datacenter` resource alias. `None` = env-global scheduler-net (only\nvalid for `operation: Submit`; `Lease` requires a concrete alias)."
+                "description": "`datacenter` resource alias."
               }
             }
           }
@@ -7608,7 +7686,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Standard executor dispatch. The compiler emits an executor job; the\nstep's `DeploymentModel` decides whether it's inline via NATS or\nsubmitted to a scheduler-net.",
+            "description": "Standard executor dispatch. The compiler emits an executor job; the\nstep's `DeploymentModel` decides whether it's inline via NATS or\ndispatched to an external cluster.",
             "required": [
               "kind"
             ],
@@ -7916,7 +7994,7 @@
       },
       "ExecutionBackendType": {
         "type": "string",
-        "description": "Discriminator selecting which executor backend handles an automated step.\n\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`, `\"smtp\"`, `\"catalogue_query\"`.\n\nThis is the canonical OpenAPI discriminator, the Y.Doc-stored string in\nproduction templates, and the executor's `ExecutionSpec.backend` value.\nBoth the mekhan compiler and the executor registry key off it.",
+        "description": "Discriminator selecting which executor backend handles an automated step.\n\nSnake-case wire values: `\"python\"`, `\"process\"`, `\"docker\"`, `\"http\"`,\n`\"llm\"`, `\"file_ops\"`, `\"kreuzberg\"`, `\"surya\"`, `\"smtp\"`,\n`\"catalogue_query\"`.\n\nThis is the canonical OpenAPI discriminator, the Y.Doc-stored string in\nproduction templates, and the executor's `ExecutionSpec.backend` value.\nBoth the mekhan compiler and the executor registry key off it.",
         "enum": [
           "python",
           "process",
@@ -7925,8 +8003,10 @@
           "llm",
           "file_ops",
           "kreuzberg",
+          "surya",
           "smtp",
-          "catalogue_query"
+          "catalogue_query",
+          "postgres"
         ]
       },
       "ExecutionSpecConfig": {
@@ -8363,6 +8443,9 @@
       "FireTriggerRequest": {
         "type": "object",
         "properties": {
+          "net_parameters": {
+            "description": "Submitter-supplied net-level parameter bag for the spawned instance.\nThreaded into `LoadScenarioRequest.net_parameters` and stored on the\nengine's `PetriNetService`, where the firing path consults it for\n`$params.` resolution and pre-dispatch metadata (e.g. `tenant_id`).\nOpaque, generic infra — no domain semantics ascribed here."
+          },
           "payload": {
             "description": "JSON object whose top-level keys are bound as the trigger's scope\nidentifiers for `payload_mapping`. For `Manual` triggers supply the\nform values keyed by field name (matching `source_scope`); for other\nsources the dispatcher synthesizes this scope from the event itself."
           },
@@ -8376,6 +8459,21 @@
                 "description": "Optional per-request reply mode (lowest of the explicit selectors —\noverridden by `?reply=` / `Prefer`, overrides the node default)."
               }
             ]
+          },
+          "skip_mask": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Per-run ablation: transition IDs to skip at evaluate-time.\nThreaded through the dispatcher into the engine's\n`LoadScenarioRequest.skip_mask` (γ.mekhan wire). Empty by default\n— research-harness ablation flows surface this; ordinary fires omit.\n#126.2: extends the previously-always-empty trigger-boundary stub."
+          },
+          "stage_overrides": {
+            "type": "object",
+            "description": "Per-run ablation: per-transition JSON merge-patch keyed by\ntransition_id. Threaded into `LoadScenarioRequest.stage_overrides`.\nSame surface + provenance as `skip_mask`. #126.2.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -9423,6 +9521,13 @@
           "provider": {
             "$ref": "#/components/schemas/Provider",
             "description": "Which LLM provider to use."
+          },
+          "reasoning": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the model uses reasoning / chain-of-thought (\"thinking\").\nMaps to Ollama's `think` request parameter. `None` = leave the model's\nprovider default; `Some(false)` disables reasoning; `Some(true)` forces\nit on. Disabling matters for reasoning-capable models (e.g. qwen3.6)\ndoing structured-output extraction: with reasoning on under a\n`format`/json-schema constraint they can loop and generate to the token\ncap without emitting valid JSON. Adapters for non-reasoning models\nignore this field."
           },
           "resource_alias": {
             "type": [
@@ -10607,6 +10712,14 @@
           }
         }
       },
+      "PgOperation": {
+        "type": "string",
+        "description": "Whether the step reads or writes.\n\n`Read` (the default) runs the statement in a read-only transaction\n(`SET LOCAL transaction_read_only = on`) and requires a non-empty\n`projection`. `Write` runs read-write and surfaces `rows_affected` from\nthe command tag; `projection` is optional and only validates `RETURNING`\ncolumns when present. This — not the legacy `read_only` flag — is the\nsource of truth for runtime read-only behaviour.",
+        "enum": [
+          "read",
+          "write"
+        ]
+      },
       "Phase": {
         "type": "object",
         "description": "A named phase within an execution.",
@@ -10760,38 +10873,57 @@
       },
       "PostgresConfig": {
         "type": "object",
-        "description": "Configuration for a single Postgres job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.\n\nSee `docs/proposals/postgres-backend.md` (A1 spec § 2) for the full field\nreference.",
+        "description": "Configuration for a single Postgres job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.",
         "required": [
-          "query",
-          "projection"
+          "resource_alias",
+          "query"
         ],
         "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/PgOperation",
+            "description": "Read vs write. Defaults to `Read`. The source of truth for the\nruntime read-only transaction mode (supersedes `read_only`)."
+          },
           "params": {
             "type": "array",
             "items": {},
-            "description": "Ordered values bound to `$1`, `$2`, ...\n\nEach entry is a JSON scalar (string / number / bool / null).\nArrays / objects are intentionally **not** supported by the initial\nscope — they require explicit JSON-typed parameters and complicate the\ntype coercion path. A1 spec § 2 lists this as a follow-up."
+            "description": "Ordered values bound to `$1`, `$2`, ...\n\nEach entry is a literal JSON value (scalar / array / object) OR a\nwhole-placeholder `\"{{slug.field}}\"` reference the backend resolves\nagainst the staged producer envelopes."
           },
           "pool": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Which named connection pool to draw from. Resolved by the executor's\nper-process `PostgresBackendsConfig.pools` map; when absent, the\n`default_pool` from that map is used."
+            "description": "Deprecated named-pool selector retained for back-compat with older\nconfigs. The backend now keys its `PgPool` cache by connection\nidentity, not by a named pool."
           },
           "projection": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Ordered list of column names expected in the result rows.\n\nThe backend verifies each column exists in the row description; an\nunexpected or missing column is a `BackendError`."
+            "description": "Ordered list of column names expected in the result rows.\n\nRequired for `read` (validation enforced in the executor/decl, not the\nDTO); optional for `write`, where it validates `RETURNING` columns when\npresent. The DTO just carries the list (default empty)."
           },
           "query": {
             "type": "string",
-            "description": "The parametrised SQL statement (use `$1`, `$2`, ... placeholders —\n**never** string-interpolated values)."
+            "description": "The parametrised SQL statement.\n\nUses `$1`, `$2`, ... placeholders for values (bound from `params` —\n**never** string-interpolated). May carry `{{ident:slug.field}}`\nidentifier references, which the backend resolves and emits as\ndouble-quoted identifiers."
           },
           "read_only": {
             "type": "boolean",
-            "description": "Whether the transaction is read-only.\n\nInitial scope hard-locks this to `true`; the backend rejects\n`read_only = false` until an allow-list arrives in a later iteration."
+            "description": "**Deprecated** — kept for back-compat default. No longer the source of\ntruth for read-only behaviour; use `operation` instead."
+          },
+          "resource_alias": {
+            "type": "string",
+            "description": "Which workspace `postgres` resource binds the connection. Required —\nthis is the connection binding; the compiler errors if absent. The\nresolved resource (host/port/database/username/password/sslmode) is\noverlaid into the config before execution."
+          },
+          "rls_context": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RlsContext",
+                "description": "Optional opt-in row-level-security context. Injected via\n`set_config(..., true)` (SET LOCAL) only when present."
+              }
+            ]
           },
           "row_limit": {
             "type": "integer",
@@ -10804,6 +10936,54 @@
             "format": "int64",
             "description": "Per-statement timeout in milliseconds (applied via\n`SET LOCAL statement_timeout`).\n\nCapped at the job-level `RunContext.timeout`.",
             "minimum": 0
+          }
+        }
+      },
+      "PreAirTriggerSpec": {
+        "type": "object",
+        "description": "Trigger spec embedded in a `POST /api/templates/apply-air` request.\nThe endpoint synthesizes a `WorkflowGraph` stub containing only this\nTrigger node so that `register_triggers` (which walks `template.graph`)\nfinds it post-commit. Direct AIR-place binding via\n`air_target_place_id` — no graph edge.",
+        "required": [
+          "node_id",
+          "label",
+          "source",
+          "air_target_place_id",
+          "enabled"
+        ],
+        "properties": {
+          "air_target_place_id": {
+            "type": "string",
+            "description": "The AIR place id whose `initial_tokens` will be seeded with the\nfire payload + system fields. Must exist in the supplied AIR's\n`places[]` — validated at fire time by `parameterize_for_place`."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the trigger is live post-apply. Explicit (no default) so\nthe deploy recipe must state intent — a disabled trigger never\nfires even if registered."
+          },
+          "label": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string",
+            "description": "Stable, globally-unique node id used in `POST /api/triggers/{node_id}/fire`\nURLs. Author-controlled (e.g. `\"trg_di_extraction_v1\"`)."
+          },
+          "payload_mapping": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldMapping"
+            }
+          },
+          "reply_default": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReplyMode"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/TriggerSource",
+            "description": "Trigger source. Clinic's initial use case is `Manual`; other sources\nare valid here too (Webhook, Cron, ...) — the dispatcher resolves\nthem identically once the trigger is registered."
           }
         }
       },
@@ -11575,6 +11755,24 @@
           }
         }
       },
+      "RlsContext": {
+        "type": "object",
+        "description": "Optional opt-in row-level-security context applied via\n`SELECT set_config(<setting>, <value>, true)` (SET LOCAL scope) before the\nstatement runs. Only injected when present.\n\n`setting` is validated as a Postgres identifier by the backend/decl;\n`value` may be a literal or a `{{slug.field}}` reference resolved at\nruntime. Validation lives in the executor/decl, not the DTO.",
+        "required": [
+          "setting",
+          "value"
+        ],
+        "properties": {
+          "setting": {
+            "type": "string",
+            "description": "The GUC setting name to apply (e.g. `app.current_tenant`). Validated as\nan identifier."
+          },
+          "value": {
+            "type": "string",
+            "description": "The value to set. Literal, or a `{{slug.field}}` reference resolved at\nruntime against the staged producer envelopes."
+          }
+        }
+      },
       "Role": {
         "type": "string",
         "description": "Message role.",
@@ -11629,14 +11827,6 @@
             "minimum": 0
           }
         }
-      },
-      "ScheduledOperation": {
-        "type": "string",
-        "description": "The two operations a `Scheduled` step can perform against its cluster.\nInternally a plain snake_case enum: `\"submit\"` / `\"lease\"`.",
-        "enum": [
-          "submit",
-          "lease"
-        ]
       },
       "ScopeEntryDto": {
         "type": "object",
@@ -12127,7 +12317,7 @@
       },
       "StorageCredentials": {
         "type": "object",
-        "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`,\n`EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]`\nsection in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved\nby the staging pipeline before use.",
+        "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`,\n`EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]`\nsection in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved\nby the staging pipeline before use.",
         "properties": {
           "access_key": {
             "type": "string",
@@ -12138,67 +12328,6 @@
             "description": "Secret key (S3 secret access key, GCS HMAC secret, Azure account key)."
           }
         }
-      },
-      "StreamDispatch": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "rhai"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "sequentialBody"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "parallelBody"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "liveReduce"
-                ]
-              }
-            }
-          }
-        ],
-        "description": "How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.\nTagged on `mode` (camelCase), mirroring the other config enums.\n\n- `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of\n  `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer\n  template omits `dispatch` and decodes to this — anything else would force a\n  body and break those templates at publish.\n- `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at\n  a time in strict stream-sequence order (a single-permit lock + a\n  next-expected-sequence guard), then the N results are reduced.\n- `ParallelBody`: same per-chunk body, dispatched map-style concurrently;\n  results are re-ordered + reduced at the gather barrier.\n- `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not\n  implemented in this phase — the lowering rejects it cleanly."
       },
       "StreamReduce": {
         "oneOf": [
@@ -12273,7 +12402,7 @@
             }
           }
         ],
-        "description": "How a `StreamConsumer` folds the drained chunks into its single output\ntoken. Tagged on `kind` (camelCase), mirroring the serde conventions of the\nother config enums. Each variant selects the gather barrier's reduce Rhai in\n`compiler/lower/stream_consumer.rs`."
+        "description": "How a `StreamFold` folds the drained chunks into its single output token.\nTagged on `kind` (camelCase), mirroring the serde conventions of the other\nconfig enums. Each variant selects the gather barrier's reduce Rhai in\n`compiler/lower/stream_fold.rs`."
       },
       "TaskBlockConfig": {
         "oneOf": [
@@ -14024,7 +14153,7 @@
             "properties": {
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `token_pool`\nadmission (`Executor.pool`). `Scheduled` = submit/lease through an\nexternal cluster (a `datacenter` resource, docs/13; or today's\nenv-global scheduler-net when `scheduler` is `None`).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.pool` here (post-R3\nconsolidation pivot)."
+                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `token_pool`\nadmission (`Executor.pool`). `Scheduled` = lease through an external\ncluster (a `datacenter` resource, docs/13).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.pool` here (post-R3\nconsolidation pivot)."
               },
               "description": {
                 "type": [
@@ -14049,6 +14178,10 @@
               "retryPolicy": {
                 "$ref": "#/components/schemas/RetryPolicy",
                 "description": "Retry behaviour on execution failure/timeout. Defaults to 3\nimmediate retries (the historical hardcoded value), so existing\ntemplates keep their prior semantics without re-authoring."
+              },
+              "streamInput": {
+                "type": "boolean",
+                "description": "Opt-in streaming CONSUMER. When `true`, the node exposes a second\nINPUT port \"stream\" and becomes a long-lived stateful reducer: it is\nseeded at net entry, receives the upstream producer's chunks over IPC\n(`aithericon.chunks()`), and folds them in-process. Wire the\nproducer's `stream` handle to this node's `stream` input and its\ncontrol `out` to this node's `in` (the control token's arrival is the\nend-of-stream / EOF trigger, carrying `stream_count`). The compiler\nderives the executor `feed_chunks` flag from this. Plain `bool` +\n`#[serde(default)]` ⇒ existing templates round-trip unchanged."
               },
               "streamOutput": {
                 "type": "boolean",
@@ -14193,17 +14326,6 @@
               "label": {
                 "type": "string"
               },
-              "lease": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/LeaseBinding",
-                    "description": "Optional datacenter lease held for the WHOLE loop (acquire once at\nenter, reuse across every iteration, release once on exit). Declared,\nnot inferred — a Loop holds a lease only when the author explicitly\nbinds one. When set, `lower_loop` hoists the\nclaim/grant/register/release handshake to loop scope (the same\nmachinery `lower_pooled_body` uses per-step) so ONE allocation backs\nall iterations; the held lease (incl. `alloc_id`) is parked into the\nloop's `p_<id>_data` envelope under a `lease` key, so body iterations\nand downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.\n`<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline."
-                  }
-                ]
-              },
               "loopCondition": {
                 "type": "string"
               },
@@ -14245,10 +14367,39 @@
           },
           {
             "type": "object",
+            "description": "Container that holds ONE datacenter allocation for the duration of its\nbody. Decouples \"hold an allocation\" from \"loop\": any AutomatedStep\n(deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly\nor through intervening containers like a plain Loop — runs ON the held\nallocation by containment (no per-step `run_on_lease` flag). The lease is\nacquired once on enter and released once on exit; the held lease (incl.\n`executor_namespace` / `alloc_id`) is parked into the scope's\n`p_<id>_data` envelope under a `lease` key, so body steps and downstream\nblocks borrow `<scope_slug>.lease.<field>` through the standard read-arc\npipeline. Children attach via the same `body_in`/`body_out` interior\nhandles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`\nhandles connect to the outer flow.\n\nTo hold ONE cluster allocation across loop iterations, compose\n`LeaseScope { Loop { … } }` — the scope acquires before the loop starts\nand releases after it exits.",
+            "required": [
+              "label",
+              "lease",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "lease": {
+                "$ref": "#/components/schemas/LeaseBinding",
+                "description": "REQUIRED datacenter lease binding (a LeaseScope with no lease is a\npointless empty container). Reuses [`LeaseBinding`] verbatim — the\n`scheduler` alias resolves via `resolve_binding(..., \"datacenter\",\n...)` exactly as the Loop-lease path does — and is NOT `Option`;\n`validate_lease_scope` rejects an empty `scheduler` alias."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "lease_scope"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`\ninto N item tokens (one per element), runs a BODY sub-graph of child\nnodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`\nhandle mechanism as Loop) once per element, gathers the N results, and\nreduces them to one collection token parked at `p_<id>_data`. Downstream\nblocks borrow the gathered collection as `<map_slug>[*].<field>` (the\nRepeater `[*]` machinery generalized to any Array-typed parked producer;\n`<map_slug>.<field>` without `[*]` is a hard `MapRefMissingStar` error).\nThe scatter writes the item namespace ONTO each body token (namespace-\non-token, v1) so body guards / Python read `item.<field>` directly.",
             "required": [
               "label",
-              "itemsRef",
               "resultVar",
               "type"
             ],
@@ -14265,7 +14416,7 @@
               },
               "itemsRef": {
                 "type": "string",
-                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`."
+                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`. IGNORED when\n`stream_source` is set (a streaming Map sources elements from its\n`stream`/`control` edges, not a static array)."
               },
               "label": {
                 "type": "string"
@@ -14285,6 +14436,10 @@
                 "type": "string",
                 "description": "Field on each body output token whose value becomes the gathered\nelement (the per-iteration result the reduce collects)."
               },
+              "streamSource": {
+                "type": "boolean",
+                "description": "When `true`, this Map is a STREAMING map: instead of scattering the\nstatic `items_ref` array, it ingests a streaming producer's chunks\n(one element per chunk over the `stream` handle) and sizes its gather\nbarrier on the runtime `stream_count` (from the `control` handle).\nParallel-only — bodies fan out concurrently exactly like the array\npath; `__map_idx` (the producer sequence) restores order at the\ngather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps\nround-trip unchanged."
+              },
               "type": {
                 "type": "string",
                 "enum": [
@@ -14295,7 +14450,7 @@
           },
           {
             "type": "object",
-            "description": "Drains a streaming producer AutomatedStep's per-call structured output\n(`set_output(name, value)` events landing on the producer's Signal\nplace), reduces (folds) them, and gates completion behind an\nend-of-stream counted barrier sized by `completed.detail.stream_count`.\n\nTwo named inbound handles: `\"stream\"` carries the data chunks (one\ntoken per `output_set` event); `\"control\"` carries the producer's\nterminal completion token whose `detail.stream_count` is the expected\nchunk count. The gather can't fire until all `N` chunks AND the count\ntoken are present, so the net stays alive until the stream fully drains\n— mirroring Map's counted-barrier gather, but counting on a runtime\n`stream_count` instead of a scattered collection length. NO engine\nchange: the engine's two-pass binding already admits the count\ncoordinator arriving after results, and each stream-token injection\nre-kicks the eval loop.",
+            "description": "Stream fold — drains a streaming producer's per-call `set_output` chunks\nand folds them into ONE output token via a declarative `reduce` strategy,\ngating completion behind an end-of-stream counted barrier sized by the\nproducer's `stream_count`. No body, no executor: the fold is pure Rhai in\nthe net. This is the clean extraction of the old `StreamConsumer`'s\ndefault `Rhai` dispatch; the body-dispatch streaming patterns live\nelsewhere now — per-chunk parallel map → a streaming-source `Map`;\nstateful in-process reduce → an `AutomatedStep` with `streamInput`. Parks\nthe reduced output write-once at `p_<id>_data` like Map.",
             "required": [
               "label",
               "type"
@@ -14307,10 +14462,6 @@
                   "null"
                 ]
               },
-              "dispatch": {
-                "$ref": "#/components/schemas/StreamDispatch",
-                "description": "How each drained chunk is dispatched BEFORE the reduce. Defaults to\n`Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every\nshipped consumer template omits this field and MUST decode to `Rhai`;\nany other default would make them demand a body and break at publish."
-              },
               "label": {
                 "type": "string"
               },
@@ -14320,12 +14471,12 @@
               },
               "resultVar": {
                 "type": "string",
-                "description": "Name of the field each chunk's value is read as. Documentary for\nv1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);\na body-per-chunk variant would bind it as the process input."
+                "description": "Name of the output field that holds the reduced result; borrowable\ndownstream as `<slug>.<resultVar>`."
               },
               "type": {
                 "type": "string",
                 "enum": [
-                  "stream_consumer"
+                  "stream_fold"
                 ]
               }
             }
@@ -14531,6 +14682,13 @@
               "type"
             ],
             "properties": {
+              "airTargetPlaceId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Pre-AIR direct target. When set, the trigger fires by seeding the\nnamed AIR place with the supplied payload, bypassing graph-edge\nresolution. Mutually exclusive with an outgoing edge in the graph:\npre-AIR templates carry a Trigger-only stub graph (no Start, no\nedges). Used by clinic-style headless templates pushed through\n`POST /api/templates/apply-air`."
+              },
               "concurrency": {
                 "$ref": "#/components/schemas/ConcurrencyPolicy",
                 "description": "Concurrency / dedup policy applied by the dispatcher."

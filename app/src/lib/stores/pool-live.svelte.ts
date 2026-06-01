@@ -51,15 +51,15 @@ const PETRI_BASE = '/petri';
  *
  * The hold is backend-agnostic: the `in_use` token carries a typed lease whose
  * shape depends on the pool's resource kind (`token_pool` → `{ unit_id }`;
- * `datacenter` → `{ node, gpu_uuid, alloc_id, expiry }`). We surface `grantId`
+ * `datacenter` → `{ alloc_id, node?, expiry?, scheduler }`). We surface `grantId`
  * (the correlation key, present on every backend) plus a generic `fields` map
- * of the remaining scalar lease fields so the view never hard-codes `gpu_id`. */
+ * of the remaining scalar lease fields so the view never hard-codes a field. */
 export interface HoldRecord {
 	tokenId: string;
 	/** Grant id carried on the token color data, or null. */
 	grantId: string | null;
 	/** All other scalar lease fields (kind-specific), stringified for display.
-	 *  e.g. `{ unit_id }` for a token pool, `{ node, gpu_uuid, alloc_id, expiry }`
+	 *  e.g. `{ unit_id }` for a token pool, `{ alloc_id, node, expiry }`
 	 *  for a datacenter lease. Empty for Unit tokens. */
 	fields: Record<string, string>;
 }
@@ -143,7 +143,7 @@ export function createPoolLiveStore(netId: string = POOL_NET_ID) {
 	/** Per-hold details from in_use tokens. Backend-agnostic: pulls `grant_id`
 	 *  as the correlation key and stringifies every other scalar lease field
 	 *  into `fields` so the view renders whatever the resource kind put on the
-	 *  lease (unit_id / node / gpu_uuid / alloc_id / expiry / …). */
+	 *  lease (unit_id / alloc_id / node / expiry / …). */
 	const holds = $derived.by((): HoldRecord[] => {
 		return inUseTokens.map((tok) => {
 			let grantId: string | null = null;

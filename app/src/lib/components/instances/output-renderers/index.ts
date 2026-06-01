@@ -10,6 +10,7 @@ import AutomatedStepEnvelope from './AutomatedStepEnvelope.svelte';
 import LlmResponseEnvelope from './LlmResponseEnvelope.svelte';
 import KreuzbergExtractionEnvelope from './KreuzbergExtractionEnvelope.svelte';
 import SmtpEnvelope from './SmtpEnvelope.svelte';
+import PostgresResultEnvelope from './PostgresResultEnvelope.svelte';
 import EndTerminalEnvelope from './EndTerminalEnvelope.svelte';
 import ProcessTokenEnvelope from './ProcessTokenEnvelope.svelte';
 import FileReference from './FileReference.svelte';
@@ -166,6 +167,19 @@ function matchesSentEmail(value: unknown): boolean {
 	return typeof value.subject === 'string';
 }
 
+/** Postgres backend's result envelope — `{rows: array, row_count?: number,
+ *  rows_affected?: number|null}` (see `executor-postgres`). The distinguishing
+ *  signature is an array `rows` field paired with at least one of the numeric
+ *  count fields, which keeps it from colliding with arbitrary objects that
+ *  happen to carry a `rows` array. */
+function matchesPostgresResult(value: unknown): boolean {
+	if (!isObj(value)) return false;
+	if (!Array.isArray(value.rows)) return false;
+	const hasRowCount = typeof value.row_count === 'number';
+	const hasRowsAffected = 'rows_affected' in value;
+	return hasRowCount || hasRowsAffected;
+}
+
 /** Catalogue file reference — `{url, filename?, content_type?}`. */
 function matchesFileRef(value: unknown): boolean {
 	if (!isObj(value)) return false;
@@ -252,6 +266,12 @@ export const REGISTRY: OutputRenderer[] = [
 		label: 'Email send result',
 		matches: matchesSentEmail,
 		component: SmtpEnvelope
+	},
+	{
+		name: 'postgres-result',
+		label: 'Postgres query result',
+		matches: matchesPostgresResult,
+		component: PostgresResultEnvelope
 	},
 	{
 		name: 'end-terminal',

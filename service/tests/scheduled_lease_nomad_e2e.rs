@@ -65,8 +65,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     default_output_port, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding,
-    LoopAccumulator, Port, Position, ScheduledOperation, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    LoopAccumulator, Port, Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -132,9 +131,27 @@ fn end(id: &str) -> WorkflowNode {
 /// graph — the lease binding is backend-agnostic; only the datacenter resource's
 /// `scheduler_flavor` decides Slurm vs Nomad.
 fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
+    let scope_id = format!("{loop_id}_scope");
     WorkflowGraph {
         nodes: vec![
             start("s"),
+            WorkflowNode {
+                id: scope_id.clone(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::LeaseScope {
+                    label: "Lease Scope".to_string(),
+                    description: None,
+                    lease: LeaseBinding {
+                        scheduler: DC_ALIAS.to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
             WorkflowNode {
                 id: loop_id.to_string(),
                 node_type: "loop".to_string(),
@@ -146,12 +163,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     max_iterations: MAX_ITERATIONS,
                     loop_condition: "true".to_string(),
                     accumulators: Vec::<LoopAccumulator>::new(),
-                    lease: Some(LeaseBinding {
-                        scheduler: DC_ALIAS.to_string(),
-                        request: None,
-                    }),
                 },
-                parent_id: None,
+                parent_id: Some(scope_id.clone()),
                 width: None,
                 height: None,
             },
@@ -179,13 +192,11 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
                     stream_output: false,
+                    stream_input: false,
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: None,
                         job_template: "petri-executor-worker".to_string(),
                         resources: None,
-                        operation: ScheduledOperation::Submit,
-                        request: None,
-                        run_on_lease: true,
                     },
                 },
                 parent_id: Some(loop_id.to_string()),
@@ -198,8 +209,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
             WorkflowEdge {
                 id: "e_in".to_string(),
                 source: "s".to_string(),
-                target: loop_id.to_string(),
+                target: scope_id.clone(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_scope_body_in".to_string(),
+                source: scope_id.clone(),
+                target: loop_id.to_string(),
+                source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
@@ -223,8 +243,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
-                id: "e_out".to_string(),
+                id: "e_loop_body_out".to_string(),
                 source: loop_id.to_string(),
+                target: scope_id.clone(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_out".to_string(),
+                source: scope_id.clone(),
                 target: "e".to_string(),
                 source_handle: None,
                 target_handle: Some("in".to_string()),
@@ -234,7 +263,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -256,13 +286,18 @@ async fn engine_available() -> bool {
 
 async fn net_running(net_id: &str) -> bool {
     match reqwest::get(format!("{}/api/nets/{net_id}/state", engine_url())).await {
-        Ok(resp) if resp.status().is_success() => resp
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("run_mode").and_then(|m| m.as_str()).map(str::to_string))
-            .as_deref()
-            == Some("running"),
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("run_mode")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("running")
+        }
         _ => false,
     }
 }
@@ -351,15 +386,17 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         );
     }
     // The dispatched drain executor uses the executor lifecycle (it enqueues to
-    // the lease namespace), so this test does not require scheduler-net /
-    // executor-net — only the engine's NOMAD_ADDR allocator env and the
-    // registered `petri-lease-executor` parameterized job.
+    // the lease namespace), so this test does not require pre-deployed infra
+    // nets — only the engine's NOMAD_ADDR allocator env and the registered
+    // `petri-lease-executor` parameterized job.
     nomad_cli(&["job", "status", LEASE_JOB]); // loud if the lease job is not registered
 
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -413,7 +450,11 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         .unwrap();
     let dc_status = resp.status();
     let dc_body = body_json(resp.into_body()).await;
-    assert_eq!(dc_status, StatusCode::CREATED, "create datacenter: {dc_body}");
+    assert_eq!(
+        dc_status,
+        StatusCode::CREATED,
+        "create datacenter: {dc_body}"
+    );
     let resource_id: Uuid = dc_body["id"].as_str().unwrap().parse().unwrap();
 
     let pool_net_id = format!("pool-{resource_id}");
@@ -491,7 +532,11 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(instance["status"], "running");
 
@@ -534,7 +579,7 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
     // ── (6) That alloc drained all N iterations, warm — its logs carry the
     //    Pool/drain config for THIS instance's lease namespace plus
     //    >= MAX_ITERATIONS `handling execution job` lines.
-    let expected_ns = format!("lease-{instance_id}-lp");
+    let expected_ns = format!("lease-{instance_id}-lp_scope");
     let out_deadline = Instant::now() + Duration::from_secs(120);
     let (alloc, logs) = loop {
         if let Some(alloc) = child_alloc_id(&drain_child) {
@@ -574,8 +619,10 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         logs.lines().rev().take(30).collect::<Vec<_>>().join("\n")
     );
 
-    // ── (7) Topology guard: loop lease places present AND the body retargeted
-    //    to the executor lifecycle (`body/inbox`, NOT `p_body_sched_out`).
+    // ── (7) Topology guard: lease-scope lease places present AND the body
+    //    retargeted to the executor lifecycle (`body/inbox`, NOT `p_body_sched_out`).
+    //    The lease now lives on the enclosing `LeaseScope` (`lp_scope`), so the
+    //    handshake places are scope-namespaced `p_lp_scope_*`.
     let topo: Value = reqwest::get(format!(
         "{}/api/nets/mekhan-{instance_id}/topology",
         engine_url()
@@ -592,15 +639,15 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         .filter_map(|p| p["id"].as_str().map(str::to_string))
         .collect();
     for required in [
-        "p_lp_claim_out",
-        "p_lp_grant_inbox",
-        "p_lp_register_out",
-        "p_lp_release_out",
-        "p_lp_held",
+        "p_lp_scope_claim_out",
+        "p_lp_scope_grant_inbox",
+        "p_lp_scope_register_out",
+        "p_lp_scope_release_out",
+        "p_lp_scope_held",
     ] {
         assert!(
             place_ids.iter().any(|p| p == required),
-            "instance net is missing the loop-lease place `{required}`. places={place_ids:?}"
+            "instance net is missing the lease-scope place `{required}`. places={place_ids:?}"
         );
     }
     assert!(

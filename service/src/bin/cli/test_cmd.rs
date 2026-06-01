@@ -98,19 +98,17 @@ pub async fn run(
         let body = resp.text().await.unwrap_or_default();
         anyhow::bail!("server rejected run-all (HTTP {status}): {body}");
     }
-    let aggregate: RunAllResponse =
-        resp.json().await.context("invalid run-all response")?;
+    let aggregate: RunAllResponse = resp.json().await.context("invalid run-all response")?;
 
     // We need names to print — fetch tests once for the join.
-    let tests: Vec<TemplateTest> = crate::http::auth(
-        client.get(format!("{server}/api/v1/templates/{template_id}/tests")),
-    )
-    .send()
-    .await
-    .context("failed to list tests for names")?
-    .json()
-    .await
-    .unwrap_or_default();
+    let tests: Vec<TemplateTest> =
+        crate::http::auth(client.get(format!("{server}/api/v1/templates/{template_id}/tests")))
+            .send()
+            .await
+            .context("failed to list tests for names")?
+            .json()
+            .await
+            .unwrap_or_default();
 
     // The server returns runs in the same order as the test list it iterated,
     // which itself is `ORDER BY created_at ASC` filtered by enabled. Match by

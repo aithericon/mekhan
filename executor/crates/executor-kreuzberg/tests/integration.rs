@@ -70,6 +70,7 @@ fn make_job(spec: &ExecutionSpec) -> ExecutionJob {
         timeout: None,
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     }
 }
@@ -162,16 +163,12 @@ async fn single_txt_extraction() {
 
     // Metrics should be populated.
     let metrics = result.metrics.as_ref().expect("missing metrics");
-    assert!(
-        metrics
-            .latest_values
-            .contains_key("kreuzberg/extraction_time_ms")
-    );
-    assert!(
-        metrics
-            .latest_values
-            .contains_key("kreuzberg/content_length")
-    );
+    assert!(metrics
+        .latest_values
+        .contains_key("kreuzberg/extraction_time_ms"));
+    assert!(metrics
+        .latest_values
+        .contains_key("kreuzberg/content_length"));
 
     // Status callback should have been called with Running.
     let entries = log.lock().unwrap();
@@ -444,7 +441,10 @@ async fn cancellation_returns_cancelled_outcome() {
     let cancel = CancellationToken::new();
     cancel.cancel();
 
-    let result = backend.execute(&ctx, noop_callback(), None, cancel).await.unwrap();
+    let result = backend
+        .execute(&ctx, noop_callback(), None, cancel)
+        .await
+        .unwrap();
 
     assert!(matches!(result.outcome, ExecutionOutcome::Cancelled));
 }

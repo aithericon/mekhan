@@ -173,7 +173,9 @@ impl NatsConfig {
     ///
     /// This is the single source of truth for connection tuning — used by
     /// both `connect()` and the executor NATS setup in `main.rs`.
-    pub async fn build_options(&self) -> Result<async_nats::ConnectOptions, async_nats::ConnectError> {
+    pub async fn build_options(
+        &self,
+    ) -> Result<async_nats::ConnectOptions, async_nats::ConnectError> {
         let base = if let Some(ref creds_path) = self.creds {
             let expanded = shellexpand::tilde(creds_path);
             tracing::info!(url = %self.url, name = %self.connection_name, creds = %expanded, "Building NATS options with credentials");
@@ -195,7 +197,9 @@ impl NatsConfig {
                     match event {
                         Event::Disconnected => tracing::warn!(conn = %name, "NATS disconnected"),
                         Event::Connected => tracing::info!(conn = %name, "NATS (re)connected"),
-                        Event::SlowConsumer(n) => tracing::warn!(conn = %name, n, "NATS slow consumer"),
+                        Event::SlowConsumer(n) => {
+                            tracing::warn!(conn = %name, n, "NATS slow consumer")
+                        }
                         other => tracing::debug!(conn = %name, ?other, "NATS event"),
                     }
                 }

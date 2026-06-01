@@ -21,8 +21,8 @@ pub(crate) static FAILURE_DECL: NodeDecl = NodeDecl {
     is_join: false,
     parks_data_envelope: false,
     lower: Some(crate::compiler::lower::failure::lower_failure),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     // No per-node structural rule. Failure IS Rhai-bearing
@@ -48,11 +48,7 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     }]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::Failure {
         failure_message,
@@ -69,8 +65,8 @@ fn yjs_encode(
     // mirrors this on the JSON wire side; preserves graph→Y.Doc→graph
     // round-trip parity in the publish path.
     if !error_result_mapping.is_empty() {
-        let erm_val = serde_json::to_value(error_result_mapping)
-            .unwrap_or(serde_json::Value::Array(vec![]));
+        let erm_val =
+            serde_json::to_value(error_result_mapping).unwrap_or(serde_json::Value::Array(vec![]));
         config.insert(txn, "errorResultMapping", json_value_to_any(&erm_val));
     }
 }

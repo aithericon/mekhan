@@ -203,20 +203,59 @@ async fn process_domain_event(
             .await?;
 
             for (place_id, token_id) in consumed_tokens {
-                insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None, None).await?;
+                insert_event_token(
+                    db,
+                    net_id,
+                    seq,
+                    &token_id.0.to_string(),
+                    "consumed",
+                    &place_id.0,
+                    None,
+                    None,
+                )
+                .await?;
             }
             for (place_id, token) in produced_tokens {
                 let data = token_color_to_json(&token.color);
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None, Some(&data)).await?;
+                insert_event_token(
+                    db,
+                    net_id,
+                    seq,
+                    &token.id.0.to_string(),
+                    "produced",
+                    &place_id.0,
+                    None,
+                    Some(&data),
+                )
+                .await?;
             }
             for (place_id, token) in read_tokens {
                 let data = token_color_to_json(&token.color);
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "read", &place_id.0, None, Some(&data)).await?;
+                insert_event_token(
+                    db,
+                    net_id,
+                    seq,
+                    &token.id.0.to_string(),
+                    "read",
+                    &place_id.0,
+                    None,
+                    Some(&data),
+                )
+                .await?;
             }
 
-            let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
-            let read_ids: Vec<String> = read_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
-            let produced_ids: Vec<String> = produced_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
+            let consumed_ids: Vec<String> = consumed_tokens
+                .iter()
+                .map(|(_, tid)| tid.0.to_string())
+                .collect();
+            let read_ids: Vec<String> = read_tokens
+                .iter()
+                .map(|(_, t)| t.id.0.to_string())
+                .collect();
+            let produced_ids: Vec<String> = produced_tokens
+                .iter()
+                .map(|(_, t)| t.id.0.to_string())
+                .collect();
             propagate_process_tags(db, &consumed_ids, &read_ids, &produced_ids).await?;
         }
 
@@ -246,20 +285,59 @@ async fn process_domain_event(
             .await?;
 
             for (place_id, token_id) in consumed_tokens {
-                insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None, None).await?;
+                insert_event_token(
+                    db,
+                    net_id,
+                    seq,
+                    &token_id.0.to_string(),
+                    "consumed",
+                    &place_id.0,
+                    None,
+                    None,
+                )
+                .await?;
             }
             for (place_id, token) in produced_tokens {
                 let data = token_color_to_json(&token.color);
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None, Some(&data)).await?;
+                insert_event_token(
+                    db,
+                    net_id,
+                    seq,
+                    &token.id.0.to_string(),
+                    "produced",
+                    &place_id.0,
+                    None,
+                    Some(&data),
+                )
+                .await?;
             }
             for (place_id, token) in read_tokens {
                 let data = token_color_to_json(&token.color);
-                insert_event_token(db, net_id, seq, &token.id.0.to_string(), "read", &place_id.0, None, Some(&data)).await?;
+                insert_event_token(
+                    db,
+                    net_id,
+                    seq,
+                    &token.id.0.to_string(),
+                    "read",
+                    &place_id.0,
+                    None,
+                    Some(&data),
+                )
+                .await?;
             }
 
-            let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
-            let read_ids: Vec<String> = read_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
-            let produced_ids: Vec<String> = produced_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
+            let consumed_ids: Vec<String> = consumed_tokens
+                .iter()
+                .map(|(_, tid)| tid.0.to_string())
+                .collect();
+            let read_ids: Vec<String> = read_tokens
+                .iter()
+                .map(|(_, t)| t.id.0.to_string())
+                .collect();
+            let produced_ids: Vec<String> = produced_tokens
+                .iter()
+                .map(|(_, t)| t.id.0.to_string())
+                .collect();
             propagate_process_tags(db, &consumed_ids, &read_ids, &produced_ids).await?;
 
             // Check effect_result for signal_key → egress cross-link
@@ -353,15 +431,41 @@ async fn process_domain_event(
 
             if *tokens_consumed {
                 for (place_id, token_id) in consumed_tokens {
-                    insert_event_token(db, net_id, seq, &token_id.0.to_string(), "consumed", &place_id.0, None, None).await?;
+                    insert_event_token(
+                        db,
+                        net_id,
+                        seq,
+                        &token_id.0.to_string(),
+                        "consumed",
+                        &place_id.0,
+                        None,
+                        None,
+                    )
+                    .await?;
                 }
                 for (place_id, token) in produced_tokens {
                     let data = token_color_to_json(&token.color);
-                    insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", &place_id.0, None, Some(&data)).await?;
+                    insert_event_token(
+                        db,
+                        net_id,
+                        seq,
+                        &token.id.0.to_string(),
+                        "produced",
+                        &place_id.0,
+                        None,
+                        Some(&data),
+                    )
+                    .await?;
                 }
 
-                let consumed_ids: Vec<String> = consumed_tokens.iter().map(|(_, tid)| tid.0.to_string()).collect();
-                let produced_ids: Vec<String> = produced_tokens.iter().map(|(_, t)| t.id.0.to_string()).collect();
+                let consumed_ids: Vec<String> = consumed_tokens
+                    .iter()
+                    .map(|(_, tid)| tid.0.to_string())
+                    .collect();
+                let produced_ids: Vec<String> = produced_tokens
+                    .iter()
+                    .map(|(_, t)| t.id.0.to_string())
+                    .collect();
                 propagate_process_tags(db, &consumed_ids, &[], &produced_ids).await?;
             }
         }
@@ -386,7 +490,17 @@ async fn process_domain_event(
 
             let token_id_str = token.id.0.to_string();
             let token_data = token_color_to_json(&token.color);
-            insert_event_token(db, net_id, seq, &token_id_str, "produced", &place_id.0, place_name.as_deref(), Some(&token_data)).await?;
+            insert_event_token(
+                db,
+                net_id,
+                seq,
+                &token_id_str,
+                "produced",
+                &place_id.0,
+                place_name.as_deref(),
+                Some(&token_data),
+            )
+            .await?;
 
             if let Some(ref sk) = signal_key {
                 // Token arrived via signal injection or bridge transfer.
@@ -551,9 +665,7 @@ async fn process_domain_event(
             // Point egress_seq to the TransitionFired that produced this bridge-out
             // (via produced_by_event), NOT to this TokenBridgedOut event.
             // The transition's consumed tokens carry the process tags we need for inheritance.
-            let egress_seq = produced_by_event
-                .map(|e| e as i64)
-                .unwrap_or(seq);
+            let egress_seq = produced_by_event.map(|e| e as i64).unwrap_or(seq);
 
             sqlx::query(
                 "INSERT INTO causality_cross_links (signal_key, egress_net, egress_seq, link_type) \
@@ -583,7 +695,17 @@ async fn process_domain_event(
             .await?;
 
             let bridge_data = token_color_to_json(&token.color);
-            insert_event_token(db, net_id, seq, &token.id.0.to_string(), "produced", "", None, Some(&bridge_data)).await?;
+            insert_event_token(
+                db,
+                net_id,
+                seq,
+                &token.id.0.to_string(),
+                "produced",
+                "",
+                None,
+                Some(&bridge_data),
+            )
+            .await?;
         }
 
         // Other event types are not relevant for token causality
@@ -836,7 +958,11 @@ struct SpawnNet;
 #[async_trait]
 impl Projector for SpawnNet {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
-        let child_net_id = match ctx.effect_result.get("child_net_id").and_then(|v| v.as_str()) {
+        let child_net_id = match ctx
+            .effect_result
+            .get("child_net_id")
+            .and_then(|v| v.as_str())
+        {
             Some(id) => id,
             None => return Ok(()),
         };
@@ -891,14 +1017,20 @@ async fn register_subworkflow_child(
 
     // Resolve the parent instance (top-level: net_id = mekhan-{uuid}; nested:
     // net_id = the parent's own child_net_id).
-    let parent: Option<(uuid::Uuid, uuid::Uuid, i32, String, Option<uuid::Uuid>, uuid::Uuid)> =
-        sqlx::query_as(
-            "SELECT id, template_id, template_version, mode, root_instance_id, created_by \
+    let parent: Option<(
+        uuid::Uuid,
+        uuid::Uuid,
+        i32,
+        String,
+        Option<uuid::Uuid>,
+        uuid::Uuid,
+    )> = sqlx::query_as(
+        "SELECT id, template_id, template_version, mode, root_instance_id, created_by \
              FROM workflow_instances WHERE net_id = $1",
-        )
-        .bind(parent_net_id)
-        .fetch_optional(db)
-        .await?;
+    )
+    .bind(parent_net_id)
+    .fetch_optional(db)
+    .await?;
     let Some((parent_id, parent_template_id, _parent_version, mode, parent_root, created_by)) =
         parent
     else {
@@ -1082,18 +1214,21 @@ async fn enrich_processes_from_start_event(
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
     let name = effect_result.get("name").and_then(|v| v.as_str());
-    let config = effect_result.get("config").cloned()
-        .or_else(|| {
-            // Build config from individual fields if not bundled
-            let mut cfg = serde_json::Map::new();
-            if let Some(desc) = effect_result.get("description") {
-                cfg.insert("description".to_string(), desc.clone());
-            }
-            if let Some(ns) = effect_result.get("namespace") {
-                cfg.insert("namespace".to_string(), ns.clone());
-            }
-            if cfg.is_empty() { None } else { Some(serde_json::Value::Object(cfg)) }
-        });
+    let config = effect_result.get("config").cloned().or_else(|| {
+        // Build config from individual fields if not bundled
+        let mut cfg = serde_json::Map::new();
+        if let Some(desc) = effect_result.get("description") {
+            cfg.insert("description".to_string(), desc.clone());
+        }
+        if let Some(ns) = effect_result.get("namespace") {
+            cfg.insert("namespace".to_string(), ns.clone());
+        }
+        if cfg.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(cfg))
+        }
+    });
 
     // Find process_ids from consumed + read tokens
     let mut source_ids = consumed_ids.to_vec();
@@ -1331,12 +1466,11 @@ async fn load_progress(
     process_id: &str,
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<Progress, sqlx::Error> {
-    let raw: Option<Option<serde_json::Value>> = sqlx::query_scalar(
-        "SELECT config -> 'progress' FROM hpi_processes WHERE process_id = $1",
-    )
-    .bind(process_id)
-    .fetch_optional(db)
-    .await?;
+    let raw: Option<Option<serde_json::Value>> =
+        sqlx::query_scalar("SELECT config -> 'progress' FROM hpi_processes WHERE process_id = $1")
+            .bind(process_id)
+            .fetch_optional(db)
+            .await?;
     Ok(raw
         .flatten()
         .and_then(|v| serde_json::from_value::<Progress>(v).ok())
@@ -1572,8 +1706,14 @@ async fn record_metric_event(
     ts: chrono::DateTime<chrono::Utc>,
     live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
-    let key = effect_result.get("key").and_then(|v| v.as_str()).unwrap_or("");
-    let value = effect_result.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let key = effect_result
+        .get("key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let value = effect_result
+        .get("value")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
     if key.is_empty() {
         return Ok(());
     }
@@ -1593,13 +1733,7 @@ async fn record_metric_event(
         .execute(db)
         .await?;
 
-        live.emit_metric(
-            pid.clone(),
-            signal_key.clone(),
-            key.to_string(),
-            value,
-            ts,
-        );
+        live.emit_metric(pid.clone(), signal_key.clone(), key.to_string(), value, ts);
     }
     Ok(())
 }
@@ -1617,10 +1751,19 @@ async fn record_log_event(
     ts: chrono::DateTime<chrono::Utc>,
     live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
-    let level = effect_result.get("level").and_then(|v| v.as_str()).unwrap_or("info");
+    let level = effect_result
+        .get("level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("info");
     let source = effect_result.get("source").and_then(|v| v.as_str());
-    let message = effect_result.get("message").and_then(|v| v.as_str()).unwrap_or("");
-    let detail = effect_result.get("detail").cloned().unwrap_or(serde_json::json!({}));
+    let message = effect_result
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let detail = effect_result
+        .get("detail")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     let process_ids = resolved_or_done!(db, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
@@ -1815,12 +1958,12 @@ async fn register_catalogue_entry(
     .bind(&cmd.mime_type)
     .bind(size_bytes)
     .bind(&cmd.storage_path)
-    .bind(net_id)                   // source_net: from the event's net_id
-    .bind(&source_place)            // source_place: from token provenance
+    .bind(net_id) // source_net: from the event's net_id
+    .bind(&source_place) // source_place: from token provenance
     .bind(&cmd.signal_key)
-    .bind(&process_id)              // process_id: from causality process tags
-    .bind(&step)                    // process_step: from effect annotation or command
-    .bind(event_seq)                // source_event_sequence: direct causality pointer
+    .bind(&process_id) // process_id: from causality process tags
+    .bind(&step) // process_step: from effect annotation or command
+    .bind(event_seq) // source_event_sequence: direct causality pointer
     .bind(&file_metadata)
     .bind(&user_metadata)
     .bind(cmd.created_at)
@@ -1978,8 +2121,11 @@ mod tests {
     #[test]
     fn subworkflow_child_ref_reads_family_and_latest_pin() {
         let fam = uuid::Uuid::new_v4();
-        let g =
-            graph_with_subworkflow("sw1", &fam.to_string(), serde_json::json!({ "mode": "latest" }));
+        let g = graph_with_subworkflow(
+            "sw1",
+            &fam.to_string(),
+            serde_json::json!({ "mode": "latest" }),
+        );
         let (tid, pin) = subworkflow_child_ref(&g, "sw1").expect("subworkflow node found");
         assert_eq!(tid, fam);
         assert!(matches!(pin, VersionPin::Latest));
@@ -2000,8 +2146,11 @@ mod tests {
     #[test]
     fn subworkflow_child_ref_none_for_missing_node() {
         let fam = uuid::Uuid::new_v4();
-        let g =
-            graph_with_subworkflow("sw1", &fam.to_string(), serde_json::json!({ "mode": "latest" }));
+        let g = graph_with_subworkflow(
+            "sw1",
+            &fam.to_string(),
+            serde_json::json!({ "mode": "latest" }),
+        );
         assert!(subworkflow_child_ref(&g, "no_such_node").is_none());
     }
 }

@@ -51,11 +51,29 @@ pub struct ExecutionJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_events: Option<Vec<EventCategory>>,
 
+    /// Opt-in for the INbound live chunk feed (the "live IPC reducer").
+    ///
+    /// When `true`, the executor registers a per-job chunk channel and the IPC
+    /// sidecar exposes the `StreamChunks` server-stream, so the child can run
+    /// `for chunk in aithericon.chunks()`; chunks arrive over the
+    /// `EXECUTOR_CHUNKS` JetStream feed (subject `executor.chunks.{id}`).
+    ///
+    /// When `false` (default), no channel is registered and `StreamChunks`
+    /// returns an immediately-empty stream — non-reducer jobs spin up nothing.
+    ///
+    /// This is the symmetric INbound counterpart to `stream_events` (which gates
+    /// OUTbound real-time event streaming). It is a dedicated flag rather than
+    /// an `EventCategory` because `stream_events` drives outbound *event
+    /// emission*, whereas this gates an inbound *data feed* — overloading the
+    /// emission filter with an inbound category would be a category error.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub feed_chunks: bool,
+
     /// Single-use Vault wrapping token containing resolved secrets.
     ///
     /// When present, the executor unwraps this token against Vault to obtain
     /// a `HashMap<String, String>` of secret key→value pairs, then resolves
-    /// `{{secret:KEY}}` patterns in spec.config and env using those values.
+    /// `{{ secret:KEY }}` patterns in spec.config and env using those values.
     ///
     /// NOT stored in `metadata` because metadata is echoed in every StatusUpdate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -163,7 +181,7 @@ pub enum InputSource {
     /// When `storage` is `None`, the global `ArtifactStore` is used (backward-compatible).
     StoragePath {
         path: String,
-        /// Per-input storage backend config. Supports `{{secret:KEY}}` in credentials.
+        /// Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         storage: Option<StorageConfig>,
     },
@@ -205,7 +223,7 @@ pub struct OutputDeclaration {
     pub kind: Option<String>,
 
     /// Upload this file output to a specific storage destination after execution.
-    /// Supports `{{secret:KEY}}` patterns in storage credentials.
+    /// Supports `{{ secret:KEY }}` patterns in storage credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upload_to: Option<OutputUploadConfig>,
 }
@@ -225,4 +243,8 @@ pub struct OutputUploadConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }

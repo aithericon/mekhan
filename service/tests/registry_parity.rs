@@ -32,11 +32,21 @@ fn smtp_minimal_config() -> serde_json::Value {
 
 #[test]
 fn smtp_minimal_config_compiles_through_registry() {
-    let (canonical, inputs) =
-        validate_and_transform(&ExecutionBackendType::Smtp, &smtp_minimal_config(), &HashMap::new(), "send")
-            .expect("smtp minimal config must compile");
-    assert!(inputs.is_empty(), "templates ride inline; no attachments in fixture → no staged inputs");
-    assert_eq!(canonical["subject"]["source"], "Welcome, {{ intake.name }}!");
+    let (canonical, inputs) = validate_and_transform(
+        &ExecutionBackendType::Smtp,
+        &smtp_minimal_config(),
+        &HashMap::new(),
+        "send",
+    )
+    .expect("smtp minimal config must compile");
+    assert!(
+        inputs.is_empty(),
+        "templates ride inline; no attachments in fixture → no staged inputs"
+    );
+    assert_eq!(
+        canonical["subject"]["source"],
+        "Welcome, {{ intake.name }}!"
+    );
     assert_eq!(canonical["body_text"]["label"], "body.txt.tera");
     assert_eq!(canonical["resource_alias"], "mail");
 }
@@ -48,13 +58,9 @@ fn smtp_with_attachments_compiles() {
         { "filename": "report.pdf", "input_name": "_att_0" },
         { "filename": "logo.png", "input_name": "_att_1" },
     ]);
-    let (canonical, _) = validate_and_transform(
-        &ExecutionBackendType::Smtp,
-        &cfg,
-        &HashMap::new(),
-        "send",
-    )
-    .expect("smtp with attachments must compile");
+    let (canonical, _) =
+        validate_and_transform(&ExecutionBackendType::Smtp, &cfg, &HashMap::new(), "send")
+            .expect("smtp with attachments must compile");
     assert_eq!(canonical["attachments"].as_array().unwrap().len(), 2);
 }
 
@@ -126,9 +132,8 @@ fn process_stages_attached_files_through_registry() {
         },
     );
     let cfg = json!({ "command": "cat", "args": ["data.txt"] });
-    let (_, inputs) =
-        validate_and_transform(&ExecutionBackendType::Process, &cfg, &files, "run")
-            .expect("process with files must compile");
+    let (_, inputs) = validate_and_transform(&ExecutionBackendType::Process, &cfg, &files, "run")
+        .expect("process with files must compile");
     // stage_all_files sorts by name for deterministic AIR
     assert_eq!(inputs.len(), 2);
     assert_eq!(inputs[0].name, "config.yml");
@@ -280,9 +285,13 @@ fn file_ops_minimal_stat_compiles_through_registry() {
         "path": "data/x.csv",
         "storage": { "backend": "local", "endpoint": "/tmp" },
     });
-    let (canonical, inputs) =
-        validate_and_transform(&ExecutionBackendType::FileOps, &cfg, &HashMap::new(), "stat")
-            .expect("file_ops stat must compile");
+    let (canonical, inputs) = validate_and_transform(
+        &ExecutionBackendType::FileOps,
+        &cfg,
+        &HashMap::new(),
+        "stat",
+    )
+    .expect("file_ops stat must compile");
     // FileOps emits NO InputDeclarations — it works on storage paths.
     assert!(inputs.is_empty(), "file_ops emits no staged inputs");
     assert_eq!(canonical["operation"], "stat");
@@ -293,10 +302,14 @@ fn file_ops_minimal_stat_compiles_through_registry() {
 fn file_ops_rejects_garbage_operation_tag_via_registry() {
     // No `operation` field at all — serde tag dispatch fails.
     let cfg = json!({ "op": "stat" });
-    let err =
-        validate_and_transform(&ExecutionBackendType::FileOps, &cfg, &HashMap::new(), "stat")
-            .expect_err("missing operation tag must be rejected")
-            .to_string();
+    let err = validate_and_transform(
+        &ExecutionBackendType::FileOps,
+        &cfg,
+        &HashMap::new(),
+        "stat",
+    )
+    .expect_err("missing operation tag must be rejected")
+    .to_string();
     assert!(err.contains("invalid file_ops config"), "got: {err}");
 }
 
@@ -334,9 +347,13 @@ fn file_ops_default_editor_config_round_trips_through_registry() {
     let cfg = (decl.default_editor_config)();
     // Default seed is a `stat` op with an empty path; deserialization
     // succeeds because every field has a default or is supplied.
-    let (_, inputs) =
-        validate_and_transform(&ExecutionBackendType::FileOps, &cfg, &HashMap::new(), "seed")
-            .expect("file_ops default editor config must validate");
+    let (_, inputs) = validate_and_transform(
+        &ExecutionBackendType::FileOps,
+        &cfg,
+        &HashMap::new(),
+        "seed",
+    )
+    .expect("file_ops default editor config must validate");
     assert!(inputs.is_empty());
 }
 
@@ -564,9 +581,8 @@ fn python_missing_entrypoint_file_rejected_via_registry() {
 #[test]
 fn python_empty_node_files_rejected_via_registry() {
     let cfg = json!({ "entrypoint": "main.py", "python": "python3" });
-    let err =
-        validate_and_transform(&ExecutionBackendType::Python, &cfg, &HashMap::new(), "step")
-            .expect_err("empty node files must reject")
-            .to_string();
+    let err = validate_and_transform(&ExecutionBackendType::Python, &cfg, &HashMap::new(), "step")
+        .expect_err("empty node files must reject")
+        .to_string();
     assert!(err.contains("no files"), "got: {err}");
 }

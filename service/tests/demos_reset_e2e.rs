@@ -97,7 +97,11 @@ async fn reset_removes_seeded_demos_and_requires_admin() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "viewer must be forbidden");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "viewer must be forbidden"
+    );
     assert!(
         template_exists(&db, demo_id).await,
         "forbidden request must not have deleted anything"

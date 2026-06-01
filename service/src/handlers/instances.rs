@@ -14,13 +14,13 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
+use crate::handlers::require_template;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
 };
 use crate::models::responses::{InstanceChild, InstanceEventsResponse, StepExecutionResponse};
-use crate::handlers::require_template;
 use crate::models::template::{PaginatedResponse, WorkflowGraph};
 use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
@@ -98,7 +98,7 @@ pub async fn create_instance(
     // engine fault (502).
     let launcher = InstanceLauncher::new(&state.db, &state.petri);
     let instance = launcher
-        .launch(LaunchSpec {
+        .launch(LaunchSpec::Templated {
             instance_id,
             net_id,
             template_id: template.id,
@@ -110,10 +110,20 @@ pub async fn create_instance(
             start_tokens: &req.start_tokens,
             mode: Some(mode),
             test_id: None,
+            // User POST path does not surface ablation today; #126.2's
+            // ablation surface lives at the trigger boundary (research
+            // harness drives via fire_trigger). Plain create-instance →
+            // empty dispatch options.
+            dispatch_options: petri_api_types::DispatchOptions::default(),
+            // Tenant propagation (D1-A) is surfaced at the trigger-fire
+            // boundary; the user POST create-instance path does not carry
+            // a net-parameter bag today.
+            net_parameters: None,
         })
         .await
         .map_err(|e| match e {
             LaunchError::Parameterize(pe) => ApiError::bad_request(pe.to_string()),
+            LaunchError::ParameterizeForPlace(pe) => ApiError::bad_request(pe.to_string()),
             LaunchError::Database(msg) => ApiError::internal(msg),
             LaunchError::Deploy(msg) => ApiError::new(
                 StatusCode::BAD_GATEWAY,
@@ -235,13 +245,12 @@ pub async fn get_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowInstance>, ApiError> {
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::not_found("instance not found"))?;
+    let instance =
+        sqlx::query_as::<_, WorkflowInstance>("SELECT * FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     Ok(Json(instance))
 }
@@ -292,17 +301,16 @@ pub async fn stream_instance(
     let prelude = stream::iter(vec![Ok::<_, Infallible>(
         Event::default().event("connected").data(net_id.clone()),
     )]);
-    let body: futures::stream::BoxStream<'static, Result<Event, Infallible>> =
-        if already_terminal {
-            // Already finished (or events purged by the cleanup sweep): emit
-            // the persisted result envelope and close — no point replaying.
-            let payload = db_result.unwrap_or(serde_json::Value::Null);
-            Box::pin(stream::iter(vec![Ok(Event::default()
-                .event("result")
-                .data(payload.to_string()))]))
-        } else {
-            Box::pin(instance_jetstream_events(state.nats.clone(), net_id))
-        };
+    let body: futures::stream::BoxStream<'static, Result<Event, Infallible>> = if already_terminal {
+        // Already finished (or events purged by the cleanup sweep): emit
+        // the persisted result envelope and close — no point replaying.
+        let payload = db_result.unwrap_or(serde_json::Value::Null);
+        Box::pin(stream::iter(vec![Ok(Event::default()
+            .event("result")
+            .data(payload.to_string()))]))
+    } else {
+        Box::pin(instance_jetstream_events(state.nats.clone(), net_id))
+    };
     let stream = prelude.chain(body);
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
@@ -425,13 +433,12 @@ pub async fn get_instance_state(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<InstanceStateResponse>, ApiError> {
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::not_found("instance not found"))?;
+    let instance =
+        sqlx::query_as::<_, WorkflowInstance>("SELECT * FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     // 1. Fetch events from JetStream (source of truth)
     let events = fetch_events(&state.nats, &instance.net_id)
@@ -508,13 +515,12 @@ pub async fn get_instance_events(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<InstanceEventsResponse>, ApiError> {
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::not_found("instance not found"))?;
+    let instance =
+        sqlx::query_as::<_, WorkflowInstance>("SELECT * FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     let events = fetch_events(&state.nats, &instance.net_id)
         .await
@@ -737,13 +743,12 @@ pub async fn cancel_instance(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkflowInstance>, ApiError> {
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| ApiError::not_found("instance not found"))?;
+    let instance =
+        sqlx::query_as::<_, WorkflowInstance>("SELECT * FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::not_found("instance not found"))?;
 
     if instance.status == "completed" || instance.status == "cancelled" {
         return Err(ApiError::conflict(format!(

@@ -10,8 +10,10 @@
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
 	import type { InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
 	import type { NodeInterface } from '$lib/types/node-interface';
+	import type { LeaseRuntime } from '$lib/stores/instance-marking.svelte';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
+	import Server from '@lucide/svelte/icons/server';
 
 	type Props = {
 		step: StepExecution | null;
@@ -36,6 +38,11 @@
 		 *  sub-workflow" drill-in. Empty / absent for non-SubWorkflow nodes or
 		 *  before the child has been registered. */
 		childInstances?: InstanceChild[];
+		/** Cluster-lease runtime for a LeaseScope node, derived from the instance
+		 *  net marking by the parent. When present the drawer renders a Lease
+		 *  section (lifecycle + typed placement detail). A LeaseScope container has
+		 *  no step row, so this is what makes its drawer non-empty. */
+		leaseRuntime?: LeaseRuntime | null;
 		open: boolean;
 		onClose: () => void;
 		/** When the user picks a different iteration in the drawer, the parent
@@ -50,10 +57,20 @@
 		iterations = [],
 		instanceId,
 		childInstances = [],
+		leaseRuntime = null,
 		open,
 		onClose,
 		onSelectIteration
 	}: Props = $props();
+
+	// Cluster-lease lifecycle palette + copy.
+	const leaseTone: Record<string, { bg: string; text: string; label: string }> = {
+		idle:     { bg: 'bg-gray-100',   text: 'text-gray-600',   label: 'not yet claimed' },
+		claiming: { bg: 'bg-amber-100',  text: 'text-amber-700',  label: 'claiming' },
+		held:     { bg: 'bg-green-100',  text: 'text-green-700',  label: 'held' },
+		released: { bg: 'bg-slate-100',  text: 'text-slate-600',  label: 'released' },
+		failed:   { bg: 'bg-red-100',    text: 'text-red-700',    label: 'allocation died' }
+	};
 
 	function borrowedAttrsFor(producerNodeId: string): string[] {
 		return nodeInterface?.borrowed_paths?.[producerNodeId] ?? [];
@@ -118,6 +135,59 @@
 		return Object.entries(inputs as Record<string, unknown>);
 	}
 </script>
+
+<!-- Cluster-lease section: lifecycle + typed placement detail, read from the
+     instance net marking. Rendered for a LeaseScope (no step row) and appended
+     to any step that also carries a lease. -->
+{#snippet leasePanel(lr: LeaseRuntime)}
+	{@const tone = leaseTone[lr.state] ?? leaseTone.idle}
+	<section data-testid="lease-panel">
+		<h3 class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+			<Server class="size-4 text-muted-foreground" />
+			Lease
+			{#if lr.flavor}
+				<Badge variant="outline" class="font-mono text-sm font-normal">{lr.flavor}</Badge>
+			{/if}
+			<Badge class="{tone.bg} {tone.text} font-normal" variant="secondary">{tone.label}</Badge>
+		</h3>
+		{#if lr.state === 'failed'}
+			<div class="mb-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+				The held allocation died mid-lease — the scope failed fast rather than
+				running further work on a dead allocation.
+			</div>
+		{:else if lr.state === 'claiming'}
+			<div class="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+				Claim sent to the scheduler; waiting for the allocation to be granted.
+			</div>
+		{/if}
+		{#if lr.allocId || lr.node || lr.executorNamespace || lr.expiry || Object.keys(lr.schedulerDetail).length > 0}
+			<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+				{#if lr.allocId}
+					<dt class="text-muted-foreground">alloc id</dt>
+					<dd class="font-mono break-all">{lr.allocId}</dd>
+				{/if}
+				{#if lr.node}
+					<dt class="text-muted-foreground">node</dt>
+					<dd class="font-mono break-all">{lr.node}</dd>
+				{/if}
+				{#if lr.executorNamespace}
+					<dt class="text-muted-foreground">namespace</dt>
+					<dd class="font-mono break-all">{lr.executorNamespace}</dd>
+				{/if}
+				{#if lr.expiry}
+					<dt class="text-muted-foreground">expiry</dt>
+					<dd class="font-mono break-all">{lr.expiry}</dd>
+				{/if}
+				{#each Object.entries(lr.schedulerDetail) as [k, v] (k)}
+					<dt class="text-muted-foreground">{k}</dt>
+					<dd class="font-mono break-all">{v}</dd>
+				{/each}
+			</dl>
+		{:else}
+			<p class="text-sm text-muted-foreground">No allocation detail yet.</p>
+		{/if}
+	</section>
+{/snippet}
 
 <Sheet.Root bind:open onOpenChange={(v: boolean) => { if (!v) onClose(); }}>
 	<SheetContent class="w-full sm:max-w-xl">
@@ -184,6 +254,9 @@
 			</header>
 
 			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+				{#if leaseRuntime}
+					{@render leasePanel(leaseRuntime)}
+				{/if}
 				{#if showChildren}
 					<!-- Sub-workflow drill-in: each child ran as its own instance
 					     (a separate engine net). Navigating to it is a fresh
@@ -332,6 +405,48 @@
 						/>
 					{/if}
 				</section>
+			</div>
+		{:else if leaseRuntime}
+			<!-- LeaseScope container: no step-execution row of its own. The drawer
+			     is the cluster view — the held allocation's lifecycle + placement. -->
+			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
+			<SheetDescription>Cluster lease held by this scope.</SheetDescription>
+
+			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
+				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
+					<Icon class="size-5 {meta.iconClass}" />
+				</div>
+				<div class="min-w-0 flex-1">
+					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
+					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
+						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
+					</div>
+					{#if node}
+						<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
+							id: {node.id}
+						</div>
+					{/if}
+					{#if nodeDescription}
+						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
+					{/if}
+				</div>
+				<div class="flex shrink-0 items-center gap-1">
+					{#if node}
+						<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
+							<Settings2 class="size-4" />
+							<span class="ml-1.5 hidden sm:inline">Config</span>
+						</Button>
+					{/if}
+					<SheetClose>
+						<Button variant="ghost" size="icon" aria-label="Close">
+							<X class="size-4" />
+						</Button>
+					</SheetClose>
+				</div>
+			</header>
+
+			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+				{@render leasePanel(leaseRuntime)}
 			</div>
 		{/if}
 	</SheetContent>

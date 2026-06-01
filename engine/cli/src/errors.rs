@@ -81,10 +81,7 @@ pub fn run_errors(client: &EngineClient, last: usize) {
                     format!("{name}  {error}")
                 }
                 "ErrorOccurred" => {
-                    let msg = inner
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
+                    let msg = inner.get("message").and_then(|v| v.as_str()).unwrap_or("?");
                     msg.to_string()
                 }
                 _ => String::new(),
@@ -166,7 +163,10 @@ fn format_short_timestamp(ts: &str) -> String {
     if let Some(t_pos) = ts.find('T') {
         let time_part = &ts[t_pos + 1..];
         // Take up to the dot or end
-        let end = time_part.find('.').or_else(|| time_part.find('Z')).unwrap_or(time_part.len());
+        let end = time_part
+            .find('.')
+            .or_else(|| time_part.find('Z'))
+            .unwrap_or(time_part.len());
         return time_part[..end].to_string();
     }
     ts.to_string()
@@ -186,10 +186,7 @@ mod tests {
 
     #[test]
     fn format_short_timestamp_no_millis() {
-        assert_eq!(
-            format_short_timestamp("2026-04-03T12:34:56Z"),
-            "12:34:56"
-        );
+        assert_eq!(format_short_timestamp("2026-04-03T12:34:56Z"), "12:34:56");
     }
 
     #[test]

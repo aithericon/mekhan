@@ -59,8 +59,7 @@ async fn real_zitadel_pat_authorizes_apply() {
                 .header("content-type", "application/json")
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::from(
-                    json!({ "name": "Zitadel E2E", "author_id": Uuid::new_v4() })
-                        .to_string(),
+                    json!({ "name": "Zitadel E2E", "author_id": Uuid::new_v4() }).to_string(),
                 ))
                 .unwrap(),
         )
@@ -125,8 +124,14 @@ async fn real_zitadel_broker_create_apply_revoke() {
     // poll briefly for convergence rather than asserting instantaneously.
     let mut seen = false;
     for _ in 0..20 {
-        let listed = mgmt.list_tokens(&subject).await.expect("broker list_tokens");
-        if listed.iter().any(|t| t.id == created.id && t.name == "e2e-ci") {
+        let listed = mgmt
+            .list_tokens(&subject)
+            .await
+            .expect("broker list_tokens");
+        if listed
+            .iter()
+            .any(|t| t.id == created.id && t.name == "e2e-ci")
+        {
             seen = true;
             break;
         }

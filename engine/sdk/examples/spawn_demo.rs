@@ -34,7 +34,9 @@ fn definition(ctx: &mut Context) {
     let job = ctx.state::<DynamicToken>("job", "Job");
     ctx.seed(
         &job,
-        vec![DynamicToken(serde_json::json!({ "value": 21, "operation": "double" }))],
+        vec![DynamicToken(
+            serde_json::json!({ "value": 21, "operation": "double" }),
+        )],
     );
 
     // Spawn child worker — io.inbox, io.reply, io.failure are auto-created

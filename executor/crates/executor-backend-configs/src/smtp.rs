@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use aithericon_executor_domain::{ExecutionSpec, ExecutorError, InputDeclaration, OutputDeclaration};
+use aithericon_executor_domain::{
+    ExecutionSpec, ExecutorError, InputDeclaration, OutputDeclaration,
+};
 
 /// Configuration for the SMTP backend.
 ///

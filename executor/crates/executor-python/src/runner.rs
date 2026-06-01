@@ -408,10 +408,7 @@ mod tests {
     /// Stage `<inputs>/main.py` plus any extra inputs, write the runner
     /// template, invoke `python3 <runner>` with the env vars the
     /// executor sets, return `(stdout, stderr, exit_code)`.
-    async fn run_runner(
-        user_script: &str,
-        inputs: &[(&str, &str)],
-    ) -> (String, String, i32) {
+    async fn run_runner(user_script: &str, inputs: &[(&str, &str)]) -> (String, String, i32) {
         let temp = TempDir::new().expect("temp dir");
         let run_dir = temp.path();
         let inputs_dir = run_dir.join("inputs");
@@ -581,10 +578,7 @@ mod tests {
         // as the escape hatch.
         let (stdout, stderr, code) = run_runner(
             r#"print("ok", "weird-name.json" in inputs)"#,
-            &[
-                ("input.json", "{}"),
-                ("weird-name.json", r#"{"x": 1}"#),
-            ],
+            &[("input.json", "{}"), ("weird-name.json", r#"{"x": 1}"#)],
         )
         .await;
         assert_eq!(code, 0, "stderr: {stderr}");
@@ -612,11 +606,8 @@ mod tests {
         // No input.json staged — `token` and `input` exist as empty
         // dicts so `token.get('x', default)` still works and
         // `'x' in token` returns False instead of NameError.
-        let (stdout, stderr, code) = run_runner(
-            r#"print(token.get("x", "default"), "x" in token)"#,
-            &[],
-        )
-        .await;
+        let (stdout, stderr, code) =
+            run_runner(r#"print(token.get("x", "default"), "x" in token)"#, &[]).await;
         assert_eq!(code, 0, "stderr: {stderr}");
         assert_eq!(stdout.trim(), "default False");
     }
@@ -885,10 +876,7 @@ mod tests {
             "stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "0 0 False"
-        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "0 0 False");
     }
 
     #[tokio::test]
@@ -923,8 +911,7 @@ mod tests {
         std::fs::create_dir_all(&outputs_dir).unwrap();
 
         let user_path = inputs_dir.join("main.py");
-        std::fs::write(&user_path, r#"set_output("result", {"ok": True, "n": 7})"#)
-            .unwrap();
+        std::fs::write(&user_path, r#"set_output("result", {"ok": True, "n": 7})"#).unwrap();
         let runner_path = run_dir.join("__runner__.py");
         write_runner(&runner_path, &user_path, &[]).await.unwrap();
 

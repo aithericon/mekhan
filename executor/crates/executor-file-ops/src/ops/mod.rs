@@ -197,10 +197,7 @@ pub fn validate(config: &FileOpsConfig) -> Result<(), String> {
 }
 
 /// Validate an inline StorageConfig.
-fn validate_storage(
-    config: &StorageConfig,
-    field: &str,
-) -> Result<(), String> {
+fn validate_storage(config: &StorageConfig, field: &str) -> Result<(), String> {
     use aithericon_executor_storage::StorageBackend;
 
     if config.endpoint.is_empty() {
@@ -542,9 +539,7 @@ mod tests {
     #[tokio::test]
     async fn annotate_create_sidecar() {
         let op = memory_operator();
-        op.write("data/file.parquet", "parquet-data")
-            .await
-            .unwrap();
+        op.write("data/file.parquet", "parquet-data").await.unwrap();
 
         let config = AnnotateConfig {
             path: "data/file.parquet".into(),
@@ -567,9 +562,7 @@ mod tests {
     #[tokio::test]
     async fn annotate_merge_sidecar() {
         let op = memory_operator();
-        op.write("data/file.parquet", "parquet-data")
-            .await
-            .unwrap();
+        op.write("data/file.parquet", "parquet-data").await.unwrap();
 
         // Write an initial sidecar
         let initial = serde_json::json!({"owner": "old-team", "version": 1});
@@ -624,10 +617,8 @@ mod tests {
         let csv_content = "name,age\nAlice,30\nBob,25\n";
         op.write("data/people.csv", csv_content).await.unwrap();
 
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "file_ops_probe_test_{}",
-            std::process::id()
-        ));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("file_ops_probe_test_{}", std::process::id()));
         tokio::fs::create_dir_all(&tmp_dir).await.unwrap();
 
         let config = ProbeConfig {
@@ -649,10 +640,8 @@ mod tests {
     async fn probe_missing_file() {
         let op = memory_operator();
 
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "file_ops_probe_miss_test_{}",
-            std::process::id()
-        ));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("file_ops_probe_miss_test_{}", std::process::id()));
 
         let config = ProbeConfig {
             path: "nonexistent.csv".into(),

@@ -27,10 +27,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     /// Helper: create a staged input as a temp file containing JSON.
-    fn stage_input(
-        name: &str,
-        value: &serde_json::Value,
-    ) -> (String, PathBuf, NamedTempFile) {
+    fn stage_input(name: &str, value: &serde_json::Value) -> (String, PathBuf, NamedTempFile) {
         let mut tmp = NamedTempFile::new().unwrap();
         write!(tmp, "{}", serde_json::to_string(value).unwrap()).unwrap();
         (name.to_string(), tmp.path().to_path_buf(), tmp)
@@ -62,8 +59,7 @@ mod tests {
 
     #[test]
     fn resolve_string_interpolation() {
-        let (name, path, _tmp) =
-            stage_input("subdir", &serde_json::json!("2026/feb"));
+        let (name, path, _tmp) = stage_input("subdir", &serde_json::json!("2026/feb"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -73,16 +69,12 @@ mod tests {
 
         resolve_inputs(&mut config, &staged).unwrap();
 
-        assert_eq!(
-            config["path"],
-            serde_json::json!("data/2026/feb/file.csv")
-        );
+        assert_eq!(config["path"], serde_json::json!("data/2026/feb/file.csv"));
     }
 
     #[test]
     fn resolve_nested_objects() {
-        let (name, path, _tmp) =
-            stage_input("target", &serde_json::json!("nested/path.csv"));
+        let (name, path, _tmp) = stage_input("target", &serde_json::json!("nested/path.csv"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -107,8 +99,7 @@ mod tests {
     #[test]
     fn resolve_missing_input_errors() {
         // Need at least one staged input so the empty-check fast path is skipped
-        let (name, path, _tmp) =
-            stage_input("other", &serde_json::json!("irrelevant"));
+        let (name, path, _tmp) = stage_input("other", &serde_json::json!("irrelevant"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -122,8 +113,7 @@ mod tests {
 
     #[test]
     fn resolve_no_patterns_noop() {
-        let (name, path, _tmp) =
-            stage_input("unused", &serde_json::json!("value"));
+        let (name, path, _tmp) = stage_input("unused", &serde_json::json!("value"));
         let staged = HashMap::from([(name, path)]);
 
         let original = serde_json::json!({
@@ -139,10 +129,8 @@ mod tests {
 
     #[test]
     fn resolve_multiple_references() {
-        let (name1, path1, _tmp1) =
-            stage_input("src", &serde_json::json!("source.csv"));
-        let (name2, path2, _tmp2) =
-            stage_input("dst", &serde_json::json!("dest.csv"));
+        let (name1, path1, _tmp1) = stage_input("src", &serde_json::json!("source.csv"));
+        let (name2, path2, _tmp2) = stage_input("dst", &serde_json::json!("dest.csv"));
         let staged = HashMap::from([(name1, path1), (name2, path2)]);
 
         let mut config = serde_json::json!({
@@ -164,10 +152,7 @@ mod tests {
         // were a usability footgun. For file-ops paths this just produces a
         // weird path that the underlying op will reject — no silent corruption.
         // See aithericon_executor_backend::resolve::interpolate_string.
-        let (name, path, _tmp) = stage_input(
-            "obj",
-            &serde_json::json!({"key": "value"}),
-        );
+        let (name, path, _tmp) = stage_input("obj", &serde_json::json!({"key": "value"}));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -198,8 +183,7 @@ mod tests {
 
     #[test]
     fn resolve_array_elements() {
-        let (name, path, _tmp) =
-            stage_input("tag", &serde_json::json!("important"));
+        let (name, path, _tmp) = stage_input("tag", &serde_json::json!("important"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -208,16 +192,12 @@ mod tests {
 
         resolve_inputs(&mut config, &staged).unwrap();
 
-        assert_eq!(
-            config["tags"],
-            serde_json::json!(["static", "important"])
-        );
+        assert_eq!(config["tags"], serde_json::json!(["static", "important"]));
     }
 
     #[test]
     fn resolve_same_input_referenced_twice() {
-        let (name, path, _tmp) =
-            stage_input("path", &serde_json::json!("shared.csv"));
+        let (name, path, _tmp) = stage_input("path", &serde_json::json!("shared.csv"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({

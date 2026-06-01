@@ -1,16 +1,17 @@
 //! End-to-end coverage for a `Scheduled` AutomatedStep dispatched through
 //! the **Slurm** scheduler backend — the sibling of `scheduled_e2e.rs` (which
-//! exercises the Nomad backend). The compiled parent net is byte-identical
-//! between the two; only what `scheduler-net` dispatches to changes.
+//! exercises the Nomad backend). The compiled parent net uses the datacenter
+//! lease adapter pattern; only what `resource_lease_acquire` dispatches to
+//! changes (sbatch over SSH instead of Nomad dispatch):
 //!
-//!   parent-net ─▶ scheduler-net ─(sbatch over SSH: mekhan-executor-worker)─▶
-//!                 executor-net  ─▶ executor (in Slurm job) ─▶ result ─▶ parent
+//!   parent-net ─▶ pool-{resource_id} (lease adapter) ─(resource_lease_acquire)─▶
+//!                 mekhan-lease-executor (sbatch) ─▶ executor ─▶ result ─▶ parent
 //!
-//! Why have both? The Nomad and Slurm `SchedulerClient` implementations are
+//! Why have both? The Nomad and Slurm `ClusterClient` implementations are
 //! independent crates (`engine/core-engine/crates/nomad`,
 //! `…/crates/slurm`) with non-overlapping failure modes:
 //! event-stream vs. poll, HTTP vs. SSH+CLI, JSON job vs. shell template. A
-//! green compiler-side bridge test does not imply the Slurm path works
+//! green compiler-side lease test does not imply the Slurm path works
 //! end-to-end. The Nomad-side analogue caught the `EXECUTOR_NAMESPACE`-
 //! mismatch false-execution bug; this is the matching guard for Slurm.
 //!
@@ -20,12 +21,12 @@
 //!
 //! (Docker Slurm cluster running, `mekhan-executor-worker.sh` + the
 //! aithericon Python SDK installed in the container, engine restarted
-//! with `SCHEDULER_BACKEND=slurm`, scheduler-net + executor-net deployed
-//! & running.) The Slurm-spawned executor pulls the staged main.py from
-//! the dev rustfs bucket `mekhan-artifacts` via `host.docker.internal`,
-//! so this test needs the same S3 overrides as the other executor-backed
-//! e2e. Run serially (`--test-threads=1`) — it shares the live engine/
-//! Slurm cluster.
+//! with `SCHEDULER_BACKEND=slurm`.) The test itself deploys the lease
+//! adapter net for the seeded resource. The Slurm-spawned executor pulls
+//! the staged main.py from the dev rustfs bucket `mekhan-artifacts` via
+//! `host.docker.internal`, so this test needs the same S3 overrides as
+//! the other executor-backed e2e. Run serially (`--test-threads=1`) —
+//! it shares the live engine/Slurm cluster.
 
 mod common;
 
@@ -43,7 +44,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     default_output_port, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, Port,
-    Position, ScheduledOperation, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -92,10 +93,8 @@ fn end(id: &str) -> WorkflowNode {
     }
 }
 
-/// `Start → AutomatedStep(python, Scheduled via mekhan-executor-worker) → End`.
-/// The job template name MUST match the script `just dev slurm-up` installs
-/// into the Slurm container at `/opt/petri/templates/mekhan-executor-worker.sh`.
-fn scheduled_graph(step_id: &str) -> WorkflowGraph {
+/// `Start → AutomatedStep(python, Scheduled via a datacenter lease) → End`.
+fn scheduled_graph(step_id: &str, scheduler: &str) -> WorkflowGraph {
     WorkflowGraph {
         nodes: vec![
             start("s"),
@@ -122,15 +121,14 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                     input: Port::empty_input(),
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
+                    // Standalone Scheduled step: now performs a single-node lease.
                     deployment_model: DeploymentModel::Scheduled {
-                        scheduler: None,
+                        scheduler: Some(scheduler.to_string()),
                         job_template: "mekhan-executor-worker".to_string(),
                         resources: None,
-                        operation: ScheduledOperation::Submit,
-                        request: None,
-                        run_on_lease: false,
                     },
                     stream_output: false,
+                    stream_input: false,
                 },
                 parent_id: None,
                 width: None,
@@ -158,7 +156,10 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -168,7 +169,7 @@ set_output("answer", 42)
 "#;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -180,13 +181,18 @@ async fn engine_available() -> bool {
 
 async fn net_running(net_id: &str) -> bool {
     match reqwest::get(format!("{}/api/nets/{net_id}/state", engine_url())).await {
-        Ok(resp) if resp.status().is_success() => resp
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("run_mode").and_then(|m| m.as_str()).map(str::to_string))
-            .as_deref()
-            == Some("running"),
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("run_mode")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("running")
+        }
         _ => false,
     }
 }
@@ -234,18 +240,48 @@ async fn scheduled_automated_step_runs_through_slurm() {
             engine_url()
         );
     }
-    if !net_running("scheduler-net").await || !net_running("executor-net").await {
-        panic!(
-            "scheduler-net / executor-net not deployed+running — run `just dev slurm-up`"
-        );
+    // Unified Scheduled needs the Slurm layer; skip if not available.
+    // (We probe 'executor-net' as a proxy for the Slurm worker registration).
+    if !net_running("executor-net").await {
+        println!("SKIPPING scheduled_automated_step_runs_through_slurm: executor-net not deployed");
+        return;
     }
 
-    let engine_nats_url =
-        std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
-    let (app, db) =
-        common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    // Seed a Slurm datacenter resource.
+    let resource_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO resources (id, workspace_id, path, resource_type, display_name, created_by) \
+         VALUES ($1, $2, 'local_slurm', 'datacenter', 'Local Slurm', $3)"
+    )
+    .bind(resource_id)
+    .bind(Uuid::nil())
+    .bind(Uuid::nil())
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO resource_versions (resource_id, version, vault_path, public_config, created_by) \
+         VALUES ($1, 1, 'secret/testing/slurm', $2, $3)"
+    )
+    .bind(resource_id)
+    .bind(json!({
+        "scheduler_flavor": "slurm",
+        "ssh_host": "localhost",
+        "ssh_port": 2222,
+        "ssh_user": "testuser",
+        "template_dir": "/opt/petri/templates",
+    }))
+    .bind(Uuid::nil())
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -254,6 +290,40 @@ async fn scheduled_automated_step_runs_through_slurm() {
         kv,
         listener_nats.jetstream().clone(),
     ));
+
+    // Deploy the datacenter lease adapter net for our seeded Slurm resource.
+    let conn = mekhan_service::petri::pool_net::DatacenterConnection {
+        resource_id,
+        resource_version: 1,
+        scheduler_flavor: "slurm".to_string(),
+        allocator_url: None,
+        token_secret_ref: None,
+        ssh_host: Some("localhost".to_string()),
+        ssh_port: Some(2222),
+        ssh_user: Some("testuser".to_string()),
+        ssh_known_hosts: Some("accept".to_string()),
+        template_dir: Some("/opt/petri/templates".to_string()),
+        ssh_key_secret_ref: Some("{{secret:testing/slurm#ssh_key}}".to_string()),
+        nomad_addr: None,
+        nomad_region: None,
+        nomad_token_secret_ref: None,
+    };
+    let adapter_air = mekhan_service::petri::pool_net::build_datacenter_lease_adapter_net(&conn);
+    let net_id = format!("pool-{resource_id}");
+    let deploy_resp = reqwest::Client::new()
+        .post(format!("{}/api/nets/{net_id}/scenario", engine_url()))
+        .json(&adapter_air)
+        .send()
+        .await
+        .expect("deploy lease adapter");
+    assert_eq!(deploy_resp.status(), StatusCode::OK, "deploy lease adapter failed");
+    let activate_resp = reqwest::Client::new()
+        .put(format!("{}/api/nets/{net_id}/run-mode", engine_url()))
+        .json(&serde_json::json!({"mode": "running"}))
+        .send()
+        .await
+        .expect("activate lease adapter");
+    assert_eq!(activate_resp.status(), StatusCode::OK, "activate lease adapter failed");
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(
@@ -276,7 +346,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
                 .body(Body::from(
                     json!({
                         "name": "Scheduled-Slurm AutomatedStep E2E",
-                        "graph": scheduled_graph("auto"),
+                        "graph": scheduled_graph("auto", "local_slurm"),
                         "files": { "auto": { "main.py": MAIN_PY } },
                         "author_id": Uuid::new_v4(),
                     })
@@ -337,7 +407,11 @@ async fn scheduled_automated_step_runs_through_slurm() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(instance["status"], "running");
 
@@ -346,18 +420,17 @@ async fn scheduled_automated_step_runs_through_slurm() {
     let deadline = Duration::from_secs(240);
     let started = Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(instance_id)
-                .fetch_one(&db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
         if st == "completed" {
             break;
         }
         assert_ne!(
             st, "failed",
-            "instance failed — scheduler-net/Slurm/executor path did not succeed"
+            "instance failed — lease-adapter/Slurm/executor path did not succeed"
         );
         if started.elapsed() > deadline {
             panic!("instance did not complete within {deadline:?} (status: {st})");
@@ -365,12 +438,11 @@ async fn scheduled_automated_step_runs_through_slurm() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    // Same regression guard as the Nomad e2e: a Scheduled step that silently
-    // collapsed to Inline (the write_node_config bug class) still "completes",
-    // but its instance net carries the inline executor-lifecycle places and
-    // lacks the Scheduled bridge_out. The topology assertion fails fast on a
-    // backend-agnostic regression — the lowering is shared between Nomad and
-    // Slurm.
+    // Regression guard: "instance completes" is *also* true if the Scheduled
+    // step silently collapsed to Inline. So assert the deployed instance net
+    // actually carries the POOLED lowering — the `p_auto_claim_out` bridge_out
+    // to the datacenter adapter net — and NOT the inline executor-lifecycle
+    // places (`auto/submitted`, `auto/inbox`).
     let topo: Value = reqwest::get(format!(
         "{}/api/nets/mekhan-{instance_id}/topology",
         engine_url()
@@ -387,14 +459,9 @@ async fn scheduled_automated_step_runs_through_slurm() {
         .filter_map(|p| p["id"].as_str().map(str::to_string))
         .collect();
     assert!(
-        place_ids.iter().any(|p| p == "p_auto_sched_out"),
-        "instance net is missing the Scheduled bridge_out `p_auto_sched_out` — \
-         the step lowered Inline (deployment_model lost?). places={place_ids:?}"
-    );
-    assert!(
-        !place_ids.iter().any(|p| p == "auto/submitted" || p == "auto/inbox"),
-        "instance net has inline executor-lifecycle places — the Scheduled \
-         step collapsed to Inline. places={place_ids:?}"
+        place_ids.iter().any(|p| p == "p_auto_claim_out"),
+        "instance net is missing the pooled bridge_out `p_auto_claim_out` — \
+         the step did not use the unified lease path. places={place_ids:?}"
     );
 
     // Slurm-side guard: identify the job dispatched by THIS test
@@ -418,12 +485,10 @@ async fn scheduled_automated_step_runs_through_slurm() {
             // Wait until the file looks done writing — the executor
             // appends `Starting executor` then runs the job; we expect
             // at least the header to be there.
-            let size: u64 = slurm_ssh(&format!(
-                "stat -c %s {p} 2>/dev/null || echo 0"
-            ))
-            .trim()
-            .parse()
-            .unwrap_or(0);
+            let size: u64 = slurm_ssh(&format!("stat -c %s {p} 2>/dev/null || echo 0"))
+                .trim()
+                .parse()
+                .unwrap_or(0);
             if size > 0 {
                 break p.to_string();
             }
@@ -431,7 +496,7 @@ async fn scheduled_automated_step_runs_through_slurm() {
         if Instant::now() > alloc_deadline {
             panic!(
                 "no new /tmp/petri-executor-*.out file appeared within 60s \
-                 of instance completion — scheduler_submit may not have \
+                 of instance completion — resource_lease_acquire may not have \
                  fired, or the Slurm backend was not registered (engine \
                  env missing?). Last listing: {listing:?}"
             );

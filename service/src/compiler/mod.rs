@@ -3,22 +3,22 @@ pub(crate) mod borrow;
 mod compile;
 mod error;
 pub(crate) mod graph;
+pub(crate) mod human_task_refs;
 pub mod interface;
 pub(crate) mod lower;
-mod pyio;
-pub(crate) mod human_task_refs;
 pub(crate) mod placeholder_refs;
+mod pyio;
 pub(crate) mod python_refs;
 pub(crate) mod resource_binding;
 pub mod resource_refs;
-pub mod scheduler_select;
-pub(crate) mod schema_refs;
 pub(crate) mod rhai_gen;
 pub mod rhai_scope;
+pub mod scheduler_select;
+pub(crate) mod schema_refs;
 pub mod subworkflow;
 pub mod token_shape;
-pub mod well_known;
 pub(crate) mod validate;
+pub mod well_known;
 mod wire;
 
 pub use compile::{

@@ -13,8 +13,8 @@
 
 #![cfg(feature = "slurm")]
 
-use petri_application::resource_lease_handlers::AllocatorClient;
 use petri_api::slurm_allocator::SlurmAllocatorClient;
+use petri_application::resource_lease_handlers::AllocatorClient;
 use petri_slurm::SlurmConfig;
 
 /// Absolute path to the committed sandbox SSH key.
@@ -49,10 +49,11 @@ fn sandbox_config() -> SlurmConfig {
 
 /// Full acquire → (node resolved) → release cycle through the trait surface.
 ///
-/// Asserts the 4-key lease shape: a real `alloc_id`, a non-empty `node`
-/// (CPU-only sandbox grants near-instantly), empty `gpu_uuid`, and that
-/// `release` cancels the allocation. A second `acquire` for the SAME grant
-/// reuses the live allocation (idempotency) rather than allocating again.
+/// Asserts the typed lease shape: a real `alloc_id`, a non-empty `node`
+/// (CPU-only sandbox grants near-instantly), the `slurm` scheduler flavor, no
+/// `gpu_uuid` (retired), and that `release` cancels the allocation. A second
+/// `acquire` for the SAME grant reuses the live allocation (idempotency) rather
+/// than allocating again.
 #[tokio::test]
 #[ignore] // requires live Slurm container
 async fn slurm_allocator_acquire_release_lifecycle() {
@@ -72,15 +73,22 @@ async fn slurm_allocator_acquire_release_lifecycle() {
         .expect("lease has alloc_id");
     assert!(!alloc_id.is_empty(), "alloc_id must be non-empty: {lease}");
 
-    // gpu_uuid is empty on the CPU-only sandbox.
+    // Typed per-flavor scheduler detail; gpu_uuid is gone.
     assert_eq!(
-        lease.get("gpu_uuid").and_then(|v| v.as_str()),
-        Some(""),
-        "gpu_uuid must be empty string on CPU sandbox: {lease}"
+        lease.get("scheduler").and_then(|s| s.get("flavor")).and_then(|v| v.as_str()),
+        Some("slurm"),
+        "lease must carry the slurm scheduler flavor: {lease}"
+    );
+    assert!(
+        lease.get("gpu_uuid").is_none(),
+        "retired gpu_uuid must not appear: {lease}"
     );
 
     // The node may briefly be null while pending; poll until assigned.
-    let mut node = lease.get("node").and_then(|v| v.as_str()).map(str::to_string);
+    let mut node = lease
+        .get("node")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     for _ in 0..10 {
         if node.as_deref().is_some_and(|n| !n.is_empty()) {
             break;
@@ -96,7 +104,10 @@ async fn slurm_allocator_acquire_release_lifecycle() {
             Some(alloc_id),
             "re-acquire must reuse the same allocation"
         );
-        node = again.get("node").and_then(|v| v.as_str()).map(str::to_string);
+        node = again
+            .get("node")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
     }
     assert!(
         node.as_deref().is_some_and(|n| !n.is_empty()),

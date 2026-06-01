@@ -22,7 +22,7 @@
 //! [claim_inbox: bridge_in] + [pool] ─(t_grant)─▶ [grant_outbox: reply "grant"]
 //!     (consumes one capacity token; emits ONLY the bridge reply → no taint)
 //!
-//! [register_inbox: bridge_in] ─(t_register)─▶ [in_use]   (CLEAN hold, grant_id+gpu_id)
+//! [register_inbox: bridge_in] ─(t_register)─▶ [in_use]   (CLEAN hold, grant_id+unit_id)
 //!     (the holder echoes its grant over a plain bridge once granted)
 //!
 //! [release_inbox: bridge_in] + [in_use]   ─(t_release, correlate grant_id)─▶ [pool] + [done]
@@ -70,7 +70,7 @@ const POOL_CAPACITY: usize = 2;
 /// A unit of capacity sitting in the pool, or held in `in_use`.
 #[token]
 struct Capacity {
-    gpu_id: String,
+    unit_id: String,
 }
 
 /// A claim request arriving from an instance net. `grant_id` correlates the
@@ -85,7 +85,7 @@ struct ClaimRequest {
 #[token]
 struct Grant {
     grant_id: String,
-    gpu_id: String,
+    unit_id: String,
 }
 
 /// Hold registration: the holder echoes its grant back over a PLAIN bridge once
@@ -95,7 +95,7 @@ struct Grant {
 #[token]
 struct HoldReg {
     grant_id: String,
-    gpu_id: String,
+    unit_id: String,
 }
 
 /// Held capacity, tagged with who holds it. Lives in `in_use` for observability
@@ -103,7 +103,7 @@ struct HoldReg {
 #[token]
 struct Hold {
     grant_id: String,
-    gpu_id: String,
+    unit_id: String,
 }
 
 /// A release request (fire-and-forget) echoing the grant_id.
@@ -116,7 +116,7 @@ struct ReleaseRequest {
 #[token]
 struct Freed {
     grant_id: String,
-    gpu_id: String,
+    unit_id: String,
     outcome: String,
 }
 
@@ -154,7 +154,7 @@ fn definition(ctx: &mut Context) {
             .auto_input("claim", &claim_inbox)
             .auto_input("cap", &pool)
             .auto_output("grant", &grant_outbox)
-            .logic(r#"#{ grant: #{ grant_id: claim.grant_id, gpu_id: cap.gpu_id } }"#);
+            .logic(r#"#{ grant: #{ grant_id: claim.grant_id, unit_id: cap.unit_id } }"#);
     });
 
     // t_register — record the hold. The holder echoes its grant over a PLAIN
@@ -163,7 +163,7 @@ fn definition(ctx: &mut Context) {
     ctx.transition("t_register", "Register Hold")
         .auto_input("reg", &register_inbox)
         .auto_output("hold", &in_use)
-        .logic(r#"#{ hold: #{ grant_id: reg.grant_id, gpu_id: reg.gpu_id } }"#);
+        .logic(r#"#{ hold: #{ grant_id: reg.grant_id, unit_id: reg.unit_id } }"#);
 
     // t_release — body finished: return capacity, matched to the hold by grant_id.
     ctx.scope("Release", |ctx| {
@@ -175,8 +175,8 @@ fn definition(ctx: &mut Context) {
             .auto_output("done", &done)
             .logic(
                 r#"#{
-                    cap:  #{ gpu_id: held.gpu_id },
-                    done: #{ grant_id: held.grant_id, gpu_id: held.gpu_id, outcome: "released" }
+                    cap:  #{ unit_id: held.unit_id },
+                    done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "released" }
                 }"#,
             );
 
@@ -190,8 +190,8 @@ fn definition(ctx: &mut Context) {
             .auto_output("done", &done)
             .logic(
                 r#"#{
-                    cap:  #{ gpu_id: held.gpu_id },
-                    done: #{ grant_id: held.grant_id, gpu_id: held.gpu_id, outcome: "reaped" }
+                    cap:  #{ unit_id: held.unit_id },
+                    done: #{ grant_id: held.grant_id, unit_id: held.unit_id, outcome: "reaped" }
                 }"#,
             );
     });
@@ -201,7 +201,7 @@ fn definition(ctx: &mut Context) {
         ctx.seed_one(
             &pool,
             Capacity {
-                gpu_id: format!("gpu-{i}"),
+                unit_id: format!("gpu-{i}"),
             },
         );
     }
@@ -211,7 +211,7 @@ fn main() {
     aithericon_sdk::run(
         "resource-pool-net",
         "Shared capacity pool — claim/grant/release/reap on the event-sourced \
-         Petri-net substrate. Generalizes scheduler-net for contended resources.",
+         Petri-net substrate. Generalizes the scheduler relay pattern for contended resources.",
         definition,
     );
 }

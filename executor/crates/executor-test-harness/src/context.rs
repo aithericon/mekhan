@@ -14,14 +14,14 @@ use uuid::Uuid;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use aithericon_executor_process::ProcessBackend;
 use aithericon_executor_domain::{ExecutionEvent, ExecutionJob, RunDirectory, StatusUpdate};
 use aithericon_executor_logs::LogSink;
 use aithericon_executor_metrics::MetricSink;
+use aithericon_executor_process::ProcessBackend;
 use aithericon_executor_storage::ArtifactStore;
 use aithericon_executor_worker::{
-    handle_execution, BackendRegistry, CancellationRegistry, CleanupPolicy, JobExecutor,
-    NatsCancelListener, SidecarLogConfig, StagingPipeline, StatusReporter,
+    handle_execution, BackendRegistry, CancellationRegistry, ChunkRegistry, CleanupPolicy,
+    JobExecutor, NatsCancelListener, SidecarLogConfig, StagingPipeline, StatusReporter,
 };
 
 use crate::nats::shared_nats_url;
@@ -38,6 +38,7 @@ pub struct ExecutorTestContext {
     pub pipeline: Arc<StagingPipeline>,
     pub base_dir: PathBuf,
     pub cancel_registry: CancellationRegistry,
+    pub chunk_registry: ChunkRegistry,
     nats_client: async_nats::Client,
     jetstream: jetstream::Context,
     status_stream_name: String,
@@ -114,6 +115,7 @@ impl ExecutorTestContext {
         let status_stream_name = format!("STATUS_{prefix}");
         let events_stream_name = format!("EVENTS_{prefix}");
         let cancel_registry = CancellationRegistry::new();
+        let chunk_registry = ChunkRegistry::new();
 
         Self {
             prefix,
@@ -123,6 +125,7 @@ impl ExecutorTestContext {
             pipeline,
             base_dir,
             cancel_registry,
+            chunk_registry,
             nats_client,
             jetstream: js,
             status_stream_name,
@@ -248,6 +251,7 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
+            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
         });
@@ -283,6 +287,7 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
+            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
         });
@@ -318,6 +323,7 @@ impl ExecutorTestContext {
             metric_sink,
             log_sink,
             cancel_registry: self.cancel_registry.clone(),
+            chunk_registry: self.chunk_registry.clone(),
             log_config,
             completion_tracker: None,
         });
@@ -355,6 +361,7 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
+            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: Some(tracker.clone()),
         });
@@ -385,6 +392,7 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
+            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
         })

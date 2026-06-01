@@ -61,11 +61,13 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         item_var,
         result_var,
         items_ref,
+        stream_source,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_map on non-Map node")
     };
+    let stream_source = *stream_source;
 
     // A Map must contain at least one body node — a child with
     // `parent_id == map.id`. An empty Map (scatter-gather doing nothing per
@@ -89,10 +91,7 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let ctx = &mut *cx.ctx;
 
-    let p_input: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
-    let p_items: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_items"), format!("{label} - Scattered Items"));
+    // Shared places used by BOTH the array and the streaming source paths.
     let p_body_in: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_body_in"), format!("{label} - Body In"));
     let p_body_out: PlaceHandle<DynamicToken> =
@@ -110,43 +109,97 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
 
-    // t_<id>_scatter — resolve the source array from `itemsRef`, emit the
-    // gather coordinator (Single) + a BATCH of item tokens. `itemsRef` is
-    // embedded verbatim; the guard read-arc pass rewrites the `<slug>.<field>`
-    // borrow onto its producer's parked place and adds a read-arc to
-    // `t_<id>_scatter`. `__map_id` (the node id literal) correlates this map's
-    // items at the gather barrier so overlapping maps never mix. Each element
-    // is stamped with `<itemVar>` (namespace-on-token) + `__map_idx`.
     let id_lit = rhai_str_escape(&id);
     let item_var_key = serde_json::to_string(&item_var).unwrap_or_else(|_| "\"item\"".to_string());
-    ctx.transition(format!("t_{id}_scatter"), format!("{label} - Scatter"))
-        .auto_input("input", &p_input)
-        .auto_output("count", &p_count)
-        .auto_output_batch("items", &p_items)
-        .logic_rhai(format!(
-            "let __src = {items_ref}; \
-             let __arr = if type_of(__src) == \"array\" {{ __src }} else {{ [] }}; \
-             let __items = []; \
-             let __i = 0; \
-             while __i < __arr.len() {{ \
-                 __items.push(#{{ {item_var_key}: __arr[__i], \"__map_idx\": __i, \"__map_id\": \"{id_lit}\" }}); \
-                 __i += 1; \
-             }} \
-             #{{ count: #{{ expected: __arr.len(), \"__map_id\": \"{id_lit}\" }}, items: __items }}"
-        ))
-        .done();
 
-    // t_<id>_dispatch — move each scattered item into the body entry place.
-    // Pure passthrough; keeps `p_items` as the documented batch sink distinct
-    // from the body-attach handle. Each `p_items` token fires this once.
-    ctx.transition(
-        format!("t_{id}_dispatch"),
-        format!("{label} - Dispatch Item"),
-    )
-    .auto_input("item", &p_items)
-    .auto_output("body", &p_body_in)
-    .logic_rhai("#{ body: item }".to_string())
-    .done();
+    // ── Source: array (`itemsRef`) vs stream (`stream`/`control` edges) ─────
+    // The body-attach (`p_body_in`/`p_body_out`), collect, gather and parking
+    // are IDENTICAL between the two paths — only how elements ENTER `p_body_in`
+    // and how `p_count` is sized differ. `source_handles` carries the extra
+    // NodePorts input wiring for the streaming path (None for the array path,
+    // which uses `input_place`).
+    let (map_input_place, source_handles): (
+        PlaceHandle<DynamicToken>,
+        Option<(PlaceHandle<DynamicToken>, PlaceHandle<DynamicToken>)>,
+    ) = if stream_source {
+            // Streaming map: each producer chunk becomes one body token (exactly
+            // the array path's per-element body token, stamped from the chunk),
+            // and `t_close` sizes the gather on the runtime `stream_count`. No
+            // dense renumber — ephemeral per-chunk jobs have no IPC ReorderBuffer
+            // and `__map_idx` is only a sort key (gather counts on stream_count).
+            let p_stream_in: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_stream_in"), format!("{label} - Stream In"));
+            let p_control_in: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_control_in"),
+                format!("{label} - Control In"),
+            );
+            ctx.transition(format!("t_{id}_ingest"), format!("{label} - Ingest Chunk"))
+                .auto_input("chunk", &p_stream_in)
+                .auto_output("body", &p_body_in)
+                .logic_rhai(format!(
+                    "#{{ body: #{{ {item_var_key}: chunk.detail.value, \"__map_idx\": chunk.sequence, \"__map_id\": \"{id_lit}\" }} }}"
+                ))
+                .done();
+            ctx.transition(format!("t_{id}_close"), format!("{label} - Close Stream"))
+                .auto_input("ctrl", &p_control_in)
+                .auto_output("count", &p_count)
+                .logic_rhai(format!(
+                    "let __n = if \"stream_count\" in ctrl {{ ctrl.stream_count }} else {{ 0 }}; \
+                     #{{ count: #{{ expected: __n, \"__map_id\": \"{id_lit}\" }} }}"
+                ))
+                .done();
+            // Stream mode keys NodePorts on `p_stream_in` (fallback); real
+            // edges route by handle via `input_handles` below.
+            (p_stream_in.clone(), Some((p_stream_in, p_control_in)))
+        } else {
+            let p_input: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
+            let p_items: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_items"),
+                format!("{label} - Scattered Items"),
+            );
+
+            // t_<id>_scatter — resolve the source array from `itemsRef`, emit the
+            // gather coordinator (Single) + a BATCH of item tokens. `itemsRef` is
+            // embedded verbatim; the guard read-arc pass rewrites the
+            // `<slug>.<field>` borrow onto its producer's parked place and adds a
+            // read-arc to `t_<id>_scatter`. `__map_id` (the node id literal)
+            // correlates this map's items at the gather barrier so overlapping
+            // maps never mix. Each element is stamped with `<itemVar>`
+            // (namespace-on-token) + `__map_idx`.
+            ctx.transition(format!("t_{id}_scatter"), format!("{label} - Scatter"))
+                .auto_input("input", &p_input)
+                .auto_output("count", &p_count)
+                .auto_output_batch("items", &p_items)
+                .logic_rhai(format!(
+                    "let __src = {items_ref}; \
+                     let __arr = if type_of(__src) == \"array\" {{ __src }} else {{ [] }}; \
+                     let __items = []; \
+                     let __i = 0; \
+                     while __i < __arr.len() {{ \
+                         __items.push(#{{ {item_var_key}: __arr[__i], \"__map_idx\": __i, \"__map_id\": \"{id_lit}\" }}); \
+                         __i += 1; \
+                     }} \
+                     #{{ count: #{{ expected: __arr.len(), \"__map_id\": \"{id_lit}\" }}, items: __items }}"
+                ))
+                .done();
+
+            // t_<id>_dispatch — move each scattered item into the body entry
+            // place. Pure passthrough; keeps `p_items` as the documented batch
+            // sink distinct from the body-attach handle. Each `p_items` token
+            // fires this once.
+            ctx.transition(
+                format!("t_{id}_dispatch"),
+                format!("{label} - Dispatch Item"),
+            )
+            .auto_input("item", &p_items)
+            .auto_output("body", &p_body_in)
+            .logic_rhai("#{ body: item }".to_string())
+            .done();
+
+            // The array path keys NodePorts on `p_input` (no extra handles).
+            (p_input, None)
+        };
 
     // NOTE: no empty-body passthrough. The Loop lowering emits a `t_body_noop`
     // (`p_body_in → p_body_out`) so an EMPTY loop body still completes — but a
@@ -213,14 +266,11 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // wiring reads from `p_<id>_output`, so forward it through a tiny
     // passthrough (single-input merge collapses this in `wire.rs` when the
     // downstream edge is a pure pass-through).
-    ctx.transition(
-        format!("t_{id}_emit"),
-        format!("{label} - Emit Control"),
-    )
-    .auto_input("ctrl", &p_ctrl)
-    .auto_output("output", &p_output)
-    .logic_rhai("#{ output: ctrl }".to_string())
-    .done();
+    ctx.transition(format!("t_{id}_emit"), format!("{label} - Emit Control"))
+        .auto_input("ctrl", &p_ctrl)
+        .auto_output("output", &p_output)
+        .logic_rhai("#{ output: ctrl }".to_string())
+        .done();
 
     cx.fixups
         .groups
@@ -228,11 +278,18 @@ pub(crate) fn lower_map(cx: &mut LoweringCtx) -> Result<(), CompileError> {
 
     let mut input_handles = HashMap::new();
     input_handles.insert("body_out".to_string(), p_body_out);
+    // Streaming map: the producer's `stream` edge routes to `p_stream_in` and
+    // its control `out` → this map's `control` to `p_control_in`. Array maps use
+    // the implicit `in` handle (→ `input_place`).
+    if let Some((p_stream_in, p_control_in)) = source_handles {
+        input_handles.insert("stream".to_string(), p_stream_in);
+        input_handles.insert("control".to_string(), p_control_in);
+    }
 
     cx.ports.insert(
         id.clone(),
         NodePorts {
-            input_place: p_input,
+            input_place: map_input_place,
             // Two source-handle outputs: default (None) is the map's outer
             // `out` (post-gather control token); "body_in" is the inner handle
             // that feeds body children one token per scattered element.

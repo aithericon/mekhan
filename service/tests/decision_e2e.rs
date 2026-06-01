@@ -8,7 +8,7 @@
 //! and assert each instance completes with the End-specific `resultMapping`
 //! (high vs. low) — i.e. the engine took the expected branch.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). Run
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`) — the lifecycle listener writes back to the
 //! shared `workflow_instances` table.
 
@@ -35,7 +35,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -81,23 +81,21 @@ async fn spawn_lifecycle(nats: MekhanNats, db: sqlx::PgPool) -> TaskHandle {
 async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
-        if st == "completed" {
-            return;
-        }
-        if st == "failed" {
-            let result: Option<Value> = sqlx::query_scalar(
-                "SELECT result FROM workflow_instances WHERE id = $1",
-            )
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_one(db)
             .await
             .unwrap();
+        if st == "completed" {
+            return;
+        }
+        if st == "failed" {
+            let result: Option<Value> =
+                sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(db)
+                    .await
+                    .unwrap();
             panic!("instance {id} reached `failed` (result: {result:?})");
         }
         if start.elapsed() > timeout {
@@ -108,24 +106,18 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
 }
 
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
-    sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT result FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .unwrap()
-    .expect("result column was null — Decision branch produced no End envelope")
+    sqlx::query_scalar::<_, Option<Value>>("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+        .expect("result column was null — Decision branch produced no End envelope")
 }
 
 /// Publish a template + seed an instance with the given start token. Returns
 /// the live `app`, db, and the new instance id. The lifecycle listener must
 /// already be running on `db`.
-async fn publish_and_start(
-    app: &axum::Router,
-    graph: Value,
-    start_token: Value,
-) -> Uuid {
+async fn publish_and_start(app: &axum::Router, graph: Value, start_token: Value) -> Uuid {
     let resp = app
         .clone()
         .oneshot(
@@ -278,11 +270,13 @@ async fn decision_routes_to_branch_based_on_start_token() {
     wait_for_completion(&db, id_high, Duration::from_secs(30)).await;
     let result = fetch_result(&db, id_high).await;
     assert_eq!(
-        result["ok"], json!(true),
+        result["ok"],
+        json!(true),
         "expected success envelope on high branch, got {result}"
     );
     assert_eq!(
-        result["value"]["route"], json!("high"),
+        result["value"]["route"],
+        json!("high"),
         "amount=250 should have taken the high branch: {result}"
     );
     assert_eq!(result["value"]["amount"], json!(250));
@@ -292,7 +286,8 @@ async fn decision_routes_to_branch_based_on_start_token() {
     wait_for_completion(&db, id_low, Duration::from_secs(30)).await;
     let result = fetch_result(&db, id_low).await;
     assert_eq!(
-        result["value"]["route"], json!("low"),
+        result["value"]["route"],
+        json!("low"),
         "amount=5 should have taken the low (default) branch: {result}"
     );
     assert_eq!(result["value"]["amount"], json!(5));

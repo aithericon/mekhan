@@ -1,0 +1,18 @@
+{
+  "name": "LiveReduce: reducer receives chunks via IPC, uppercases + concatenates → 'THE QUICK BROWN FOX'",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {}
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    {
+      "path": "result.value.transcript",
+      "op": "eq",
+      "value": "THE QUICK BROWN FOX"
+    }
+  ]
+}

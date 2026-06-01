@@ -7,7 +7,7 @@ use crate::models::template::{
     WorkflowNodeData,
 };
 
-use super::*;// ─── Per-node shape derivation ──────────────────────────────────────────────
+use super::*; // ─── Per-node shape derivation ──────────────────────────────────────────────
 
 /// One reachable, still-live reference the editor variable picker should
 /// offer at a node — the producer-namespaced replacement for the flat TS
@@ -156,8 +156,7 @@ fn output_place_ids(node: &WorkflowNode) -> Vec<String> {
         // `p_{id}_main`; `p_{id}_data` is schema'd by the foundation pass.
         WorkflowNodeData::Start { .. } => vec![format!("p_{id}_main")],
         WorkflowNodeData::HumanTask { .. } => vec![format!("p_{id}_output")],
-        WorkflowNodeData::AutomatedStep { .. }
-        | WorkflowNodeData::SubWorkflow { .. } => {
+        WorkflowNodeData::AutomatedStep { .. } | WorkflowNodeData::SubWorkflow { .. } => {
             vec![format!("p_{id}_output"), format!("p_{id}_error")]
         }
         WorkflowNodeData::Decision {
@@ -449,12 +448,6 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
         WorkflowNodeData::AutomatedStep {
             deployment_model: DeploymentModel::Executor { pool: Some(_) },
             ..
-        } | WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled {
-                operation: crate::models::template::ScheduledOperation::Lease,
-                ..
-            },
-            ..
         }
     );
     if holds_lease {
@@ -480,7 +473,6 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
 pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
     let WorkflowNodeData::Loop {
         accumulators,
-        lease,
         ..
     } = &node.data
     else {
@@ -502,17 +494,6 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
             Provenance::new(node, "loop accumulator (declared producer field)"),
         );
     }
-    // L3: a loop-scoped lease parks the held grant under `lease` (incl.
-    // `alloc_id`/`gpu_uuid`/…) in the same parked envelope. Declared `Any` so
-    // body iterations + downstream blocks borrow `<slug>.lease.<field>` (e.g.
-    // `<slug>.lease.alloc_id`) through the standard read-arc pipeline.
-    if lease.is_some() {
-        ns.insert(
-            "lease",
-            TokenShape::Any,
-            Provenance::new(node, "loop-scoped held lease (`<slug>.lease.<field>`)"),
-        );
-    }
     o.insert(
         &node.slug(),
         ns,
@@ -521,36 +502,46 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
     o
 }
 
-/// Map: parks a gathered COLLECTION at `p_<id>_data`, addressed downstream as
-/// `<map_slug>[*].<field>`. The outbound shape adds `<slug>` as an
-/// `Array(<element>)` namespace alongside the passed-through inbound token,
-/// where `<element>` is the declared `output` port shape (or `Any` when no
-/// fields are declared). The `[*]` borrow surface reuses the Repeater Array
-/// machinery (see `is_parked_producer` + `parse_repeater_ref`).
-/// StreamConsumer: drains a producer's stream, reduces it, and parks the
-/// reduced value write-once at `p_<id>_data` as `#{ output: <reduced> }`. The
-/// outbound shape forwards the inbound control token and ADDS a `<slug>`
-/// namespace with a single `output` field so downstream nodes can borrow
-/// `<slug>.output` (e.g. an End mapping `transcript ← consumer.output`) — the
-/// same declared-producer-field mechanism Loop uses for `<slug>.iteration`. The
-/// reduced value is heterogeneous (Array→array, Concat→string, Sum→number,
-/// Custom→any), so `output` is declared `Any` (mirrors Loop accumulators).
-pub(crate) fn out_shape_stream_consumer(node: &WorkflowNode, _in_shape: &TokenShape) -> TokenShape {
-    let WorkflowNodeData::StreamConsumer { .. } = &node.data else {
-        unreachable!("out_shape_stream_consumer on non-StreamConsumer variant");
+/// LeaseScope: holds one allocation across its interior and parks the held
+/// grant write-once at `p_<id>_data` under a `lease` key. The held grant is
+/// opaque to the compiler (the allocator fills it at runtime), so the `lease`
+/// namespace is declared `Any` — body steps + downstream blocks borrow
+/// `<scope>.lease.<field>` (e.g. `<scope>.lease.executor_namespace`) through the
+/// standard read-arc pipeline (`resolve_ref`'s `resolves_under_opaque` path).
+/// Mirrors a leased `Loop`'s `<slug>.lease` namespace, minus the iteration
+/// counter / accumulators (a LeaseScope only ever parks the lease).
+pub(crate) fn out_shape_lease_scope(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::LeaseScope { .. } = &node.data else {
+        unreachable!("out_shape_lease_scope on non-LeaseScope variant");
     };
-    // FLAT { output: Any } (NOT slug-nested): a StreamConsumer is a parked
-    // producer (see `is_parked_producer`), so the borrow resolver namespaces this
-    // leaf EXTERNALLY by slug — `output` surfaces as `<slug>.output` automatically,
-    // exactly like `out_shape_automated_step`'s flat envelope fields resolve as
-    // `<slug>.<field>` and match the parked-envelope key (`#{ output: <reduced> }`,
-    // see `lower_stream_consumer`). Slug-nesting here would instead collapse the
-    // leaf into the generic `input` control-token scope (the `input.output` bug).
+    let mut o = in_shape.clone();
+    let mut ns = TokenShape::object();
+    ns.insert(
+        "lease",
+        TokenShape::Any,
+        Provenance::new(node, "lease-scope held lease (`<scope>.lease.<field>`)"),
+    );
+    o.insert(
+        &node.slug(),
+        ns,
+        Provenance::new(node, "lease-scope namespace (`<scope>.lease`)"),
+    );
+    o
+}
+
+
+/// StreamFold: a parked-producer outbound shape — the old StreamConsumer `Rhai`
+/// fold — a FLAT `{ output: Any }` envelope, namespaced externally by slug so
+/// downstream nodes borrow `<slug>.output` (e.g. `consumer.output`).
+pub(crate) fn out_shape_stream_fold(node: &WorkflowNode, _in_shape: &TokenShape) -> TokenShape {
+    let WorkflowNodeData::StreamFold { .. } = &node.data else {
+        unreachable!("out_shape_stream_fold on non-StreamFold variant");
+    };
     let mut o = TokenShape::object();
     o.insert(
         "output",
         TokenShape::Any,
-        Provenance::new(node, "stream-consumer reduced output (parked `<slug>.output`)"),
+        Provenance::new(node, "stream-fold reduced output (parked `<slug>.output`)"),
     );
     o
 }
@@ -695,9 +686,7 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
                 .filter(|c| !c.guard.trim().is_empty())
                 .map(|c| c.guard.as_str())
                 .collect(),
-            WorkflowNodeData::Loop { loop_condition, .. }
-                if !loop_condition.trim().is_empty() =>
-            {
+            WorkflowNodeData::Loop { loop_condition, .. } if !loop_condition.trim().is_empty() => {
                 vec![loop_condition.as_str()]
             }
             // Delay/Timeout duration expressions borrow upstream refs just
@@ -821,9 +810,10 @@ pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::SubWorkflow { .. }
                     | WorkflowNodeData::Start { .. }
                     | WorkflowNodeData::Loop { .. }
+                    | WorkflowNodeData::LeaseScope { .. }
                     | WorkflowNodeData::Join { .. }
                     | WorkflowNodeData::Map { .. }
-                    | WorkflowNodeData::StreamConsumer { .. }
+                    | WorkflowNodeData::StreamFold { .. }
             )
     })
 }
@@ -839,26 +829,6 @@ pub(crate) fn is_map_node(graph: &WorkflowGraph, id: &str) -> bool {
         .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Map { .. }))
 }
 
-/// True if `id` names a body-mode `StreamConsumer` (dispatch =
-/// `SequentialBody` or `ParallelBody`). These run a per-chunk body block — a
-/// child whose terminal edge enters the consumer's `body_out` handle — exactly
-/// like a Map body. The body terminal must therefore fork its FULL completed
-/// envelope (so `t_<id>_collect` can read `body.detail.outputs.<resultVar>` plus
-/// the `__map_idx`/`__map_id` correlation leaves), and the body-item namespace
-/// `<resultVar>.<field>` is token-resident inside the body. The default `Rhai`
-/// mode (and the inert `LiveReduce` mode) have no body and return `false`.
-pub(crate) fn is_stream_consumer_body_mode_node(graph: &WorkflowGraph, id: &str) -> bool {
-    use crate::models::template::StreamDispatch;
-    graph.nodes.iter().any(|n| {
-        n.id == id
-            && matches!(
-                &n.data,
-                WorkflowNodeData::StreamConsumer { dispatch, .. }
-                    if matches!(dispatch, StreamDispatch::SequentialBody | StreamDispatch::ParallelBody)
-            )
-    })
-}
-
 /// True if `id` names a `WorkflowNodeData::Loop` node. Loop counters live in a
 /// parked `p_<loop>_data` place keyed flat (`{iteration: N}`), so
 /// `<slug>.iteration` borrows resolve through the standard read-arc pipeline
@@ -870,7 +840,22 @@ pub(crate) fn is_loop_node(graph: &WorkflowGraph, id: &str) -> bool {
         .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::Loop { .. }))
 }
 
-pub(crate) fn topo_pos(order: &[petgraph::graph::NodeIndex], wg: &WorkflowDiGraph) -> BTreeMap<String, usize> {
+/// True if `id` names a `WorkflowNodeData::LeaseScope` node. A LeaseScope parks
+/// its held grant write-once at `p_<id>_data` under a `lease` key (an opaque
+/// `Any` namespace), so `<scope>.lease.<field>` borrows resolve through the same
+/// read-arc pipeline as a leased Loop's `<slug>.lease` (see `resolve_ref`'s
+/// Qualified branch, which accepts a LeaseScope producer alongside a Loop).
+pub(crate) fn is_lease_scope_node(graph: &WorkflowGraph, id: &str) -> bool {
+    graph
+        .nodes
+        .iter()
+        .any(|n| n.id == id && matches!(n.data, WorkflowNodeData::LeaseScope { .. }))
+}
+
+pub(crate) fn topo_pos(
+    order: &[petgraph::graph::NodeIndex],
+    wg: &WorkflowDiGraph,
+) -> BTreeMap<String, usize> {
     let mut pos = BTreeMap::new();
     for (i, ni) in order.iter().enumerate() {
         pos.insert(wg.dag.node_weight(*ni).unwrap().id.clone(), i);
@@ -1008,7 +993,10 @@ pub fn collect_scope_tree(shape: &TokenShape, prov_anchor: Option<&ScalarTy>) ->
         TokenShape::Object(map) => {
             let mut fields = BTreeMap::new();
             for (k, f) in map {
-                fields.insert(k.clone(), collect_scope_tree(&f.shape, f.prov.anchor.as_ref()));
+                fields.insert(
+                    k.clone(),
+                    collect_scope_tree(&f.shape, f.prov.anchor.as_ref()),
+                );
             }
             TyDescriptor::Object {
                 fields,

@@ -71,7 +71,10 @@ async fn ws_upgrade_succeeds() {
     let msg = ws.next().await.unwrap().unwrap();
     let data = msg.into_data();
     assert!(!data.is_empty(), "first message should not be empty");
-    assert_eq!(data[0], MSG_SYNC_STEP2, "first message type should be SyncStep2");
+    assert_eq!(
+        data[0], MSG_SYNC_STEP2,
+        "first message type should be SyncStep2"
+    );
 
     ws.close(None).await.ok();
 }
@@ -199,16 +202,18 @@ async fn two_clients_exchange_updates() {
     ws_a.send(Message::Binary(msg)).await.unwrap();
 
     // Client B should receive the broadcast
-    let broadcast = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        ws_b.next(),
-    )
-    .await;
+    let broadcast = tokio::time::timeout(std::time::Duration::from_secs(5), ws_b.next()).await;
 
-    assert!(broadcast.is_ok(), "client B should receive a message within timeout");
+    assert!(
+        broadcast.is_ok(),
+        "client B should receive a message within timeout"
+    );
     let broadcast_msg = broadcast.unwrap().unwrap().unwrap();
     let broadcast_data = broadcast_msg.into_data();
-    assert!(!broadcast_data.is_empty(), "broadcast message should not be empty");
+    assert!(
+        !broadcast_data.is_empty(),
+        "broadcast message should not be empty"
+    );
 
     ws_a.close(None).await.ok();
     ws_b.close(None).await.ok();
@@ -256,7 +261,10 @@ async fn update_persisted_to_db() {
             .await
             .unwrap();
 
-    assert!(count >= 2, "should have at least 2 update rows (init + WS update), got {count}");
+    assert!(
+        count >= 2,
+        "should have at least 2 update rows (init + WS update), got {count}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +291,10 @@ async fn disconnect_evicts_room() {
     let msg = ws2.next().await.unwrap().unwrap();
     let data = msg.into_data();
 
-    assert_eq!(data[0], MSG_SYNC_STEP2, "reconnect should receive SyncStep2");
+    assert_eq!(
+        data[0], MSG_SYNC_STEP2,
+        "reconnect should receive SyncStep2"
+    );
     assert!(data.len() > 1, "reconnect should have state from DB");
 
     ws2.close(None).await.ok();

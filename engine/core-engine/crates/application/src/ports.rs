@@ -181,7 +181,11 @@ mod tests {
         };
 
         apply_event_to_marking(&mut marking, &event);
-        assert_eq!(marking.token_count(&place_a), 1, "NetCreated should not change marking");
+        assert_eq!(
+            marking.token_count(&place_a),
+            1,
+            "NetCreated should not change marking"
+        );
     }
 
     #[test]
@@ -198,7 +202,11 @@ mod tests {
         };
 
         apply_event_to_marking(&mut marking, &event);
-        assert_eq!(marking.token_count(&place_a), 1, "NetCompleted should not change marking");
+        assert_eq!(
+            marking.token_count(&place_a),
+            1,
+            "NetCompleted should not change marking"
+        );
     }
 
     #[test]
@@ -215,7 +223,11 @@ mod tests {
         };
 
         apply_event_to_marking(&mut marking, &event);
-        assert_eq!(marking.token_count(&place_a), 1, "NetCancelled should not change marking");
+        assert_eq!(
+            marking.token_count(&place_a),
+            1,
+            "NetCancelled should not change marking"
+        );
     }
 
     #[test]

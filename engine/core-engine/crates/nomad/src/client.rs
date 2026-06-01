@@ -114,7 +114,10 @@ impl SchedulerClient for NomadClient {
         // so including token_data here would be redundant and hits Nomad's
         // hardcoded 16KB dispatch payload limit for large specs.
         // Only routing metadata (net_id, signal_key, etc.) goes in meta tags.
-        let dispatch_req = DispatchJobRequest { payload: None, meta };
+        let dispatch_req = DispatchJobRequest {
+            payload: None,
+            meta,
+        };
 
         let url = self.url(&format!("job/{}/dispatch", request.job_template_id));
 

@@ -23,9 +23,9 @@
 //! contract change — all surface as a publish-time compile error or a
 //! runtime-time assert failure here, never on the user's first try.
 //!
-//! Requires `just dev::up` (engine :13030, executor, rustfs S3 :9005,
-//! NATS :14333). Set
-//! `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:15439/mekhan`
+//! Requires `just dev::up` (engine :3030, executor, rustfs S3 :9005,
+//! NATS :4333). Set
+//! `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:5439/mekhan`
 //! and the `TEST_S3_*` env per `reference_executor_e2e_s3_bucket`.
 //!
 //! Parallel-safe: builds `MekhanNats` with a per-test
@@ -53,7 +53,7 @@ use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 fn engine_nats_url() -> String {
@@ -86,9 +86,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
         ("HUMAN_REQUESTS", "mekhan-human-task-ingest"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream
-                .delete_consumer(&format!("{prefix}_{base}"))
-                .await;
+            let _ = stream.delete_consumer(&format!("{prefix}_{base}")).await;
         }
     }
 }
@@ -130,7 +128,10 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    (TaskHandle(causality.abort_handle()), TaskHandle(lifecycle.abort_handle()))
+    (
+        TaskHandle(causality.abort_handle()),
+        TaskHandle(lifecycle.abort_handle()),
+    )
 }
 
 /// Locate `demos/invoice-processing` relative to this test crate. The
@@ -164,19 +165,14 @@ async fn wait_for_pending_task(db: &sqlx::PgPool, net_id: &str, timeout: Duratio
     }
 }
 
-async fn wait_for_terminal_status(
-    db: &sqlx::PgPool,
-    id: Uuid,
-    timeout: Duration,
-) -> String {
+async fn wait_for_terminal_status(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if matches!(st.as_str(), "completed" | "failed" | "cancelled") {
             return st;
         }
@@ -218,10 +214,7 @@ async fn invoice_processing_demo_low_value_path_completes() {
 
     // POST a fresh copy. The name is suffixed so successive runs can't
     // collide on the (unique) name constraint should one exist.
-    let unique_name = format!(
-        "Invoice Processing Demo E2E {}",
-        Uuid::new_v4().simple()
-    );
+    let unique_name = format!("Invoice Processing Demo E2E {}", Uuid::new_v4().simple());
     let resp = app
         .clone()
         .oneshot(

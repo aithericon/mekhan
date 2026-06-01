@@ -196,7 +196,7 @@ Used for interacting with external systems (Nomad, Kubernetes, Cloud APIs).
 ctx.transition("submit_job", "Submit Job")
     .auto_input("params", &job_params)
     .auto_output("result", &job_result)
-    .effect("nomad_submit"); // Calls registered SchedulerSubmitHandler
+    .effect("nomad_submit"); // Calls registered SchedulerSubmitHandler (one of two dispatch patterns; the other is the resource-lease adapter)
 ```
 
 ### Pattern: Resource Coordination via Claim Pattern

@@ -131,7 +131,11 @@ mod tests {
         sorted.sort();
         assert_eq!(
             sorted,
-            vec!["greeter".to_string(), "mail".to_string(), "recipient".to_string()]
+            vec![
+                "greeter".to_string(),
+                "mail".to_string(),
+                "recipient".to_string()
+            ]
         );
     }
 

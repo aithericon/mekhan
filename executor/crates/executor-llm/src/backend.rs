@@ -102,9 +102,7 @@ impl ExecutionBackend for LlmBackend {
         cancel: CancellationToken,
     ) -> Result<ExecutionResult, ExecutorError> {
         let config: LlmConfig = serde_json::from_value(run_context.backend_state.clone())
-            .map_err(|e| {
-                ExecutorError::Config(format!("failed to deserialize llm config: {e}"))
-            })?;
+            .map_err(|e| ExecutorError::Config(format!("failed to deserialize llm config: {e}")))?;
 
         let adapter = adapters::adapter_for(&config.provider);
         let start = tokio::time::Instant::now();
@@ -137,7 +135,11 @@ impl ExecutionBackend for LlmBackend {
         if let Some(ref es) = event_stream {
             es.log(
                 LogLevel::Info,
-                format!("dispatching LLM request to {}/{}", adapter.name(), config.model),
+                format!(
+                    "dispatching LLM request to {}/{}",
+                    adapter.name(),
+                    config.model
+                ),
                 HashMap::from([
                     ("provider".into(), adapter.name().to_string()),
                     ("model".into(), config.model.clone()),
@@ -166,7 +168,8 @@ impl ExecutionBackend for LlmBackend {
                 crate::config::Provider::Anthropic => "ANTHROPIC_API_KEY",
                 crate::config::Provider::Ollama => "OLLAMA_API_KEY",
             };
-            env.entry(env_key.to_string()).or_insert_with(|| api_key.clone());
+            env.entry(env_key.to_string())
+                .or_insert_with(|| api_key.clone());
         }
         if let Some(ref base_url) = config.base_url {
             let env_key = match config.provider {
@@ -174,7 +177,8 @@ impl ExecutionBackend for LlmBackend {
                 crate::config::Provider::Anthropic => "ANTHROPIC_BASE_URL",
                 crate::config::Provider::Ollama => "OLLAMA_API_BASE_URL",
             };
-            env.entry(env_key.to_string()).or_insert_with(|| base_url.clone());
+            env.entry(env_key.to_string())
+                .or_insert_with(|| base_url.clone());
         }
 
         // Three-way select: cancellation, timeout, or LLM execution
@@ -485,12 +489,7 @@ fn load_images(inputs: &[ImageInput]) -> Result<Vec<ImageData>, ExecutorError> {
 }
 
 fn guess_media_type(path: &str) -> String {
-    match path
-        .rsplit('.')
-        .next()
-        .map(|s| s.to_lowercase())
-        .as_deref()
-    {
+    match path.rsplit('.').next().map(|s| s.to_lowercase()).as_deref() {
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("gif") => "image/gif",

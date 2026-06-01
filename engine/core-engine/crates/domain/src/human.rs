@@ -101,41 +101,105 @@ impl TaskField {
             include_time: None,
         }
     }
-    pub fn text(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Text) }
-    pub fn textarea(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Textarea) }
-    pub fn number(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Number) }
-    pub fn select(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Select) }
-    pub fn checkbox(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Checkbox) }
-    pub fn file(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::File) }
-    pub fn signature(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Signature) }
-    pub fn radio(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Radio) }
-    pub fn date(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Date) }
-    pub fn range(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Range) }
-    pub fn rating(name: impl Into<String>, label: impl Into<String>) -> Self { Self::new(name, label, TaskFieldKind::Rating) }
-    pub fn required(mut self) -> Self { self.required = Some(true); self }
-    pub fn placeholder(mut self, p: impl Into<String>) -> Self { self.placeholder = Some(p.into()); self }
-    pub fn description(mut self, d: impl Into<String>) -> Self { self.description_mdsvex = Some(d.into()); self }
+    pub fn text(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Text)
+    }
+    pub fn textarea(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Textarea)
+    }
+    pub fn number(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Number)
+    }
+    pub fn select(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Select)
+    }
+    pub fn checkbox(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Checkbox)
+    }
+    pub fn file(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::File)
+    }
+    pub fn signature(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Signature)
+    }
+    pub fn radio(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Radio)
+    }
+    pub fn date(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Date)
+    }
+    pub fn range(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Range)
+    }
+    pub fn rating(name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(name, label, TaskFieldKind::Rating)
+    }
+    pub fn required(mut self) -> Self {
+        self.required = Some(true);
+        self
+    }
+    pub fn placeholder(mut self, p: impl Into<String>) -> Self {
+        self.placeholder = Some(p.into());
+        self
+    }
+    pub fn description(mut self, d: impl Into<String>) -> Self {
+        self.description_mdsvex = Some(d.into());
+        self
+    }
     /// Bare-string shorthand: each entry becomes `{value: s, label: s}`.
     /// For distinct `value` / `label` pairs, set `self.options` directly
     /// or use the deserializer's rich shape.
     pub fn options(mut self, opts: &[&str]) -> Self {
         self.options = Some(
             opts.iter()
-                .map(|s| SelectOption { value: (*s).to_string(), label: (*s).to_string() })
+                .map(|s| SelectOption {
+                    value: (*s).to_string(),
+                    label: (*s).to_string(),
+                })
                 .collect(),
         );
         self
     }
-    pub fn accept(mut self, a: impl Into<String>) -> Self { self.accept = Some(a.into()); self }
-    pub fn max_file_size(mut self, s: u64) -> Self { self.max_file_size = Some(s); self }
-    pub fn max_files(mut self, n: u32) -> Self { self.max_files = Some(n); self }
-    pub fn signature_mode(mut self, m: impl Into<String>) -> Self { self.signature_mode = Some(m.into()); self }
-    pub fn pen_color(mut self, c: impl Into<String>) -> Self { self.pen_color = Some(c.into()); self }
-    pub fn min(mut self, v: f64) -> Self { self.min = Some(v); self }
-    pub fn max(mut self, v: f64) -> Self { self.max = Some(v); self }
-    pub fn step(mut self, v: f64) -> Self { self.step = Some(v); self }
-    pub fn max_rating(mut self, n: u32) -> Self { self.max_rating = Some(n); self }
-    pub fn include_time(mut self) -> Self { self.include_time = Some(true); self }
+    pub fn accept(mut self, a: impl Into<String>) -> Self {
+        self.accept = Some(a.into());
+        self
+    }
+    pub fn max_file_size(mut self, s: u64) -> Self {
+        self.max_file_size = Some(s);
+        self
+    }
+    pub fn max_files(mut self, n: u32) -> Self {
+        self.max_files = Some(n);
+        self
+    }
+    pub fn signature_mode(mut self, m: impl Into<String>) -> Self {
+        self.signature_mode = Some(m.into());
+        self
+    }
+    pub fn pen_color(mut self, c: impl Into<String>) -> Self {
+        self.pen_color = Some(c.into());
+        self
+    }
+    pub fn min(mut self, v: f64) -> Self {
+        self.min = Some(v);
+        self
+    }
+    pub fn max(mut self, v: f64) -> Self {
+        self.max = Some(v);
+        self
+    }
+    pub fn step(mut self, v: f64) -> Self {
+        self.step = Some(v);
+        self
+    }
+    pub fn max_rating(mut self, n: u32) -> Self {
+        self.max_rating = Some(n);
+        self
+    }
+    pub fn include_time(mut self) -> Self {
+        self.include_time = Some(true);
+        self
+    }
 }
 
 /// Hand-rolled deserializer for `TaskField::options`. Accepts two authoring
@@ -248,9 +312,15 @@ pub struct DownloadItem {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaskBlock {
-    Input { field: TaskField },
-    Mdsvex { content: String },
-    Download { downloads: Vec<DownloadItem> },
+    Input {
+        field: TaskField,
+    },
+    Mdsvex {
+        content: String,
+    },
+    Download {
+        downloads: Vec<DownloadItem>,
+    },
     Table {
         headers: Vec<String>,
         rows: Vec<Vec<String>>,
@@ -339,8 +409,14 @@ pub struct ChartSeries {
 }
 
 impl TaskBlock {
-    pub fn mdsvex(content: impl Into<String>) -> Self { Self::Mdsvex { content: content.into() } }
-    pub fn input(field: TaskField) -> Self { Self::Input { field } }
+    pub fn mdsvex(content: impl Into<String>) -> Self {
+        Self::Mdsvex {
+            content: content.into(),
+        }
+    }
+    pub fn input(field: TaskField) -> Self {
+        Self::Input { field }
+    }
 }
 
 /// One step in a multi-step human task.
@@ -355,13 +431,35 @@ pub struct TaskStep {
 
 impl TaskStep {
     pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
-        Self { id: id.into(), title: title.into(), description_mdsvex: None, blocks: vec![] }
+        Self {
+            id: id.into(),
+            title: title.into(),
+            description_mdsvex: None,
+            blocks: vec![],
+        }
     }
-    pub fn description(mut self, d: impl Into<String>) -> Self { self.description_mdsvex = Some(d.into()); self }
-    pub fn block(mut self, block: TaskBlock) -> Self { self.blocks.push(block); self }
-    pub fn input(mut self, field: TaskField) -> Self { self.blocks.push(TaskBlock::Input { field }); self }
-    pub fn mdsvex(mut self, content: impl Into<String>) -> Self { self.blocks.push(TaskBlock::Mdsvex { content: content.into() }); self }
-    pub fn divider(mut self) -> Self { self.blocks.push(TaskBlock::Divider); self }
+    pub fn description(mut self, d: impl Into<String>) -> Self {
+        self.description_mdsvex = Some(d.into());
+        self
+    }
+    pub fn block(mut self, block: TaskBlock) -> Self {
+        self.blocks.push(block);
+        self
+    }
+    pub fn input(mut self, field: TaskField) -> Self {
+        self.blocks.push(TaskBlock::Input { field });
+        self
+    }
+    pub fn mdsvex(mut self, content: impl Into<String>) -> Self {
+        self.blocks.push(TaskBlock::Mdsvex {
+            content: content.into(),
+        });
+        self
+    }
+    pub fn divider(mut self) -> Self {
+        self.blocks.push(TaskBlock::Divider);
+        self
+    }
 }
 
 /// Request to create a new human task.
@@ -488,10 +586,13 @@ mod tests {
         let field: TaskField = serde_json::from_value(rich_field()).expect("parse rich");
         let opts = field.options.expect("options present");
         assert_eq!(opts.len(), 2);
-        assert_eq!(opts[0], SelectOption {
-            value: "approve".into(),
-            label: "Approve as-extracted".into(),
-        });
+        assert_eq!(
+            opts[0],
+            SelectOption {
+                value: "approve".into(),
+                label: "Approve as-extracted".into(),
+            }
+        );
         assert_eq!(opts[1].value, "edit");
         assert_eq!(opts[1].label, "Approve with edits");
     }
@@ -500,10 +601,19 @@ mod tests {
     fn bare_string_options_normalize_to_value_equals_label() {
         let field: TaskField = serde_json::from_value(bare_field()).expect("parse bare");
         let opts = field.options.expect("options present");
-        assert_eq!(opts, vec![
-            SelectOption { value: "approve".into(), label: "approve".into() },
-            SelectOption { value: "reject".into(), label: "reject".into() },
-        ]);
+        assert_eq!(
+            opts,
+            vec![
+                SelectOption {
+                    value: "approve".into(),
+                    label: "approve".into()
+                },
+                SelectOption {
+                    value: "reject".into(),
+                    label: "reject".into()
+                },
+            ]
+        );
     }
 
     #[test]
@@ -545,7 +655,10 @@ mod tests {
         let err = serde_json::from_value::<TaskField>(raw).expect_err("must fail");
         let msg = err.to_string();
         assert!(msg.contains("options[0]"), "error names index: {msg}");
-        assert!(msg.contains("value"), "error mentions missing `value` key: {msg}");
+        assert!(
+            msg.contains("value"),
+            "error mentions missing `value` key: {msg}"
+        );
     }
 
     #[test]
@@ -658,7 +771,10 @@ mod tests {
                 blocks,
                 ..
             } => {
-                assert!(item_label_ref.is_none(), "item_label_ref must be None when omitted");
+                assert!(
+                    item_label_ref.is_none(),
+                    "item_label_ref must be None when omitted"
+                );
                 assert!(blocks.is_empty());
             }
             other => panic!("expected TaskBlock::Repeater, got {other:?}"),
@@ -685,7 +801,10 @@ mod tests {
             (
                 json!({"type": "mdsvex", "content": "hello"}),
                 matches!(
-                    serde_json::from_value::<TaskBlock>(json!({"type": "mdsvex", "content": "hello"})).unwrap(),
+                    serde_json::from_value::<TaskBlock>(
+                        json!({"type": "mdsvex", "content": "hello"})
+                    )
+                    .unwrap(),
                     TaskBlock::Mdsvex { .. }
                 ),
             ),
@@ -702,7 +821,8 @@ mod tests {
                         "items_ref": "x.y[*]",
                         "output_slug": "z",
                         "blocks": []
-                    })).unwrap(),
+                    }))
+                    .unwrap(),
                     TaskBlock::Repeater { .. }
                 ),
             ),

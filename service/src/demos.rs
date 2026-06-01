@@ -265,12 +265,11 @@ fn read_tests_dir(tests_dir: &Path) -> Result<Vec<LoadedTest>, DemoLoadError> {
             path: path.clone(),
             source: e,
         })?;
-        let test: LoadedTest = serde_json::from_slice(&bytes).map_err(|e| {
-            DemoLoadError::TestSidecarParse {
+        let test: LoadedTest =
+            serde_json::from_slice(&bytes).map_err(|e| DemoLoadError::TestSidecarParse {
                 path: path.clone(),
                 source: e,
-            }
-        })?;
+            })?;
         out.push(test);
     }
     Ok(out)
@@ -287,10 +286,7 @@ const TASK_SIDECAR_FILENAME: &str = "task.json";
 /// a clear "you forgot the sidecar" failure mode). A sidecar for a node
 /// that isn't a HumanTask (or doesn't exist) is a hard error here so
 /// typos surface at load time, not at publish.
-fn merge_task_sidecars(
-    nodes_dir: &Path,
-    graph: &mut WorkflowGraph,
-) -> Result<(), DemoLoadError> {
+fn merge_task_sidecars(nodes_dir: &Path, graph: &mut WorkflowGraph) -> Result<(), DemoLoadError> {
     use crate::models::template::{TaskStepConfig, WorkflowNodeData};
 
     if !nodes_dir.is_dir() {
@@ -330,9 +326,7 @@ fn merge_task_sidecars(
         let node = graph.nodes.iter_mut().find(|n| n.id == node_id);
         match node {
             Some(n) => match &mut n.data {
-                WorkflowNodeData::HumanTask {
-                    steps: target, ..
-                } => {
+                WorkflowNodeData::HumanTask { steps: target, .. } => {
                     *target = steps;
                 }
                 _ => {
@@ -392,10 +386,12 @@ fn read_node_files(
                 path: entry.path(),
                 source: e,
             })?;
-            let ft = file_entry.file_type().map_err(|e| DemoLoadError::NodeFile {
-                path: file_entry.path(),
-                source: e,
-            })?;
+            let ft = file_entry
+                .file_type()
+                .map_err(|e| DemoLoadError::NodeFile {
+                    path: file_entry.path(),
+                    source: e,
+                })?;
             if !ft.is_file() {
                 continue;
             }
@@ -409,11 +405,12 @@ fn read_node_files(
             if filename == TASK_SIDECAR_FILENAME {
                 continue;
             }
-            let content =
-                std::fs::read_to_string(file_entry.path()).map_err(|e| DemoLoadError::NodeFile {
+            let content = std::fs::read_to_string(file_entry.path()).map_err(|e| {
+                DemoLoadError::NodeFile {
                     path: file_entry.path(),
                     source: e,
-                })?;
+                }
+            })?;
             node_files.insert(filename, content);
         }
 
@@ -484,7 +481,9 @@ pub enum DemoSeedError {
     InvalidOwnerTemplateId(String),
     #[error("visibility `{0}` is invalid — must be `workspace`, `public`, or `private`")]
     InvalidVisibility(String),
-    #[error("visibility `private` requires `ownerTemplateId` (the embedding parent demo's templateId)")]
+    #[error(
+        "visibility `private` requires `ownerTemplateId` (the embedding parent demo's templateId)"
+    )]
     PrivateMissingOwner,
     #[error("`ownerTemplateId` is only valid with `visibility: private`")]
     OwnerOnNonPrivate,
@@ -516,8 +515,7 @@ pub enum SeedOutcome {
 /// `00000000-0000-0000-0000-000000000aaa` — chosen to be obviously
 /// non-Zitadel (real user subjects are random v4 UUIDs) and to sort
 /// distinctly from the nil UUID some test fixtures use.
-const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid =
-    uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
+const DEMO_SEEDER_AUTHOR_ID: uuid::Uuid = uuid::uuid!("00000000-0000-0000-0000-000000000aaa");
 
 /// Workspace that seeded demos belong to: the **default** workspace
 /// (`Uuid::nil()`, slug `default`), NOT the system-owned `demos` workspace.
@@ -580,9 +578,7 @@ async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, Demo
 /// [`DEMO_SEEDER_AUTHOR_ID`], which never flows through the BFF
 /// `ensure_default_workspace_membership` path that real users do — cannot
 /// resolve any workspace resource a demo references. Idempotent.
-async fn ensure_seeder_workspace_membership(
-    state: &crate::AppState,
-) -> Result<(), sqlx::Error> {
+async fn ensure_seeder_workspace_membership(state: &crate::AppState) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
          VALUES ($1, $2, 'owner') \
@@ -752,10 +748,7 @@ pub async fn seed_all(
 
 /// Seed one demo directory. Idempotent — see [`seed_all`] for the
 /// existence check semantics.
-pub async fn seed_one(
-    state: &crate::AppState,
-    dir: &Path,
-) -> Result<SeedOutcome, DemoSeedError> {
+pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome, DemoSeedError> {
     let demo = load_demo(dir)?;
     let template_id: uuid::Uuid = demo
         .metadata
@@ -979,9 +972,7 @@ pub struct DemoResetReport {
 /// (template_tests has no FK to cascade, so it is deleted explicitly).
 ///
 /// Idempotent: a second call finds nothing and returns a zeroed report.
-pub async fn purge_seeded(
-    state: &crate::AppState,
-) -> Result<DemoResetReport, DemoSeedError> {
+pub async fn purge_seeded(state: &crate::AppState) -> Result<DemoResetReport, DemoSeedError> {
     let mut report = DemoResetReport::default();
 
     // Family base ids. Seeded v1 rows set `base_template_id = id`, so COALESCE
@@ -1122,7 +1113,9 @@ mod tests {
             .get("extract")
             .expect("extract node must have files");
         assert!(
-            extract.get("main.py").is_some_and(|s| s.contains("set_output")),
+            extract
+                .get("main.py")
+                .is_some_and(|s| s.contains("set_output")),
             "extract/main.py must be loaded with the SDK calls intact"
         );
 
@@ -1178,9 +1171,7 @@ mod tests {
     /// `MEKHAN__DEMOS__SEED=true` startup time on a developer's machine.
     #[test]
     fn invoice_processing_demo_compiles_with_repeater() {
-        use crate::compiler::{
-            compile_to_air, node_files_inline,
-        };
+        use crate::compiler::{compile_to_air, node_files_inline};
         use crate::models::template::{TaskBlockConfig, WorkflowNodeData};
 
         let demo = load_demo(&repo_root().join("demos/invoice-processing"))
@@ -1235,8 +1226,7 @@ mod tests {
     fn document_pipeline_v1_join_node_round_trips() {
         use crate::models::template::{JoinMode, WorkflowGraph, WorkflowNodeData};
 
-        let graph_path =
-            repo_root().join("demos/document-pipeline-v1/graph.json");
+        let graph_path = repo_root().join("demos/document-pipeline-v1/graph.json");
         let raw = std::fs::read_to_string(&graph_path).expect("graph.json must exist");
         let graph: WorkflowGraph =
             serde_json::from_str(&raw).expect("graph.json must deserialize as WorkflowGraph");
@@ -1322,6 +1312,259 @@ mod tests {
         assert!(
             !bw.contains("\"$ref\""),
             "$ref must have been inlined before parking: {bw}"
+        );
+    }
+
+    /// `document-pipeline-branching-v1` is the Phase-1 branching pipeline:
+    /// vision-LLM classify (on the raw file, BEFORE OCR) → `decision`
+    /// route-by-class → two branches (bloodwork: Surya OCR → OCR-text extract
+    /// → Python resolve-bbox; generic: single vision extract) → XOR-`join`
+    /// (mode=any) → Python validate → end. It exercises four things together
+    /// on a real bundled fixture: (1) a Surya `automated_step` (the
+    /// `{{ start.document_file }}` placeholder bypasses the node-file gate),
+    /// (2) the strict `$ref` ExtractionFields schema parked in the
+    /// side-channel, (3) two Python nodes whose `main.py` reads NON-predecessor
+    /// producers via bare `slug.field` accesses (`ocr.words`,
+    /// `extract_bloodwork.fields`, `extraction.fields`, `classify.document_type`)
+    /// — the read-arc synthesis the resolve-bbox cascade depends on, and (4)
+    /// the join converging the two branch tails. A break in any of those
+    /// layers fails here rather than silently at `MEKHAN__DEMOS__SEED=true`
+    /// startup. Mirrors `document_pipeline_v1_compiles_with_strict_schemas`.
+    #[test]
+    fn document_pipeline_branching_v1_compiles_with_strict_schemas() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+        use crate::models::template::{JoinMode, WorkflowNodeData};
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+            .expect("document-pipeline-branching-v1 must load");
+        assert_eq!(demo.metadata.name, "Document Pipeline — Branching v1");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000054"
+        );
+
+        // Stable trigger node id — tests + the dispatcher registry key off it,
+        // so drift must be a deliberate, type-checked break.
+        assert!(
+            demo.graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "trg_document_pipeline_branching_v1"),
+            "trigger node id must be trg_document_pipeline_branching_v1"
+        );
+
+        // The XOR-join the two branch tails fan into.
+        let merge = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "merge-extraction")
+            .expect("merge-extraction node must exist");
+        match &merge.data {
+            WorkflowNodeData::Join { mode, output, .. } => {
+                assert_eq!(*mode, JoinMode::Any, "branching demo uses XOR-join (mode=any)");
+                assert!(
+                    output.fields.iter().any(|f| f.name == "fields"),
+                    "merge-extraction.output must declare a `fields` field"
+                );
+            }
+            other => panic!("merge-extraction must be a Join, got {other:?}"),
+        }
+
+        // Both Python nodes must ship their main.py with the SDK calls intact.
+        for node_id in ["resolve-bbox", "validate"] {
+            let node_files = demo
+                .files
+                .get(node_id)
+                .unwrap_or_else(|| panic!("{node_id} node must have files"));
+            assert!(
+                node_files
+                    .get("main.py")
+                    .is_some_and(|s| s.contains("set_output")),
+                "{node_id}/main.py must be loaded with the SDK calls intact"
+            );
+        }
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("document-pipeline-branching-v1 must compile (no Rhai-complexity panic)");
+
+        // Both LLM extractors park their resolved config (the strict
+        // ExtractionFields `$ref` would blow Rhai's complexity limit inline).
+        for node_id in ["classify", "extract-bloodwork", "extract-generic"] {
+            assert!(
+                node_configs.contains_key(node_id),
+                "node config for `{node_id}` must be parked in side-channel; got keys: {:?}",
+                node_configs.keys().collect::<Vec<_>>()
+            );
+        }
+        // The heavy `$ref`-expanded schema must have made it into the
+        // side-channel with the `$ref` inlined first.
+        let bw = node_configs
+            .get("extract-bloodwork")
+            .expect("extract-bloodwork config")
+            .to_string();
+        assert!(
+            bw.contains("reference_range"),
+            "extract-bloodwork config must contain the expanded ExtractionFields schema: {bw}"
+        );
+        assert!(
+            !bw.contains("\"$ref\""),
+            "$ref must have been inlined before parking: {bw}"
+        );
+    }
+
+    /// Compile the `document-pipeline-branching-v1` demo to AIR and dump the
+    /// canonical JSON to a file so the clinic can ship the **compiler output**
+    /// (not a hand-authored net). Gated on `DUMP_BRANCHING_AIR=<path>`: when
+    /// the env var is set, the test writes the AIR to that path; otherwise it
+    /// is a no-op (keeps CI quiet). This is the single export step in the
+    /// graph.json → clinic-AIR regeneration flow — see the demo README.
+    ///
+    /// The clinic ships this AIR through `apply-workflows.sh` →
+    /// `POST /api/v1/templates/apply-air`, which stores the AIR **verbatim**
+    /// and uploads **nothing** to S3 (the endpoint is opaque to
+    /// mekhan-service). The compiler's default lowering parks every node's
+    /// static config in the S3 side-channel and emits a `config_ref`
+    /// `storage_path` — which would dangle in the clinic path because no
+    /// publish-time upload runs. So this dumper post-processes the AIR to
+    /// **inline** each parked config back into its prepare-transition Rhai
+    /// (`config_ref { storage_path }` → `config { … }`), using the
+    /// `node_configs` side-channel the compiler returns. Per
+    /// `executor-domain::ExecutionSpec`, an inline `config` with no
+    /// `config_ref` is a first-class, fully-supported path (the executor's
+    /// `FetchConfigHook` is skipped). The Python `main.py` source is already
+    /// inlined by the lowering (`inputs[].source.content`), so the resulting
+    /// AIR is fully self-contained — no S3 dependency.
+    #[test]
+    fn dump_document_pipeline_branching_v1_air() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+            ConfigStorage,
+        };
+        use crate::compiler::rhai_gen::json_to_rhai_literal;
+
+        let Some(out_path) = std::env::var_os("DUMP_BRANCHING_AIR") else {
+            return;
+        };
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+            .expect("document-pipeline-branching-v1 must load");
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts {
+            mut air,
+            node_configs,
+            ..
+        } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("document-pipeline-branching-v1 must compile to AIR");
+
+        // Inline every parked config back into its prepare-transition Rhai so
+        // the AIR carries no `config_ref` storage dependency. The compiler
+        // minted each `config_ref` as the literal
+        //   "config_ref": #{ "storage_path": "<key>" }
+        // inside the `<node>/prepare` transition's logic source. We replace
+        // that exact substring with
+        //   "config": <rhai literal of the parked config>
+        // and assert each replacement landed (so a lowering change to the
+        // emitted shape fails loudly here rather than shipping a dangling ref).
+        let transitions = air
+            .get_mut("transitions")
+            .and_then(|v| v.as_array_mut())
+            .expect("AIR must carry a transitions array");
+        let mut inlined = 0usize;
+        for (node_id, config) in &node_configs {
+            let storage_key =
+                ConfigStorage::ephemeral().key(node_id);
+            let needle = format!(
+                "\"config_ref\": #{{ \"storage_path\": \"{}\" }}",
+                storage_key.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            let replacement =
+                format!("\"config\": {}", json_to_rhai_literal(config));
+
+            let prepare_id = format!("{node_id}/prepare");
+            let t = transitions
+                .iter_mut()
+                .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(prepare_id.as_str()))
+                .unwrap_or_else(|| panic!("prepare transition `{prepare_id}` must exist"));
+            let src = t
+                .pointer_mut("/logic/source")
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| panic!("`{prepare_id}` must carry a Rhai logic.source"));
+            assert!(
+                src.contains(&needle),
+                "`{prepare_id}` Rhai must contain the config_ref literal to inline; \
+                 looked for: {needle}"
+            );
+            let rewritten = src.replace(&needle, &replacement);
+            *t.pointer_mut("/logic/source").unwrap() =
+                serde_json::Value::String(rewritten);
+            inlined += 1;
+        }
+        assert_eq!(
+            inlined,
+            node_configs.len(),
+            "every parked node config must be inlined"
+        );
+
+        // No dangling storage refs may remain in any executable transition
+        // logic (proves the inlining was total). Note: the `definitions` block
+        // carries the *schema* for the ExecutorSubmitInput token, whose shape
+        // legitimately includes an (unused, None) `config_ref` field plus
+        // doc-comments that name `config_ref` / the `node-config.json` key
+        // pattern — that is inert token-type metadata, not a live storage
+        // reference. The load-bearing signal that a real parked-config offload
+        // survived is a `node-config.json` storage_path inside a
+        // `transition.logic.source`, so we assert on that surface only.
+        for t in air
+            .get("transitions")
+            .and_then(|v| v.as_array())
+            .expect("transitions array")
+        {
+            if let Some(src) = t.pointer("/logic/source").and_then(|v| v.as_str()) {
+                let tid = t.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                assert!(
+                    !src.contains("node-config.json"),
+                    "transition `{tid}` logic.source still references a node-config.json \
+                     storage path — inlining missed it"
+                );
+                assert!(
+                    !src.contains("config_ref"),
+                    "transition `{tid}` logic.source still references config_ref — \
+                     inlining missed it"
+                );
+            }
+        }
+
+        let canonical = serde_json::to_string_pretty(&air).expect("AIR must serialize");
+        std::fs::write(&out_path, format!("{canonical}\n"))
+            .unwrap_or_else(|e| panic!("write AIR to {out_path:?}: {e}"));
+        eprintln!(
+            "wrote self-contained branching AIR ({} bytes, {} configs inlined) to {:?}",
+            canonical.len(),
+            inlined,
+            out_path
         );
     }
 
@@ -1618,8 +1861,8 @@ mod tests {
         };
 
         let root = repo_root().join("demos");
-        let demo = load_demo(&root.join("09-agent-tool-loop"))
-            .expect("09-agent-tool-loop must load");
+        let demo =
+            load_demo(&root.join("09-agent-tool-loop")).expect("09-agent-tool-loop must load");
         assert_eq!(demo.metadata.name, "09 · Agent + Tool Loop");
         assert_eq!(
             demo.metadata.template_id,
@@ -1752,7 +1995,9 @@ mod tests {
                 ..Default::default()
             },
         )
-        .unwrap_or_else(|e| panic!("email-welcome must compile to AIR with known resources: {e:?}"));
+        .unwrap_or_else(|e| {
+            panic!("email-welcome must compile to AIR with known resources: {e:?}")
+        });
 
         let send_prepare = air
             .get("transitions")
@@ -1852,6 +2097,87 @@ mod tests {
         );
     }
 
+    /// The Postgres-backend demo (`19-postgres-node`) must parse + compile
+    /// through the same AIR pipeline `/api/v1/templates/{id}/publish` uses.
+    /// Pins the resource-bound topology: a READ step and a WRITE step both
+    /// binding the `demo_pg` postgres resource (ConfigOverlay), each borrowing
+    /// a `{{ start.* }}` param. The compiler must stage the Start producer
+    /// envelope + the resource envelope and carry the `postgres` discriminator.
+    #[test]
+    fn postgres_node_demo_loads_and_compiles_with_resource() {
+        use crate::compiler::node_files_inline;
+        use crate::compiler::resource_refs::{KnownResource, KnownResources};
+        use crate::compiler::{compile_to_air_with_options, CompileArtifacts, CompileOptions};
+        use std::collections::HashMap;
+        use uuid::Uuid;
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("19-postgres-node")).expect("19-postgres-node must load");
+        assert_eq!(demo.metadata.name, "19 · Postgres Node");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000170"
+        );
+
+        let files = node_files_inline(&demo.files);
+        // Both steps declare `resource_alias: "demo_pg"`; pre-populate the
+        // workspace-resolved map the publish path would pass.
+        let mut known = KnownResources::new();
+        known.insert(
+            "demo_pg".to_string(),
+            KnownResource {
+                id: Uuid::new_v4(),
+                type_name: "postgres".to_string(),
+                latest_version: 1,
+                public_config: serde_json::Value::Null,
+            },
+        );
+        let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let CompileArtifacts { air, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &inline,
+                known_resources: &known,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("19-postgres-node must compile to AIR: {e:?}"));
+
+        let transitions = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions");
+        let prepare = transitions
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("read_widgets/prepare"))
+            .expect("read_widgets/prepare exists");
+        let logic_node = prepare.get("logic").expect("read_widgets/prepare logic");
+        let source = logic_node
+            .get("Rhai")
+            .and_then(|l| l.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| logic_node.get("source").and_then(|s| s.as_str()))
+            .expect("Rhai source");
+
+        // The `{{ start.min_id }}` param borrow stages the Start producer
+        // envelope; the bound `demo_pg` resource stages its envelope.
+        assert!(
+            source.contains("start.json"),
+            "compiled AIR must stage start.json for the postgres param borrow; source:\n{source}"
+        );
+        assert!(
+            source.contains("demo_pg.json"),
+            "compiled AIR must stage demo_pg.json (resource envelope); source:\n{source}"
+        );
+        assert!(
+            source.contains("\"postgres\""),
+            "compiled AIR must carry the postgres backend discriminator"
+        );
+    }
+
     /// The Bayesian-optimization loop demo (`12-bo-loop`) must parse through
     /// the same types `/api/v1/templates` accepts. Pins the BO topology: a
     /// Loop carrying four accumulators (observations / f_best / best_a /
@@ -1878,9 +2204,17 @@ mod tests {
                 .find(|n| n.id == id)
                 .and_then(|n| n.slug.clone())
         };
-        assert_eq!(slug_of("lp").as_deref(), Some("bo"), "loop slug must be `bo`");
+        assert_eq!(
+            slug_of("lp").as_deref(),
+            Some("bo"),
+            "loop slug must be `bo`"
+        );
         assert_eq!(slug_of("propose").as_deref(), Some("propose"));
-        assert_eq!(slug_of("mp").as_deref(), Some("evals"), "map slug must be `evals`");
+        assert_eq!(
+            slug_of("mp").as_deref(),
+            Some("evals"),
+            "map slug must be `evals`"
+        );
         assert_eq!(slug_of("branin").as_deref(), Some("branin"));
         assert_eq!(slug_of("gather").as_deref(), Some("gather"));
 
@@ -1904,7 +2238,11 @@ mod tests {
         }
         // The Map body lives inside the Loop body (Map-in-Loop): `mp`'s parent
         // is the loop, `branin`'s parent is the map.
-        assert_eq!(mp.parent_id.as_deref(), Some("lp"), "Map nests in the Loop body");
+        assert_eq!(
+            mp.parent_id.as_deref(),
+            Some("lp"),
+            "Map nests in the Loop body"
+        );
 
         // The Loop carries five accumulators, none reserved-named. `budget`
         // captures `input.max_iterations` at enter and is carried constant, so
@@ -1967,8 +2305,7 @@ mod tests {
     fn bo_loop_demo_compiles() {
         use crate::compiler::{compile_to_air_with_options, node_files_inline, CompileOptions};
 
-        let demo = load_demo(&repo_root().join("demos/12-bo-loop"))
-            .expect("12-bo-loop must load");
+        let demo = load_demo(&repo_root().join("demos/12-bo-loop")).expect("12-bo-loop must load");
 
         let files = node_files_inline(&demo.files);
         compile_to_air_with_options(
@@ -2049,8 +2386,10 @@ mod tests {
                     }
                     other => panic!("trigger source must be Catalog, got {other:?}"),
                 }
-                let targets: Vec<&str> =
-                    payload_mapping.iter().map(|m| m.target_field.as_str()).collect();
+                let targets: Vec<&str> = payload_mapping
+                    .iter()
+                    .map(|m| m.target_field.as_str())
+                    .collect();
                 assert_eq!(
                     targets,
                     ["observations", "last_z"],
@@ -2120,19 +2459,58 @@ mod tests {
     fn learning_path_demos_all_load() {
         let root = repo_root().join("demos");
         for (dir_name, expected_id, expected_name) in [
-            ("01-hello-world",      "00000000-0000-0000-0000-000000000011", "01 · Hello World"),
-            ("02-human-form",       "00000000-0000-0000-0000-000000000012", "02 · Human Form"),
-            ("03-decision-routing", "00000000-0000-0000-0000-000000000013", "03 · Decision Routing"),
-            ("04-loop-counter",     "00000000-0000-0000-0000-000000000014", "04 · Loop Counter"),
-            ("05-parallel-fanout",  "00000000-0000-0000-0000-000000000015", "05 · Parallel Fanout"),
-            ("06-subworkflow",      "00000000-0000-0000-0000-000000000016", "06 · SubWorkflow (Flow-in-Flow)"),
-            ("07-ocr-classify-extract", "00000000-0000-0000-0000-000000000017", "07 · OCR Classify & Extract"),
-            ("08-failure-handling",     "00000000-0000-0000-0000-000000000018", "08 · Failure Handling"),
-            ("10-delay-timeout",        "00000000-0000-0000-0000-000000000021", "10 · Delay & Timeout"),
+            (
+                "01-hello-world",
+                "00000000-0000-0000-0000-000000000011",
+                "01 · Hello World",
+            ),
+            (
+                "02-human-form",
+                "00000000-0000-0000-0000-000000000012",
+                "02 · Human Form",
+            ),
+            (
+                "03-decision-routing",
+                "00000000-0000-0000-0000-000000000013",
+                "03 · Decision Routing",
+            ),
+            (
+                "04-loop-counter",
+                "00000000-0000-0000-0000-000000000014",
+                "04 · Loop Counter",
+            ),
+            (
+                "05-parallel-fanout",
+                "00000000-0000-0000-0000-000000000015",
+                "05 · Parallel Fanout",
+            ),
+            (
+                "06-subworkflow",
+                "00000000-0000-0000-0000-000000000016",
+                "06 · SubWorkflow (Flow-in-Flow)",
+            ),
+            (
+                "07-ocr-classify-extract",
+                "00000000-0000-0000-0000-000000000017",
+                "07 · OCR Classify & Extract",
+            ),
+            (
+                "08-failure-handling",
+                "00000000-0000-0000-0000-000000000018",
+                "08 · Failure Handling",
+            ),
+            (
+                "10-delay-timeout",
+                "00000000-0000-0000-0000-000000000021",
+                "10 · Delay & Timeout",
+            ),
         ] {
             let demo = load_demo(&root.join(dir_name))
                 .unwrap_or_else(|e| panic!("{dir_name} must load: {e}"));
-            assert_eq!(demo.metadata.template_id, expected_id, "{dir_name} templateId");
+            assert_eq!(
+                demo.metadata.template_id, expected_id,
+                "{dir_name} templateId"
+            );
             assert_eq!(demo.metadata.name, expected_name, "{dir_name} name");
         }
     }
@@ -2164,10 +2542,7 @@ mod tests {
             let air = compile_to_air(
                 &demo.graph,
                 &demo.metadata.name,
-                demo.metadata
-                    .description
-                    .as_deref()
-                    .unwrap_or(""),
+                demo.metadata.description.as_deref().unwrap_or(""),
                 &files,
             )
             .unwrap_or_else(|e| panic!("{dir_name} must compile to AIR: {e:?}"));
@@ -2468,8 +2843,8 @@ mod tests {
             let spec_json = runtime
                 .dynamic_to_json(spec_dyn)
                 .expect("spec dynamic must convert to JSON");
-            let spec: ExecutionSpec = serde_json::from_value(spec_json.clone())
-                .unwrap_or_else(|e| {
+            let spec: ExecutionSpec =
+                serde_json::from_value(spec_json.clone()).unwrap_or_else(|e| {
                     panic!(
                         "ExecutionSpec must deserialize from the prepare \
                          transition's emitted spec (regression for the \
@@ -2661,8 +3036,7 @@ mod tests {
             // serde_json::Value with the `preserve_order` feature OFF (the
             // default) sorts BTreeMap-style on serialization — keys are
             // canonical. `to_string_pretty` is stable across runs.
-            let canonical = serde_json::to_string_pretty(&air)
-                .expect("AIR must serialize");
+            let canonical = serde_json::to_string_pretty(&air).expect("AIR must serialize");
             println!("=== {dir_name} ===");
             println!("{canonical}");
             println!("=== /{dir_name} ===");
@@ -2675,8 +3049,8 @@ mod tests {
     /// demos that carry no `tests/` directory.
     #[test]
     fn hello_world_demo_carries_bundled_test() {
-        let demo = load_demo(&repo_root().join("demos/01-hello-world"))
-            .expect("01-hello-world must load");
+        let demo =
+            load_demo(&repo_root().join("demos/01-hello-world")).expect("01-hello-world must load");
         assert_eq!(demo.tests.len(), 1, "expected the hello-alice fixture");
         let test = &demo.tests[0];
         assert_eq!(test.name, "hello-alice");

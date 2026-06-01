@@ -158,11 +158,7 @@ pub fn generate_py_io_files(
         if !is_py_identifier(name) {
             continue;
         }
-        output_decls.push_str(&format!(
-            "{name}: {ty}\n",
-            name = name,
-            ty = py_type(*kind)
-        ));
+        output_decls.push_str(&format!("{name}: {ty}\n", name = name, ty = py_type(*kind)));
     }
     let output_block = if output_decls.is_empty() {
         String::new()

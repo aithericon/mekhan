@@ -9,7 +9,7 @@
 //! transition consumes the scheduled token + signal, and the End sees the
 //! original payload.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). Run
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`).
 
 mod common;
@@ -33,7 +33,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -78,23 +78,21 @@ async fn spawn_lifecycle(nats: MekhanNats, db: sqlx::PgPool) -> TaskHandle {
 async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     let start = Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
-        if st == "completed" {
-            return;
-        }
-        if st == "failed" {
-            let result: Option<Value> = sqlx::query_scalar(
-                "SELECT result FROM workflow_instances WHERE id = $1",
-            )
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_one(db)
             .await
             .unwrap();
+        if st == "completed" {
+            return;
+        }
+        if st == "failed" {
+            let result: Option<Value> =
+                sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(db)
+                    .await
+                    .unwrap();
             panic!("instance {id} reached `failed` (result: {result:?})");
         }
         if start.elapsed() > timeout {
@@ -105,14 +103,12 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
 }
 
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
-    sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT result FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .unwrap()
-    .expect("result column was null — Delay produced no End envelope")
+    sqlx::query_scalar::<_, Option<Value>>("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+        .expect("result column was null — Delay produced no End envelope")
 }
 
 async fn publish_and_start(app: &axum::Router, graph: Value, start_token: Value) -> Uuid {
@@ -240,8 +236,12 @@ async fn delay_waits_then_forwards_payload() {
     let _lifecycle = spawn_lifecycle(nats, db.clone()).await;
 
     let started_at = Instant::now();
-    let id =
-        publish_and_start(&app, delay_graph("500"), json!({ "marker": "delay-payload" })).await;
+    let id = publish_and_start(
+        &app,
+        delay_graph("500"),
+        json!({ "marker": "delay-payload" }),
+    )
+    .await;
     wait_for_completion(&db, id, Duration::from_secs(20)).await;
     let elapsed = started_at.elapsed();
 

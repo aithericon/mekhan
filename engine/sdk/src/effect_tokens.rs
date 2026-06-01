@@ -189,8 +189,12 @@ impl SchedulerStatusSignal {
     /// Get the scheduler job ID (shared across backends).
     pub fn scheduler_job_id(&self) -> &str {
         match self {
-            Self::Nomad { scheduler_job_id, .. } => scheduler_job_id,
-            Self::Slurm { scheduler_job_id, .. } => scheduler_job_id,
+            Self::Nomad {
+                scheduler_job_id, ..
+            } => scheduler_job_id,
+            Self::Slurm {
+                scheduler_job_id, ..
+            } => scheduler_job_id,
         }
     }
 
@@ -399,9 +403,16 @@ pub struct ProcessStepDef {
 
 impl ProcessStepDef {
     pub fn new(key: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { key: key.into(), label: label.into(), human: false }
+        Self {
+            key: key.into(),
+            label: label.into(),
+            human: false,
+        }
     }
-    pub fn human(mut self) -> Self { self.human = true; self }
+    pub fn human(mut self) -> Self {
+        self.human = true;
+        self
+    }
 }
 
 /// Typed configuration for the `process_start` effect.
@@ -458,28 +469,38 @@ pub struct ProcessStartConfig {
 
 impl ProcessStartConfig {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), ..Default::default() }
+        Self {
+            name: name.into(),
+            ..Default::default()
+        }
     }
     pub fn description(mut self, desc: impl Into<String>) -> Self {
-        self.description = Some(desc.into()); self
+        self.description = Some(desc.into());
+        self
     }
     pub fn process_id_field(mut self, field: impl Into<String>) -> Self {
-        self.process_id_field = Some(field.into()); self
+        self.process_id_field = Some(field.into());
+        self
     }
     pub fn name_field(mut self, field: impl Into<String>) -> Self {
-        self.name_field = Some(field.into()); self
+        self.name_field = Some(field.into());
+        self
     }
     pub fn process_id_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.process_id_prefix = Some(prefix.into()); self
+        self.process_id_prefix = Some(prefix.into());
+        self
     }
     pub fn step(mut self, key: impl Into<String>, label: impl Into<String>) -> Self {
-        self.steps.push(ProcessStepDef::new(key, label)); self
+        self.steps.push(ProcessStepDef::new(key, label));
+        self
     }
     pub fn human_step(mut self, key: impl Into<String>, label: impl Into<String>) -> Self {
-        self.steps.push(ProcessStepDef::new(key, label).human()); self
+        self.steps.push(ProcessStepDef::new(key, label).human());
+        self
     }
     pub fn forward_ports(mut self, ports: Vec<String>) -> Self {
-        self.forward_ports = Some(ports); self
+        self.forward_ports = Some(ports);
+        self
     }
 }
 
@@ -537,9 +558,7 @@ pub struct ProcessMetadata {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProcessUpdateType {
     /// Process has started with full metadata.
-    Started {
-        metadata: ProcessMetadata,
-    },
+    Started { metadata: ProcessMetadata },
     /// A workflow step has begun.
     StepStarted {
         step: String,
@@ -573,15 +592,10 @@ pub enum ProcessUpdateType {
         summary: Option<String>,
     },
     /// Process failed.
-    Failed {
-        error: String,
-    },
+    Failed { error: String },
     // ── Executor-originated events ──────────────────────────────────────
     /// An execution has started for a step.
-    ExecutionStarted {
-        step: String,
-        execution_id: String,
-    },
+    ExecutionStarted { step: String, execution_id: String },
     /// Execution progress update.
     ExecutionProgress {
         step: String,

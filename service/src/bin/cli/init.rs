@@ -6,19 +6,22 @@ use crate::formats::WorkflowFormat;
 use crate::fs_ops;
 use crate::ws_client;
 
-pub async fn run(server: &str, name: &str, description: Option<&str>, format: WorkflowFormat) -> Result<()> {
+pub async fn run(
+    server: &str,
+    name: &str,
+    description: Option<&str>,
+    format: WorkflowFormat,
+) -> Result<()> {
     println!("Creating template '{}'...", name);
 
     // 1. POST /api/v1/templates to create the template
     let url = format!("{}/api/v1/templates", server);
     let client = reqwest::Client::new();
-    let resp = crate::http::auth(
-        client.post(&url).json(&json!({
-            "name": name,
-            "description": description.unwrap_or(""),
-            "author_id": "00000000-0000-0000-0000-000000000000"
-        })),
-    )
+    let resp = crate::http::auth(client.post(&url).json(&json!({
+        "name": name,
+        "description": description.unwrap_or(""),
+        "author_id": "00000000-0000-0000-0000-000000000000"
+    })))
     .send()
     .await
     .context("failed to connect to server")?;

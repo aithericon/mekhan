@@ -42,11 +42,8 @@ struct TestEnv {
 impl TestEnv {
     fn new() -> Self {
         let seq = ENV_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "fileops-integ-{}-{}",
-            std::process::id(),
-            seq,
-        ));
+        let root =
+            std::env::temp_dir().join(format!("fileops-integ-{}-{}", std::process::id(), seq,));
         std::fs::create_dir_all(&root).unwrap();
 
         let storage_json = serde_json::json!({
@@ -67,11 +64,8 @@ impl TestEnv {
 
     fn with_prefix(prefix: &str) -> Self {
         let seq = ENV_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "fileops-integ-pfx-{}-{}",
-            std::process::id(),
-            seq,
-        ));
+        let root =
+            std::env::temp_dir().join(format!("fileops-integ-pfx-{}-{}", std::process::id(), seq,));
         std::fs::create_dir_all(&root).unwrap();
 
         let storage_json = serde_json::json!({
@@ -120,6 +114,7 @@ fn make_job(spec: &ExecutionSpec) -> ExecutionJob {
         timeout: None,
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     }
 }
@@ -302,10 +297,7 @@ async fn backend_delete_ignore_missing() {
 async fn backend_copy_success() {
     let env = TestEnv::new();
     let backend = FileOpsBackend::new();
-    env.operator
-        .write("src/file.csv", "content")
-        .await
-        .unwrap();
+    env.operator.write("src/file.csv", "content").await.unwrap();
 
     let spec = make_spec(serde_json::json!({
         "operation": "copy",
@@ -371,10 +363,7 @@ async fn backend_copy_cross_backend() {
 async fn backend_move_success() {
     let env = TestEnv::new();
     let backend = FileOpsBackend::new();
-    env.operator
-        .write("old/file.csv", "data")
-        .await
-        .unwrap();
+    env.operator.write("old/file.csv", "data").await.unwrap();
 
     let spec = make_spec(serde_json::json!({
         "operation": "move",
@@ -508,10 +497,7 @@ async fn backend_probe_csv() {
     let env = TestEnv::new();
     let backend = FileOpsBackend::new();
     let csv = "name,age\nAlice,30\nBob,25\n";
-    env.operator
-        .write("data/people.csv", csv)
-        .await
-        .unwrap();
+    env.operator.write("data/people.csv", csv).await.unwrap();
 
     let spec = make_spec(serde_json::json!({
         "operation": "probe",
@@ -649,10 +635,7 @@ async fn prepare_rejects_invalid_config() {
     assert!(result.is_err(), "prepare should reject invalid config");
 
     let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("config"),
-        "error should mention config: {err}"
-    );
+    assert!(err.contains("config"), "error should mention config: {err}");
 }
 
 #[tokio::test]
@@ -723,10 +706,7 @@ async fn prepare_populates_backend_state() {
 async fn backend_cancellation() {
     let env = TestEnv::new();
     let backend = FileOpsBackend::new();
-    env.operator
-        .write("data/file.csv", "hello")
-        .await
-        .unwrap();
+    env.operator.write("data/file.csv", "hello").await.unwrap();
 
     let spec = make_spec(serde_json::json!({
         "operation": "stat",
@@ -761,10 +741,7 @@ async fn backend_cancellation() {
 async fn backend_reports_running_status() {
     let env = TestEnv::new();
     let backend = FileOpsBackend::new();
-    env.operator
-        .write("data/file.csv", "hello")
-        .await
-        .unwrap();
+    env.operator.write("data/file.csv", "hello").await.unwrap();
 
     let spec = make_spec(serde_json::json!({
         "operation": "stat",
@@ -1101,11 +1078,7 @@ async fn backend_copy_transcode_gzip_to_zstd() {
     );
 
     // Verify output is zstd-compressed (magic bytes: 0x28 0xb5 0x2f 0xfd)
-    let zstd_data = env
-        .operator
-        .read("warehouse/cities.csv.zst")
-        .await
-        .unwrap();
+    let zstd_data = env.operator.read("warehouse/cities.csv.zst").await.unwrap();
     let zstd_bytes = zstd_data.to_vec();
     assert_eq!(zstd_bytes[0], 0x28);
     assert_eq!(zstd_bytes[1], 0xb5);
@@ -1285,10 +1258,8 @@ async fn backend_annotate_with_input_annotations() {
         .unwrap();
 
     // Simulate an Inline input containing probe metadata
-    let inputs_dir = std::env::temp_dir().join(format!(
-        "fileops-inputs-annotate-{}",
-        std::process::id()
-    ));
+    let inputs_dir =
+        std::env::temp_dir().join(format!("fileops-inputs-annotate-{}", std::process::id()));
     std::fs::create_dir_all(&inputs_dir).unwrap();
 
     let probe_metadata = serde_json::json!({
@@ -1309,12 +1280,7 @@ async fn backend_annotate_with_input_annotations() {
         "storage": env.storage()
     }));
     let job = make_job(&spec);
-    let ctx = make_run_context_with_inputs(
-        spec,
-        DEFAULT_TIMEOUT,
-        "test-annotate-input",
-        staged,
-    );
+    let ctx = make_run_context_with_inputs(spec, DEFAULT_TIMEOUT, "test-annotate-input", staged);
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
@@ -1362,10 +1328,8 @@ async fn backend_copy_with_input_path() {
         .unwrap();
 
     // Simulate an Inline input containing the source path string
-    let inputs_dir = std::env::temp_dir().join(format!(
-        "fileops-inputs-copy-{}",
-        std::process::id()
-    ));
+    let inputs_dir =
+        std::env::temp_dir().join(format!("fileops-inputs-copy-{}", std::process::id()));
     std::fs::create_dir_all(&inputs_dir).unwrap();
 
     let (name, path) = stage_inline_input(
@@ -1383,12 +1347,7 @@ async fn backend_copy_with_input_path() {
         "source_storage": env.storage()
     }));
     let job = make_job(&spec);
-    let ctx = make_run_context_with_inputs(
-        spec,
-        DEFAULT_TIMEOUT,
-        "test-copy-input",
-        staged,
-    );
+    let ctx = make_run_context_with_inputs(spec, DEFAULT_TIMEOUT, "test-copy-input", staged);
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
@@ -1423,17 +1382,11 @@ async fn backend_input_resolution_with_string_interpolation() {
         .unwrap();
 
     // Simulate inputs for path components
-    let inputs_dir = std::env::temp_dir().join(format!(
-        "fileops-inputs-interp-{}",
-        std::process::id()
-    ));
+    let inputs_dir =
+        std::env::temp_dir().join(format!("fileops-inputs-interp-{}", std::process::id()));
     std::fs::create_dir_all(&inputs_dir).unwrap();
 
-    let (name, path) = stage_inline_input(
-        &inputs_dir,
-        "subdir",
-        &serde_json::json!("2026/feb"),
-    );
+    let (name, path) = stage_inline_input(&inputs_dir, "subdir", &serde_json::json!("2026/feb"));
     let staged = HashMap::from([(name, path)]);
 
     // Config uses string interpolation: data/{{input:subdir}}/report.csv
@@ -1443,12 +1396,7 @@ async fn backend_input_resolution_with_string_interpolation() {
         "storage": env.storage()
     }));
     let job = make_job(&spec);
-    let ctx = make_run_context_with_inputs(
-        spec,
-        DEFAULT_TIMEOUT,
-        "test-stat-interp",
-        staged,
-    );
+    let ctx = make_run_context_with_inputs(spec, DEFAULT_TIMEOUT, "test-stat-interp", staged);
     let ctx = backend.prepare(&job, ctx).await.unwrap();
 
     let result = backend
@@ -1474,16 +1422,11 @@ async fn backend_prepare_fails_on_missing_input() {
 
     // Need at least one staged input so the empty-check fast path is
     // skipped, but reference a different name that doesn't exist.
-    let inputs_dir = std::env::temp_dir().join(format!(
-        "fileops-inputs-miss-{}",
-        std::process::id()
-    ));
+    let inputs_dir =
+        std::env::temp_dir().join(format!("fileops-inputs-miss-{}", std::process::id()));
     std::fs::create_dir_all(&inputs_dir).unwrap();
-    let (name, path) = stage_inline_input(
-        &inputs_dir,
-        "other_input",
-        &serde_json::json!("irrelevant"),
-    );
+    let (name, path) =
+        stage_inline_input(&inputs_dir, "other_input", &serde_json::json!("irrelevant"));
     let staged = HashMap::from([(name, path)]);
 
     let spec = make_spec(serde_json::json!({
@@ -1492,12 +1435,7 @@ async fn backend_prepare_fails_on_missing_input() {
         "storage": env.storage()
     }));
     let job = make_job(&spec);
-    let ctx = make_run_context_with_inputs(
-        spec,
-        DEFAULT_TIMEOUT,
-        "test-missing-input",
-        staged,
-    );
+    let ctx = make_run_context_with_inputs(spec, DEFAULT_TIMEOUT, "test-missing-input", staged);
 
     let result = backend.prepare(&job, ctx).await;
     assert!(result.is_err(), "prepare should fail on missing input");

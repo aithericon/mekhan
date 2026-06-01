@@ -1195,7 +1195,10 @@ impl TestScenario {
                 );
             }
             None => {
-                ctx.seed(&input, vec![aithericon_sdk::DynamicToken::from(serde_json::json!({}))]);
+                ctx.seed(
+                    &input,
+                    vec![aithericon_sdk::DynamicToken::from(serde_json::json!({}))],
+                );
             }
         }
 
@@ -1224,7 +1227,10 @@ impl TestScenario {
             .auto_input("inp", &input)
             .auto_output("out", &out)
             .logic("#{ out: undefined_variable }");
-        ctx.seed(&input, vec![aithericon_sdk::DynamicToken::from(serde_json::json!({}))]);
+        ctx.seed(
+            &input,
+            vec![aithericon_sdk::DynamicToken::from(serde_json::json!({}))],
+        );
         Self::from_sdk(ctx.build())
     }
 
@@ -1574,7 +1580,11 @@ mod tests {
 
         // Verify Input place is internal
         let input_id = &scenario.places["Input"];
-        let input_place = scenario.net.places.get(input_id).expect("Input place exists");
+        let input_place = scenario
+            .net
+            .places
+            .get(input_id)
+            .expect("Input place exists");
         assert!(
             matches!(input_place.kind, petri_domain::PlaceKind::Internal),
             "Input place should be Internal"

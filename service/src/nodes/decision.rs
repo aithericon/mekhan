@@ -27,8 +27,8 @@ pub(crate) static DECISION_DECL: NodeDecl = NodeDecl {
     // Decision's own id.
     parks_data_envelope: false,
     lower: Some(crate::compiler::lower::decision::lower_decision),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     validate: Some(crate::compiler::validate::validate_decision),
@@ -72,11 +72,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     out
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::Decision {
         conditions,
@@ -86,8 +82,7 @@ fn yjs_encode(
     else {
         unreachable!("decision::yjs_encode on non-Decision variant");
     };
-    let conds_val =
-        serde_json::to_value(conditions).unwrap_or(serde_json::Value::Array(vec![]));
+    let conds_val = serde_json::to_value(conditions).unwrap_or(serde_json::Value::Array(vec![]));
     config.insert(txn, "conditions", json_value_to_any(&conds_val));
     if let Some(db) = default_branch {
         config.insert(txn, "defaultBranch", db.clone());

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use aithericon_executor_process::ProcessConfig;
 use aithericon_executor_domain::{ExecutionJob, ExecutionStatus, JobPriority};
+use aithericon_executor_process::ProcessConfig;
 use aithericon_executor_test_harness::context::ExecutorTestContext;
 use aithericon_executor_test_harness::helpers::*;
 use uuid::Uuid;
@@ -98,6 +98,7 @@ async fn test_spec_env_vars() {
         timeout: None,
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     };
 

@@ -20,8 +20,8 @@ use tokio::sync::RwLock;
 
 use petri_domain::ExternalSignal;
 use petri_scheduler_bridge::{
-    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, CheckpointStore,
-    RoutingMeta, SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
+    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, CheckpointStore, RoutingMeta,
+    SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
 };
 
 use crate::config::SlurmConfig;
@@ -611,7 +611,8 @@ mod tests {
 
     #[test]
     fn test_extract_routing_valid() {
-        let comment = r#"{"petri_net_id":"test-net","petri_place":"inbox","petri_signal_key":"job:0"}"#;
+        let comment =
+            r#"{"petri_net_id":"test-net","petri_place":"inbox","petri_signal_key":"job:0"}"#;
         let routing = extract_routing(comment).unwrap();
         assert_eq!(routing.net_id, "test-net");
         assert_eq!(routing.fallback_place, "inbox");
@@ -670,7 +671,11 @@ mod tests {
     /// Mirrors the eviction predicate in handle_disappeared_jobs. Kept here as a
     /// pure function so we can unit-test the keep/evict decision without
     /// constructing a full SlurmWatcher (which needs NATS).
-    fn should_keep(active: bool, terminal_at: Option<chrono::DateTime<Utc>>, cutoff: chrono::DateTime<Utc>) -> bool {
+    fn should_keep(
+        active: bool,
+        terminal_at: Option<chrono::DateTime<Utc>>,
+        cutoff: chrono::DateTime<Utc>,
+    ) -> bool {
         if active {
             return true;
         }

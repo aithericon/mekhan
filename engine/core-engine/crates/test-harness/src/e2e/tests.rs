@@ -1397,10 +1397,7 @@ async fn test_terminal_scenario_completes_unit_token() {
     let terminal = result
         .terminal_reached
         .expect("terminal_reached should be Some");
-    assert_eq!(
-        terminal.place_id,
-        scenario.places["Done"].to_string()
-    );
+    assert_eq!(terminal.place_id, scenario.places["Done"].to_string());
     // Unit token has no exit_code field
     assert_eq!(terminal.exit_code, None);
 }
@@ -1551,10 +1548,7 @@ async fn test_script_error_emits_error_occurred_event() {
     let a_id = scenario.places["A"].clone();
 
     let test_ctx: TestContext<MockEventRepository, MockTopologyRepository, MockStateProjection> =
-        TestContext::builder()
-            .with_scenario(scenario)
-            .build()
-            .await;
+        TestContext::builder().with_scenario(scenario).build().await;
 
     // Should succeed (not Err) — a permanent failure stops the pass cleanly
     // with the failure recorded, instead of propagating an Err the driver
@@ -1623,10 +1617,7 @@ async fn test_script_error_preserves_prior_transitions() {
     let b_id = scenario.places["B"].clone();
 
     let test_ctx: TestContext<MockEventRepository, MockTopologyRepository, MockStateProjection> =
-        TestContext::builder()
-            .with_scenario(scenario)
-            .build()
-            .await;
+        TestContext::builder().with_scenario(scenario).build().await;
 
     let result = test_ctx
         .service
@@ -1635,7 +1626,10 @@ async fn test_script_error_preserves_prior_transitions() {
         .expect("evaluate should not return Err");
 
     // T1 should have fired (1 step); T2's permanent failure does not count.
-    assert_eq!(result.steps_executed, 1, "Good transition should have fired");
+    assert_eq!(
+        result.steps_executed, 1,
+        "Good transition should have fired"
+    );
 
     // T1's success persists, but T2's permanent failure consumes B's token so
     // the broken transition cannot be re-selected (loop-breaking behavior).

@@ -144,6 +144,13 @@ ctx.transition("submit", "Submit to Scheduler")
 
 See: `sdk/examples/scheduler_net.rs`
 
+> **Note:** For mekhan-compiled workflows, the **lease adapter pattern**
+> (`resource_pool_net.rs`) is the preferred dispatch path — it holds an
+> allocation through the replay-safe `resource_lease` effect. The
+> `SchedulerSubmit` contract above remains valid SDK infrastructure and is
+> used directly by the standalone `scheduler_net.rs` example and the
+> multi-layer bridged demos.
+
 ### Human Task
 
 Assigns tasks to humans via the Human UI.

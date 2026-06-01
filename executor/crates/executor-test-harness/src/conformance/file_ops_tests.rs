@@ -198,7 +198,8 @@ pub async fn test_copy_existing<K: FileOpsTestKit>(kit: &K) {
     let src = kit.verify_file_content("data/hello.csv").await;
     let dst = kit.verify_file_content("copy/hello.csv").await;
     assert_eq!(
-        src, dst,
+        src,
+        dst,
         "[{}] copied file content should match source",
         kit.backend_name()
     );
@@ -311,8 +312,8 @@ pub async fn test_annotate<K: FileOpsTestKit>(kit: &K) {
 
     // Verify sidecar content
     if let Some(content) = kit.verify_file_content("data/hello.csv.meta.json").await {
-        let parsed: serde_json::Value = serde_json::from_slice(&content)
-            .expect("sidecar should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&content).expect("sidecar should be valid JSON");
         assert_eq!(
             parsed["source"],
             serde_json::json!("test"),

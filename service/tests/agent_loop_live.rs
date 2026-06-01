@@ -29,8 +29,8 @@
 //!     hung instance, caught by the test timeout.
 //!
 //! Requires:
-//!   - `just dev::up` (engine :13030, executor with `llm`+`python` features,
-//!     NATS :14333, postgres :15439)
+//!   - `just dev::up` (engine :3030, executor with `llm`+`python` features,
+//!     NATS :4333, postgres :5439)
 //!   - `just dev::up-ollama` (Ollama at :11434; the demo references
 //!     `qwen3.5:9b`, which is `up-ollama`'s default. Any tool-capable
 //!     model — qwen2.5+/qwen3+/llama3.1+ — works; override by editing
@@ -60,7 +60,7 @@ use mekhan_service::nats::MekhanNats;
 use mekhan_service::projections::step_executions::start_step_executions_ingest;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 fn engine_nats_url() -> String {
@@ -104,9 +104,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
         ("PETRI_GLOBAL", "mekhan-step-executions"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream
-                .delete_consumer(&format!("{prefix}_{base}"))
-                .await;
+            let _ = stream.delete_consumer(&format!("{prefix}_{base}")).await;
         }
     }
 }
@@ -193,19 +191,14 @@ fn feedback_child_dir() -> std::path::PathBuf {
 
 /// Poll the instance's persisted status until terminal. Panics on
 /// timeout so a hung loop is caught loudly.
-async fn wait_for_terminal_status(
-    db: &sqlx::PgPool,
-    id: Uuid,
-    timeout: Duration,
-) -> String {
+async fn wait_for_terminal_status(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if matches!(st.as_str(), "completed" | "failed" | "cancelled") {
             return st;
         }
@@ -360,13 +353,13 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
     // Python body lives in the child template
     // (demos/08a-order-lookup/nodes/lookup_order/main.py) and returns the
     // literal strings the LLM has access to via the sub-workflow result.
-    let result: Value =
-        sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
-            .bind(instance_id)
-            .fetch_one(&db)
-            .await
-            .expect("instance result must be present after `completed`");
-    eprintln!("\n--- agent loop final result ---\n{}\n---\n",
+    let result: Value = sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(instance_id)
+        .fetch_one(&db)
+        .await
+        .expect("instance result must be present after `completed`");
+    eprintln!(
+        "\n--- agent loop final result ---\n{}\n---\n",
         serde_json::to_string_pretty(&result).unwrap_or_default()
     );
 
@@ -412,10 +405,7 @@ async fn agent_tool_loop_demo_completes_with_tool_call() {
 
     // Reply must be non-empty text. A blank reply means the agent exited
     // through an unintended path (e.g. an error envelope on the success port).
-    let reply = payload
-        .get("reply")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let reply = payload.get("reply").and_then(|v| v.as_str()).unwrap_or("");
     assert!(
         !reply.trim().is_empty(),
         "agent reply was empty — final response did not propagate through \
@@ -541,9 +531,7 @@ fn collect_field_names(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::Object(map) => {
             if let Some(Value::String(name)) = map.get("name") {
-                if (map.contains_key("kind") || map.contains_key("label"))
-                    && !out.contains(name)
-                {
+                if (map.contains_key("kind") || map.contains_key("label")) && !out.contains(name) {
                     out.push(name.clone());
                 }
             }
@@ -664,12 +652,11 @@ async fn agent_human_form_tool_feeds_collected_answer_into_lookup() {
          id into the lookup tool (the parked-data collect bug)"
     );
 
-    let result: Value =
-        sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
-            .bind(instance_id)
-            .fetch_one(&db)
-            .await
-            .expect("instance result must be present after `completed`");
+    let result: Value = sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(instance_id)
+        .fetch_one(&db)
+        .await
+        .expect("instance result must be present after `completed`");
     eprintln!(
         "\n--- human-form chain final result ---\n{}\n---\n",
         serde_json::to_string_pretty(&result).unwrap_or_default()
@@ -716,7 +703,11 @@ async fn create_and_publish<G: serde::Serialize, F: serde::Serialize>(
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED, "create template '{name}'");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "create template '{name}'"
+    );
     let template_id: Uuid = body_json(resp.into_body()).await["id"]
         .as_str()
         .unwrap()
@@ -1008,12 +999,11 @@ async fn agent_subworkflow_tool_loop_completes() {
          child sub-workflow published cleanly (Start/End boundary present)"
     );
 
-    let result: Value =
-        sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
-            .bind(instance_id)
-            .fetch_one(&db)
-            .await
-            .expect("instance result must be present after `completed`");
+    let result: Value = sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(instance_id)
+        .fetch_one(&db)
+        .await
+        .expect("instance result must be present after `completed`");
     eprintln!(
         "\n--- agent subworkflow-tool final result ---\n{}\n---\n",
         serde_json::to_string_pretty(&result).unwrap_or_default()
@@ -1130,13 +1120,8 @@ async fn python_tool_reads_llm_args_as_input_field() {
 
     // The projector is an async consumer; allow it to catch up past the
     // instance reaching `completed`.
-    let rows = wait_for_step_execution(
-        &db,
-        instance_id,
-        "lookup_order",
-        Duration::from_secs(30),
-    )
-    .await;
+    let rows =
+        wait_for_step_execution(&db, instance_id, "lookup_order", Duration::from_secs(30)).await;
 
     eprintln!("\n--- lookup_order step_execution rows ---\n{rows:#?}\n---\n");
 

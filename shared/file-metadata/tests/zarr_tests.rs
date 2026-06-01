@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use fmeta::detect::{detect_format, is_zarr_directory};
-use fmeta::format::{FileFormat, FormatMetadata, ZarrMetadata};
-use fmeta::{ZarrExtractor};
 use fmeta::extractor::MetadataExtractor;
+use fmeta::format::{FileFormat, FormatMetadata, ZarrMetadata};
+use fmeta::ZarrExtractor;
 use zarrs::array::ArrayBuilder;
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
@@ -13,8 +13,7 @@ use zarrs::storage::ReadableWritableListableStorage;
 
 /// Create a V3 Zarr store with a root group and two arrays.
 fn create_test_zarr_v3(dir: &std::path::Path) {
-    let store: ReadableWritableListableStorage =
-        Arc::new(FilesystemStore::new(dir).unwrap());
+    let store: ReadableWritableListableStorage = Arc::new(FilesystemStore::new(dir).unwrap());
 
     // Root group
     GroupBuilder::new()
@@ -53,8 +52,7 @@ fn create_test_zarr_v3(dir: &std::path::Path) {
 
 /// Create a V3 Zarr store with nested groups.
 fn create_nested_zarr_v3(dir: &std::path::Path) {
-    let store: ReadableWritableListableStorage =
-        Arc::new(FilesystemStore::new(dir).unwrap());
+    let store: ReadableWritableListableStorage = Arc::new(FilesystemStore::new(dir).unwrap());
 
     GroupBuilder::new()
         .build(store.clone(), "/")

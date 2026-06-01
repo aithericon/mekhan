@@ -167,8 +167,7 @@ async fn process_event(
         let Some(ctx) = load_instance_context(db, net_id).await? else {
             return Ok(());
         };
-        let registry: InterfaceRegistry = match serde_json::from_value(ctx.interface_json.clone())
-        {
+        let registry: InterfaceRegistry = match serde_json::from_value(ctx.interface_json.clone()) {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(
@@ -317,4 +316,3 @@ async fn upsert_rows(
     }
     Ok(())
 }
-

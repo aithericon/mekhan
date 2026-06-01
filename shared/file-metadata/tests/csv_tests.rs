@@ -1,8 +1,6 @@
 #[cfg(feature = "csv")]
 mod csv_tests {
-    use fmeta::{
-        CsvExtractor, DataType, FileFormat, FormatMetadata, MetadataExtractor,
-    };
+    use fmeta::{CsvExtractor, DataType, FileFormat, FormatMetadata, MetadataExtractor};
     use std::path::Path;
 
     fn fixture_path() -> &'static Path {
@@ -80,10 +78,7 @@ mod csv_tests {
         let result = CsvExtractor::new().extract(Path::new("/nonexistent/file.csv"));
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            fmeta::MetadataError::FileNotFound(_)
-        ));
+        assert!(matches!(err, fmeta::MetadataError::FileNotFound(_)));
     }
 
     #[test]

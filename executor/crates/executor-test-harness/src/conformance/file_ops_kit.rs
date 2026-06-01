@@ -7,7 +7,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use aithericon_executor_backend::ExecutionBackend;
-use aithericon_executor_domain::{ExecutionJob, ExecutionSpec, JobPriority, RunContext, RunDirectory};
+use aithericon_executor_domain::{
+    ExecutionJob, ExecutionSpec, JobPriority, RunContext, RunDirectory,
+};
 
 /// Factory trait for file-ops conformance testing.
 ///
@@ -90,6 +92,7 @@ pub trait FileOpsTestKit: Send + Sync {
             timeout: None,
             priority: JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         }
     }
@@ -120,11 +123,8 @@ impl Default for LocalFileOpsKit {
 impl LocalFileOpsKit {
     pub fn new() -> Self {
         let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "fileops-kit-{}-{}",
-            std::process::id(),
-            seq,
-        ));
+        let root =
+            std::env::temp_dir().join(format!("fileops-kit-{}-{}", std::process::id(), seq,));
         std::fs::create_dir_all(&root).unwrap();
 
         let storage_json = serde_json::json!({
@@ -171,9 +171,7 @@ impl FileOpsTestKit for LocalFileOpsKit {
     }
 
     async fn create_backend(&self) -> Result<Arc<dyn ExecutionBackend>, String> {
-        Ok(Arc::new(
-            aithericon_executor_file_ops::FileOpsBackend::new(),
-        ))
+        Ok(Arc::new(aithericon_executor_file_ops::FileOpsBackend::new()))
     }
 
     async fn seed_storage(&self) {

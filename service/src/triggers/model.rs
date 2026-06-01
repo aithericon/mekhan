@@ -41,6 +41,14 @@ pub struct TriggerRecord {
     pub reply_default: Option<ReplyMode>,
     pub enabled: bool,
     pub registered_at: DateTime<Utc>,
+    /// Pre-AIR direct-target place id (clinic-style headless templates).
+    /// When `Some`, the dispatcher constructs `LaunchSpec::PreAir` on
+    /// spawn, seeding the named AIR place with the fire payload rather
+    /// than resolving a Start block from the (stub) graph. Mutually
+    /// exclusive with a non-empty `target_handle` on graph-edge resolved
+    /// triggers — set by `register_template` only when the trigger node
+    /// carries `air_target_place_id` and has no outgoing edge.
+    pub air_target_place_id: Option<String>,
 }
 
 /// Used in handler responses and history records. Distinguishes a trigger by
@@ -89,13 +97,13 @@ pub enum TriggerError {
     NotFound(String),
     #[error("trigger '{0}' is disabled")]
     Disabled(String),
-    #[error("trigger '{node_id}' resolves to a target node '{target}' which is missing or invalid")]
+    #[error(
+        "trigger '{node_id}' resolves to a target node '{target}' which is missing or invalid"
+    )]
     TargetMissing { node_id: String, target: String },
     #[error("payload mapping for field '{field}' failed: {message}")]
     PayloadMappingFailed { field: String, message: String },
-    #[error(
-        "start input contract violation: field '{field}' expected {expected}, got {actual}"
-    )]
+    #[error("start input contract violation: field '{field}' expected {expected}, got {actual}")]
     StartContractViolation {
         field: String,
         expected: String,

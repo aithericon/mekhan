@@ -7,9 +7,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use async_nats::jetstream::consumer::{
-    pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy,
-};
+use async_nats::jetstream::consumer::{pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy};
 use async_nats::jetstream::stream::{Config as StreamConfig, RetentionPolicy};
 use async_nats::jetstream::Message;
 use petri_application::{
@@ -22,7 +20,9 @@ use std::time::Duration;
 
 use tokio::sync::Notify;
 
-use crate::message_loop::{run_message_loop_cancellable, MessageHandler, PreProcessResult, ProcessError};
+use crate::message_loop::{
+    run_message_loop_cancellable, MessageHandler, PreProcessResult, ProcessError,
+};
 use crate::subjects::Subjects;
 
 /// Errors from the human result listener.
@@ -102,10 +102,7 @@ impl HumanResultListener {
             let svc = service.clone();
             let notify = eval_notify.clone();
             handles.push(tokio::spawn(async move {
-                if let Err(e) = listener
-                    .run_completed_consumer(svc, notify)
-                    .await
-                {
+                if let Err(e) = listener.run_completed_consumer(svc, notify).await {
                     tracing::error!(
                         error = %e,
                         net_id = %listener.net_id,
@@ -121,10 +118,7 @@ impl HumanResultListener {
             let svc = service.clone();
             let notify = eval_notify.clone();
             handles.push(tokio::spawn(async move {
-                if let Err(e) = listener
-                    .run_cancelled_consumer(svc, notify)
-                    .await
-                {
+                if let Err(e) = listener.run_cancelled_consumer(svc, notify).await {
                     tracing::error!(
                         error = %e,
                         net_id = %listener.net_id,
@@ -353,12 +347,9 @@ where
     S: StateProjection,
 {
     // String IDs are the domain IDs now
-    service.resolve_place_id(place_name).map_err(|_| {
-        ProcessError::Business(format!(
-            "Target place '{}' not found",
-            place_name
-        ))
-    })
+    service
+        .resolve_place_id(place_name)
+        .map_err(|_| ProcessError::Business(format!("Target place '{}' not found", place_name)))
 }
 
 /// Map a `create_token_with_meta` result for human-result handlers.

@@ -1,0 +1,80 @@
+[package]
+name = "aithericon-executor-surya"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# Sub-phase 2.2b: Surya OCR integration as sibling crate to
+# aithericon-executor-kreuzberg. Surya runs as Python subprocess managed
+# by Rust (pattern: aithericon-executor-llm's Ollama subprocess). Advertises
+# Capability::Ocr to capability-routing independently of kreuzberg's
+# in-process OCR backends (Tesseract / EasyOCR / PaddleOCR / VLM-OCR).
+# Also implements kreuzberg's public OcrBackend trait
+# (`kreuzberg::plugins::register_ocr_backend()`) so kreuzberg-driven
+# document-extraction can transparently route OCR steps through Surya —
+# the hybrid path from the Surya-vs-kreuzberg research (2026-05-16).
+#
+# License footgun (workstream #71): Surya code is GPL-3.0; weights are
+# modified OpenRAIL-M with $2M revenue/funding commercial-license
+# threshold. Subprocess process-isolation cleanly contains GPL-3.0 — no
+# static linking; no in-process embedding. The executor binary stays
+# Apache-2.0; Datalab commercial-license inquiry is user-routed at slice
+# close.
+
+# Item 5: dedicated register-as-pool binary (parallel to
+# aithericon-executor-llm's aithericon-executor-pool). Spawns the managed
+# Surya subprocess, binds the pool_listener axum task on the pool_url
+# port, registers `services.surya = { healthy: true }` with
+# cloud-layer-capability-routing, and runs the heartbeat loop.
+[[bin]]
+name = "aithericon-executor-surya-pool"
+path = "src/bin/executor_surya_pool.rs"
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+aithericon-executor-backend-configs = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+base64 = "0.22"
+
+# kreuzberg as a non-optional dep: this crate's reason-to-exist includes
+# implementing kreuzberg's OcrBackend plugin trait so kreuzberg-driven
+# document-extraction can route OCR through Surya. Unlike executor-llm
+# (where kreuzberg is feature-gated as an additive OCR surface), there's
+# no "Surya without kreuzberg integration" deployment shape — the plugin
+# registration IS the architectural contract.
+#
+# default-features = false + tokio-runtime keeps the dep light — we don't
+# pull document-parsers (pdf, excel, office, etc.) since Surya operates
+# on images that kreuzberg's document-extraction machinery hands to us
+# already-converted.
+kreuzberg = { version = "4", default-features = false, features = ["tokio-runtime"] }
+
+# Pool register-as-pool wiring (Item 5) — mirrors executor-llm's dep set.
+# axum used by pool_listener; jsonwebtoken + uuid + gethostname + anyhow
+# used by register_as_pool + the bin's startup orchestration;
+# tracing-subscriber initialised in the bin's main(). tokio-util already
+# above in the core dep block (CancellationToken used in subprocess
+# lifecycle).
+axum = { workspace = true }
+anyhow = { workspace = true }
+jsonwebtoken = { workspace = true }
+gethostname = { workspace = true }
+uuid = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde_json = { workspace = true }
+tempfile = "3"

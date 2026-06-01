@@ -20,7 +20,7 @@
 //!   envelope is emitted, the HumanTask is no longer pending (drained by
 //!   `human_cancel`), and the instance reaches `completed` cleanly.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). Run
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`).
 
 mod common;
@@ -69,7 +69,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -158,12 +158,11 @@ async fn spawn_consumers(
 async fn wait_for_terminal(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if matches!(st.as_str(), "completed" | "failed" | "cancelled") {
             return st;
         }
@@ -175,14 +174,12 @@ async fn wait_for_terminal(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> St
 }
 
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
-    sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT result FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .unwrap()
-    .expect("result column was null — Timeout produced no End envelope")
+    sqlx::query_scalar::<_, Option<Value>>("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+        .expect("result column was null — Timeout produced no End envelope")
 }
 
 async fn wait_for_net_id(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
@@ -591,7 +588,7 @@ async fn timeout_timer_wins_drains_body_human_task() {
     let saw = |name: &str| -> bool {
         evs.iter().any(|e| {
             let ev = &e["event"];
-            ev.get("type").and_then(|t| t.as_str()).map_or(false, |t| {
+            ev.get("type").and_then(|t| t.as_str()).is_some_and(|t| {
                 (t == "TransitionFired" || t == "EffectCompleted")
                     && ev.get("transition_id").and_then(|x| x.as_str()) == Some(name)
             })
@@ -608,7 +605,7 @@ async fn timeout_timer_wins_drains_body_human_task() {
     );
 
     // Poll the hpi_tasks projection — the cancel_listener runs in the live
-    // dev mekhan (sharing this PG via :15439) and consumes `human.cancel.>`
+    // dev mekhan (sharing this PG via :5439) and consumes `human.cancel.>`
     // from JetStream, so there's a small async gap between the engine firing
     // human_cancel and the row flipping. 5s is conservative.
     let task_cancelled_within = Duration::from_secs(5);
@@ -702,7 +699,7 @@ async fn timeout_drains_mid_body_human_task() {
     let saw = |name: &str| -> bool {
         evs.iter().any(|e| {
             let ev = &e["event"];
-            ev.get("type").and_then(|t| t.as_str()).map_or(false, |t| {
+            ev.get("type").and_then(|t| t.as_str()).is_some_and(|t| {
                 (t == "TransitionFired" || t == "EffectCompleted")
                     && ev.get("transition_id").and_then(|x| x.as_str()) == Some(name)
             })
@@ -777,8 +774,7 @@ async fn timeout_drains_mid_body_human_task() {
         // which reads the last execution.
         let status = rows.as_array().and_then(|rs| {
             rs.iter()
-                .filter(|r| r["node_id"] == json!("review"))
-                .next_back()
+                .rfind(|r| r["node_id"] == json!("review"))
                 .and_then(|r| r["status"].as_str().map(str::to_string))
         });
         if let Some(s) = &status {

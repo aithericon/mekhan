@@ -8,7 +8,7 @@
 //!
 //! The lifecycle listener and the engine must share a NATS broker. Both the
 //! harness default and the `just dev` engine use the dev broker
-//! (`docker-compose.yml` maps `14333:4222`). Override with `ENGINE_NATS_URL`
+//! (`docker-compose.yml` maps `4333:4222`). Override with `ENGINE_NATS_URL`
 //! only if the engine was started against a non-default NATS.
 
 mod common;
@@ -30,7 +30,7 @@ use mekhan_service::nats::MekhanNats;
 
 /// Test engine URL (override with TEST_ENGINE_URL).
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 /// Check if the petri-lab engine is reachable.
@@ -68,8 +68,8 @@ fn simple_graph() -> WorkflowGraph {
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
-                terminal: mekhan_service::models::template::default_terminal_port(),
-                result_mapping: Vec::new(),
+                    terminal: mekhan_service::models::template::default_terminal_port(),
+                    result_mapping: Vec::new(),
                 },
                 parent_id: None,
                 width: None,
@@ -85,7 +85,10 @@ fn simple_graph() -> WorkflowGraph {
             label: None,
             edge_type: "sequence".to_string(),
         }],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -133,20 +136,33 @@ async fn full_instance_lifecycle() {
     // E2E test must use the SAME NATS as the running engine.
     // Defaults to the dev-stack broker (common::nats_url()); override via
     // ENGINE_NATS_URL if the engine is on a different broker.
-    let engine_nats_url = std::env::var("ENGINE_NATS_URL")
-        .unwrap_or_else(|_| common::nats_url());
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let engine_http_url = engine_url();
 
-    let (app, db) =
-        common::test_app_with_petri_url(&engine_nats_url, &engine_http_url).await;
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_http_url).await;
 
     // Start lifecycle listener on the engine's NATS
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
-    let kv = listener_nats.ensure_catalogue_subscriptions_kv().await.expect("create KV");
-    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
+    let kv = listener_nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("create KV");
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
+        start_lifecycle_listener(
+            listener_nats,
+            listener_db,
+            sub_mgr,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+        .await;
     });
 
     // 1. Create template
@@ -191,7 +207,10 @@ async fn full_instance_lifecycle() {
 
     // Verify AIR was generated
     let published: Value = json_body(publish_resp).await;
-    assert!(published["air_json"].is_object(), "air_json should be compiled");
+    assert!(
+        published["air_json"].is_object(),
+        "air_json should be compiled"
+    );
 
     // 3. Create instance (deploys to engine + sets running)
     let instance_resp = app

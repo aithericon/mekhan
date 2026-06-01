@@ -92,10 +92,7 @@ pub struct ExecutorLifecycleHandles {
 ///
 /// The caller provides `bridges` to wire the lifecycle into the broader net.
 /// Returns handles to key output places.
-pub fn executor_lifecycle(
-    ctx: &mut Context,
-    bridges: ExecutorBridges,
-) -> ExecutorLifecycleHandles {
+pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> ExecutorLifecycleHandles {
     let exec_queue = bridges.inbox;
     let dead_letter = ctx.terminal::<DynamicToken>("dead_letter", "Dead Letter");
     let effect_errors = ctx.state::<EffectError>("effect_errors", "Effect Errors");
@@ -205,7 +202,7 @@ pub fn executor_lifecycle(
     // original executor process exits after one job, so pushing a retry token
     // back to `exec_queue` publishes a NATS message that no consumer picks up
     // — the loop hangs. Failures and timeouts now propagate directly to the
-    // upstream net via `failure_out`; the upstream (BO loop, scheduler-net)
+    // upstream net via `failure_out`; the upstream (BO loop, upstream scheduler relay)
     // decides whether to re-dispatch with a fresh sbatch.
     //
     // The `dead_letter` terminal place is kept (unreachable) so callers

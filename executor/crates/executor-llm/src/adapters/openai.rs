@@ -81,7 +81,6 @@ fn is_json_schema_unsupported(status: reqwest::StatusCode, body: &str) -> bool {
         && (lower.contains("does not support") || lower.contains("not supported"))
 }
 
-
 // ---------------------------------------------------------------------------
 // OpenAI /v1/chat/completions
 // ---------------------------------------------------------------------------
@@ -338,11 +337,7 @@ async fn openai_complete(
         .first()
         .ok_or_else(|| LlmError::Api("OpenAI returned no choices".into()))?;
 
-    let content = choice
-        .message
-        .content
-        .clone()
-        .unwrap_or_default();
+    let content = choice.message.content.clone().unwrap_or_default();
 
     let stop_reason = parse_finish_reason(choice.finish_reason.as_deref());
 
@@ -535,7 +530,11 @@ fn build_request_body<'a>(
         response_format,
         temperature: request.temperature,
         max_tokens: request.max_tokens,
-        parallel_tool_calls: if tools_decl.is_some() { Some(false) } else { None },
+        parallel_tool_calls: if tools_decl.is_some() {
+            Some(false)
+        } else {
+            None
+        },
         tools: tools_decl,
     }
 }
@@ -558,6 +557,7 @@ mod tests {
             messages: vec![Message::text(Role::User, "say hi".into())],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: format,
             tools: vec![],
         }
@@ -604,7 +604,10 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0]["role"], "system");
         let sys = msgs[0]["content"].as_str().unwrap();
-        assert!(sys.contains("JSON"), "system msg must mention JSON literally");
+        assert!(
+            sys.contains("JSON"),
+            "system msg must mention JSON literally"
+        );
         assert!(sys.contains("\"sentiment\""), "schema must be inlined");
         assert_eq!(msgs[1]["role"], "user");
     }
@@ -619,8 +622,7 @@ mod tests {
             let body = build_request_body(&req, cap);
             let wire = serde_json::to_value(&body).unwrap();
             assert!(
-                wire.get("response_format").is_none()
-                    || wire["response_format"].is_null(),
+                wire.get("response_format").is_none() || wire["response_format"].is_null(),
                 "text mode (cap={cap:?}) must omit response_format; got {wire}"
             );
             // No schema injection.
@@ -659,6 +661,7 @@ mod tests {
             ],
             temperature: None,
             max_tokens: None,
+            reasoning: None,
             response_format: ResponseFormat::Text,
             tools: vec![],
         };
@@ -679,7 +682,10 @@ mod tests {
         let args = assistant["tool_calls"][0]["function"]["arguments"]
             .as_str()
             .expect("arguments must serialize as a string");
-        assert!(args.contains("ORD-42"), "args string carries the call: {args}");
+        assert!(
+            args.contains("ORD-42"),
+            "args string carries the call: {args}"
+        );
         // A pure tool-call assistant turn omits content entirely.
         assert!(
             assistant.get("content").map_or(true, |c| c.is_null()),

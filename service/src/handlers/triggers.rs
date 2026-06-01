@@ -84,6 +84,25 @@ pub struct FireTriggerRequest {
     /// overridden by `?reply=` / `Prefer`, overrides the node default).
     #[serde(default)]
     pub reply_mode: Option<ReplyMode>,
+    /// Per-run ablation: transition IDs to skip at evaluate-time.
+    /// Threaded through the dispatcher into the engine's
+    /// `LoadScenarioRequest.skip_mask` (γ.mekhan wire). Empty by default
+    /// — research-harness ablation flows surface this; ordinary fires omit.
+    /// #126.2: extends the previously-always-empty trigger-boundary stub.
+    #[serde(default)]
+    pub skip_mask: Vec<String>,
+    /// Per-run ablation: per-transition JSON merge-patch keyed by
+    /// transition_id. Threaded into `LoadScenarioRequest.stage_overrides`.
+    /// Same surface + provenance as `skip_mask`. #126.2.
+    #[serde(default)]
+    pub stage_overrides: std::collections::HashMap<String, serde_json::Value>,
+    /// Submitter-supplied net-level parameter bag for the spawned instance.
+    /// Threaded into `LoadScenarioRequest.net_parameters` and stored on the
+    /// engine's `PetriNetService`, where the firing path consults it for
+    /// `$params.` resolution and pre-dispatch metadata (e.g. `tenant_id`).
+    /// Opaque, generic infra — no domain semantics ascribed here.
+    #[serde(default)]
+    pub net_parameters: Option<serde_json::Value>,
 }
 
 /// Query selector for the reply mode: `?reply=wait|nowait|stream`.
@@ -261,18 +280,36 @@ pub async fn fire_trigger(
         .map(|Query(q)| q)
         .unwrap_or_default();
 
-    let (payload, body_reply_mode) = if content_type.starts_with("multipart/form-data") {
-        (build_multipart_payload(&state, &node_id, request).await?, None)
+    let (payload, body_reply_mode, dispatch_options, net_parameters) = if content_type
+        .starts_with("multipart/form-data")
+    {
+        // Multipart fires (file-bearing) don't carry skip_mask /
+        // stage_overrides / net_parameters — those land via the JSON body shape.
+        (
+            build_multipart_payload(&state, &node_id, request).await?,
+            None,
+            petri_api_types::DispatchOptions::default(),
+            None,
+        )
     } else {
         let bytes = axum::body::to_bytes(request.into_body(), 4 * 1024 * 1024)
             .await
             .map_err(|e| ApiError::bad_request(format!("failed to read body: {e}")))?;
         if bytes.is_empty() {
-            (Value::Null, None)
+            (
+                Value::Null,
+                None,
+                petri_api_types::DispatchOptions::default(),
+                None,
+            )
         } else {
             let req: FireTriggerRequest = serde_json::from_slice(&bytes)
                 .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
-            (req.payload, req.reply_mode)
+            let dispatch = petri_api_types::DispatchOptions {
+                skip_mask: req.skip_mask,
+                stage_overrides: req.stage_overrides,
+            };
+            (req.payload, req.reply_mode, dispatch, req.net_parameters)
         }
     };
 
@@ -294,10 +331,15 @@ pub async fn fire_trigger(
         ReplyMode::Sse => {
             use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
             use futures::stream::{self, StreamExt};
-            let result =
-                crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
-                    .await
-                    .map_err(map_trigger_error)?;
+            let result = crate::triggers::sources::manual::fire(
+                &state.triggers,
+                &node_id,
+                payload,
+                dispatch_options,
+                net_parameters,
+            )
+            .await
+            .map_err(map_trigger_error)?;
             let instance_id = match &result.outcome {
                 FireOutcome::Spawned { instance_id } => Some(*instance_id),
                 _ => None,
@@ -333,10 +375,15 @@ pub async fn fire_trigger(
                 .into_response())
         }
         ReplyMode::FireAndForget => {
-            let result =
-                crate::triggers::sources::manual::fire(&state.triggers, &node_id, payload)
-                    .await
-                    .map_err(map_trigger_error)?;
+            let result = crate::triggers::sources::manual::fire(
+                &state.triggers,
+                &node_id,
+                payload,
+                dispatch_options,
+                net_parameters,
+            )
+            .await
+            .map_err(map_trigger_error)?;
             Ok(Json(FireTriggerResponse {
                 result,
                 outcome: None,
@@ -348,6 +395,8 @@ pub async fn fire_trigger(
                 &state.triggers,
                 &node_id,
                 payload,
+                dispatch_options,
+                net_parameters,
                 &state.result_waiters,
             )
             .await
@@ -833,7 +882,12 @@ pub async fn webhook_receiver(
 
     let result = state
         .triggers
-        .fire(&trigger.node_id, payload)
+        .fire(
+            &trigger.node_id,
+            payload,
+            petri_api_types::DispatchOptions::default(),
+            None,
+        )
         .await
         .map_err(map_trigger_error)?;
     Ok(Json(FireTriggerResponse {

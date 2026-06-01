@@ -22,17 +22,20 @@ mod ws_client;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "mekhan", about = "Mekhan workflow CLI — import/export templates")]
+#[command(
+    name = "mekhan",
+    about = "Mekhan workflow CLI — import/export templates"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Server URL (e.g. http://localhost:13100). Falls back to $MEKHAN_CLI_SERVER.
+    /// Server URL (e.g. http://localhost:3100). Falls back to $MEKHAN_CLI_SERVER.
     #[arg(
         short,
         long,
         env = "MEKHAN_CLI_SERVER",
-        default_value = "http://localhost:13100",
+        default_value = "http://localhost:3100",
         global = true
     )]
     server: String,
@@ -218,10 +221,7 @@ async fn main() -> anyhow::Result<()> {
             };
             pull::run(&cli.server, &template_id, directory.as_deref(), fmt).await
         }
-        Commands::Push {
-            directory,
-            dry_run,
-        } => push::run(&cli.server, &directory, dry_run).await,
+        Commands::Push { directory, dry_run } => push::run(&cli.server, &directory, dry_run).await,
         Commands::Status { directory } => status::run(&cli.server, &directory).await,
         Commands::Publish { directory } => publish::run(&cli.server, &directory).await,
         Commands::Apply { directory } => apply::run(&cli.server, &directory).await,
@@ -229,14 +229,18 @@ async fn main() -> anyhow::Result<()> {
             template,
             inputs,
             start_tokens_file,
-        } => run::run(&cli.server, &template, &inputs, start_tokens_file.as_deref()).await,
-        Commands::Instances { template } => {
-            instances::run(&cli.server, template.as_deref()).await
+        } => {
+            run::run(
+                &cli.server,
+                &template,
+                &inputs,
+                start_tokens_file.as_deref(),
+            )
+            .await
         }
+        Commands::Instances { template } => instances::run(&cli.server, template.as_deref()).await,
         Commands::Cancel { instance_id } => cancel::run(&cli.server, &instance_id).await,
-        Commands::Logs { instance_id, tail } => {
-            logs::run(&cli.server, &instance_id, tail).await
-        }
+        Commands::Logs { instance_id, tail } => logs::run(&cli.server, &instance_id, tail).await,
         Commands::Demos { action } => {
             let act = match action {
                 DemosAction::Reset => demos::Action::Reset,
@@ -256,14 +260,6 @@ async fn main() -> anyhow::Result<()> {
             template,
             name,
             include_disabled,
-        } => {
-            test_cmd::run(
-                &cli.server,
-                &template,
-                name.as_deref(),
-                include_disabled,
-            )
-            .await
-        }
+        } => test_cmd::run(&cli.server, &template, name.as_deref(), include_disabled).await,
     }
 }

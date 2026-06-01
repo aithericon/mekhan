@@ -33,6 +33,7 @@ pub mod end;
 pub mod failure;
 pub mod human_task;
 pub mod join;
+pub mod lease_scope;
 pub mod loop_;
 pub mod map;
 pub mod parallel_split;
@@ -40,7 +41,7 @@ pub mod phase_update;
 pub mod progress_update;
 pub mod scope;
 pub mod start;
-pub mod stream_consumer;
+pub mod stream_fold;
 pub mod sub_workflow;
 pub mod timeout;
 pub mod trigger;
@@ -144,11 +145,8 @@ pub(crate) type TokenShapeFn = fn(&WorkflowNode, &TokenShape) -> TokenShape;
 /// YJS-side config encoder. Writes the variant's per-config fields into
 /// the supplied `Y.Map` under the surrounding transaction. Mirrors one
 /// arm of `yjs/doc_ops.rs::write_node_config` exactly.
-pub(crate) type YjsEncodeFn = fn(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-);
+pub(crate) type YjsEncodeFn =
+    fn(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData);
 
 // ─── Registry ───────────────────────────────────────────────────────────────
 
@@ -166,6 +164,7 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &failure::FAILURE_DECL,
     &human_task::HUMAN_TASK_DECL,
     &join::JOIN_DECL,
+    &lease_scope::LEASE_SCOPE_DECL,
     &loop_::LOOP_DECL,
     &map::MAP_DECL,
     &parallel_split::PARALLEL_SPLIT_DECL,
@@ -173,7 +172,7 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &progress_update::PROGRESS_UPDATE_DECL,
     &scope::SCOPE_DECL,
     &start::START_DECL,
-    &stream_consumer::STREAM_CONSUMER_DECL,
+    &stream_fold::STREAM_FOLD_DECL,
     &sub_workflow::SUB_WORKFLOW_DECL,
     &timeout::TIMEOUT_DECL,
     &trigger::TRIGGER_DECL,
@@ -198,8 +197,9 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::Join { .. } => "join",
         WorkflowNodeData::Loop { .. } => "loop",
         WorkflowNodeData::Scope { .. } => "scope",
+        WorkflowNodeData::LeaseScope { .. } => "lease_scope",
         WorkflowNodeData::Map { .. } => "map",
-        WorkflowNodeData::StreamConsumer { .. } => "stream_consumer",
+        WorkflowNodeData::StreamFold { .. } => "stream_fold",
         WorkflowNodeData::PhaseUpdate { .. } => "phase_update",
         WorkflowNodeData::ProgressUpdate { .. } => "progress_update",
         WorkflowNodeData::Failure { .. } => "failure",
@@ -254,11 +254,12 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
         | WorkflowNodeData::ParallelSplit { .. }
         | WorkflowNodeData::Join { .. }
         | WorkflowNodeData::Scope { .. }
+        | WorkflowNodeData::LeaseScope { .. }
         | WorkflowNodeData::Map { .. }
-        // StreamConsumer's `reduce` Custom expr is Rhai but operates over the
+        // StreamFold's `reduce` Custom expr is Rhai but operates over the
         // gathered `__r` array (not `input.<path>`-resolved like guards), so it
-        // is syntax-checked in `validate_stream_consumer`, not here.
-        | WorkflowNodeData::StreamConsumer { .. }
+        // is syntax-checked in `validate_stream_fold`, not here.
+        | WorkflowNodeData::StreamFold { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
         | WorkflowNodeData::Trigger { .. }
@@ -325,10 +326,9 @@ mod tests {
     use crate::models::template::{
         default_automated_input_port, default_automated_output_port, default_initial_port,
         default_join_output_port, default_subworkflow_input_contract,
-        default_subworkflow_output_port, default_terminal_port,
-        BranchCondition, ConcurrencyPolicy, ContextStrategy, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, ManualTrigger, ModelRef, PhaseUpdateStatus, RetryPolicy,
-        ToolErrorPolicy, TriggerSource, VersionPin,
+        default_subworkflow_output_port, default_terminal_port, BranchCondition, ConcurrencyPolicy,
+        ContextStrategy, ExecutionBackendType, ExecutionSpecConfig, JoinMode, ManualTrigger,
+        ModelRef, PhaseUpdateStatus, RetryPolicy, ToolErrorPolicy, TriggerSource, VersionPin,
     };
     use uuid::Uuid;
 
@@ -357,6 +357,7 @@ mod tests {
             payload_mapping: vec![],
             reply_default: None,
             enabled: false,
+            air_target_place_id: None,
         };
         let decl = lookup_by_variant(&data).expect("trigger registered");
         assert_eq!(decl.wire_name, "trigger");
@@ -508,7 +509,10 @@ mod tests {
         // ParallelSplit because of its converging cousin Join), this test
         // catches it before it reaches `wire.rs`'s special-case branch.
         let count_is_join = NODES.iter().filter(|d| d.is_join).count();
-        assert_eq!(count_is_join, 1, "exactly one variant should have is_join: true (Join)");
+        assert_eq!(
+            count_is_join, 1,
+            "exactly one variant should have is_join: true (Join)"
+        );
         let only = NODES.iter().find(|d| d.is_join).unwrap();
         assert_eq!(only.wire_name, "join");
     }
@@ -521,7 +525,6 @@ mod tests {
             max_iterations: 10,
             loop_condition: "false".to_string(),
             accumulators: vec![],
-            lease: None,
         };
         let decl = lookup_by_variant(&data).expect("loop registered");
         assert_eq!(decl.wire_name, "loop");
@@ -540,6 +543,7 @@ mod tests {
             label: "m".to_string(),
             description: None,
             items_ref: "extract.tasks".to_string(),
+            stream_source: false,
             item_var: "item".to_string(),
             result_var: "result".to_string(),
             output: None,
@@ -562,17 +566,16 @@ mod tests {
     }
 
     #[test]
-    fn lookup_by_variant_finds_stream_consumer() {
-        let data = WorkflowNodeData::StreamConsumer {
-            label: "sc".to_string(),
+    fn lookup_by_variant_finds_stream_fold() {
+        let data = WorkflowNodeData::StreamFold {
+            label: "sf".to_string(),
             description: None,
             result_var: "item".to_string(),
             reduce: Default::default(),
-            dispatch: Default::default(),
         };
-        let decl = lookup_by_variant(&data).expect("stream_consumer registered");
-        assert_eq!(decl.wire_name, "stream_consumer");
-        assert_eq!(decl.kind, NodeKind::StreamConsumer);
+        let decl = lookup_by_variant(&data).expect("stream_fold registered");
+        assert_eq!(decl.wire_name, "stream_fold");
+        assert_eq!(decl.kind, NodeKind::StreamFold);
         assert!(decl.lowers_to_air);
         // Parks the reduced output at p_<id>_data, like Map.
         assert!(decl.parks_data_envelope);
@@ -639,6 +642,7 @@ mod tests {
             retry_policy: RetryPolicy::default(),
             deployment_model: Default::default(),
             stream_output: false,
+            stream_input: false,
         };
         let decl = lookup_by_variant(&data).expect("automated_step registered");
         assert_eq!(decl.wire_name, "automated_step");
@@ -745,7 +749,6 @@ mod tests {
             max_iterations: 3,
             loop_condition: "i < 3".to_string(),
             accumulators: vec![],
-            lease: None,
         };
         assert_eq!(guard_rhai_sources(&loop_), vec!["i < 3"]);
 
@@ -796,7 +799,6 @@ mod tests {
             max_iterations: 1,
             loop_condition: "   ".to_string(),
             accumulators: vec![],
-            lease: None,
         };
         assert!(guard_rhai_sources(&blank).is_empty());
     }
@@ -827,7 +829,6 @@ mod tests {
                 max_iterations: 1,
                 loop_condition: "true".to_string(),
                 accumulators: vec![],
-                lease: None,
             },
             WorkflowNodeData::Delay {
                 label: "d".to_string(),
@@ -866,6 +867,7 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: Default::default(),
                 stream_output: false,
+                stream_input: false,
             },
             // Rhai-bearing only (no structural validate hook — covered by
             // guard_rhai_sources / validate_guards):
@@ -923,7 +925,7 @@ mod tests {
             "progress_update",
             "scope",
             "start",
-            "stream_consumer",
+            "stream_fold",
             "sub_workflow",
             "timeout",
             "trigger",
@@ -949,7 +951,10 @@ mod tests {
         let en = all.iter().find(|d| d.wire_name == "end").unwrap();
         assert_eq!(en.kind, "end");
         assert!(en.lowers_to_air);
-        let pgu = all.iter().find(|d| d.wire_name == "progress_update").unwrap();
+        let pgu = all
+            .iter()
+            .find(|d| d.wire_name == "progress_update")
+            .unwrap();
         assert_eq!(pgu.kind, "progress_update");
         let fl = all.iter().find(|d| d.wire_name == "failure").unwrap();
         assert_eq!(fl.kind, "failure");
@@ -958,7 +963,10 @@ mod tests {
         // AutomatedStep — the runtime envelope shape is shared.
         let ag = all.iter().find(|d| d.wire_name == "agent").unwrap();
         assert_eq!(ag.kind, "agent");
-        let ps = all.iter().find(|d| d.wire_name == "parallel_split").unwrap();
+        let ps = all
+            .iter()
+            .find(|d| d.wire_name == "parallel_split")
+            .unwrap();
         assert_eq!(ps.kind, "parallel_split");
         let jn = all.iter().find(|d| d.wire_name == "join").unwrap();
         assert_eq!(jn.kind, "join");
@@ -970,7 +978,10 @@ mod tests {
         let ht = all.iter().find(|d| d.wire_name == "human_task").unwrap();
         assert_eq!(ht.kind, "human_task");
         assert!(ht.parks_data_envelope);
-        let asd = all.iter().find(|d| d.wire_name == "automated_step").unwrap();
+        let asd = all
+            .iter()
+            .find(|d| d.wire_name == "automated_step")
+            .unwrap();
         assert_eq!(asd.kind, "automated_step");
         assert!(asd.parks_data_envelope);
         let dn = all.iter().find(|d| d.wire_name == "decision").unwrap();

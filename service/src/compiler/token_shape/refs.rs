@@ -4,7 +4,6 @@ use super::*;
 // `reachable_scope`, and `check_guard` moved to
 // `crate::compiler::borrow::planners::guard`.)
 
-
 // ─── Tiny guard expression scanner ──────────────────────────────────────────
 //
 // `rhai_scope::extract_qualified_refs` only yields 2-segment `ident.field`
@@ -86,7 +85,10 @@ pub(crate) fn scan_dotted_refs(src: &str) -> Vec<(String, Vec<String>, Option<Li
                 segs.push(bytes[start..i].iter().collect::<String>());
                 // A `[*]` boundary may also follow a field segment
                 // (`mymap.rows[*].field`). Capture it the same way.
-                if i + 2 < bytes.len() && bytes[i] == '[' && bytes[i + 1] == '*' && bytes[i + 2] == ']'
+                if i + 2 < bytes.len()
+                    && bytes[i] == '['
+                    && bytes[i + 1] == '*'
+                    && bytes[i + 2] == ']'
                 {
                     segs.push("[*]".to_string());
                     i += 3;

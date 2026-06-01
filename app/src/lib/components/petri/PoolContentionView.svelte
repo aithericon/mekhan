@@ -1,9 +1,9 @@
 <!--
   PoolContentionView — live resource-pool-net contention dashboard.
 
-  Visualises the `resource-pool-net` Petri net's current marking:
+  Visualises a token_pool Petri net's current marking:
     1. Pool drain bar: free / in-use split with conservation indicator.
-    2. Per-hold list: each active hold's gpu_id + grant_id.
+    2. Per-hold list: each active hold's grant_id + its typed lease fields.
     3. Freed units counter (cumulative since net start).
 
   Driven by `createPoolLiveStore` which polls
@@ -206,7 +206,7 @@
 
 		<!-- Active holds list ── ── ── ── ── ── ── ── ── ── ── ── ── ── -->
 		<!-- Backend-agnostic: each hold's typed lease fields (unit_id for token
-		     pools; node/gpu_uuid/alloc_id/expiry for datacenter adapters) are
+		     pools; alloc_id/node/expiry for datacenter adapters) are
 		     surfaced generically from the in_use token — no field is hard-coded. -->
 		{#if !compact && store.inUseCount > 0}
 			<div class="flex flex-col gap-1.5">

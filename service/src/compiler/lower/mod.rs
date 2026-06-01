@@ -9,21 +9,23 @@
 pub(super) use crate::compiler::compile::SubWorkflowAir;
 pub(super) use crate::compiler::error::CompileError;
 pub(super) use crate::compiler::interface::{InterfaceRegistry, NodeInterface, OutputKey};
-pub(super) use crate::compiler::well_known;
 pub(super) use crate::compiler::rhai_gen::{
     build_join_merge_logic_full, build_join_passthrough_logic, build_merge_logic,
     build_retry_topology, interpolate_to_rhai_expr, json_to_rhai_literal, rhai_str_escape,
     with_pluck_prelude,
 };
 pub(super) use crate::compiler::token_shape::YIELD_LOGIC;
+pub(super) use crate::compiler::well_known;
 pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
-    PhaseUpdateStatus, Port, ResourceConfig, ScheduledOperation,
-    WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
+    PhaseUpdateStatus, Port, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    WorkflowNodeData,
 };
 pub(super) use aithericon_executor_domain::InputSource;
-pub(super) use aithericon_sdk::components::executor_lifecycle::{executor_lifecycle, ExecutorBridges};
+pub(super) use aithericon_sdk::components::executor_lifecycle::{
+    executor_lifecycle, ExecutorBridges,
+};
 pub(super) use aithericon_sdk::{
     effects, Context, DynamicToken, EffectError, ExecutorSubmitInput, HumanTaskAssigned,
     HumanTaskRequest, HumanTaskResponse, HumanTaskSubmit, PlaceHandle,
@@ -57,9 +59,7 @@ pub type NodeFiles = HashMap<String, HashMap<String, InputSource>>;
 /// [`node_files_storage_path`] instead and pass the inline source map
 /// via `CompileOptions::inline_sources` to `compile_to_air_with_options`
 /// so the borrow planner can still scan.
-pub fn node_files_inline(
-    inline: &HashMap<String, HashMap<String, String>>,
-) -> NodeFiles {
+pub fn node_files_inline(inline: &HashMap<String, HashMap<String, String>>) -> NodeFiles {
     inline
         .iter()
         .map(|(node_id, files)| {
@@ -100,8 +100,7 @@ pub fn node_files_storage_path(
             let sources = files
                 .keys()
                 .map(|filename| {
-                    let path =
-                        format!("templates/{template_id}/v{version}/{node_id}/{filename}");
+                    let path = format!("templates/{template_id}/v{version}/{node_id}/{filename}");
                     (
                         filename.clone(),
                         InputSource::StoragePath {
@@ -321,11 +320,9 @@ impl<'a> ConfigStorage<'a> {
             // Single source of truth for the default key shape; the publish-time
             // upload (`ArtifactStore::upload_node_config`) mints the same key so
             // the compile-time Rhai literal and the actual blob path agree.
-            None => crate::s3::ArtifactStore::node_config_key(
-                self.template_id,
-                self.version,
-                node_id,
-            ),
+            None => {
+                crate::s3::ArtifactStore::node_config_key(self.template_id, self.version, node_id)
+            }
         }
     }
 
@@ -360,10 +357,14 @@ impl LoweringCtx<'_, '_> {
         if let Some(ports) = self.ports.get(&id) {
             iface.entry = Some(ports.input_place.id().to_string());
             for (handle, place) in &ports.input_handles {
-                iface.named_inputs.insert(handle.clone(), place.id().to_string());
+                iface
+                    .named_inputs
+                    .insert(handle.clone(), place.id().to_string());
             }
             for (edge_id, place) in &ports.input_places {
-                iface.named_inputs.insert(edge_id.clone(), place.id().to_string());
+                iface
+                    .named_inputs
+                    .insert(edge_id.clone(), place.id().to_string());
             }
             for (key, place) in &ports.output_places {
                 let k = match key {
@@ -461,6 +462,8 @@ pub(crate) mod end;
 pub(crate) mod failure;
 pub(crate) mod human_task;
 pub(crate) mod join;
+pub(crate) mod lease_bridge;
+pub(crate) mod lease_scope;
 pub(crate) mod loop_;
 pub(crate) mod map;
 pub(crate) mod parallel_split;
@@ -468,7 +471,7 @@ pub(crate) mod phase_update;
 pub(crate) mod progress_update;
 pub(crate) mod scope;
 pub(crate) mod start;
-pub(crate) mod stream_consumer;
+pub(crate) mod stream_fold;
 pub(crate) mod subworkflow;
 pub(crate) mod timeout;
 
@@ -490,8 +493,7 @@ pub(super) fn result_mapping_rhai(mappings: &[FieldMapping]) -> (String, String)
     let mut entries: Vec<String> = Vec::with_capacity(mappings.len());
     for (i, m) in mappings.iter().enumerate() {
         lets.push_str(&format!("let __rv{i} = ({}); ", m.expression));
-        let key =
-            serde_json::to_string(&m.target_field).unwrap_or_else(|_| "\"\"".to_string());
+        let key = serde_json::to_string(&m.target_field).unwrap_or_else(|_| "\"\"".to_string());
         entries.push(format!("{key}: __rv{i}"));
     }
     (lets, format!("#{{ {} }}", entries.join(", ")))
@@ -625,16 +627,13 @@ pub(super) fn error_path_wired(outgoing_edges: &[&WorkflowEdge]) -> bool {
         .any(|e| e.source_handle.as_deref() == Some("error"))
 }
 
-/// True when `node` is the TERMINAL of a *container body* — the child whose
-/// edge enters the parent container's `body_out` handle. The container is
-/// either a **Map** OR a **body-mode StreamConsumer** (dispatch
-/// `SequentialBody`/`ParallelBody`): both run a body block per element/chunk and
-/// gather the results by `__map_id`, so a terminal child must fork its FULL
+/// True when `node` is the TERMINAL of a **Map** body — the child whose edge
+/// enters the Map's `body_out` handle. The Map runs a body block per element and
+/// gathers the results by `__map_id`, so a terminal child must fork its FULL
 /// completed envelope (`park_outputs`) — the slim `split_outputs` control token
 /// carries neither `detail.outputs.<resultVar>` nor the `__map_idx`/`__map_id`
 /// correlation leaves. Single source of truth shared by every body kind that can
-/// sit at such a terminal (AutomatedStep inline, SubWorkflow). The default
-/// `Rhai` StreamConsumer has no body and so is never a container.
+/// sit at such a terminal (AutomatedStep inline, SubWorkflow).
 ///
 /// `outgoing_edges` are the edges whose `source == node_id` (see `graph::outgoing`).
 pub(super) fn is_map_body_terminal(
@@ -643,8 +642,7 @@ pub(super) fn is_map_body_terminal(
     outgoing_edges: &[&WorkflowEdge],
 ) -> bool {
     parent_id.is_some_and(|pid| {
-        (crate::compiler::token_shape::is_map_node(graph, pid)
-            || crate::compiler::token_shape::is_stream_consumer_body_mode_node(graph, pid))
+        crate::compiler::token_shape::is_map_node(graph, pid)
             && outgoing_edges
                 .iter()
                 .any(|e| e.target == pid && e.target_handle.as_deref() == Some("body_out"))
@@ -735,8 +733,7 @@ pub(crate) fn apply_agent_tool_wirings(
                 .and_then(|i| i.data_port.clone());
             match (child_default_out, child_data_port) {
                 (Some(child_out), Some(data_place_id)) => {
-                    let p_data: PlaceHandle<DynamicToken> =
-                        PlaceHandle::external(data_place_id);
+                    let p_data: PlaceHandle<DynamicToken> = PlaceHandle::external(data_place_id);
                     ctx.transition(
                         format!("t_{agent_id}_collect_{tn}"),
                         format!("{agent_label} - Collect {tn}"),
@@ -745,9 +742,7 @@ pub(crate) fn apply_agent_tool_wirings(
                     .read_input("result", &p_data)
                     .auto_input("state", &wiring.p_state_in_tool)
                     .auto_output("state", &wiring.p_state)
-                    .logic_rhai(format!(
-                        r#"let s = state; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
-                    ))
+                    .logic_rhai(r#"let s = state; s.pending = [#{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }]; s.message_count = s.message_count + 1; #{ state: s }"#.to_string())
                     .done();
                 }
                 (Some(child_out), None) => {
@@ -758,9 +753,7 @@ pub(crate) fn apply_agent_tool_wirings(
                     .auto_input("result", &child_out)
                     .auto_input("state", &wiring.p_state_in_tool)
                     .auto_output("state", &wiring.p_state)
-                    .logic_rhai(format!(
-                        r#"let s = state; s.pending = [#{{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }}]; s.message_count = s.message_count + 1; #{{ state: s }}"#
-                    ))
+                    .logic_rhai(r#"let s = state; s.pending = [#{ role: "tool", tool_call_id: s.pending_tool_call_id, content: result }]; s.message_count = s.message_count + 1; #{ state: s }"#.to_string())
                     .done();
                 }
                 (None, _) => {}
@@ -874,8 +867,7 @@ pub(crate) fn apply_timeout_cancel_fanouts(
             // The in-flight place we're draining lives elsewhere in the net —
             // synthesize a typed handle here by id alone. Use DynamicToken so
             // the consume arc accepts whatever shape the child parked.
-            let in_flight: PlaceHandle<DynamicToken> =
-                PlaceHandle::external(spec.place_id.clone());
+            let in_flight: PlaceHandle<DynamicToken> = PlaceHandle::external(spec.place_id.clone());
 
             // Build the per-kind cancel-input shape AND pick the engine
             // effect descriptor to fire afterwards.
@@ -1005,4 +997,3 @@ pub(super) fn declared_outputs_rhai(backend: ExecutionBackendType, output: &Port
         .collect();
     json_to_rhai_literal(&serde_json::Value::Array(arr))
 }
-

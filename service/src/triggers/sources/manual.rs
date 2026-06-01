@@ -16,14 +16,20 @@ use crate::triggers::model::{FireResult, TriggerError};
 use crate::triggers::waiters::{ResultWaiters, TerminalOutcome};
 
 /// Fire a manual trigger. Equivalent to calling `dispatcher.fire(node_id,
-/// payload)` directly — kept as a free function so the per-source modules all
-/// look uniform.
+/// payload, dispatch_options)` directly — kept as a free function so the
+/// per-source modules all look uniform. `dispatch_options` carries γ.mekhan
+/// ablation (#126.2) for research-harness-driven fires; ordinary HTTP fires
+/// pass `DispatchOptions::default()`.
 pub async fn fire(
     dispatcher: &TriggerDispatcher,
     node_id: &str,
     payload: Value,
+    dispatch_options: petri_api_types::DispatchOptions,
+    net_parameters: Option<Value>,
 ) -> Result<FireResult, TriggerError> {
-    dispatcher.fire(node_id, payload).await
+    dispatcher
+        .fire(node_id, payload, dispatch_options, net_parameters)
+        .await
 }
 
 /// Fire a manual trigger in WaitForResult mode: a Spawn additionally
@@ -33,7 +39,11 @@ pub async fn fire_waiting(
     dispatcher: &TriggerDispatcher,
     node_id: &str,
     payload: Value,
+    dispatch_options: petri_api_types::DispatchOptions,
+    net_parameters: Option<Value>,
     waiters: &ResultWaiters,
 ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
-    dispatcher.fire_waiting(node_id, payload, waiters).await
+    dispatcher
+        .fire_waiting(node_id, payload, dispatch_options, net_parameters, waiters)
+        .await
 }

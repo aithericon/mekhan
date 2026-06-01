@@ -4,7 +4,14 @@
 //! `cloud-layer-pool-ollama` bin. Spawns a managed Ollama subprocess,
 //! probes hardware, registers the executor as a `compute_pool` with
 //! capability-routing, runs the 5s heartbeat loop, and exposes a minimal
-//! HTTP listener at the configured `pool_url` (`/v1/healthz`).
+//! HTTP listener at the configured `pool_url` serving:
+//!
+//!   - `GET /v1/healthz` — liveness probe
+//!   - `POST /v1/inference` — synchronous HTTP inference bridge (sub-phase
+//!     2.3b). Cap-routing's engine-side `HttpInferenceHandler` dispatches
+//!     inference requests here; the handler wraps `OllamaAdapter` against the
+//!     managed subprocess. Lease validation is deferred to a later slice;
+//!     any non-empty Bearer is accepted.
 //!
 //! This binary is intentionally **lightweight** — it does NOT consume
 //! NATS, apalis, gRPC, or any of the heavier `executor-service`
@@ -20,7 +27,7 @@
 //! 2. Spawn managed Ollama subprocess on `AITHERICON_EXECUTOR_OLLAMA_PORT`
 //!    (default 11436).
 //! 3. Spawn the pool_listener axum task on `AITHERICON_EXECUTOR_POOL_PORT`
-//!    (default 3301) serving `/v1/healthz`.
+//!    (default 3301) serving `/v1/healthz` + `POST /v1/inference`.
 //! 4. Call [`aithericon_executor_llm::register_as_pool`] — registers with
 //!    capability-routing + spawns the heartbeat loop. Fail-closed.
 //! 5. Wait on Ctrl+C; cancel the heartbeat + pool_listener; let the
@@ -31,8 +38,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use aithericon_executor_llm::{
-    register_as_pool, spawn_pool_listener, OllamaSubprocess, OllamaSubprocessConfig,
-    PoolBootConfig,
+    register_as_pool, spawn_pool_listener, OllamaSubprocess, OllamaSubprocessConfig, PoolBootConfig,
+    ToolResultsState,
 };
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
@@ -84,10 +91,58 @@ async fn main() -> anyhow::Result<()> {
         "Managed Ollama subprocess up and serving"
     );
 
-    // 3. Pool listener (axum healthz).
+    // Workstream #30 (sub-phase 2.5a): always_hot pre-pull. Pull each
+    // model in AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS BEFORE registration
+    // so cap-routing's first heartbeat snapshot already shows the model
+    // warm. Fail-closed: any pull failure aborts boot.
+    let always_hot: Vec<String> = std::env::var("AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS")
+        .ok()
+        .map(|s| {
+            s.split(',')
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !always_hot.is_empty() {
+        tracing::info!(
+            count = always_hot.len(),
+            models = ?always_hot,
+            "Pre-pulling AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS (workstream #30)"
+        );
+        for model in &always_hot {
+            ollama.model_load(model).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "AITHERICON_EXECUTOR_ALWAYS_HOT_MODELS pre-pull '{}' failed (fail-closed): {}",
+                    model,
+                    e
+                )
+            })?;
+            tracing::info!(model = %model, "always_hot pull complete");
+        }
+    }
+
+    // 3. Pool listener (healthz + inference + /v1/models/{load,evict} +
+    //    /v1/runs/{run_id}/tool_results).
+    //    OllamaAdapter is the sole CompletionPort in the pool binary —
+    //    Anthropic/OpenAI adapters are not wired here since this executor
+    //    manages a local Ollama subprocess.
+    let llm_port: Arc<dyn aithericon_executor_llm::CompletionPort> =
+        Arc::new(aithericon_executor_llm::adapters::ollama::OllamaAdapter);
     let listener_cancel = CancellationToken::new();
-    let _actual_addr = spawn_pool_listener(pool_bind, listener_cancel.clone()).await?;
-    tracing::info!(bind = %pool_bind, "Pool listener up serving /v1/healthz");
+    let tool_results_state = ToolResultsState::new();
+    let _actual_addr = spawn_pool_listener(
+        pool_bind,
+        listener_cancel.clone(),
+        llm_port,
+        Arc::clone(&ollama),
+        tool_results_state,
+    )
+    .await?;
+    tracing::info!(
+        bind = %pool_bind,
+        "Pool listener up serving /v1/healthz + POST /v1/inference"
+    );
 
     // 4. Register + heartbeat (fail-closed).
     let boot_handle = register_as_pool(&config, Arc::clone(&ollama))

@@ -8,7 +8,7 @@
 //!   just dev up   # Postgres + NATS + S3 + executor + engine + mekhan
 //!
 //! The engine/executor connect to the dev NATS broker (`docker-compose.yml`
-//! maps `14333:4222`); the test harness defaults to that same broker.
+//! maps `4333:4222`); the test harness defaults to that same broker.
 //!
 //! Run with:
 //!   cargo test --test causality_e2e -- --test-threads=1 --nocapture
@@ -41,7 +41,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -150,14 +150,13 @@ async fn wait_for_instance_status(
 ) {
     let start = std::time::Instant::now();
     loop {
-        let status: Option<String> = sqlx::query_scalar(
-            "SELECT status FROM workflow_instances WHERE id = $1",
-        )
-        .bind(instance_id)
-        .fetch_optional(db)
-        .await
-        .unwrap()
-        .flatten();
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+                .bind(instance_id)
+                .fetch_optional(db)
+                .await
+                .unwrap()
+                .flatten();
 
         if status.as_deref() == Some(target) {
             return;
@@ -206,13 +205,12 @@ async fn wait_for_causality_events(
 ) {
     let start = std::time::Instant::now();
     loop {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)::bigint FROM causality_events WHERE net_id = $1",
-        )
-        .bind(net_id)
-        .fetch_one(db)
-        .await
-        .unwrap_or(0);
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM causality_events WHERE net_id = $1")
+                .bind(net_id)
+                .fetch_one(db)
+                .await
+                .unwrap_or(0);
 
         if count >= min_count {
             return;
@@ -259,7 +257,7 @@ async fn causality_full_pipeline() {
     // ── 1. Prerequisites ─────────────────────────────────────────────────
     if !engine_available().await {
         eprintln!(
-            "SKIP: engine not available at http://localhost:13030\n\
+            "SKIP: engine not available at http://localhost:3030\n\
              Start the full local stack with: just dev up"
         );
         return;
@@ -277,12 +275,16 @@ async fn causality_full_pipeline() {
     let config = common::test_config();
     let petri = mekhan_service::petri::client::PetriClient::new(&config.petri_lab_url);
     let yjs_persistence = mekhan_service::yjs::persistence::YjsPersistence::new(db.clone());
-    let yjs_manager = Arc::new(mekhan_service::yjs::manager::YjsManager::new(yjs_persistence));
+    let yjs_manager = Arc::new(mekhan_service::yjs::manager::YjsManager::new(
+        yjs_persistence,
+    ));
     let artifact_store = Arc::new(mekhan_service::s3::ArtifactStore::new(&config.s3));
-    let catalogue_repo = Arc::new(mekhan_service::catalogue::repository::PgCatalogueRepository::new(db.clone()));
+    let catalogue_repo =
+        Arc::new(mekhan_service::catalogue::repository::PgCatalogueRepository::new(db.clone()));
     let (token_verifier, principal_resolver) = common::default_test_auth();
-    let session_store: Arc<dyn mekhan_service::auth::bff::session::SessionStore> =
-        Arc::new(mekhan_service::auth::bff::session::PgSessionStore::new(db.clone()));
+    let session_store: Arc<dyn mekhan_service::auth::bff::session::SessionStore> = Arc::new(
+        mekhan_service::auth::bff::session::PgSessionStore::new(db.clone()),
+    );
     let triggers = Arc::new(mekhan_service::triggers::TriggerDispatcher::new(
         db.clone(),
         petri.clone(),
@@ -298,9 +300,7 @@ async fn causality_full_pipeline() {
         artifact_s3: None,
         catalogue_repo,
         live: LiveBroadcasts::new(),
-        authenticator: Arc::new(
-            mekhan_service::auth::authenticator::NoopAuthenticator::default(),
-        ),
+        authenticator: Arc::new(mekhan_service::auth::authenticator::NoopAuthenticator::default()),
         session_store,
         oidc: None,
         token_verifier,
@@ -328,10 +328,7 @@ async fn causality_full_pipeline() {
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("create KV");
-    let sub_mgr = Arc::new(SubscriptionManager::new(
-        kv,
-        nats.jetstream().clone(),
-    ));
+    let sub_mgr = Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
 
     // Single consumer projects catalogue, human tasks, and step/metric/log
     // breadcrumbs off the petri.events.> stream.
@@ -339,14 +336,23 @@ async fn causality_full_pipeline() {
     let c_db = db.clone();
     let c_sub = sub_mgr.clone();
     let c_live = LiveBroadcasts::new();
-    let _causality = spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
+    let _causality =
+        spawn_consumer(move || start_causality_ingest(c_nats, c_db, c_sub, c_live, None)).await;
 
     // Lifecycle listener
     let l_nats = nats.clone();
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();
-    let _lifecycle =
-        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None, mekhan_service::triggers::ResultWaiters::new())).await;
+    let _lifecycle = spawn_consumer(move || {
+        start_lifecycle_listener(
+            l_nats,
+            l_db,
+            l_sub,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+    })
+    .await;
 
     // ── 3. Compile & deploy scenario ─────────────────────────────────────
 
@@ -371,13 +377,11 @@ async fn causality_full_pipeline() {
     eprintln!("  human task appeared: {task_id} (process: {task_process_id})");
 
     // Verify task detail
-    let task_detail: Value = sqlx::query_scalar(
-        "SELECT detail FROM hpi_tasks WHERE id = $1",
-    )
-    .bind(&task_id)
-    .fetch_one(&db)
-    .await
-    .expect("fetch task detail");
+    let task_detail: Value = sqlx::query_scalar("SELECT detail FROM hpi_tasks WHERE id = $1")
+        .bind(&task_id)
+        .fetch_one(&db)
+        .await
+        .expect("fetch task detail");
     assert_eq!(
         task_detail["net_id"].as_str(),
         Some(net_id.as_str()),
@@ -400,7 +404,10 @@ async fn causality_full_pipeline() {
     });
     let subject = format!("human.completed.{net_id}.{review_place}");
     nats.client()
-        .publish(subject.clone(), serde_json::to_vec(&completion).unwrap().into())
+        .publish(
+            subject.clone(),
+            serde_json::to_vec(&completion).unwrap().into(),
+        )
         .await
         .expect("publish human completion");
     eprintln!("  published human completion to {subject}");
@@ -425,24 +432,25 @@ async fn causality_full_pipeline() {
     // Wait for causality events to accumulate (at least 3: TokenCreated + TransitionFired + EffectCompleted)
     wait_for_causality_events(&db, &net_id, 3, Duration::from_secs(10)).await;
 
-    let event_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM causality_events WHERE net_id = $1",
-    )
-    .bind(&net_id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let event_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM causality_events WHERE net_id = $1")
+            .bind(&net_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     eprintln!("  causality events: {event_count}");
-    assert!(event_count >= 3, "expected ≥3 causality events, got {event_count}");
+    assert!(
+        event_count >= 3,
+        "expected ≥3 causality events, got {event_count}"
+    );
 
     // Check token roles exist
-    let token_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM causality_event_tokens WHERE net_id = $1",
-    )
-    .bind(&net_id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let token_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM causality_event_tokens WHERE net_id = $1")
+            .bind(&net_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert!(token_count > 0, "expected causality_event_tokens rows");
 
     // Check process tags (seed tokens should self-tag)
@@ -491,9 +499,7 @@ async fn causality_full_pipeline() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!(
-                    "/api/v1/provenance/{net_id}/{some_token}?depth=5"
-                ))
+                .uri(format!("/api/v1/provenance/{net_id}/{some_token}?depth=5"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -507,20 +513,22 @@ async fn causality_full_pipeline() {
         .expect("provenance.nodes should be array");
     eprintln!("  provenance nodes for {some_token}: {}", nodes.len());
     // At minimum depth 0 (the event that produced this token)
-    assert!(!nodes.is_empty(), "provenance should return at least 1 node");
+    assert!(
+        !nodes.is_empty(),
+        "provenance should return at least 1 node"
+    );
 
     // ── 9. Assert catalogue (if executor completed with artifact) ────────
 
     // Give catalogue ingest a moment to process
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let catalogue_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM catalogue_entries WHERE source_net = $1",
-    )
-    .bind(&net_id)
-    .fetch_one(&db)
-    .await
-    .unwrap_or(0);
+    let catalogue_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM catalogue_entries WHERE source_net = $1")
+            .bind(&net_id)
+            .fetch_one(&db)
+            .await
+            .unwrap_or(0);
     eprintln!("  catalogue entries for net: {catalogue_count}");
     // Note: catalogue_count may be 0 if the catalogue ingest consumer isn't running
     // in this test. The key assertion is that causality + tasks + lifecycle work.
@@ -556,7 +564,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
 
     if !engine_available().await {
         eprintln!(
-            "SKIP: engine not available at http://localhost:13030\n\
+            "SKIP: engine not available at http://localhost:3030\n\
              Start the full local stack with: just dev up"
         );
         return;
@@ -586,8 +594,16 @@ async fn interpolated_human_task_resolves_start_file_param() {
     let l_nats = nats.clone();
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();
-    let _lifecycle =
-        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None, mekhan_service::triggers::ResultWaiters::new())).await;
+    let _lifecycle = spawn_consumer(move || {
+        start_lifecycle_listener(
+            l_nats,
+            l_db,
+            l_sub,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+    })
+    .await;
 
     // Minimal Start(file param) → Review(interpolated blocks) → End graph.
     let graph = json!({
@@ -735,8 +751,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
 
     // 4. Engine runs Start→Review; HumanTaskRequest → HUMAN_REQUESTS →
     //    causality consumer projects the rendered task into hpi_tasks.
-    let (task_id, _process_id) =
-        wait_for_task_by_net(&db, &net_id, Duration::from_secs(20)).await;
+    let (task_id, _process_id) = wait_for_task_by_net(&db, &net_id, Duration::from_secs(20)).await;
 
     let (detail, title): (Value, String) =
         sqlx::query_as("SELECT detail, title FROM hpi_tasks WHERE id = $1")
@@ -883,13 +898,11 @@ async fn rrv_publish_and_create(
 }
 
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Option<Value> {
-    sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT result FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .unwrap()
+    sqlx::query_scalar::<_, Option<Value>>("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
 }
 
 fn start_with_fields(fields: Value) -> Value {
@@ -922,8 +935,7 @@ async fn rrv_end_result_mapping_success_envelope() {
               "targetHandle": "in", "type": "sequence" }
         ]
     });
-    let (app, db, id, _c, _l) =
-        rrv_publish_and_create(graph, json!({ "amount": 42 })).await;
+    let (app, db, id, _c, _l) = rrv_publish_and_create(graph, json!({ "amount": 42 })).await;
     wait_for_instance_status(&db, id, "completed", Duration::from_secs(30)).await;
 
     assert_eq!(
@@ -943,7 +955,10 @@ async fn rrv_end_result_mapping_success_envelope() {
         .await
         .unwrap();
     let body = body_json(resp.into_body()).await;
-    assert_eq!(body["result"], json!({ "ok": true, "value": { "total": 42 } }));
+    assert_eq!(
+        body["result"],
+        json!({ "ok": true, "value": { "total": 42 } })
+    );
     eprintln!("  ✓ rrv_end_result_mapping_success_envelope passed");
 }
 
@@ -980,8 +995,7 @@ async fn rrv_failure_precedence_over_end() {
               "targetHandle": "in", "type": "sequence" }
         ]
     });
-    let (_app, db, id, _c, _l) =
-        rrv_publish_and_create(graph, json!({ "code": "E_BAD" })).await;
+    let (_app, db, id, _c, _l) = rrv_publish_and_create(graph, json!({ "code": "E_BAD" })).await;
     // Failure does NOT change net status — it forwards to End → completed.
     wait_for_instance_status(&db, id, "completed", Duration::from_secs(30)).await;
 
@@ -1017,8 +1031,7 @@ async fn rrv_bare_end_result_is_null() {
               "targetHandle": "in", "type": "sequence" }
         ]
     });
-    let (_app, db, id, _c, _l) =
-        rrv_publish_and_create(graph, json!({ "x": 1 })).await;
+    let (_app, db, id, _c, _l) = rrv_publish_and_create(graph, json!({ "x": 1 })).await;
     wait_for_instance_status(&db, id, "completed", Duration::from_secs(30)).await;
     assert_eq!(
         fetch_result(&db, id).await,

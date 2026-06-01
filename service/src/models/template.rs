@@ -310,9 +310,8 @@ pub enum WorkflowNodeData {
         retry_policy: RetryPolicy,
         /// Where/how the job is dispatched. `Executor` (default) = our executor
         /// daemon pool over the NATS work queue, optionally under a `token_pool`
-        /// admission (`Executor.pool`). `Scheduled` = submit/lease through an
-        /// external cluster (a `datacenter` resource, docs/13; or today's
-        /// env-global scheduler-net when `scheduler` is `None`).
+        /// admission (`Executor.pool`). `Scheduled` = lease through an external
+        /// cluster (a `datacenter` resource, docs/13).
         /// `#[serde(default)]` + the `Executor` default ⇒ every existing
         /// template round-trips unchanged (same precedent as `retry_policy`).
         ///
@@ -332,6 +331,17 @@ pub enum WorkflowNodeData {
         /// `retry_policy`/`deployment_model`).
         #[serde(rename = "streamOutput", default)]
         stream_output: bool,
+        /// Opt-in streaming CONSUMER. When `true`, the node exposes a second
+        /// INPUT port "stream" and becomes a long-lived stateful reducer: it is
+        /// seeded at net entry, receives the upstream producer's chunks over IPC
+        /// (`aithericon.chunks()`), and folds them in-process. Wire the
+        /// producer's `stream` handle to this node's `stream` input and its
+        /// control `out` to this node's `in` (the control token's arrival is the
+        /// end-of-stream / EOF trigger, carrying `stream_count`). The compiler
+        /// derives the executor `feed_chunks` flag from this. Plain `bool` +
+        /// `#[serde(default)]` ⇒ existing templates round-trip unchanged.
+        #[serde(rename = "streamInput", default)]
+        stream_input: bool,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -373,7 +383,11 @@ pub enum WorkflowNodeData {
         mode: JoinMode,
         /// Honoured only when `mode == All`. For `Any` only one payload ever
         /// arrives per firing, so there is nothing to merge.
-        #[serde(rename = "mergeStrategy", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "mergeStrategy",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         merge_strategy: Option<MergeStrategy>,
         /// Declared output shape. Each branch's inbound payload is parked at
         /// `p_<id>_data`; the declared fields here describe what downstream
@@ -397,24 +411,40 @@ pub enum WorkflowNodeData {
         /// Downstream blocks read them via `<loop_slug>.<var>` borrows.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         accumulators: Vec<LoopAccumulator>,
-        /// Optional datacenter lease held for the WHOLE loop (acquire once at
-        /// enter, reuse across every iteration, release once on exit). Declared,
-        /// not inferred — a Loop holds a lease only when the author explicitly
-        /// binds one. When set, `lower_loop` hoists the
-        /// claim/grant/register/release handshake to loop scope (the same
-        /// machinery `lower_pooled_body` uses per-step) so ONE allocation backs
-        /// all iterations; the held lease (incl. `alloc_id`) is parked into the
-        /// loop's `p_<id>_data` envelope under a `lease` key, so body iterations
-        /// and downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.
-        /// `<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        lease: Option<LeaseBinding>,
     },
     #[serde(rename = "scope")]
     Scope {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+    },
+    /// Container that holds ONE datacenter allocation for the duration of its
+    /// body. Decouples "hold an allocation" from "loop": any AutomatedStep
+    /// (deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly
+    /// or through intervening containers like a plain Loop — runs ON the held
+    /// allocation by containment (no per-step `run_on_lease` flag). The lease is
+    /// acquired once on enter and released once on exit; the held lease (incl.
+    /// `executor_namespace` / `alloc_id`) is parked into the scope's
+    /// `p_<id>_data` envelope under a `lease` key, so body steps and downstream
+    /// blocks borrow `<scope_slug>.lease.<field>` through the standard read-arc
+    /// pipeline. Children attach via the same `body_in`/`body_out` interior
+    /// handles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`
+    /// handles connect to the outer flow.
+    ///
+    /// To hold ONE cluster allocation across loop iterations, compose
+    /// `LeaseScope { Loop { … } }` — the scope acquires before the loop starts
+    /// and releases after it exits.
+    #[serde(rename = "lease_scope")]
+    LeaseScope {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// REQUIRED datacenter lease binding (a LeaseScope with no lease is a
+        /// pointless empty container). Reuses [`LeaseBinding`] verbatim — the
+        /// `scheduler` alias resolves via `resolve_binding(..., "datacenter",
+        /// ...)` exactly as the Loop-lease path does — and is NOT `Option`;
+        /// `validate_lease_scope` rejects an empty `scheduler` alias.
+        lease: LeaseBinding,
     },
     /// Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`
     /// into N item tokens (one per element), runs a BODY sub-graph of child
@@ -433,9 +463,21 @@ pub enum WorkflowNodeData {
         description: Option<String>,
         /// Producer-namespaced reference to the array to scatter, carrying
         /// exactly one `[*]` boundary at iteration time (resolved through the
-        /// Repeater items-ref machinery), e.g. `extract.tasks`.
-        #[serde(rename = "itemsRef")]
+        /// Repeater items-ref machinery), e.g. `extract.tasks`. IGNORED when
+        /// `stream_source` is set (a streaming Map sources elements from its
+        /// `stream`/`control` edges, not a static array).
+        #[serde(rename = "itemsRef", default)]
         items_ref: String,
+        /// When `true`, this Map is a STREAMING map: instead of scattering the
+        /// static `items_ref` array, it ingests a streaming producer's chunks
+        /// (one element per chunk over the `stream` handle) and sizes its gather
+        /// barrier on the runtime `stream_count` (from the `control` handle).
+        /// Parallel-only — bodies fan out concurrently exactly like the array
+        /// path; `__map_idx` (the producer sequence) restores order at the
+        /// gather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps
+        /// round-trip unchanged.
+        #[serde(rename = "streamSource", default)]
+        stream_source: bool,
         /// Identifier the per-item element is bound to on each body token.
         /// Body guards / Python read `<item_var>.<field>`. Defaults to `item`.
         #[serde(rename = "itemVar", default = "default_item_var")]
@@ -449,29 +491,22 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<Port>,
     },
-    /// Drains a streaming producer AutomatedStep's per-call structured output
-    /// (`set_output(name, value)` events landing on the producer's Signal
-    /// place), reduces (folds) them, and gates completion behind an
-    /// end-of-stream counted barrier sized by `completed.detail.stream_count`.
-    ///
-    /// Two named inbound handles: `"stream"` carries the data chunks (one
-    /// token per `output_set` event); `"control"` carries the producer's
-    /// terminal completion token whose `detail.stream_count` is the expected
-    /// chunk count. The gather can't fire until all `N` chunks AND the count
-    /// token are present, so the net stays alive until the stream fully drains
-    /// — mirroring Map's counted-barrier gather, but counting on a runtime
-    /// `stream_count` instead of a scattered collection length. NO engine
-    /// change: the engine's two-pass binding already admits the count
-    /// coordinator arriving after results, and each stream-token injection
-    /// re-kicks the eval loop.
-    #[serde(rename = "stream_consumer")]
-    StreamConsumer {
+    /// Stream fold — drains a streaming producer's per-call `set_output` chunks
+    /// and folds them into ONE output token via a declarative `reduce` strategy,
+    /// gating completion behind an end-of-stream counted barrier sized by the
+    /// producer's `stream_count`. No body, no executor: the fold is pure Rhai in
+    /// the net. This is the clean extraction of the old `StreamConsumer`'s
+    /// default `Rhai` dispatch; the body-dispatch streaming patterns live
+    /// elsewhere now — per-chunk parallel map → a streaming-source `Map`;
+    /// stateful in-process reduce → an `AutomatedStep` with `streamInput`. Parks
+    /// the reduced output write-once at `p_<id>_data` like Map.
+    #[serde(rename = "stream_fold")]
+    StreamFold {
         label: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
-        /// Name of the field each chunk's value is read as. Documentary for
-        /// v1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);
-        /// a body-per-chunk variant would bind it as the process input.
+        /// Name of the output field that holds the reduced result; borrowable
+        /// downstream as `<slug>.<resultVar>`.
         #[serde(rename = "resultVar", default = "default_stream_result_var")]
         result_var: String,
         /// How the drained chunks are folded into the single output token.
@@ -479,12 +514,6 @@ pub enum WorkflowNodeData {
         /// `.value`).
         #[serde(default)]
         reduce: StreamReduce,
-        /// How each drained chunk is dispatched BEFORE the reduce. Defaults to
-        /// `Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every
-        /// shipped consumer template omits this field and MUST decode to `Rhai`;
-        /// any other default would make them demand a body and break at publish.
-        #[serde(default)]
-        dispatch: StreamDispatch,
     },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token
@@ -523,9 +552,17 @@ pub enum WorkflowNodeData {
         /// Optional progress message. Supports `{{ field }}` placeholders.
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(rename = "currentStep", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "currentStep",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         current_step: Option<i64>,
-        #[serde(rename = "totalSteps", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "totalSteps",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         total_steps: Option<i64>,
     },
     /// Pass-through control node that marks the owning HPI process `failed`
@@ -620,6 +657,18 @@ pub enum WorkflowNodeData {
         /// Disabled triggers are stored but the dispatcher ignores them.
         #[serde(default)]
         enabled: bool,
+        /// Pre-AIR direct target. When set, the trigger fires by seeding the
+        /// named AIR place with the supplied payload, bypassing graph-edge
+        /// resolution. Mutually exclusive with an outgoing edge in the graph:
+        /// pre-AIR templates carry a Trigger-only stub graph (no Start, no
+        /// edges). Used by clinic-style headless templates pushed through
+        /// `POST /api/templates/apply-air`.
+        #[serde(
+            rename = "airTargetPlaceId",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        air_target_place_id: Option<String>,
     },
     /// Agent block — one LLM call, optionally extended with tool children
     /// and a multi-turn loop. PR 1 only models the type; the degenerate
@@ -681,11 +730,7 @@ pub enum WorkflowNodeData {
         /// Optional terminal Rhai guard. When `Some`, the agent loop exits
         /// once this expression evaluates true on the parked agent state.
         /// Inert in the degenerate (single-turn) path.
-        #[serde(
-            rename = "stopWhen",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "stopWhen", default, skip_serializing_if = "Option::is_none")]
         stop_when: Option<String>,
         /// Context-window management strategy. Defaults to `None` (no
         /// compaction). Inert in the degenerate path.
@@ -762,7 +807,10 @@ pub enum WorkflowNodeData {
         /// canvas can show "what this sub-workflow consumes" (the way a Start
         /// node shows its declared fields) without opening the property panel.
         /// Empty `in` port ⇒ not yet resolved / child declares no Start fields.
-        #[serde(rename = "inputContract", default = "default_subworkflow_input_contract")]
+        #[serde(
+            rename = "inputContract",
+            default = "default_subworkflow_input_contract"
+        )]
         input_contract: Port,
     },
 }
@@ -780,8 +828,9 @@ impl WorkflowNodeData {
             | Self::Join { label, .. }
             | Self::Loop { label, .. }
             | Self::Scope { label, .. }
+            | Self::LeaseScope { label, .. }
             | Self::Map { label, .. }
-            | Self::StreamConsumer { label, .. }
+            | Self::StreamFold { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
@@ -813,8 +862,9 @@ impl WorkflowNodeData {
             | Self::Join { description, .. }
             | Self::Loop { description, .. }
             | Self::Scope { description, .. }
+            | Self::LeaseScope { description, .. }
             | Self::Map { description, .. }
-            | Self::StreamConsumer { description, .. }
+            | Self::StreamFold { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
@@ -1071,7 +1121,9 @@ pub struct DownloadItemConfig {
 /// Severity for callout blocks. Snake-case on the wire (`"info"`,
 /// `"warning"`, `"error"`, `"success"`) to keep the byte-for-byte shape that
 /// the editor and human-task UI already produce/consume.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum CalloutSeverity {
     Info,
@@ -1082,7 +1134,18 @@ pub enum CalloutSeverity {
 
 /// Layout mode for image blocks. Snake-case wire values: `"single"`,
 /// `"grid"`, `"gallery"`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageDisplay {
     #[default]
@@ -1255,57 +1318,17 @@ pub enum DeploymentModel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pool: Option<ResourcePoolBinding>,
     },
-    /// Submit/lease through an external cluster. `scheduler` names a
-    /// `datacenter` resource (docs/13); `None` = today's env-global
-    /// scheduler-net (byte-identical). `job_template` selects the scheduler's
-    /// parameterized job (e.g. `petri-mumax3-worker`). `operation` picks
-    /// `Submit` (today's queued dispatch) or `Lease` (R4: hold an allocation,
-    /// run on it).
+    /// Lease through an external cluster. `scheduler` names a `datacenter`
+    /// resource (docs/13). `job_template` selects the scheduler's parameterized
+    /// job (e.g. `petri-mumax3-worker`).
     Scheduled {
-        /// `datacenter` resource alias. `None` = env-global scheduler-net (only
-        /// valid for `operation: Submit`; `Lease` requires a concrete alias).
+        /// `datacenter` resource alias.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduler: Option<String>,
         #[serde(rename = "jobTemplate")]
         job_template: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
-        /// `Submit` (default) = today's proven dispatch. `Lease` = R4.
-        /// NOTE: a DIFFERENT field name from the `mode` tag on purpose — `mode`
-        /// already discriminates inline/scheduled, so the submit/lease selector
-        /// is `operation`.
-        #[serde(default)]
-        operation: ScheduledOperation,
-        /// Claim-schema-shaped lease request params (the `datacenter` kind's
-        /// `claim_schema` in `aithericon_resources::pool` — `{ gpu_count,
-        /// gpu_type, max_duration_secs }`). Used only by `operation: Lease`,
-        /// where it is validated against the kind's `claim_schema` and carried
-        /// into the `ClaimRequest`. Ignored for `Submit`. `None` ⇒ the
-        /// allocator's default placement. Optional + skip-if-none so today's
-        /// `Submit` wire shape round-trips byte-identically.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        request: Option<serde_json::Value>,
-        /// Opt-in: ENQUEUE this body to the enclosing leased loop's lease
-        /// namespace instead of submitting a fresh scheduler job. The body
-        /// step ALWAYS sits inside the leasing loop (`parent_id == loop.id`)
-        /// and there is exactly one loop lease in scope — no ambiguity. When
-        /// set (and the enclosing Loop carries a `lease`), the body lowers via
-        /// the EXECUTOR enqueue path (NOT the scheduler-net) and the compiler
-        /// injects `d.executor_namespace = <loop_slug>.lease.executor_namespace`
-        /// onto the job token via the standard read-arc borrow pipeline. The
-        /// engine's `ExecutorSubmitHandler` reads that per-job namespace and
-        /// publishes to the lease-scoped NATS queue (`lease-<grant_id>`) drained
-        /// by the ONE persistent executor the acquire path launched on the held
-        /// allocation — so every iteration's body runs WARM on the same held
-        /// instance (venv/model/GPU state persists). `false` (default) = an
-        /// independent scheduler submit. The namespace rides the job token's
-        /// top-level `executor_namespace` key — no typed engine field.
-        #[serde(
-            default,
-            rename = "runOnLease",
-            skip_serializing_if = "std::ops::Not::not"
-        )]
-        run_on_lease: bool,
     },
 }
 
@@ -1317,20 +1340,6 @@ impl Default for DeploymentModel {
     fn default() -> Self {
         DeploymentModel::Executor { pool: None }
     }
-}
-
-/// The two operations a `Scheduled` step can perform against its cluster.
-/// Internally a plain snake_case enum: `"submit"` / `"lease"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ScheduledOperation {
-    /// Today's behaviour: submit a job to the scheduler-net (sbatch / Nomad
-    /// dispatch) and await its result. Proven end-to-end.
-    #[default]
-    Submit,
-    /// Hold an allocation/lease on the cluster and run the body on it (R4 —
-    /// the `resource_lease` engine effect + datacenter lease-adapter).
-    Lease,
 }
 
 /// Optional resource hints forwarded to the scheduler for a `Scheduled` step.
@@ -1464,20 +1473,22 @@ fn default_item_var() -> String {
     "item".to_string()
 }
 
-/// Default `StreamConsumer.result_var` — chunks bind their value as `item`.
+/// Default `StreamFold.result_var` — chunks bind their value as `item`.
 fn default_stream_result_var() -> String {
     "item".to_string()
 }
 
-/// How a `StreamConsumer` folds the drained chunks into its single output
-/// token. Tagged on `kind` (camelCase), mirroring the serde conventions of the
-/// other config enums. Each variant selects the gather barrier's reduce Rhai in
-/// `compiler/lower/stream_consumer.rs`.
+/// How a `StreamFold` folds the drained chunks into its single output token.
+/// Tagged on `kind` (camelCase), mirroring the serde conventions of the other
+/// config enums. Each variant selects the gather barrier's reduce Rhai in
+/// `compiler/lower/stream_fold.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Default)]
 pub enum StreamReduce {
     /// Ordered array — sort chunks by stream sequence, project each `.value`
     /// into a `Vec`. The default (matches Map's gather reduce).
+    #[default]
     Array,
     /// String-join the chunk `.value`s (rendered as strings) in stream order,
     /// optionally separated by `sep`.
@@ -1490,42 +1501,6 @@ pub enum StreamReduce {
     /// Author-supplied Rhai over `__r` (the sorted array of
     /// `#{ value, __map_idx, __map_id }`), returning the reduced value.
     Custom { expr: String },
-}
-
-impl Default for StreamReduce {
-    fn default() -> Self {
-        StreamReduce::Array
-    }
-}
-
-/// How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.
-/// Tagged on `mode` (camelCase), mirroring the other config enums.
-///
-/// - `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of
-///   `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer
-///   template omits `dispatch` and decodes to this — anything else would force a
-///   body and break those templates at publish.
-/// - `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at
-///   a time in strict stream-sequence order (a single-permit lock + a
-///   next-expected-sequence guard), then the N results are reduced.
-/// - `ParallelBody`: same per-chunk body, dispatched map-style concurrently;
-///   results are re-ordered + reduced at the gather barrier.
-/// - `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not
-///   implemented in this phase — the lowering rejects it cleanly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema, Default)]
-#[serde(tag = "mode", rename_all = "camelCase")]
-pub enum StreamDispatch {
-    /// Pure-Rhai passthrough, no per-chunk body. THE DEFAULT — keeps every
-    /// existing consumer template byte-identical.
-    #[default]
-    Rhai,
-    /// Python body per chunk, strictly one-at-a-time in stream order, then reduce.
-    SequentialBody,
-    /// Python body per chunk, map-style concurrent, reduce at the gather.
-    ParallelBody,
-    /// One long-lived Python reducer fed chunks live over IPC. Phase-3 only —
-    /// the compiler rejects this mode for now.
-    LiveReduce,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
@@ -1621,11 +1596,11 @@ where
     let Some(value) = value else {
         return Ok(None);
     };
-    let arr = value
-        .as_array()
-        .ok_or_else(|| D::Error::custom(
+    let arr = value.as_array().ok_or_else(|| {
+        D::Error::custom(
             "task field `options` must be a list (either of strings or of `{value,label}` objects)",
-        ))?;
+        )
+    })?;
     let mut out = Vec::with_capacity(arr.len());
     for (i, item) in arr.iter().enumerate() {
         match item {
@@ -1677,7 +1652,18 @@ where
 /// `TASK_FIELD_KINDS` in `app/src/lib/hpi/types.ts` — drift means the
 /// compiler accepts an author's choice that the engine rejects (or
 /// vice-versa).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskFieldKind {
     #[default]
@@ -1732,11 +1718,9 @@ impl FieldKind {
             Self::Json => true,
             Self::Bool => value.is_boolean(),
             Self::Number => value.is_number(),
-            Self::Text
-            | Self::Textarea
-            | Self::Select
-            | Self::Signature
-            | Self::Timestamp => value.is_string(),
+            Self::Text | Self::Textarea | Self::Select | Self::Signature | Self::Timestamp => {
+                value.is_string()
+            }
             // File is a catalog reference (`file_metadata::StoragePath`); accept
             // any string or object, validation happens deeper.
             Self::File => value.is_string() || value.is_object(),
@@ -1830,7 +1814,11 @@ impl Port {
     /// Empty input port — used as the deserialization default for `Start.initial`
     /// and similar so existing templates load unchanged.
     pub fn empty_input() -> Self {
-        Self { id: "in".to_string(), label: "Input".to_string(), fields: vec![] }
+        Self {
+            id: "in".to_string(),
+            label: "Input".to_string(),
+            fields: vec![],
+        }
     }
 
     /// Validate a candidate token against this port's declared fields.
@@ -1843,9 +1831,7 @@ impl Port {
     /// ports (via the trigger dispatcher's signal path). Keeping one
     /// implementation guarantees the spawn and signal paths can't diverge.
     pub fn validate_token(&self, token: &serde_json::Value) -> Result<(), PortValidationError> {
-        let obj = token
-            .as_object()
-            .ok_or(PortValidationError::NotObject)?;
+        let obj = token.as_object().ok_or(PortValidationError::NotObject)?;
         for field in &self.fields {
             match obj.get(&field.name) {
                 None if field.required => {
@@ -1943,9 +1929,7 @@ pub(crate) fn agent_extra_output_fields() -> Vec<PortField> {
             kind: FieldKind::Number,
             required: false,
             options: None,
-            description: Some(
-                "Number of LLM round-trips before the agent exited.".to_string(),
-            ),
+            description: Some("Number of LLM round-trips before the agent exited.".to_string()),
             accept: None,
         },
         PortField {
@@ -2020,7 +2004,10 @@ pub fn agent_to_llm_config(
 ) -> serde_json::Value {
     use serde_json::{Number, Value};
     let mut config = serde_json::Map::new();
-    config.insert("provider".to_string(), Value::String(model.provider.clone()));
+    config.insert(
+        "provider".to_string(),
+        Value::String(model.provider.clone()),
+    );
     config.insert("model".to_string(), Value::String(model.model.clone()));
     if let Some(k) = &model.api_key {
         config.insert("api_key".to_string(), Value::String(k.clone()));
@@ -2038,7 +2025,9 @@ pub fn agent_to_llm_config(
     if let Some(t) = model.temperature {
         config.insert(
             "temperature".to_string(),
-            Number::from_f64(t).map(Value::Number).unwrap_or(Value::Null),
+            Number::from_f64(t)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
         );
     }
     if let Some(m) = model.max_tokens {
@@ -2168,16 +2157,10 @@ pub enum WebhookAuth {
     None,
     /// Compare a header (typically `Authorization` or `X-Webhook-Token`) to a
     /// static shared secret. Secret is stored encrypted at rest.
-    SharedSecret {
-        header: String,
-        secret_ref: String,
-    },
+    SharedSecret { header: String, secret_ref: String },
     /// HMAC-SHA256 signature over the request body, with the signing key
     /// stored encrypted at rest and the signature read from `header`.
-    SignedHmac {
-        header: String,
-        secret_ref: String,
-    },
+    SignedHmac { header: String, secret_ref: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -2211,7 +2194,10 @@ pub enum ConcurrencyPolicy {
     Queue,
     /// Dedup by hashing the result of a Rhai `expression` over the event scope;
     /// fires whose key has been seen within `window_secs` are dropped.
-    DedupKey { expression: String, window_secs: u32 },
+    DedupKey {
+        expression: String,
+        window_secs: u32,
+    },
 }
 
 /// A single field mapping for `Trigger.payload_mapping`. Each entry projects
@@ -2234,9 +2220,7 @@ pub struct FieldMapping {
 /// when the caller doesn't specify. `Sse` is never *executed* on the fire
 /// endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
 /// modeled so a node can advertise it as the intended consumption mode.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplyMode {
     /// Return `{ result }` immediately; caller polls / streams. Default —
@@ -2357,6 +2341,62 @@ pub struct ApplyTemplateRequest {
     pub source_ref: Option<SourceRef>,
 }
 
+/// Trigger spec embedded in a `POST /api/templates/apply-air` request.
+/// The endpoint synthesizes a `WorkflowGraph` stub containing only this
+/// Trigger node so that `register_triggers` (which walks `template.graph`)
+/// finds it post-commit. Direct AIR-place binding via
+/// `air_target_place_id` — no graph edge.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PreAirTriggerSpec {
+    /// Stable, globally-unique node id used in `POST /api/triggers/{node_id}/fire`
+    /// URLs. Author-controlled (e.g. `"trg_di_extraction_v1"`).
+    pub node_id: String,
+    pub label: String,
+    /// Trigger source. Clinic's initial use case is `Manual`; other sources
+    /// are valid here too (Webhook, Cron, ...) — the dispatcher resolves
+    /// them identically once the trigger is registered.
+    pub source: TriggerSource,
+    #[serde(default)]
+    pub payload_mapping: Vec<FieldMapping>,
+    #[serde(default)]
+    pub reply_default: Option<ReplyMode>,
+    /// The AIR place id whose `initial_tokens` will be seeded with the
+    /// fire payload + system fields. Must exist in the supplied AIR's
+    /// `places[]` — validated at fire time by `parameterize_for_place`.
+    pub air_target_place_id: String,
+    /// Whether the trigger is live post-apply. Explicit (no default) so
+    /// the deploy recipe must state intent — a disabled trigger never
+    /// fires even if registered.
+    pub enabled: bool,
+}
+
+/// Request body for `POST /api/templates/apply-air` — clinic-style
+/// headless template upload.
+///
+/// Accepts pre-compiled AIR directly: no `WorkflowGraph` compile pass,
+/// no Y.Doc init, no S3 file upload. The supplied `air_json` is stored
+/// verbatim into the `air_json` column; a synthetic stub graph (one
+/// Trigger node, no edges) is stored into the `graph` column so the
+/// trigger dispatcher's `register_triggers` finds it.
+///
+/// Idempotency: name-based. Re-apply with the same `name` Bumps the
+/// chain (new version row, prior version's triggers forgotten); first
+/// apply Seeds (fresh chain at v1).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ApplyAirTemplateRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Pre-compiled AIR. Stored verbatim. The endpoint runs no compile
+    /// pass; the AIR is consumed by the engine at trigger-fire time.
+    pub air_json: serde_json::Value,
+    pub trigger: PreAirTriggerSpec,
+    /// Optional git provenance, recorded into `source_ref` exactly like
+    /// the existing GitOps `apply` endpoint.
+    #[serde(default)]
+    pub source_ref: Option<SourceRef>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTemplateRequest {
     pub name: String,
@@ -2457,7 +2497,8 @@ impl WorkflowGraph {
             }],
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
         }
     }
 }
@@ -2473,8 +2514,8 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, LeaseBinding, LoopAccumulator, MergeStrategy, ModelRef, Port,
-        RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
+        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef,
+        Port, RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
         WorkflowNodeData,
     };
     use serde::{Deserialize, Serialize};
@@ -2545,9 +2586,6 @@ pub mod dsl {
 
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub accumulators: Vec<LoopAccumulator>,
-
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub lease: Option<LeaseBinding>,
 
         // scope
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2673,10 +2711,7 @@ pub mod dsl {
                     // via the dedicated `initial` / `process_name` fields;
                     // absent (legacy files) falls back to the empty-input
                     // default so older templates load unchanged.
-                    initial: step
-                        .initial
-                        .clone()
-                        .unwrap_or_else(Port::empty_input),
+                    initial: step.initial.clone().unwrap_or_else(Port::empty_input),
                     process_name: step.process_name.clone(),
                 }),
                 "end" => Ok(WorkflowNodeData::End {
@@ -2719,19 +2754,17 @@ pub mod dsl {
                     Ok(WorkflowNodeData::HumanTask {
                         label: label.to_string(),
                         description: step.description.clone(),
-                        task_title: step
-                            .task_title
-                            .clone()
-                            .unwrap_or_else(|| label.to_string()),
+                        task_title: step.task_title.clone().unwrap_or_else(|| label.to_string()),
                         instructions_mdsvex: step.instructions.clone(),
                         steps: task_steps,
                         steps_ref: step.steps_ref.clone(),
                     })
                 }
                 "agent" => {
-                    let a = step.agent.as_ref().ok_or_else(|| {
-                        format!("agent '{}' requires an 'agent' field", key)
-                    })?;
+                    let a = step
+                        .agent
+                        .as_ref()
+                        .ok_or_else(|| format!("agent '{}' requires an 'agent' field", key))?;
                     Ok(WorkflowNodeData::Agent {
                         label: label.to_string(),
                         description: step.description.clone(),
@@ -2803,6 +2836,8 @@ pub mod dsl {
                         // DSL does not model resource pools (yet).
                         // DSL does not model streaming output (prototype flag).
                         stream_output: false,
+                        // DSL does not model streaming input (reducer flag).
+                        stream_input: false,
                     })
                 }
                 "decision" => {
@@ -2860,7 +2895,6 @@ pub mod dsl {
                         max_iterations: max_iter,
                         loop_condition: condition,
                         accumulators: step.accumulators.clone(),
-                        lease: step.lease.clone(),
                     })
                 }
                 "scope" => Ok(WorkflowNodeData::Scope {
@@ -2905,7 +2939,6 @@ pub mod dsl {
                 max_iterations: None,
                 loop_condition: None,
                 accumulators: Vec::new(),
-                lease: None,
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
@@ -2961,27 +2994,25 @@ pub mod dsl {
                     // Extract entrypoint and files from config into their own
                     // fields
                     let mut config = execution_spec.config.clone();
-                    let (entrypoint, files) =
-                        if let serde_json::Value::Object(ref mut map) = config {
-                            let ep = map
-                                .remove("entrypoint")
-                                .and_then(|v| v.as_str().map(|s| s.to_string()));
-                            let f = map
-                                .remove("required_files")
-                                .and_then(|v| {
-                                    v.as_array().map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|item| {
-                                                item.as_str().map(|s| s.to_string())
-                                            })
-                                            .collect()
-                                    })
+                    let (entrypoint, files) = if let serde_json::Value::Object(ref mut map) = config
+                    {
+                        let ep = map
+                            .remove("entrypoint")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()));
+                        let f = map
+                            .remove("required_files")
+                            .and_then(|v| {
+                                v.as_array().map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                                        .collect()
                                 })
-                                .unwrap_or_default();
-                            (ep, f)
-                        } else {
-                            (None, vec![])
-                        };
+                            })
+                            .unwrap_or_default();
+                        (ep, f)
+                    } else {
+                        (None, vec![])
+                    };
                     // Round-trip the enum through serde to recover the
                     // canonical snake_case wire string (`python`, `file_ops`,
                     // …) so the DSL export matches what users would type.
@@ -3029,17 +3060,20 @@ pub mod dsl {
                     // children are populated by the CLI envelope after the
                     // step map is built
                 }
+                WorkflowNodeData::LeaseScope { .. } => {
+                    // children are populated by the CLI envelope after the
+                    // step map is built; LeaseScope is GUI-authored for now
+                    // (DSL doesn't model container nodes with lease bindings).
+                }
                 WorkflowNodeData::Loop {
                     max_iterations,
                     loop_condition,
                     accumulators,
-                    lease,
                     ..
                 } => {
                     step.max_iterations = Some(*max_iterations);
                     step.loop_condition = Some(loop_condition.clone());
                     step.accumulators = accumulators.clone();
-                    step.lease = lease.clone();
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }
@@ -3047,11 +3081,12 @@ pub mod dsl {
                 | WorkflowNodeData::Delay { .. }
                 | WorkflowNodeData::Timeout { .. }
                 | WorkflowNodeData::Map { .. }
-                | WorkflowNodeData::StreamConsumer { .. } => {
+                | WorkflowNodeData::StreamFold { .. } => {
                     // DSL doesn't model the process-control / container nodes —
                     // GUI-authored for now. Same lossy-drop behaviour as
                     // triggers. (Map's body sub-graph + itemsRef/resultVar, and
-                    // StreamConsumer's resultVar/reduce, have no DSL schema yet.)
+                    // StreamConsumer/StreamFold's resultVar/reduce, have no DSL
+                    // schema yet.)
                 }
                 WorkflowNodeData::Agent {
                     model,
@@ -3081,8 +3116,7 @@ pub mod dsl {
                         deployment_model: deployment_model.clone(),
                     });
                 }
-                WorkflowNodeData::Trigger { .. }
-                | WorkflowNodeData::SubWorkflow { .. } => {
+                WorkflowNodeData::Trigger { .. } | WorkflowNodeData::SubWorkflow { .. } => {
                     // DSL doesn't model triggers or sub-workflows — declared in
                     // the GUI for now. Round-trip through DSL drops them,
                     // matching how legacy DSL templates behave.
@@ -3158,12 +3192,18 @@ mod tests {
         // From impl. Pin the mapping so downstream borrow-checking can
         // rely on the typed-ports superset (`Bool` for checkbox, etc.).
         assert_eq!(FieldKind::from(TaskFieldKind::Text), FieldKind::Text);
-        assert_eq!(FieldKind::from(TaskFieldKind::Textarea), FieldKind::Textarea);
+        assert_eq!(
+            FieldKind::from(TaskFieldKind::Textarea),
+            FieldKind::Textarea
+        );
         assert_eq!(FieldKind::from(TaskFieldKind::Number), FieldKind::Number);
         assert_eq!(FieldKind::from(TaskFieldKind::Select), FieldKind::Select);
         assert_eq!(FieldKind::from(TaskFieldKind::Checkbox), FieldKind::Bool);
         assert_eq!(FieldKind::from(TaskFieldKind::File), FieldKind::File);
-        assert_eq!(FieldKind::from(TaskFieldKind::Signature), FieldKind::Signature);
+        assert_eq!(
+            FieldKind::from(TaskFieldKind::Signature),
+            FieldKind::Signature
+        );
         // New in Feature B parity sync: Radio borrows Select's option
         // semantics, Date is wire-text (ISO string), Range/Rating emit
         // plain numbers.
@@ -3298,7 +3338,10 @@ mod tests {
         let port = Port {
             id: "in".into(),
             label: "In".into(),
-            fields: vec![pf("name", FieldKind::Text, true), pf("n", FieldKind::Number, false)],
+            fields: vec![
+                pf("name", FieldKind::Text, true),
+                pf("n", FieldKind::Number, false),
+            ],
         };
         match port.validate_token(&serde_json::json!({ "n": 1 })) {
             Err(PortValidationError::MissingRequiredField { field }) => assert_eq!(field, "name"),
@@ -3320,7 +3363,9 @@ mod tests {
     #[test]
     fn validate_token_fieldless_port_accepts_any_object() {
         let port = Port::empty_input();
-        assert!(port.validate_token(&serde_json::json!({ "anything": 1 })).is_ok());
+        assert!(port
+            .validate_token(&serde_json::json!({ "anything": 1 }))
+            .is_ok());
         assert!(port.validate_token(&serde_json::json!({})).is_ok());
         assert!(matches!(
             port.validate_token(&serde_json::json!("nope")),
@@ -3415,9 +3460,15 @@ mod tests {
             height: None,
         };
         let json = serde_json::to_string(&node).unwrap();
-        assert!(!json.contains("parentId"), "parentId should be omitted when None");
+        assert!(
+            !json.contains("parentId"),
+            "parentId should be omitted when None"
+        );
         assert!(!json.contains("width"), "width should be omitted when None");
-        assert!(!json.contains("height"), "height should be omitted when None");
+        assert!(
+            !json.contains("height"),
+            "height should be omitted when None"
+        );
     }
 
     #[test]
@@ -3438,7 +3489,13 @@ mod tests {
         assert!(json.get("url").is_none());
 
         let back: TaskBlockConfig = serde_json::from_value(json).unwrap();
-        if let TaskBlockConfig::Image { filenames, display, url, .. } = back {
+        if let TaskBlockConfig::Image {
+            filenames,
+            display,
+            url,
+            ..
+        } = back
+        {
             assert_eq!(filenames.len(), 2);
             assert_eq!(display, ImageDisplay::Grid);
             assert_eq!(url, None);
@@ -3562,7 +3619,12 @@ mod tests {
         ];
         for (i, json) in blocks.iter().enumerate() {
             let result: Result<TaskBlockConfig, _> = serde_json::from_value(json.clone());
-            assert!(result.is_ok(), "block type {} failed to deserialize: {:?}", i, result.err());
+            assert!(
+                result.is_ok(),
+                "block type {} failed to deserialize: {:?}",
+                i,
+                result.err()
+            );
         }
     }
 

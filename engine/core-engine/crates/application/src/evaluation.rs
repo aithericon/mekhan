@@ -320,6 +320,7 @@ pub(crate) async fn evaluate_until_quiescent<
     secret_store: Option<&dyn SecretStore>,
     net_parameters: Option<&serde_json::Value>,
     pre_dispatch: Option<&PreDispatchRuntime>,
+    dispatch_options: &petri_domain::DispatchOptions,
 ) -> Result<EvaluateResult, ServiceError> {
     let mut steps_executed = 0;
     let mut transitions_fired = Vec::new();
@@ -369,6 +370,7 @@ pub(crate) async fn evaluate_until_quiescent<
                     secret_store,
                     net_parameters,
                     pre_dispatch,
+                    dispatch_options,
                 )
                 .await;
 
@@ -392,8 +394,13 @@ pub(crate) async fn evaluate_until_quiescent<
                         // marker and tears the net down.
                         let reason = format!("Transition {}: {}", transition_id, e);
                         tracing::warn!("{}", reason);
-                        let retryable =
-                            matches!(e, ServiceError::EffectFailed { retryable: true, .. });
+                        let retryable = matches!(
+                            e,
+                            ServiceError::EffectFailed {
+                                retryable: true,
+                                ..
+                            }
+                        );
                         // Surface the audit events the firing layer appended
                         // (so callers/tests see them in EvaluateResult.events;
                         // the driver also re-reads the store for SSE).
@@ -411,14 +418,13 @@ pub(crate) async fn evaluate_until_quiescent<
                             }),
                         });
                     }
-                    // Pre-dispatch soft outcomes — marking unchanged, audit
-                    // events already emitted by `fire_effect_transition`.
-                    // Stop this evaluation pass; a future pass (triggered by
-                    // new tokens / timers / next eval-notify) can re-attempt.
-                    Err(
-                        ServiceError::PreDispatchRejected { .. }
-                        | ServiceError::PreDispatchDeferred { .. },
-                    ) => {
+                    // Pre-dispatch Defer — marking unchanged, audit event
+                    // already emitted by `fire_effect_transition`. Stop this
+                    // pass; a future pass (triggered by new tokens / timers /
+                    // next eval-notify) can re-attempt. The defer budget in
+                    // `firing.rs` caps how many times a Defer can recur before
+                    // it escalates to Reject.
+                    Err(ServiceError::PreDispatchDeferred { .. }) => {
                         return Ok(EvaluateResult {
                             steps_executed,
                             transitions_fired,
@@ -426,6 +432,43 @@ pub(crate) async fn evaluate_until_quiescent<
                             events: events_generated,
                             terminal_reached: None,
                             failure_reached: None,
+                        });
+                    }
+                    // Pre-dispatch Reject — TERMINAL per spec § 6 ("the first
+                    // hook returning Reject wins"). The previous treatment as
+                    // a soft retryable outcome produced an infinite busy-loop:
+                    // hook errors with `fail_open=false` → Reject → audit
+                    // event appended → consumer→eval bridge re-kicks →
+                    // re-fire → same Reject → … (200+/s, 286% CPU per stuck
+                    // net). Reject must fail the net so the driver emits
+                    // NetFailed and tears it down.
+                    Err(ServiceError::PreDispatchRejected {
+                        transition_id: tid,
+                        hook_name,
+                        reason,
+                    }) => {
+                        let synthesized = format!(
+                            "Pre-dispatch hook '{}' rejected transition {}: {}",
+                            hook_name, tid, reason
+                        );
+                        tracing::warn!(
+                            transition_id = %tid,
+                            hook = %hook_name,
+                            reason = %reason,
+                            "{}",
+                            synthesized
+                        );
+                        return Ok(EvaluateResult {
+                            steps_executed,
+                            transitions_fired,
+                            final_state: EvaluateFinalState::Quiescent,
+                            events: events_generated,
+                            terminal_reached: None,
+                            failure_reached: Some(FailureInfo {
+                                transition_id: tid,
+                                reason: synthesized,
+                                retryable: false,
+                            }),
                         });
                     }
                     // Non-permanent, non-soft errors (e.g. a benign
@@ -451,8 +494,10 @@ pub(crate) async fn evaluate_until_quiescent<
 
 /// Check if any terminal place in the topology has tokens.
 ///
-/// Returns the first terminal place with a token, extracting an exit code
-/// from the token's data if present (looks for `data.exit_code`).
+/// Returns the first terminal place with a token, extracting the run result
+/// from the token's data: the explicit `data.exit_code` envelope when present,
+/// otherwise the whole token body (so hand-authored AIR nets that carry the
+/// result inline still surface it instead of completing with empty outputs).
 pub fn check_terminal_state(
     topology: &impl TopologyRepository,
     marking: &Marking,
@@ -464,8 +509,15 @@ pub fn check_terminal_state(
         }
         let tokens = marking.tokens_at(&place.id);
         if let Some(token) = tokens.first() {
+            // The compiler's End node stamps an explicit `exit_code` envelope
+            // ({ ok, value }); hand-authored AIR nets (e.g. clinic-submitted
+            // scenarios) carry the result as the token body with no `exit_code`
+            // key. Fall back to the whole token data so those nets surface a
+            // result rather than completing with empty outputs.
             let exit_code = match &token.color {
-                TokenColor::Data(data) => data.get("exit_code").cloned(),
+                TokenColor::Data(data) => {
+                    Some(data.get("exit_code").cloned().unwrap_or_else(|| data.clone()))
+                }
                 _ => None,
             };
             return Some(TerminalReachedInfo {
@@ -543,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn check_terminal_data_token_without_exit_code() {
+    fn check_terminal_data_token_without_exit_code_falls_back_to_full_body() {
         let topo = TestTopology(Some(net_with_terminal()));
         let mut marking = Marking::new();
         marking.add_token(
@@ -553,7 +605,8 @@ mod tests {
 
         let result = check_terminal_state(&topo, &marking).unwrap();
         assert_eq!(result.place_id, "done");
-        assert!(result.exit_code.is_none());
+        // No explicit `exit_code` key → the whole token body is the result.
+        assert_eq!(result.exit_code, Some(serde_json::json!({"foo": "bar"})));
     }
 
     #[test]
@@ -649,8 +702,7 @@ mod tests {
             "input",
         ));
         net.add_arc(
-            PetriArc::input(PlaceId("p_data".to_string()), tb1.clone(), "d_prod")
-                .with_read(true),
+            PetriArc::input(PlaceId("p_data".to_string()), tb1.clone(), "d_prod").with_read(true),
         );
         net.add_arc(PetriArc::output(
             tb1,

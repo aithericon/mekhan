@@ -110,8 +110,7 @@ pub struct AppState {
 /// uptime monitors, or container orchestrators need to reach without a session
 /// cookie belongs here.
 fn build_public_openapi_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::<AppState>::new()
-        .routes(routes!(handlers::health::liveness))
+    OpenApiRouter::<AppState>::new().routes(routes!(handlers::health::liveness))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -138,7 +137,13 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::auth_tokens::create_token
         ))
         .routes(routes!(handlers::auth_tokens::revoke_token))
-        // Templates
+        // Templates — `apply_air_template` (POST /api/templates/apply-air)
+        // MUST be registered BEFORE the `{id}` routes; matchit/axum match
+        // literal segments only when they're seen first against a wildcard
+        // already in the trie at the same position. Otherwise `apply-air`
+        // gets routed to `GET/PUT/DELETE /api/templates/{id}` (with
+        // `id = "apply-air"`) and POST returns 405 (#126.4.1 cert finding).
+        .routes(routes!(handlers::templates::apply_air_template))
         .routes(routes!(
             handlers::templates::list_templates,
             handlers::templates::create_template
@@ -323,8 +328,7 @@ pub fn build_router(state: AppState) -> Router {
     // The protected OpenApiRouter holds every authenticated handler; the
     // public one holds only `/healthz`. Both contribute to the same
     // `api_spec` so the published OpenAPI document stays a single document.
-    let (protected_router, mut api_spec) =
-        build_protected_openapi_router().split_for_parts();
+    let (protected_router, mut api_spec) = build_protected_openapi_router().split_for_parts();
     let (public_router, public_spec) = build_public_openapi_router().split_for_parts();
     api_spec.merge(public_spec);
 
@@ -349,22 +353,35 @@ pub fn build_router(state: AppState) -> Router {
         )
         .with_state(state.clone());
 
+    // Cloud-layer visualization proxy: mounted INSIDE the auth middleware
+    // (joined via merge after the protected router is built). Routes are not
+    // OpenAPI-modelled — they're BFF pass-throughs, not first-party resources.
+    let cloud_layer_router: Router = Router::new()
+        .route(
+            "/api/cloud-layer/runs/{run_id}/topology",
+            get(handlers::cloud_layer_proxy::get_topology),
+        )
+        .route(
+            "/api/cloud-layer/runs/{run_id}/stream",
+            get(handlers::cloud_layer_proxy::get_stream),
+        )
+        .route(
+            "/api/cloud-layer/runs/{run_id}/tokens/{token_id}/payload",
+            get(handlers::cloud_layer_proxy::get_token_payload),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::extractor::require_auth_middleware,
+        ))
+        .with_state(state.clone());
+
     // BFF auth endpoints — UNAUTHENTICATED (they establish the very session
     // the protected router requires). Same `/api/auth/*` prefix so the Vite
     // dev proxy and prod same-origin SPA serving work with no new rules.
     let auth_router: Router = Router::new()
-        .route(
-            "/api/auth/login",
-            get(auth::bff::handlers::login),
-        )
-        .route(
-            "/api/auth/callback",
-            get(auth::bff::handlers::callback),
-        )
-        .route(
-            "/api/auth/session",
-            get(auth::bff::handlers::session),
-        )
+        .route("/api/auth/login", get(auth::bff::handlers::login))
+        .route("/api/auth/callback", get(auth::bff::handlers::callback))
+        .route("/api/auth/session", get(auth::bff::handlers::session))
         .route(
             "/api/auth/logout",
             axum::routing::post(auth::bff::handlers::logout),
@@ -394,6 +411,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(ws_router)
         .merge(webhook_router)
         .merge(auth_router)
+        .merge(cloud_layer_router)
         .merge(petri_proxy);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);

@@ -20,8 +20,7 @@ pub async fn extract_metadata_async(path: &Path) -> Result<FileMetadata, Metadat
     let path: PathBuf = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut meta = crate::extract_metadata(&path)?;
-        meta.checksum =
-            crate::compute_checksum(&path, crate::ChecksumAlgorithm::Sha256).ok();
+        meta.checksum = crate::compute_checksum(&path, crate::ChecksumAlgorithm::Sha256).ok();
         Ok(meta)
     })
     .await
@@ -42,8 +41,7 @@ pub async fn extract_metadata_with_preview_async(
     let path: PathBuf = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut meta = crate::extract_metadata_with_preview(&path, &preview_options)?;
-        meta.checksum =
-            crate::compute_checksum(&path, crate::ChecksumAlgorithm::Sha256).ok();
+        meta.checksum = crate::compute_checksum(&path, crate::ChecksumAlgorithm::Sha256).ok();
         Ok(meta)
     })
     .await

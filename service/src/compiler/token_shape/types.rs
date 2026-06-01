@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::models::template::{FieldKind, WorkflowNode};// ─── Structural token type ──────────────────────────────────────────────────
+use crate::models::template::{FieldKind, WorkflowNode}; // ─── Structural token type ──────────────────────────────────────────────────
 
 /// Leaf type of a token field. Deliberately small — the point is to model
 /// *where a value lives and roughly what it is*, not a full JSON Schema.
@@ -22,10 +22,9 @@ pub enum ScalarTy {
 impl ScalarTy {
     pub(super) fn from_kind(k: FieldKind) -> ScalarTy {
         match k {
-            FieldKind::Text
-            | FieldKind::Textarea
-            | FieldKind::Select
-            | FieldKind::Signature => ScalarTy::String,
+            FieldKind::Text | FieldKind::Textarea | FieldKind::Select | FieldKind::Signature => {
+                ScalarTy::String
+            }
             FieldKind::Number => ScalarTy::Number,
             FieldKind::Bool => ScalarTy::Bool,
             FieldKind::File => ScalarTy::FileRef,
@@ -143,7 +142,10 @@ impl TokenShape {
 
     /// Resolve a dotted path (the segments *after* `input`). Returns the
     /// matched field's shape + provenance, or `None` if any segment is absent.
-    pub(crate) fn resolve<'a>(&'a self, segs: &[String]) -> Option<(&'a TokenShape, Option<&'a Provenance>)> {
+    pub(crate) fn resolve<'a>(
+        &'a self,
+        segs: &[String],
+    ) -> Option<(&'a TokenShape, Option<&'a Provenance>)> {
         let mut cur = self;
         let mut prov: Option<&Provenance> = None;
         for seg in segs {
@@ -305,7 +307,6 @@ pub fn def_ref(name: &str) -> String {
 pub fn dynamic_token_definition() -> (String, Value) {
     ("DynamicToken".to_string(), serde_json::json!({}))
 }
-
 
 // ─── Picker-facing recursive type descriptor (Feature B) ────────────────────
 

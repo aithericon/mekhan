@@ -48,6 +48,7 @@ fn make_job(spec: ExecutionSpec) -> ExecutionJob {
         timeout: None,
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     }
 }
@@ -241,8 +242,14 @@ async fn ollama_extract_structured_blocks() {
         result.stderr_tail
     );
 
-    let response = result.outputs.get("response").expect("missing 'response' output");
-    assert!(response.is_object(), "expected JSON object, got: {response}");
+    let response = result
+        .outputs
+        .get("response")
+        .expect("missing 'response' output");
+    assert!(
+        response.is_object(),
+        "expected JSON object, got: {response}"
+    );
 
     eprintln!(
         "\n--- Ollama LLM output ---\n{}\n---\n",
@@ -346,8 +353,14 @@ async fn openai_extract_structured_blocks() {
         result.stderr_tail
     );
 
-    let response = result.outputs.get("response").expect("missing 'response' output");
-    assert!(response.is_object(), "expected JSON object, got: {response}");
+    let response = result
+        .outputs
+        .get("response")
+        .expect("missing 'response' output");
+    assert!(
+        response.is_object(),
+        "expected JSON object, got: {response}"
+    );
 
     eprintln!(
         "\n--- OpenAI-compat LLM output ---\n{}\n---\n",
@@ -445,20 +458,20 @@ async fn ollama_per_key_structured_unpack() {
 
     // The key assertion: each port carries its own key's scalar value,
     // not the whole {"x":1,"y":2} envelope.
-    assert!(
-        x.is_number(),
-        "outputs[\"x\"] should be a number, got: {x}"
-    );
-    assert!(
-        y.is_number(),
-        "outputs[\"y\"] should be a number, got: {y}"
-    );
+    assert!(x.is_number(), "outputs[\"x\"] should be a number, got: {x}");
+    assert!(y.is_number(), "outputs[\"y\"] should be a number, got: {y}");
     assert_eq!(x.as_i64(), Some(1), "outputs[\"x\"] should be 1, got: {x}");
     assert_eq!(y.as_i64(), Some(2), "outputs[\"y\"] should be 2, got: {y}");
 
     // The unmapped built-in 'response' still carries the full envelope.
-    let response = result.outputs.get("response").expect("missing 'response' output");
-    assert!(response.is_object(), "response should still be the full object: {response}");
+    let response = result
+        .outputs
+        .get("response")
+        .expect("missing 'response' output");
+    assert!(
+        response.is_object(),
+        "response should still be the full object: {response}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -513,11 +526,19 @@ async fn ollama_chat_with_history() {
     // Verify usage is populated (key advantage over rig chat mode)
     let usage = result.outputs.get("usage").expect("missing 'usage' output");
     assert!(
-        usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+        usage
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            > 0,
         "input_tokens should be > 0, got: {usage}"
     );
     assert!(
-        usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+        usage
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            > 0,
         "output_tokens should be > 0, got: {usage}"
     );
 }

@@ -9,9 +9,7 @@
 
 use std::sync::Arc;
 
-use async_nats::jetstream::consumer::{
-    pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy,
-};
+use async_nats::jetstream::consumer::{pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy};
 use async_nats::jetstream::Message;
 use petri_application::json_to_token_color;
 use petri_domain::{ReplyRouting, TokenColor};
@@ -121,9 +119,7 @@ impl GlobalBridgeListener {
             .jetstream
             .get_or_create_stream(crate::stream_config())
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to get stream: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
         // Subscribe to ALL bridge subjects across all nets
         let filter = format!("{}.>", Subjects::BRIDGE_PREFIX);
@@ -139,9 +135,7 @@ impl GlobalBridgeListener {
         let consumer = stream
             .create_consumer(consumer_config)
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to create consumer: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to create consumer: {}", e)))?;
 
         let handler = GlobalBridgeHandler {
             resolver: &self.resolver,
@@ -168,14 +162,13 @@ impl MessageHandler for GlobalBridgeHandler<'_> {
         let subject = msg.subject.as_str();
 
         // Parse subject: petri.bridge.{net_id}.{place_name}
-        let (net_id, place_name) =
-            Subjects::parse_bridge_subject(subject).ok_or_else(|| {
-                ProcessError::Parse(format!("Could not parse bridge subject: {}", subject))
-            })?;
+        let (net_id, place_name) = Subjects::parse_bridge_subject(subject).ok_or_else(|| {
+            ProcessError::Parse(format!("Could not parse bridge subject: {}", subject))
+        })?;
 
         // Deserialize the transfer message
-        let transfer: CrossNetTokenTransfer = serde_json::from_slice(&msg.payload)
-            .map_err(|e| ProcessError::Parse(e.to_string()))?;
+        let transfer: CrossNetTokenTransfer =
+            serde_json::from_slice(&msg.payload).map_err(|e| ProcessError::Parse(e.to_string()))?;
 
         // Resolve the net (may wake from hibernation, rejects completed/cancelled nets).
         // Use Transient so that if the net doesn't exist yet (e.g., spawn race),

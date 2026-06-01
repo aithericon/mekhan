@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f15",
   "name": "15 · Stream Python Body",
-  "description": "Per-chunk Python body on a StreamConsumer (dispatch=SequentialBody). A producer AutomatedStep with streamOutput=true emits 4 word chunks (the/quick/brown/fox); the consumer dispatches one Python body run per chunk, one at a time in stream order (the sequential permit + next-expected-sequence gate), each body uppercasing its chunk; the Concat reduce joins the body results into 'THE QUICK BROWN FOX'. The control token sizes the end-of-stream gather barrier so the net WAITS for the full stream + all bodies before completing. Flip dispatch to parallelBody for the map-style concurrent path (same result).",
+  "description": "streamInput reducer: a single AutomatedStep with streamInput=true is a long-lived Python process that receives chunks via IPC (aithericon.chunks()) from a streaming producer. The producer (streamOutput=true) emits 4 word chunks (the/quick/brown/fox); the reducer (seeded at net entry) uppercases and concatenates them into 'THE QUICK BROWN FOX'. The Python script owns the reduction logic — no container node, no Petri-net gather barrier. Wire producer.stream → reducer.stream and producer.out → reducer.in (the EOF trigger).",
   "visibility": "public"
 }

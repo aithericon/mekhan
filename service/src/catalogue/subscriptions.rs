@@ -130,16 +130,14 @@ impl SubscriptionManager {
                         let key = entry.key.clone();
                         match entry.operation {
                             jetstream::kv::Operation::Put => {
-                                match serde_json::from_slice::<CatalogueSubscription>(
-                                    &entry.value,
-                                ) {
+                                match serde_json::from_slice::<CatalogueSubscription>(&entry.value)
+                                {
                                     Ok(sub) => {
                                         tracing::debug!(
                                             subscription_id = %sub.subscription_id,
                                             "subscription cache: put"
                                         );
-                                        self.cache
-                                            .insert(sub.subscription_id.clone(), sub);
+                                        self.cache.insert(sub.subscription_id.clone(), sub);
                                     }
                                     Err(e) => {
                                         tracing::warn!(
@@ -149,8 +147,7 @@ impl SubscriptionManager {
                                     }
                                 }
                             }
-                            jetstream::kv::Operation::Delete
-                            | jetstream::kv::Operation::Purge => {
+                            jetstream::kv::Operation::Delete | jetstream::kv::Operation::Purge => {
                                 // Key format: sub.{subscription_id}
                                 let sub_id = key.strip_prefix("sub.").unwrap_or(&key);
                                 if self.cache.remove(sub_id).is_some() {
@@ -192,8 +189,8 @@ impl SubscriptionManager {
             created_at: Utc::now(),
         };
 
-        let value = serde_json::to_vec(&sub)
-            .map_err(|e| SubscriptionError::Internal(e.to_string()))?;
+        let value =
+            serde_json::to_vec(&sub).map_err(|e| SubscriptionError::Internal(e.to_string()))?;
 
         let kv_key = format!("sub.{subscription_id}");
         self.kv
@@ -218,10 +215,7 @@ impl SubscriptionManager {
     }
 
     /// Remove a subscription by ID. Returns `true` if it existed.
-    pub async fn unsubscribe(
-        &self,
-        subscription_id: &str,
-    ) -> Result<bool, SubscriptionError> {
+    pub async fn unsubscribe(&self, subscription_id: &str) -> Result<bool, SubscriptionError> {
         let kv_key = format!("sub.{subscription_id}");
 
         // Check if it exists in cache (fast path)
@@ -253,10 +247,7 @@ impl SubscriptionManager {
     /// the published signal — the caller must use this same key when
     /// inserting the cross-link row so that the ingress-side UPDATE (in the
     /// TokenCreated handler) can find it.
-    pub async fn evaluate_new_artifact(
-        &self,
-        entry: &CatalogueEntry,
-    ) -> Vec<MatchedSubscription> {
+    pub async fn evaluate_new_artifact(&self, entry: &CatalogueEntry) -> Vec<MatchedSubscription> {
         let mut matched = Vec::new();
         for sub_ref in self.cache.iter() {
             let sub = sub_ref.value();

@@ -91,11 +91,8 @@ mod csv_statistics_tests {
     #[test]
     fn convenience_function() {
         let tmp = create_csv("x,y\n1,a\n2,b\n");
-        let meta = fmeta::extract_metadata_with_statistics(
-            tmp.path(),
-            &StatisticsOptions::new(),
-        )
-        .unwrap();
+        let meta =
+            fmeta::extract_metadata_with_statistics(tmp.path(), &StatisticsOptions::new()).unwrap();
 
         assert!(meta.columns[0].statistics.is_some());
         assert!(meta.columns[1].statistics.is_some());

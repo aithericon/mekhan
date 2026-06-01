@@ -80,10 +80,8 @@ pub(crate) fn lower_decision(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // branch guard matched. With zero conditions it stays unconditional
     // (preserves the historical always-route behavior).
     if let Some(default_edge_id) = default_branch {
-        let p_default: PlaceHandle<DynamicToken> = ctx.state(
-            format!("p_{id}_out_default"),
-            format!("{label} - Default"),
-        );
+        let p_default: PlaceHandle<DynamicToken> =
+            ctx.state(format!("p_{id}_out_default"), format!("{label} - Default"));
 
         let t = ctx
             .transition(format!("t_{id}_default"), format!("{label} - Default"))
@@ -110,8 +108,7 @@ pub(crate) fn lower_decision(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // priority so it only ever wins when nothing else is enabled. The `throw`
     // is a permanent ScriptError: the engine emits ErrorOccurred and consumes
     // the token (no infinite re-fire).
-    let deadend_msg =
-        format!("decision {label}: token matched no branch and no default branch");
+    let deadend_msg = format!("decision {label}: token matched no branch and no default branch");
     ctx.transition(
         format!("t_{id}_deadend"),
         format!("{label} - No Match (error)"),

@@ -1,8 +1,8 @@
 #![cfg(feature = "vtk")]
 
+use fmeta::extractor::MetadataExtractor;
 use fmeta::format::{FileFormat, FormatMetadata, VtkMetadata};
 use fmeta::{detect_format, VtkExtractor};
-use fmeta::extractor::MetadataExtractor;
 use vtkio::model::*;
 
 fn create_unstructured_grid_vtk(path: &std::path::Path) {
@@ -14,8 +14,8 @@ fn create_unstructured_grid_vtk(path: &std::path::Path) {
         data: DataSet::inline(UnstructuredGridPiece {
             points: vec![
                 0.0f64, 0.0, 0.0, // point 0
-                1.0, 0.0, 0.0,    // point 1
-                0.0, 1.0, 0.0,    // point 2
+                1.0, 0.0, 0.0, // point 1
+                0.0, 1.0, 0.0, // point 2
             ]
             .into(),
             cells: Cells {
@@ -56,10 +56,7 @@ fn create_polydata_vtk(path: &std::path::Path) {
         file_path: None,
         data: DataSet::inline(PolyDataPiece {
             points: vec![
-                0.0f64, 0.0, 0.0,
-                1.0, 0.0, 0.0,
-                0.5, 1.0, 0.0,
-                0.5, 0.5, 1.0,
+                0.0f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 1.0, 0.0, 0.5, 0.5, 1.0,
             ]
             .into(),
             verts: None,
@@ -74,10 +71,7 @@ fn create_polydata_vtk(path: &std::path::Path) {
                     name: String::from("velocity"),
                     elem: ElementType::Vectors,
                     data: vec![
-                        1.0f32, 0.0, 0.0,
-                        0.0, 1.0, 0.0,
-                        0.0, 0.0, 1.0,
-                        1.0, 1.0, 1.0,
+                        1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0,
                     ]
                     .into(),
                 })],
@@ -99,8 +93,14 @@ fn vtk_legacy_basic_metadata() {
     assert_eq!(meta.format, FileFormat::VtkLegacy);
     assert_eq!(meta.num_rows, Some(3)); // 3 points
     assert!(meta.num_columns.unwrap() > 0);
-    assert!(meta.dimensions.iter().any(|d| d.name == "points" && d.size == Some(3)));
-    assert!(meta.dimensions.iter().any(|d| d.name == "cells" && d.size == Some(1)));
+    assert!(meta
+        .dimensions
+        .iter()
+        .any(|d| d.name == "points" && d.size == Some(3)));
+    assert!(meta
+        .dimensions
+        .iter()
+        .any(|d| d.name == "cells" && d.size == Some(1)));
 }
 
 #[test]
@@ -116,17 +116,19 @@ fn vtk_point_and_cell_data() {
     assert!(meta.column_names.contains(&"cell:temperature".to_string()));
 
     // Check column types
-    let pressure_col = meta.columns.iter().find(|c| c.name == "point:pressure").unwrap();
-    assert_eq!(
-        pressure_col.data_type,
-        fmeta::DataType::Float64
-    );
+    let pressure_col = meta
+        .columns
+        .iter()
+        .find(|c| c.name == "point:pressure")
+        .unwrap();
+    assert_eq!(pressure_col.data_type, fmeta::DataType::Float64);
 
-    let temp_col = meta.columns.iter().find(|c| c.name == "cell:temperature").unwrap();
-    assert_eq!(
-        temp_col.data_type,
-        fmeta::DataType::Float64
-    );
+    let temp_col = meta
+        .columns
+        .iter()
+        .find(|c| c.name == "cell:temperature")
+        .unwrap();
+    assert_eq!(temp_col.data_type, fmeta::DataType::Float64);
 }
 
 #[test]

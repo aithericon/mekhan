@@ -30,22 +30,13 @@ pub trait CatalogueRepository: Send + Sync {
         id: &str,
     ) -> Result<Option<CatalogueEntry>, QueryError>;
 
-    async fn stats(
-        &self,
-        params: &QueryParams,
-    ) -> Result<CatalogueStats, QueryError>;
+    async fn stats(&self, params: &QueryParams) -> Result<CatalogueStats, QueryError>;
 
     async fn stats_by_net(&self) -> Result<Vec<NetStats>, QueryError>;
 
-    async fn lineage_grouped(
-        &self,
-        process_id: &str,
-    ) -> Result<LineageResponse, QueryError>;
+    async fn lineage_grouped(&self, process_id: &str) -> Result<LineageResponse, QueryError>;
 
-    async fn distinct_values(
-        &self,
-        column: &str,
-    ) -> Result<Vec<String>, QueryError>;
+    async fn distinct_values(&self, column: &str) -> Result<Vec<String>, QueryError>;
 
     async fn distinct_jsonb_values(
         &self,
@@ -85,10 +76,7 @@ impl CatalogueRepository for PgCatalogueRepository {
             .map_err(QueryError::Database)
     }
 
-    async fn stats(
-        &self,
-        params: &QueryParams,
-    ) -> Result<CatalogueStats, QueryError> {
+    async fn stats(&self, params: &QueryParams) -> Result<CatalogueStats, QueryError> {
         queries::stats(&self.pool, params).await
     }
 
@@ -98,19 +86,13 @@ impl CatalogueRepository for PgCatalogueRepository {
             .map_err(QueryError::Database)
     }
 
-    async fn lineage_grouped(
-        &self,
-        process_id: &str,
-    ) -> Result<LineageResponse, QueryError> {
+    async fn lineage_grouped(&self, process_id: &str) -> Result<LineageResponse, QueryError> {
         queries::lineage_grouped(&self.pool, process_id)
             .await
             .map_err(QueryError::Database)
     }
 
-    async fn distinct_values(
-        &self,
-        column: &str,
-    ) -> Result<Vec<String>, QueryError> {
+    async fn distinct_values(&self, column: &str) -> Result<Vec<String>, QueryError> {
         queries::distinct_values(&self.pool, column).await
     }
 

@@ -71,7 +71,10 @@ where
         // endpoints): authenticate directly against the session cookie.
         let state = AppState::from_ref(state);
         let jar = CookieJar::from_headers(&parts.headers);
-        let mut user = state.authenticator.authenticate(&parts.headers, &jar).await?;
+        let mut user = state
+            .authenticator
+            .authenticate(&parts.headers, &jar)
+            .await?;
         super::active_workspace::apply_override(&state.db, &mut user, &parts.headers).await;
         Ok(user)
     }
@@ -98,7 +101,10 @@ where
         // Bearer path: only a valid `mekhan_session` cookie authenticates.
         let state = AppState::from_ref(state);
         let jar = CookieJar::from_headers(&parts.headers);
-        let mut user = state.authenticator.authenticate(&parts.headers, &jar).await?;
+        let mut user = state
+            .authenticator
+            .authenticate(&parts.headers, &jar)
+            .await?;
         super::active_workspace::apply_override(&state.db, &mut user, &parts.headers).await;
         Ok(CookieAuthUser(user))
     }
@@ -115,7 +121,10 @@ where
 {
     type Rejection = AuthError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Option<Self>, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &S,
+    ) -> Result<Option<Self>, Self::Rejection> {
         // Dual-use, same as the required extractor: prefer the principal the
         // middleware already resolved (Bearer or cookie).
         if let Some(user) = parts.extensions.get::<AuthUser>() {
@@ -162,8 +171,7 @@ pub async fn require_auth_middleware(
         if let Some(token) = bearer_token(req.headers()) {
             if let Ok(claims) = verifier.verify(token).await {
                 let mut user = state.principal_resolver.resolve(claims).await?;
-                super::active_workspace::apply_override(&state.db, &mut user, req.headers())
-                    .await;
+                super::active_workspace::apply_override(&state.db, &mut user, req.headers()).await;
                 req.extensions_mut().insert(user);
                 return Ok(next.run(req).await);
             }
@@ -171,7 +179,10 @@ pub async fn require_auth_middleware(
     }
 
     let jar = CookieJar::from_headers(req.headers());
-    let mut user = state.authenticator.authenticate(req.headers(), &jar).await?;
+    let mut user = state
+        .authenticator
+        .authenticate(req.headers(), &jar)
+        .await?;
     super::active_workspace::apply_override(&state.db, &mut user, req.headers()).await;
     // Stash the user on the request so downstream handlers can pick it up via
     // an `Extension<AuthUser>` if they don't want to re-extract.

@@ -20,14 +20,14 @@ use uuid::Uuid;
 
 /// Default Postgres URL for test infrastructure.
 /// Override with `TEST_POSTGRES_URL` env var.
-pub const DEFAULT_POSTGRES_URL: &str = "postgres://test:test@localhost:5599/test";
+pub const DEFAULT_POSTGRES_URL: &str = "postgres://mekhan:mekhan@localhost:15439/mekhan";
 
 /// Default NATS URL for test infrastructure.
 ///
 /// Points at the `just dev` stack broker (`docker-compose.yml` maps
-/// `14333:4222`), which is the same NATS the engine/executor daemons connect
+/// `4333:4222`), which is the same NATS the engine/executor daemons connect
 /// to. Override with `TEST_NATS_URL` env var.
-pub const DEFAULT_NATS_URL: &str = "nats://localhost:14333";
+pub const DEFAULT_NATS_URL: &str = "nats://localhost:4333";
 
 /// Read the test Postgres URL from env or use the default.
 pub fn postgres_url() -> String {

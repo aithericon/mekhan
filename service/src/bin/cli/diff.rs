@@ -171,8 +171,7 @@ fn compute_diff_inner(
 
     // -- Edges --
     let local_edge_ids: HashSet<&str> = local_graph.edges.iter().map(|e| e.id.as_str()).collect();
-    let remote_edge_ids: HashSet<&str> =
-        remote_graph.edges.iter().map(|e| e.id.as_str()).collect();
+    let remote_edge_ids: HashSet<&str> = remote_graph.edges.iter().map(|e| e.id.as_str()).collect();
 
     for id in local_edge_ids.difference(&remote_edge_ids) {
         edge_diffs.push(EdgeDiff {

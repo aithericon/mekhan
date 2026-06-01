@@ -33,7 +33,7 @@ use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 fn engine_nats_url() -> String {
@@ -93,7 +93,10 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    (TaskHandle(causality.abort_handle()), TaskHandle(lifecycle.abort_handle()))
+    (
+        TaskHandle(causality.abort_handle()),
+        TaskHandle(lifecycle.abort_handle()),
+    )
 }
 
 /// Best-effort delete of this test's per-prefix durables on the shared streams.
@@ -241,19 +244,14 @@ async fn complete_task(app: &axum::Router, task_id: &str, data: Value) {
     );
 }
 
-async fn wait_for_terminal_status(
-    db: &sqlx::PgPool,
-    id: Uuid,
-    timeout: Duration,
-) -> String {
+async fn wait_for_terminal_status(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if matches!(st.as_str(), "completed" | "failed" | "cancelled") {
             return st;
         }
@@ -365,8 +363,7 @@ async fn template_tests_live_full_cycle() {
         json!({ "approved": true, "comment": "lgtm" }),
     )
     .await;
-    let terminal =
-        wait_for_terminal_status(&db, instance_id, Duration::from_secs(30)).await;
+    let terminal = wait_for_terminal_status(&db, instance_id, Duration::from_secs(30)).await;
     assert_eq!(
         terminal, "completed",
         "source instance never reached `completed` — promote-to-test would scoop a partial fixture"
@@ -456,7 +453,9 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!(
+                    "/api/v1/templates/{template_id}/tests/{test_id}/run"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -500,7 +499,9 @@ async fn template_tests_live_full_cycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!(
+                    "/api/v1/templates/{template_id}/tests/{test_id}/run"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -551,14 +552,20 @@ async fn template_tests_live_full_cycle() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "patch rhai-template assertion");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "patch rhai-template assertion"
+    );
 
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!(
+                    "/api/v1/templates/{template_id}/tests/{test_id}/run"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -599,14 +606,20 @@ async fn template_tests_live_full_cycle() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "patch interpolation assertion");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "patch interpolation assertion"
+    );
 
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!(
+                    "/api/v1/templates/{template_id}/tests/{test_id}/run"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -640,14 +653,20 @@ async fn template_tests_live_full_cycle() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "patch unequal rhai assertion");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "patch unequal rhai assertion"
+    );
 
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/templates/{template_id}/tests/{test_id}/run"))
+                .uri(format!(
+                    "/api/v1/templates/{template_id}/tests/{test_id}/run"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )

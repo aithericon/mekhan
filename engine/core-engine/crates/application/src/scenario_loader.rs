@@ -201,9 +201,7 @@ impl ScenarioParser {
                         }
                     }
                     "terminal" => Place::terminal(&sp.name),
-                    "state" | "resource" | "internal" | "" => {
-                        Place::internal(&sp.name)
-                    }
+                    "state" | "resource" | "internal" | "" => Place::internal(&sp.name),
                     other => return Err(ScenarioLoadError::InvalidPlaceType(other.to_string())),
                 }
             };

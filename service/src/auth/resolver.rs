@@ -34,7 +34,8 @@ pub struct StaticPrincipalResolver;
 impl PrincipalResolver for StaticPrincipalResolver {
     async fn resolve(&self, claims: VerifiedClaims) -> Result<AuthUser, AuthError> {
         let email = string_claim(&claims, "email");
-        let display_name = string_claim(&claims, "name").or_else(|| string_claim(&claims, "preferred_username"));
+        let display_name =
+            string_claim(&claims, "name").or_else(|| string_claim(&claims, "preferred_username"));
 
         let (roles, org_id) = match claims.extra.get(ZITADEL_ROLES_CLAIM) {
             Some(Value::Object(roles_obj)) => {
@@ -61,7 +62,11 @@ impl PrincipalResolver for StaticPrincipalResolver {
 }
 
 fn string_claim(claims: &VerifiedClaims, key: &str) -> Option<String> {
-    claims.extra.get(key).and_then(|v| v.as_str()).map(str::to_string)
+    claims
+        .extra
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 /// Resolver that enriches the `StaticPrincipalResolver` output with a
@@ -77,7 +82,10 @@ pub struct DbPrincipalResolver {
 
 impl DbPrincipalResolver {
     pub fn new(db: PgPool) -> Self {
-        Self { inner: StaticPrincipalResolver, db }
+        Self {
+            inner: StaticPrincipalResolver,
+            db,
+        }
     }
 }
 
@@ -129,12 +137,10 @@ impl PrincipalResolver for DbPrincipalResolver {
 /// workspace. Today that's just `demos`, but the loop is correct for any
 /// future system workspace (e.g. a `samples` or `tutorial` namespace).
 async fn ensure_system_workspace_membership(db: &PgPool, user_id: Uuid) -> Result<(), AuthError> {
-    let rows: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM workspaces WHERE is_system = TRUE",
-    )
-    .fetch_all(db)
-    .await
-    .map_err(|e| AuthError::Internal(format!("system workspace lookup: {e}")))?;
+    let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM workspaces WHERE is_system = TRUE")
+        .fetch_all(db)
+        .await
+        .map_err(|e| AuthError::Internal(format!("system workspace lookup: {e}")))?;
     for (ws_id,) in rows {
         upsert_member(db, ws_id, user_id, "viewer").await?;
     }
@@ -160,15 +166,21 @@ async fn lookup_workspace_by_zitadel_org(
     db: &PgPool,
     zitadel_org_id: &str,
 ) -> Result<Option<Uuid>, AuthError> {
-    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM workspaces WHERE zitadel_org_id = $1")
-        .bind(zitadel_org_id)
-        .fetch_optional(db)
-        .await
-        .map_err(|e| AuthError::Internal(format!("workspace lookup: {e}")))?;
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM workspaces WHERE zitadel_org_id = $1")
+            .bind(zitadel_org_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| AuthError::Internal(format!("workspace lookup: {e}")))?;
     Ok(row.map(|(id,)| id))
 }
 
-async fn upsert_member(db: &PgPool, workspace_id: Uuid, user_id: Uuid, role: &str) -> Result<(), AuthError> {
+async fn upsert_member(
+    db: &PgPool,
+    workspace_id: Uuid,
+    user_id: Uuid,
+    role: &str,
+) -> Result<(), AuthError> {
     sqlx::query(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
          VALUES ($1, $2, $3) \

@@ -24,13 +24,12 @@
 			if (dm.pool == null) return null;
 			return { text: `Pool: ${dm.pool.alias || '—'}`, title: `Holds a unit from the "${dm.pool.alias}" token pool while running` };
 		}
-		// scheduled
-		const op = dm.operation ?? 'submit';
-		if (op === 'lease') {
-			const sched = dm.scheduler ?? '';
-			return { text: `Lease: ${sched || '—'}`, title: `Leases an allocation from the "${sched}" datacenter for the step's duration` };
+		// scheduled — always lease pattern now
+		const sched = dm.scheduler ?? '';
+		if (sched) {
+			return { text: `Lease: ${sched}`, title: `Leases an allocation from the "${sched}" datacenter for the step's duration` };
 		}
-		return { text: 'Scheduled', title: 'Dispatched as a job through the scheduler-net' };
+		return { text: 'Scheduled', title: 'Dispatched as a job through an external cluster (Nomad/Slurm)' };
 	});
 
 	const kindBadge: Record<string, string> = {
@@ -128,5 +127,17 @@
 		position={Position.Right}
 		style="top:75%;background:#a855f7;border-color:#7e22ce;"
 		title="Stream output (log_output tokens)"
+	/>
+{/if}
+{#if data.streamInput}
+	<!-- Streaming reducer input: receives the upstream producer's chunks over
+	     IPC. Offset below the "in" handle on the left edge. Wire the producer's
+	     stream handle here (and its control out to this node's "in"). -->
+	<Handle
+		id="stream"
+		type="target"
+		position={Position.Left}
+		style="top:72%;background:#06b6d4;border-color:#0891b2;"
+		title="Stream input — chunks from a streamOutput producer (aithericon.chunks())"
 	/>
 {/if}

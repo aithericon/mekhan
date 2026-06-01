@@ -763,7 +763,12 @@ impl<'ctx> TransitionBuilder<'ctx> {
 
     /// Like [`spawn_logic_labeled()`](Self::spawn_logic_labeled), but with a
     /// custom target place in the child net.
-    pub fn spawn_logic_labeled_to(self, script: impl Into<String>, target_place: &str, label_expr: &str) {
+    pub fn spawn_logic_labeled_to(
+        self,
+        script: impl Into<String>,
+        target_place: &str,
+        label_expr: &str,
+    ) {
         let inner = script.into();
         // Pre-compute label in a let binding to avoid Rhai parsing ambiguity
         // when label_expr contains if/else blocks inside the map literal.
@@ -1079,7 +1084,9 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_output("submitted", ports.submitted)
             .error_output(ports.errors);
 
-        builder.ctx.record_service_requirement(&effects::EXECUTOR_SUBMIT);
+        builder
+            .ctx
+            .record_service_requirement(&effects::EXECUTOR_SUBMIT);
 
         // Build signal_routes from handle IDs (type-safe, scoped)
         let mut config = serde_json::json!({
@@ -1134,9 +1141,13 @@ impl<'ctx> TransitionBuilder<'ctx> {
         // (not cancelled — that's caused by the cancel transition)
         builder.caused_signals.push(ports.accepted.id().to_string());
         builder.caused_signals.push(ports.running.id().to_string());
-        builder.caused_signals.push(ports.completed.id().to_string());
+        builder
+            .caused_signals
+            .push(ports.completed.id().to_string());
         builder.caused_signals.push(ports.failed.id().to_string());
-        builder.caused_signals.push(ports.timed_out.id().to_string());
+        builder
+            .caused_signals
+            .push(ports.timed_out.id().to_string());
 
         builder.finalize();
     }
@@ -1168,12 +1179,16 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_output("cancelled", ports.cancelling)
             .error_output(ports.errors);
 
-        builder.ctx.record_service_requirement(&effects::EXECUTOR_CANCEL);
+        builder
+            .ctx
+            .record_service_requirement(&effects::EXECUTOR_CANCEL);
         builder.logic = Some(TransitionLogic::Effect {
             handler_id: effects::EXECUTOR_CANCEL.handler_id.to_string(),
             config: None,
         });
-        builder.caused_signals.push(ports.cancelled_signal.id().to_string());
+        builder
+            .caused_signals
+            .push(ports.cancelled_signal.id().to_string());
         builder.finalize();
     }
 
@@ -1257,7 +1272,9 @@ impl<'ctx> TransitionBuilder<'ctx> {
                 "place": ports.response_signal.id()
             })),
         });
-        builder.caused_signals.push(ports.response_signal.id().to_string());
+        builder
+            .caused_signals
+            .push(ports.response_signal.id().to_string());
         builder.finalize();
     }
 
@@ -1273,7 +1290,9 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_output("cancelled", ports.cancelled)
             .error_output(ports.errors);
 
-        builder.ctx.record_service_requirement(&effects::HUMAN_CANCEL);
+        builder
+            .ctx
+            .record_service_requirement(&effects::HUMAN_CANCEL);
         builder.logic = Some(TransitionLogic::Effect {
             handler_id: effects::HUMAN_CANCEL.handler_id.to_string(),
             config: None,
@@ -1294,7 +1313,9 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_output("scheduled", ports.scheduled)
             .error_output(ports.errors);
 
-        builder.ctx.record_service_requirement(&effects::TIMER_SCHEDULE);
+        builder
+            .ctx
+            .record_service_requirement(&effects::TIMER_SCHEDULE);
         builder.logic = Some(TransitionLogic::Effect {
             handler_id: effects::TIMER_SCHEDULE.handler_id.to_string(),
             config: None,
@@ -1315,7 +1336,9 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_output("cancelled", ports.cancelled)
             .error_output(ports.errors);
 
-        builder.ctx.record_service_requirement(&effects::TIMER_CANCEL);
+        builder
+            .ctx
+            .record_service_requirement(&effects::TIMER_CANCEL);
         builder.logic = Some(TransitionLogic::Effect {
             handler_id: effects::TIMER_CANCEL.handler_id.to_string(),
             config: None,
@@ -1336,13 +1359,17 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_output("submitted", ports.submitted)
             .error_output(ports.errors);
 
-        builder.ctx.record_service_requirement(&effects::SCHEDULER_SUBMIT);
+        builder
+            .ctx
+            .record_service_requirement(&effects::SCHEDULER_SUBMIT);
         builder.logic = Some(TransitionLogic::Effect {
             handler_id: effects::SCHEDULER_SUBMIT.handler_id.to_string(),
             config: None,
         });
         builder.caused_signals.push(ports.running.id().to_string());
-        builder.caused_signals.push(ports.completed.id().to_string());
+        builder
+            .caused_signals
+            .push(ports.completed.id().to_string());
         builder.caused_signals.push(ports.failed.id().to_string());
         if let Some(t) = ports.timed_out {
             builder.caused_signals.push(t.id().to_string());
@@ -1365,7 +1392,9 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_output("cancelled", ports.cancelled)
             .error_output(ports.errors);
 
-        builder.ctx.record_service_requirement(&effects::SCHEDULER_CANCEL);
+        builder
+            .ctx
+            .record_service_requirement(&effects::SCHEDULER_CANCEL);
         builder.logic = Some(TransitionLogic::Effect {
             handler_id: effects::SCHEDULER_CANCEL.handler_id.to_string(),
             config: None,
@@ -1384,8 +1413,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
     ///
     /// This is a terminal method — auto-finalizes the transition.
     pub fn process_start(mut self, config: serde_json::Value) {
-        self.ctx
-            .record_service_requirement(&effects::PROCESS_START);
+        self.ctx.record_service_requirement(&effects::PROCESS_START);
         self.logic = Some(TransitionLogic::Effect {
             handler_id: effects::PROCESS_START.handler_id.to_string(),
             config: Some(config),
@@ -1426,10 +1454,14 @@ impl<'ctx> TransitionBuilder<'ctx> {
             .auto_input("trigger", ports.trigger)
             .auto_output("process", ports.process);
 
-        builder.ctx.record_service_requirement(&effects::PROCESS_START);
+        builder
+            .ctx
+            .record_service_requirement(&effects::PROCESS_START);
         builder.logic = Some(TransitionLogic::Effect {
             handler_id: effects::PROCESS_START.handler_id.to_string(),
-            config: Some(serde_json::to_value(ports.config).expect("ProcessStartConfig serializes")),
+            config: Some(
+                serde_json::to_value(ports.config).expect("ProcessStartConfig serializes"),
+            ),
         });
         builder.finalize();
     }
@@ -1487,7 +1519,10 @@ impl<'ctx> TransitionBuilder<'ctx> {
     ///     .logic(r#"#{ done: result }"#);
     /// ```
     pub fn correlate_on(self, port1: &str, port2: &str, fields: &[&str]) -> Self {
-        assert!(!fields.is_empty(), "correlate_on requires at least one field");
+        assert!(
+            !fields.is_empty(),
+            "correlate_on requires at least one field"
+        );
         let guard_expr: String = fields
             .iter()
             .map(|f| format!("{}.{} == {}.{}", port1, f, port2, f))

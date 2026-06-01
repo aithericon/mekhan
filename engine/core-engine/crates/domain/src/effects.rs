@@ -97,6 +97,25 @@ pub const SCHEDULER_CANCEL: EffectDescriptor = EffectDescriptor {
 };
 
 /// Submit an execution to the executor service.
+///
+/// ## Sub-phase 2.5d-tools: agent_loop config keys (carried in `config`)
+///
+/// When the target executor runs an LLM Agent stage with tool use, the
+/// transition's `logic.config` carries two additional keys alongside the
+/// standard `task_kind`, `required_capabilities`, etc.:
+///
+/// - `tool_names: Vec<String>` — names of tools the LLM may invoke, resolved
+///   by name against the submission's `tool_catalogue`. The executor's
+///   `run_agent_loop` passes only the named tools to the LLM.
+///
+/// - `max_tool_iterations: usize` (optional; default 16) — hard cap on the
+///   number of LLM ↔ tool turns before the loop terminates with an error.
+///   Prevents runaway tool loops from consuming unbounded tokens.
+///
+/// Both keys are absent from `ExecutorSubmitInput` schema validation today
+/// (the executor reads them from raw `config` JSON). Schema reference will
+/// be updated in 2.5e when the clinic-side pipeline engine deletes its own
+/// tool-loop and defers fully to mekhan.
 pub const EXECUTOR_SUBMIT: EffectDescriptor = EffectDescriptor {
     handler_id: "executor_submit",
     default_input_port: "job",
@@ -114,6 +133,16 @@ pub const EXECUTOR_CANCEL: EffectDescriptor = EffectDescriptor {
     category: ServiceCategory::Executor,
     default_input_schema: Some("#/definitions/ExecutorCancelInput"),
     default_output_schema: Some("#/definitions/ExecutorCancelled"),
+};
+
+/// Feed a data chunk into a running reducer job.
+pub const EXECUTOR_STREAM_FEED: EffectDescriptor = EffectDescriptor {
+    handler_id: "executor_stream_feed",
+    default_input_port: "feed",
+    default_output_port: "fed",
+    category: ServiceCategory::Executor,
+    default_input_schema: None,
+    default_output_schema: None,
 };
 
 /// Schedule a durable timer via Clockmaster.
@@ -308,7 +337,7 @@ pub const PROCESS_LOG_MESSAGE: EffectDescriptor = EffectDescriptor {
 /// R4: the `scheduler` deployment backend's `lease` operation. The handler
 /// (`ResourceLeaseAcquireHandler`) POSTs the claim request to the allocator URL
 /// (resolved per-fire from the datacenter resource secret in `effect_config`)
-/// and emits the typed lease (`{ grant_id, node, gpu_uuid, alloc_id, expiry }`)
+/// and emits the typed lease (`{ grant_id, alloc_id, node?, expiry?, scheduler }`)
 /// — the `DatacenterLease` shape from `aithericon_resources::pool`. The
 /// allocator is the source of truth; the net holds only the lease handle.
 ///
@@ -346,6 +375,7 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &SCHEDULER_CANCEL,
     &EXECUTOR_SUBMIT,
     &EXECUTOR_CANCEL,
+    &EXECUTOR_STREAM_FEED,
     &TIMER_SCHEDULE,
     &TIMER_CANCEL,
     &HUMAN_TASK,

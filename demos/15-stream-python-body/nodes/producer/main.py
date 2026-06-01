@@ -3,13 +3,13 @@
 # `streamOutput: true` (graph.json) makes every `set_output(name, value)` call
 # emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this
 # node's stream side-channel (the `p_producer_stream` Signal place). The
-# downstream StreamConsumer (dispatch=SequentialBody) drains each chunk as it
-# arrives and runs a per-chunk Python BODY on it.
+# downstream reducer (an AutomatedStep with streamInput=true) receives each chunk
+# via `aithericon.chunks()` over IPC and folds them in-process.
 #
 # We emit one DISTINCT-named chunk per word, each value a plain string (distinct
 # names matter: the stream token dedup id is content-addressable per output
-# name). The consumer's body uppercases each chunk and the Concat reduce joins
-# the body results in stream order into "THE QUICK BROWN FOX".
+# name). The reducer uppercases each chunk and concatenates them in stream order
+# into "THE QUICK BROWN FOX".
 #
 # IMPORTANT: a streaming producer must emit ONLY stream chunks — every
 # `set_output` becomes a stream token and is counted into `stream_count` (the

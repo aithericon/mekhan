@@ -73,7 +73,11 @@ impl TestScenario {
                     "signal" => Place::signal(&sp.name),
                     "bridge_in" => {
                         if let Some(ref source) = sp.bridge_in {
-                            Place::bridge_in_from(&sp.name, &source.source_net_id, &source.source_place_name)
+                            Place::bridge_in_from(
+                                &sp.name,
+                                &source.source_net_id,
+                                &source.source_place_name,
+                            )
                         } else {
                             Place::bridge_in(&sp.name)
                         }

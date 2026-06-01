@@ -57,6 +57,9 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "13-resource-pool",
     "13-dynamic-form",
     "14-streaming-output",
+    "15-stream-python-body",
+    "17-stream-map",
+    "18-stream-pipeline",
 ];
 
 fn repo_root() -> PathBuf {
@@ -251,6 +254,21 @@ fn snapshot_14_streaming_output() {
     run("14-streaming-output");
 }
 
+#[test]
+fn snapshot_15_stream_python_body() {
+    run("15-stream-python-body");
+}
+
+#[test]
+fn snapshot_17_stream_map() {
+    run("17-stream-map");
+}
+
+#[test]
+fn snapshot_18_stream_pipeline() {
+    run("18-stream-pipeline");
+}
+
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
 /// a snapshot test, fail loudly. Comparison against the curated list above
 /// rather than the disk so we can intentionally exclude (e.g. subworkflow
@@ -267,8 +285,7 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
             // Numbered demos use NN-name. Strip-prefix isolates the convention
             // from the unnumbered ones (`invoice-processing`, `llm-smoke`,
             // ...) that this suite doesn't claim to cover.
-            if name.chars().take(2).all(|c| c.is_ascii_digit())
-                && name.chars().nth(2) == Some('-')
+            if name.chars().take(2).all(|c| c.is_ascii_digit()) && name.chars().nth(2) == Some('-')
             {
                 Some(name)
             } else {
@@ -279,18 +296,31 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     numbered.sort();
 
     let covered: std::collections::HashSet<&str> = SNAPSHOT_DEMOS.iter().copied().collect();
-    // Both skipped for the same reason: they reference a child template by id
-    // that the bare `compile_to_air` entry-point can't resolve (the publish
-    // handler runs the resolver). 09's `lookup_order` tool is a SubWorkflow
-    // (the 08a-order-lookup child), so it joins 06 here.
-    // 06/09 reference a child template by id the bare entry-point can't
-    // resolve. 12a-bo-catalog-trigger carries a Trigger node whose catalogue
-    // wiring is resolved at publish time, not by `compile_to_air` — same class
-    // of "needs the publish handler" exclusion.
-    let documented_skip: std::collections::HashSet<&str> =
-        ["06-subworkflow", "09-agent-tool-loop", "12a-bo-catalog-trigger"]
-            .into_iter()
-            .collect();
+    // Skipped for the same reason: each references a child template or resource
+    // by id that the bare `compile_to_air` entry-point can't resolve (the
+    // publish handler runs the resolver). 09's `lookup_order` tool is a
+    // SubWorkflow (the 08a-order-lookup child), so it joins 06; 11-http-call's
+    // `http` backend references an http resource the resolver would supply;
+    // 12a-bo-catalog-trigger carries a Trigger node whose catalogue wiring is
+    // resolved at publish time — same class of "needs the publish handler".
+    // 16-leased-gpu's LeaseScope binds the `nomad_dc` datacenter resource, whose
+    // backing net the bare `compile_to_air` has no KnownResources to resolve; its
+    // compiled shape is pinned by `compiler_e2e`'s lease-scope tests and the live
+    // seed (publish path) proves it compiles.
+    // 19-postgres-node binds the `demo_pg` postgres resource via ConfigOverlay —
+    // bare `compile_to_air` has no KnownResources to resolve it; its compile is
+    // pinned by `demos::tests::postgres_node_demo_loads_and_compiles_with_resource`
+    // (which passes a known `demo_pg`) and the live seed proves the publish path.
+    let documented_skip: std::collections::HashSet<&str> = [
+        "06-subworkflow",
+        "09-agent-tool-loop",
+        "11-http-call",
+        "12a-bo-catalog-trigger",
+        "16-leased-gpu",
+        "19-postgres-node",
+    ]
+    .into_iter()
+    .collect();
 
     for d in &numbered {
         let s = d.as_str();
@@ -303,4 +333,3 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         );
     }
 }
-

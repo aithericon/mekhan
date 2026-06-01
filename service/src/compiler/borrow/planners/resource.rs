@@ -149,11 +149,9 @@ impl BorrowSource for ResourceSource {
     }
     fn scan(&self, ctx: &PlanCtx<'_>) -> Result<Vec<Borrow>, CompileError> {
         let mut out = Vec::new();
-        for b in automated_step_resource_borrow_plan(
-            ctx.graph,
-            ctx.inline_sources,
-            ctx.known_resources,
-        )? {
+        for b in
+            automated_step_resource_borrow_plan(ctx.graph, ctx.inline_sources, ctx.known_resources)?
+        {
             // `producer_node` is set to `__resources__/<name>` as a sentinel:
             // it identifies the borrow source on inspection but is never
             // consumed by `wire_read_arc` (the `ResourceEnvelope` apply arm

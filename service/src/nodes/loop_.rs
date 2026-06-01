@@ -32,8 +32,8 @@ pub(crate) static LOOP_DECL: NodeDecl = NodeDecl {
     // synthesises a read-arc through the parked envelope.
     parks_data_envelope: true,
     lower: Some(crate::compiler::lower::loop_::lower_loop),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     validate: Some(crate::compiler::validate::validate_loop),
@@ -72,17 +72,12 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     ]
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::Loop {
         max_iterations,
         loop_condition,
         accumulators,
-        lease,
         ..
     } = data
     else {
@@ -97,16 +92,5 @@ fn yjs_encode(
         let accs_val =
             serde_json::to_value(accumulators).unwrap_or(serde_json::Value::Array(vec![]));
         config.insert(txn, "accumulators", json_value_to_any(&accs_val));
-    }
-    // L3 loop-scoped lease (datacenter alias + optional request). MUST be
-    // persisted through Yjs or it is silently dropped on publish's
-    // `doc_to_graph` reconstruction (the `..` previously ate it) — offline
-    // `compile_to_air` keeps it directly, which is why `compiler_e2e` passed
-    // but the live published instance lowered as a plain (lease-less) loop.
-    // Key `lease` matches the serde field name so `doc_to_graph`'s generic
-    // config-merge + `from_value::<WorkflowNodeData>` round-trips it back.
-    if let Some(lease) = lease {
-        let lease_val = serde_json::to_value(lease).unwrap_or(serde_json::Value::Null);
-        config.insert(txn, "lease", json_value_to_any(&lease_val));
     }
 }

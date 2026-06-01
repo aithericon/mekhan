@@ -52,7 +52,11 @@ fn fake_resource_envelope() -> serde_json::Value {
 }
 
 fn stage_resource(ctx: &RunContext, alias: &str, envelope: &serde_json::Value) {
-    write_input(&ctx.run_dir.inputs_dir, &format!("{alias}.json"), envelope.clone());
+    write_input(
+        &ctx.run_dir.inputs_dir,
+        &format!("{alias}.json"),
+        envelope.clone(),
+    );
 }
 
 fn noop_status_cb() -> StatusCallback {
@@ -128,7 +132,10 @@ async fn renders_subject_and_body_against_inputs() {
     // ExecutionOutcome is Success on the happy path; structured detail in outputs.
     assert!(matches!(result.outcome, ExecutionOutcome::Success));
     let outcome = result.outputs.get("outcome").expect("outcome present");
-    assert_eq!(outcome.get("type").and_then(|v| v.as_str()), Some("success"));
+    assert_eq!(
+        outcome.get("type").and_then(|v| v.as_str()),
+        Some("success")
+    );
     // dry_run=true because sink was set
     assert_eq!(outcome.get("dry_run").and_then(|v| v.as_bool()), Some(true));
 
@@ -136,8 +143,14 @@ async fn renders_subject_and_body_against_inputs() {
     let captured = sink.take();
     assert_eq!(captured.len(), 1);
     let raw = String::from_utf8(captured[0].clone()).unwrap();
-    assert!(raw.contains("Welcome, Ada!"), "expected rendered subject, got:\n{raw}");
-    assert!(raw.contains("Hi Ada,"), "expected rendered body, got:\n{raw}");
+    assert!(
+        raw.contains("Welcome, Ada!"),
+        "expected rendered subject, got:\n{raw}"
+    );
+    assert!(
+        raw.contains("Hi Ada,"),
+        "expected rendered body, got:\n{raw}"
+    );
     assert!(
         raw.contains("ada@example.com"),
         "expected recipient, got:\n{raw}"
@@ -173,7 +186,10 @@ async fn template_render_error_surfaces_structured_outcome() {
         .unwrap();
 
     // ExecutionOutcome::BackendError + structured SmtpOutcome::TemplateRender
-    assert!(matches!(result.outcome, ExecutionOutcome::BackendError { .. }));
+    assert!(matches!(
+        result.outcome,
+        ExecutionOutcome::BackendError { .. }
+    ));
     let outcome = result.outputs.get("outcome").expect("outcome present");
     assert_eq!(
         outcome.get("type").and_then(|v| v.as_str()),
@@ -183,7 +199,6 @@ async fn template_render_error_surfaces_structured_outcome() {
         outcome.get("file").and_then(|v| v.as_str()),
         Some("subject.tera")
     );
-
 }
 
 #[tokio::test]
@@ -230,12 +245,14 @@ async fn from_override_wins_over_resource_default() {
 
     let raw = String::from_utf8(sink.take()[0].clone()).unwrap();
     assert!(raw.contains("Alt"), "From override missing: {raw}");
-    assert!(raw.contains("alt@example.com"), "From address missing: {raw}");
+    assert!(
+        raw.contains("alt@example.com"),
+        "From address missing: {raw}"
+    );
     assert!(
         !raw.contains("hello@example.com"),
         "resource default leaked when override was set: {raw}"
     );
-
 }
 
 #[tokio::test]
@@ -268,10 +285,12 @@ async fn multipart_alternative_when_both_bodies_set() {
         .unwrap();
 
     let raw = String::from_utf8(sink.take()[0].clone()).unwrap();
-    assert!(raw.contains("multipart/alternative"), "expected multipart/alternative: {raw}");
+    assert!(
+        raw.contains("multipart/alternative"),
+        "expected multipart/alternative: {raw}"
+    );
     assert!(raw.contains("(text)"));
     assert!(raw.contains("<p>Hi C (html)</p>"));
-
 }
 
 #[tokio::test]
@@ -306,7 +325,10 @@ async fn attachments_go_through_multipart_mixed() {
         .unwrap();
 
     let raw = String::from_utf8(sink.take()[0].clone()).unwrap();
-    assert!(raw.contains("multipart/mixed"), "expected multipart/mixed: {raw}");
+    assert!(
+        raw.contains("multipart/mixed"),
+        "expected multipart/mixed: {raw}"
+    );
     assert!(raw.contains("report.pdf"));
     assert!(raw.contains("application/pdf"));
 }
@@ -362,7 +384,10 @@ async fn dry_run_does_not_call_sink_or_transport() {
         .await
         .unwrap();
     let outcome = result.outputs.get("outcome").unwrap();
-    assert_eq!(outcome.get("type").and_then(|v| v.as_str()), Some("success"));
+    assert_eq!(
+        outcome.get("type").and_then(|v| v.as_str()),
+        Some("success")
+    );
     assert_eq!(outcome.get("dry_run").and_then(|v| v.as_bool()), Some(true));
 
     // Subject + body preview ride the outputs map.

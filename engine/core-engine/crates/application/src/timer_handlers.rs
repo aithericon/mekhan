@@ -119,10 +119,7 @@ impl EffectHandler for TimerScheduleHandler {
 
     fn port_schemas(&self) -> Option<crate::effect::EffectPortSchemas> {
         Some(crate::effect::EffectPortSchemas {
-            inputs: HashMap::from([(
-                self.input_port.clone(),
-                "#/definitions/TimerInput".into(),
-            )]),
+            inputs: HashMap::from([(self.input_port.clone(), "#/definitions/TimerInput".into())]),
             outputs: HashMap::from([(
                 self.output_port.clone(),
                 "#/definitions/TimerScheduled".into(),

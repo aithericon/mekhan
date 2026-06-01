@@ -86,16 +86,10 @@ impl CrossNetTestContext {
 
         // Start inbound bridge listeners
         let bridge_a = Arc::new(CrossNetBridge::new(net_a_id.clone(), jetstream.clone()));
-        bridge_a.start_inbound_listener(
-            service_a.clone(),
-            eval_notify_a.clone(),
-        );
+        bridge_a.start_inbound_listener(service_a.clone(), eval_notify_a.clone());
 
         let bridge_b = Arc::new(CrossNetBridge::new(net_b_id.clone(), jetstream.clone()));
-        bridge_b.start_inbound_listener(
-            service_b.clone(),
-            eval_notify_b.clone(),
-        );
+        bridge_b.start_inbound_listener(service_b.clone(), eval_notify_b.clone());
 
         // Wait for bridge consumers to be created (DeliverPolicy::New means
         // messages published before the consumer exists are missed).
@@ -322,7 +316,10 @@ async fn test_one_way_bridge() {
         one_way_bridge_scenario(&ctx.net_b_id);
 
     ctx.service_a.initialize(sender_net.clone()).await.unwrap();
-    ctx.service_b.initialize(receiver_net.clone()).await.unwrap();
+    ctx.service_b
+        .initialize(receiver_net.clone())
+        .await
+        .unwrap();
     ctx.service_a
         .create_token(source_id.clone(), TokenColor::Unit)
         .await
@@ -365,7 +362,10 @@ async fn test_request_reply_bridge() {
     ) = request_reply_scenario(&ctx.net_b_id);
 
     ctx.service_a.initialize(sender_net.clone()).await.unwrap();
-    ctx.service_b.initialize(receiver_net.clone()).await.unwrap();
+    ctx.service_b
+        .initialize(receiver_net.clone())
+        .await
+        .unwrap();
     ctx.service_a
         .create_token(
             source_id.clone(),
@@ -412,7 +412,10 @@ async fn test_bridge_multiple_tokens() {
         one_way_bridge_scenario(&ctx.net_b_id);
 
     ctx.service_a.initialize(sender_net.clone()).await.unwrap();
-    ctx.service_b.initialize(receiver_net.clone()).await.unwrap();
+    ctx.service_b
+        .initialize(receiver_net.clone())
+        .await
+        .unwrap();
 
     for _ in 0..3 {
         ctx.service_a
@@ -451,7 +454,10 @@ async fn test_bridge_with_data_token() {
         one_way_bridge_scenario(&ctx.net_b_id);
 
     ctx.service_a.initialize(sender_net.clone()).await.unwrap();
-    ctx.service_b.initialize(receiver_net.clone()).await.unwrap();
+    ctx.service_b
+        .initialize(receiver_net.clone())
+        .await
+        .unwrap();
     ctx.service_a
         .create_token(
             source_id.clone(),
@@ -638,7 +644,11 @@ fn multi_instance_sender(relay_net_id: &str) -> (PetriNet, TransitionId, PlaceId
     let send_id = send.id.clone();
     net.add_transition(send);
 
-    net.add_arc(PetriArc::input(source_id.clone(), send_id.clone(), "source"));
+    net.add_arc(PetriArc::input(
+        source_id.clone(),
+        send_id.clone(),
+        "source",
+    ));
     net.add_arc(PetriArc::output(send_id.clone(), "outbox", outbox_id));
 
     (net, send_id, source_id, reply_inbox_id)
@@ -665,7 +675,11 @@ fn multi_instance_relay() -> (PetriNet, TransitionId, PlaceId, PlaceId) {
     let process_id = process.id.clone();
     net.add_transition(process);
 
-    net.add_arc(PetriArc::input(inbox_id.clone(), process_id.clone(), "inbox"));
+    net.add_arc(PetriArc::input(
+        inbox_id.clone(),
+        process_id.clone(),
+        "inbox",
+    ));
     net.add_arc(PetriArc::output(
         process_id.clone(),
         "processed",
@@ -686,18 +700,14 @@ async fn test_multi_instance_reply_routing() {
         multi_instance_sender(&ctx.relay_id);
     let (beta_net, beta_send_id, beta_source_id, beta_reply_id) =
         multi_instance_sender(&ctx.relay_id);
-    let (relay_net, relay_process_id, relay_inbox_id, _relay_processed_id) =
-        multi_instance_relay();
+    let (relay_net, relay_process_id, relay_inbox_id, _relay_processed_id) = multi_instance_relay();
 
     // Initialize all nets
     ctx.service_alpha
         .initialize(alpha_net.clone())
         .await
         .unwrap();
-    ctx.service_beta
-        .initialize(beta_net.clone())
-        .await
-        .unwrap();
+    ctx.service_beta.initialize(beta_net.clone()).await.unwrap();
     ctx.service_relay
         .initialize(relay_net.clone())
         .await
@@ -818,9 +828,7 @@ async fn test_multi_instance_reply_routing() {
 // places on the sender.
 
 /// Sender with bridge_out_reply_channels and two separate reply inboxes.
-fn multi_channel_sender(
-    relay_net_id: &str,
-) -> (PetriNet, TransitionId, PlaceId, PlaceId, PlaceId) {
+fn multi_channel_sender(relay_net_id: &str) -> (PetriNet, TransitionId, PlaceId, PlaceId, PlaceId) {
     let mut net = PetriNet::new();
 
     let source = Place::internal("source");
@@ -848,7 +856,11 @@ fn multi_channel_sender(
     let send_id = send.id.clone();
     net.add_transition(send);
 
-    net.add_arc(PetriArc::input(source_id.clone(), send_id.clone(), "source"));
+    net.add_arc(PetriArc::input(
+        source_id.clone(),
+        send_id.clone(),
+        "source",
+    ));
     net.add_arc(PetriArc::output(send_id.clone(), "outbox", outbox_id));
 
     (net, send_id, source_id, alpha_inbox_id, beta_inbox_id)
@@ -950,8 +962,16 @@ async fn test_multi_channel_reply_routing() {
     .await;
 
     // Verify: each inbox got exactly 1 token
-    assert_eq!(marking.token_count(&alpha_inbox_id), 1, "alpha_inbox should have 1 token");
-    assert_eq!(marking.token_count(&beta_inbox_id), 1, "beta_inbox should have 1 token");
+    assert_eq!(
+        marking.token_count(&alpha_inbox_id),
+        1,
+        "alpha_inbox should have 1 token"
+    );
+    assert_eq!(
+        marking.token_count(&beta_inbox_id),
+        1,
+        "beta_inbox should have 1 token"
+    );
 
     // Verify: alpha_inbox has the alpha channel token
     let alpha_tokens = marking.tokens_at(&alpha_inbox_id);

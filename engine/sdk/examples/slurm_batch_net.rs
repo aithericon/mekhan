@@ -1,9 +1,11 @@
 //! Example: Slurm batch job net with signal-based completion, timeout handling, retry, and dead-letter routing.
 //!
 //! Defines a Petri net that submits batch jobs to Slurm via the `scheduler_submit`
-//! effect handler, then uses SlurmWatcher-delivered signals to detect completion,
-//! failure, or timeout. Failed jobs are retried up to `max_retries` before being
-//! dead-lettered. Timed-out jobs are routed to a dedicated `timed_out` place.
+//! effect handler (one of two dispatch patterns — the other is the resource-lease
+//! adapter in `resource_pool_net.rs`), then uses SlurmWatcher-delivered signals to
+//! detect completion, failure, or timeout. Failed jobs are retried up to
+//! `max_retries` before being dead-lettered. Timed-out jobs are routed to a
+//! dedicated `timed_out` place.
 //!
 //! Net topology:
 //! ```text

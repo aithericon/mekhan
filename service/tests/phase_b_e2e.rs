@@ -112,12 +112,7 @@ async fn seed_template_with_webhook(
     id
 }
 
-async fn create_project(
-    app: &axum::Router,
-    subject: &str,
-    workspace_id: Uuid,
-    slug: &str,
-) -> Uuid {
+async fn create_project(app: &axum::Router, subject: &str, workspace_id: Uuid, slug: &str) -> Uuid {
     let resp = app
         .clone()
         .oneshot(
@@ -126,7 +121,8 @@ async fn create_project(
                 .uri(format!("/api/v1/workspaces/{workspace_id}/projects"))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({ "slug": slug, "display_name": slug, "description": "test" }).to_string(),
+                    json!({ "slug": slug, "display_name": slug, "description": "test" })
+                        .to_string(),
                 ))
                 .unwrap(),
         )
@@ -203,7 +199,11 @@ async fn openapi_bundle_lists_attached_webhooks() {
     assert!(path["post"].is_object(), "POST operation must exist");
     let op = &path["post"];
     assert_eq!(op["operationId"], "webhook_invoice-received");
-    assert!(op["tags"].as_array().unwrap().iter().any(|t| t == "webhooks"));
+    assert!(op["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t == "webhooks"));
     let auth_param = op["parameters"][0].clone();
     assert_eq!(auth_param["name"], "X-Webhook-Token");
 
@@ -362,9 +362,7 @@ async fn email_resolver_dev_noop_echoes_email_as_subject() {
                 .method("POST")
                 .uri("/api/v1/users/resolve")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "email": "bob@corp.com" }).to_string(),
-                ))
+                .body(Body::from(json!({ "email": "bob@corp.com" }).to_string()))
                 .unwrap(),
         )
         .await
@@ -394,11 +392,7 @@ async fn email_resolver_rejects_invalid_input() {
             )
             .await
             .unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::BAD_REQUEST,
-            "rejected '{bad}'"
-        );
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "rejected '{bad}'");
     }
 }
 
@@ -416,9 +410,7 @@ async fn email_resolver_end_to_end_with_member_add() {
                 .method("POST")
                 .uri("/api/v1/users/resolve")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "email": "bob@corp.com" }).to_string(),
-                ))
+                .body(Body::from(json!({ "email": "bob@corp.com" }).to_string()))
                 .unwrap(),
         )
         .await
@@ -581,9 +573,7 @@ async fn set_active_workspace_emits_cookie_and_204() {
                 .method("POST")
                 .uri("/api/v1/me/active-workspace")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "workspace_id": ws_b }).to_string(),
-                ))
+                .body(Body::from(json!({ "workspace_id": ws_b }).to_string()))
                 .unwrap(),
         )
         .await
@@ -616,9 +606,7 @@ async fn set_active_workspace_rejects_non_member() {
                 .method("POST")
                 .uri("/api/v1/me/active-workspace")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "workspace_id": ws_b }).to_string(),
-                ))
+                .body(Body::from(json!({ "workspace_id": ws_b }).to_string()))
                 .unwrap(),
         )
         .await
@@ -644,7 +632,10 @@ async fn clear_active_workspace_emits_removal_cookie() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    let set_cookie = resp.headers().get("set-cookie").expect("Set-Cookie emitted");
+    let set_cookie = resp
+        .headers()
+        .get("set-cookie")
+        .expect("Set-Cookie emitted");
     let s = set_cookie.to_str().unwrap();
     // Removal cookies set a far-past expiry and zero max-age.
     assert!(s.contains("mekhan_active_workspace="));
@@ -875,11 +866,10 @@ async fn resolver_auto_provisions_default_membership_as_editor() {
     };
     let user = resolver.resolve(claims).await.expect("resolve");
 
-    let (default_id,): (Uuid,) =
-        sqlx::query_as("SELECT id FROM workspaces WHERE slug = 'default'")
-            .fetch_one(&db)
-            .await
-            .unwrap();
+    let (default_id,): (Uuid,) = sqlx::query_as("SELECT id FROM workspaces WHERE slug = 'default'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
     let role: Option<(String,)> = sqlx::query_as(
         "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
     )

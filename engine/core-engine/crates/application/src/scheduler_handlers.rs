@@ -91,7 +91,7 @@ impl EffectHandler for SchedulerSubmitHandler {
         // here. The id flows to the scheduler dispatch (sbatch --export for Slurm)
         // and through the bridge into the executor net, where the executor
         // submit handler reuses it as the NATS subject suffix. Both sides must
-        // agree, so it is the scheduler-net's responsibility to authoritatively
+        // agree, so it is the upstream scheduler relay's responsibility to authoritatively
         // stamp it before the dispatch.
         let execution_id = job_data
             .get("execution_id")

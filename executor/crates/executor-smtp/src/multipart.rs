@@ -148,7 +148,9 @@ fn parse_addr(value: &str, which: &str) -> Result<Mailbox, SmtpOutcome> {
 /// surface the actual recipient list in the success outcome.
 pub fn build(inputs: Inputs<'_>) -> Result<Assembled, SmtpOutcome> {
     let from = parse_addr(&inputs.from, "from")?;
-    let mut builder = Message::builder().from(from.clone()).subject(inputs.subject.clone());
+    let mut builder = Message::builder()
+        .from(from.clone())
+        .subject(inputs.subject.clone());
 
     let mut to_norm = Vec::with_capacity(inputs.to.len());
     for addr in &inputs.to {
@@ -223,7 +225,8 @@ pub fn build(inputs: Inputs<'_>) -> Result<Assembled, SmtpOutcome> {
             };
             for a in inputs.attachments {
                 mixed = mixed.singlepart(
-                    Attachment::new(a.filename.clone()).body(a.bytes.clone(), a.content_type.clone()),
+                    Attachment::new(a.filename.clone())
+                        .body(a.bytes.clone(), a.content_type.clone()),
                 );
             }
             builder.multipart(mixed).map_err(invalid_config)?
@@ -360,7 +363,10 @@ mod tests {
     fn extension_mime_inference() {
         assert_eq!(mime_from_extension(Some("pdf")), "application/pdf");
         assert_eq!(mime_from_extension(Some("PNG")), "image/png");
-        assert_eq!(mime_from_extension(Some("unknown")), "application/octet-stream");
+        assert_eq!(
+            mime_from_extension(Some("unknown")),
+            "application/octet-stream"
+        );
         assert_eq!(mime_from_extension(None), "application/octet-stream");
     }
 }

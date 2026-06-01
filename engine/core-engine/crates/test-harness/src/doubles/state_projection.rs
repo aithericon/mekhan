@@ -57,8 +57,8 @@ mod tests {
                 token: token.clone(),
                 place_name: None,
                 workflow_id: None,
-                    signal_key: None,
-                    dedup_id: None,
+                signal_key: None,
+                dedup_id: None,
             },
             None,
         );
@@ -81,8 +81,8 @@ mod tests {
                 token,
                 place_name: None,
                 workflow_id: None,
-                    signal_key: None,
-                    dedup_id: None,
+                signal_key: None,
+                dedup_id: None,
             },
             None,
         );

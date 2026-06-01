@@ -62,7 +62,10 @@ pub fn next_fire_after(
 ) -> Result<Option<DateTime<Utc>>, String> {
     let (schedule, tz) = parse_cron(trigger)?;
     let after_tz = after.with_timezone(&tz);
-    Ok(schedule.after(&after_tz).next().map(|t| t.with_timezone(&Utc)))
+    Ok(schedule
+        .after(&after_tz)
+        .next()
+        .map(|t| t.with_timezone(&Utc)))
 }
 
 /// Persistent loop that fires a single cron trigger on schedule. Spawned per
@@ -81,12 +84,11 @@ pub fn spawn_loop(
         // we recompute the next-fire after `max(now, last_fire)` so a service
         // that came up after a missed window can immediately fire (FireMissed)
         // or skip ahead (SkipMissed — default).
-        let mut last_fire: Option<DateTime<Utc>> =
-            if let Some(ref kv) = kv {
-                read_last_fire(kv, &node_id).await
-            } else {
-                None
-            };
+        let mut last_fire: Option<DateTime<Utc>> = if let Some(ref kv) = kv {
+            read_last_fire(kv, &node_id).await
+        } else {
+            None
+        };
 
         // On boot, if FireMissed and we have a last_fire, replay the most
         // recent missed window (one fire, not all of them — that's safer for
@@ -176,7 +178,15 @@ async fn fire_once(
         "fire_time": fire_time.to_rfc3339(),
         "scheduled_time": scheduled_time.to_rfc3339(),
     });
-    match dispatcher.fire(node_id, payload).await {
+    match dispatcher
+        .fire(
+            node_id,
+            payload,
+            petri_api_types::DispatchOptions::default(),
+            None,
+        )
+        .await
+    {
         Ok(result) => {
             tracing::info!(
                 node_id = %node_id,

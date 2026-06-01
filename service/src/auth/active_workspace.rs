@@ -104,8 +104,7 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(
             axum::http::header::COOKIE,
-            HeaderValue::from_str(&format!("{}={}", ACTIVE_WORKSPACE_COOKIE, id))
-                .unwrap(),
+            HeaderValue::from_str(&format!("{}={}", ACTIVE_WORKSPACE_COOKIE, id)).unwrap(),
         );
         assert_eq!(cookie_workspace_id(&h), Some(id));
     }
@@ -121,8 +120,7 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(
             axum::http::header::COOKIE,
-            HeaderValue::from_str(&format!("{}=not-a-uuid", ACTIVE_WORKSPACE_COOKIE))
-                .unwrap(),
+            HeaderValue::from_str(&format!("{}=not-a-uuid", ACTIVE_WORKSPACE_COOKIE)).unwrap(),
         );
         assert_eq!(cookie_workspace_id(&h), None);
     }

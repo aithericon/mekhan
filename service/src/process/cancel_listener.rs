@@ -116,7 +116,12 @@ pub async fn start_human_cancel_listener(nats: MekhanNats, db: PgPool) {
             Err(e) => {
                 tracing::error!("human cancel lookup failed: {e}");
                 // NACK by not acking; redelivery will retry.
-                if let Err(nak) = msg.ack_with(async_nats::jetstream::AckKind::Nak(Some(Duration::from_secs(5)))).await {
+                if let Err(nak) = msg
+                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(
+                        Duration::from_secs(5),
+                    )))
+                    .await
+                {
                     tracing::warn!("nak failed: {nak}");
                 }
                 continue;
@@ -133,8 +138,7 @@ pub async fn start_human_cancel_listener(nats: MekhanNats, db: PgPool) {
             continue;
         }
 
-        match queries::update_task_status(&db, &payload.task_id, "cancelled", Some(&detail)).await
-        {
+        match queries::update_task_status(&db, &payload.task_id, "cancelled", Some(&detail)).await {
             Ok(Some(_)) => {
                 tracing::info!(
                     task_id = %payload.task_id,
@@ -150,7 +154,12 @@ pub async fn start_human_cancel_listener(nats: MekhanNats, db: PgPool) {
             }
             Err(e) => {
                 tracing::error!("human cancel update failed: {e}");
-                if let Err(nak) = msg.ack_with(async_nats::jetstream::AckKind::Nak(Some(Duration::from_secs(5)))).await {
+                if let Err(nak) = msg
+                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(
+                        Duration::from_secs(5),
+                    )))
+                    .await
+                {
                     tracing::warn!("nak failed: {nak}");
                 }
                 continue;

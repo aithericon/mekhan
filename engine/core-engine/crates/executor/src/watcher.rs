@@ -433,11 +433,10 @@ impl ExecutorWatcher {
                 StatusDetail::OutputSet { name, .. } => {
                     format!("{}-output-{}", event.execution_id, name)
                 }
-                StatusDetail::PhaseChanged { phase_name, status, .. } => {
-                    format!(
-                        "{}-phase-{}-{:?}",
-                        event.execution_id, phase_name, status
-                    )
+                StatusDetail::PhaseChanged {
+                    phase_name, status, ..
+                } => {
+                    format!("{}-phase-{}-{:?}", event.execution_id, phase_name, status)
                 }
                 _ => format!("{}-event-{}", event.execution_id, event.sequence),
             };

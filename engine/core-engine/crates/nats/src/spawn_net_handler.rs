@@ -84,12 +84,9 @@ impl SpawnNetHandler {
 #[async_trait::async_trait]
 impl EffectHandler for SpawnNetHandler {
     async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
-        let request = input
-            .inputs
-            .get(&self.input_port)
-            .ok_or_else(|| {
-                EffectError::Fatal(format!("Missing input port '{}'", self.input_port))
-            })?;
+        let request = input.inputs.get(&self.input_port).ok_or_else(|| {
+            EffectError::Fatal(format!("Missing input port '{}'", self.input_port))
+        })?;
 
         // Extract child_net_id (auto-generate if absent)
         let child_net_id = request
@@ -172,13 +169,16 @@ impl EffectHandler for SpawnNetHandler {
             initial_tokens: None,
         };
 
-        let payload = serde_json::to_vec(&create_request)
-            .map_err(|e| EffectError::ExecutionFailed(format!("Failed to serialize CreateNetRequest: {}", e)))?;
+        let payload = serde_json::to_vec(&create_request).map_err(|e| {
+            EffectError::ExecutionFailed(format!("Failed to serialize CreateNetRequest: {}", e))
+        })?;
 
         self.jetstream
             .publish(Subjects::COMMAND_CREATE_NET.to_string(), payload.into())
             .await
-            .map_err(|e| EffectError::ExecutionFailed(format!("Failed to publish CreateNetRequest: {}", e)))?;
+            .map_err(|e| {
+                EffectError::ExecutionFailed(format!("Failed to publish CreateNetRequest: {}", e))
+            })?;
 
         tracing::info!(
             parent_net = %self.parent_net_id,
@@ -238,10 +238,7 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: CreateNetRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.net_id, "child-123");
-        assert_eq!(
-            parsed.parameters.unwrap()["parent_net_id"],
-            "parent-456"
-        );
+        assert_eq!(parsed.parameters.unwrap()["parent_net_id"], "parent-456");
     }
 
     /// Helper to build an EffectInput for testing.

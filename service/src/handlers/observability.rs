@@ -121,9 +121,7 @@ pub async fn list_silent_drops(
                     // The stream itself carries a malformed record (shouldn't
                     // happen — we control the producer). Log and continue
                     // rather than fail the whole query.
-                    tracing::warn!(
-                        "silent-drops stream carried a record we couldn't parse: {e}"
-                    );
+                    tracing::warn!("silent-drops stream carried a record we couldn't parse: {e}");
                 }
             },
             Ok(Some(Err(e))) => {

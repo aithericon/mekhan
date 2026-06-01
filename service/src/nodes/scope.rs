@@ -28,8 +28,8 @@ pub(crate) static SCOPE_DECL: NodeDecl = NodeDecl {
     // children's own envelopes.
     parks_data_envelope: false,
     lower: Some(crate::compiler::lower::scope::lower_scope),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     validate: None,
@@ -52,11 +52,7 @@ fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
     }]
 }
 
-fn yjs_encode(
-    _txn: &mut yrs::TransactionMut<'_>,
-    _config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(_txn: &mut yrs::TransactionMut<'_>, _config: &yrs::MapRef, data: &WorkflowNodeData) {
     // No node-specific config — Scope carries only `label` + `description`,
     // which the WorkflowNode envelope encodes outside this function. The
     // legacy arm in `yjs/doc_ops.rs::write_node_config` for Scope (combined

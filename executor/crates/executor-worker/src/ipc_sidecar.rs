@@ -155,6 +155,11 @@ struct SidecarService {
     log_sink: Option<Arc<dyn LogSink>>,
     pending_uploads: Arc<Mutex<Vec<PendingUploadHandle>>>,
     stream_ctx: Option<Arc<StreamContext>>,
+    /// Inbound chunk feed for live reducer jobs. `Some` only when the job opted
+    /// in (the receiver end of the `ChunkRegistry` channel); `None` for every
+    /// non-reducer job, in which case `StreamChunks` returns an immediately-empty
+    /// stream. Wrapped so the (single) `StreamChunks` call can take ownership.
+    chunk_rx: Mutex<Option<tokio::sync::mpsc::Receiver<proto::ChunkMessage>>>,
 }
 
 #[tonic::async_trait]
@@ -219,8 +224,7 @@ impl ExecutorSidecar for SidecarService {
         request: Request<proto::SetOutputRequest>,
     ) -> Result<Response<proto::SidecarResponse>, Status> {
         let req = request.into_inner();
-        let (status, error_message) =
-            handle_set_output(&req, &self.state, &self.stream_ctx).await;
+        let (status, error_message) = handle_set_output(&req, &self.state, &self.stream_ctx).await;
         Ok(Response::new(make_response(status, error_message)))
     }
 
@@ -255,6 +259,101 @@ impl ExecutorSidecar for SidecarService {
             None,
         )))
     }
+
+    type StreamChunksStream = ChunkStream;
+
+    /// Inbound live data feed: the child opens this server-stream once and pulls
+    /// chunks as the executor receives them (over the `EXECUTOR_CHUNKS`
+    /// JetStream feed → `ChunkRegistry` channel). Drives the Python SDK's
+    /// `for chunk in aithericon.chunks()` loop.
+    ///
+    /// Gated on opt-in: a non-reducer job has `chunk_rx == None`, so this
+    /// returns an immediately-empty stream (the loop body never runs). When the
+    /// feed is present, each `ChunkMessage` is yielded in `sequence` order; the
+    /// in-band EOF sentinel (`is_eof`) is forwarded too and the channel close
+    /// (driven by the listener after EOF, or by the job ending) terminates the
+    /// stream.
+    async fn stream_chunks(
+        &self,
+        _request: Request<proto::StreamChunksRequest>,
+    ) -> Result<Response<Self::StreamChunksStream>, Status> {
+        // Take the receiver — `StreamChunks` is opened at most once per job.
+        let rx = self.chunk_rx.lock().await.take();
+        match rx {
+            Some(rx) => {
+                debug!("IPC sidecar: child opened chunk feed");
+                Ok(Response::new(ChunkStream::new(rx)))
+            }
+            None => {
+                // Not a reducer job (no feed) OR the feed was already opened.
+                // Either way: an empty stream — the Python `chunks()` loop ends
+                // immediately.
+                debug!("IPC sidecar: StreamChunks with no active feed — empty stream");
+                Ok(Response::new(ChunkStream::empty()))
+            }
+        }
+    }
+}
+
+/// Server-stream of inbound `ChunkMessage`s for `StreamChunks`.
+///
+/// Drains the per-job `ChunkRegistry` channel. Each delivered chunk is yielded
+/// as `Ok(ChunkMessage)`; once the channel closes (EOF forwarded by the
+/// listener, or the job ended) the stream ends. An EOF sentinel
+/// (`is_eof == true`) is yielded to the client and then ends the stream so the
+/// Python loop has an explicit terminator even if the channel stays open
+/// briefly.
+pub struct ChunkStream {
+    rx: Option<tokio::sync::mpsc::Receiver<proto::ChunkMessage>>,
+    done: bool,
+}
+
+impl ChunkStream {
+    fn new(rx: tokio::sync::mpsc::Receiver<proto::ChunkMessage>) -> Self {
+        Self {
+            rx: Some(rx),
+            done: false,
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            rx: None,
+            done: true,
+        }
+    }
+}
+
+impl futures::Stream for ChunkStream {
+    type Item = Result<proto::ChunkMessage, Status>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if self.done {
+            return Poll::Ready(None);
+        }
+        let Some(rx) = self.rx.as_mut() else {
+            self.done = true;
+            return Poll::Ready(None);
+        };
+        match rx.poll_recv(cx) {
+            Poll::Ready(Some(msg)) => {
+                if msg.is_eof {
+                    // Yield the sentinel, then end the stream.
+                    self.done = true;
+                }
+                Poll::Ready(Some(Ok(msg)))
+            }
+            Poll::Ready(None) => {
+                self.done = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 fn make_response(
@@ -285,6 +384,7 @@ pub async fn start_ipc_sidecar(
     log_config: SidecarLogConfig,
     child_exited: CancellationToken,
     stream_ctx: Option<Arc<StreamContext>>,
+    chunk_rx: Option<tokio::sync::mpsc::Receiver<proto::ChunkMessage>>,
 ) -> Result<tokio::task::JoinHandle<SidecarResult>, std::io::Error> {
     // Ensure socket parent directory exists (may be outside the run dir
     // when the path was shortened to fit the Unix sun_path limit).
@@ -348,6 +448,7 @@ pub async fn start_ipc_sidecar(
             log_sink: log_sink.clone(),
             pending_uploads: pending_uploads.clone(),
             stream_ctx,
+            chunk_rx: Mutex::new(chunk_rx),
         };
 
         let shutdown = tokio_util::sync::CancellationToken::new();
@@ -511,7 +612,11 @@ pub async fn start_ipc_sidecar(
                     }
                     Ok((idx, None)) => {
                         let st = state.lock().await;
-                        let name = st.artifacts.get(idx).map(|a| a.name.as_str()).unwrap_or("?");
+                        let name = st
+                            .artifacts
+                            .get(idx)
+                            .map(|a| a.name.as_str())
+                            .unwrap_or("?");
                         warn!(
                             artifact_index = idx,
                             artifact_name = %name,
@@ -1251,8 +1356,11 @@ async fn handle_set_output(
     // node's parked output; these mid-run events are content-addressably
     // deduped per output name engine-side, so the terminal re-emit collapses.
     if let Some(ctx) = stream_ctx {
-        ctx.maybe_emit(EventCategory::Output, StatusDetail::OutputSet { name, value })
-            .await;
+        ctx.maybe_emit(
+            EventCategory::Output,
+            StatusDetail::OutputSet { name, value },
+        )
+        .await;
     }
 
     (proto::ResponseStatus::Ok, None)
@@ -1279,8 +1387,7 @@ async fn handle_log_metrics(
                 value: p.value,
                 step: p.step,
                 timestamp: if p.timestamp_ms != 0 {
-                    chrono::DateTime::from_timestamp_millis(p.timestamp_ms)
-                        .unwrap_or_else(Utc::now)
+                    chrono::DateTime::from_timestamp_millis(p.timestamp_ms).unwrap_or_else(Utc::now)
                 } else {
                     Utc::now()
                 },
@@ -1421,6 +1528,7 @@ mod tests {
             None,
             SidecarLogConfig::default(),
             child_exited.clone(),
+            None,
             None,
         )
         .await

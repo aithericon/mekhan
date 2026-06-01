@@ -346,12 +346,11 @@ async fn delete_template_returns_204() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
     // Verify it's gone from DB
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM workflow_templates WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&db)
-            .await
-            .unwrap();
+    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM workflow_templates WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&db)
+        .await
+        .unwrap();
 
     assert!(row.is_none(), "template should be deleted from DB");
 }

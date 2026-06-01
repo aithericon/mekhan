@@ -110,10 +110,7 @@ mod netcdf_tests {
         let meta = extract_metadata(tmp.path()).unwrap();
 
         let title = meta.attributes.get("title").unwrap();
-        assert_eq!(
-            title,
-            &fmeta::AttributeValue::String("Test dataset".into())
-        );
+        assert_eq!(title, &fmeta::AttributeValue::String("Test dataset".into()));
     }
 
     #[test]
@@ -228,10 +225,7 @@ mod netcdf_tests {
 
         // Root attribute
         let author = meta.attributes.get("author").unwrap();
-        assert_eq!(
-            author,
-            &fmeta::AttributeValue::String("test".into())
-        );
+        assert_eq!(author, &fmeta::AttributeValue::String("test".into()));
 
         // Group-level attribute
         match &meta.format_specific {
@@ -246,10 +240,7 @@ mod netcdf_tests {
                     .iter()
                     .find(|(k, _)| k == "description")
                     .unwrap();
-                assert_eq!(
-                    desc.1,
-                    fmeta::AttributeValue::String("Sensor IDs".into())
-                );
+                assert_eq!(desc.1, fmeta::AttributeValue::String("Sensor IDs".into()));
             }
             other => panic!("Expected Hdf5, got {other:?}"),
         }

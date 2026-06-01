@@ -4,12 +4,12 @@
 //! Publishes cancel requests to the `human.cancel.{net_id}.{place}` subject.
 //! Uses dedicated HUMAN_REQUESTS and HUMAN_CANCEL streams separate from PETRI_GLOBAL.
 
+use crate::subjects::Subjects;
 use async_nats::jetstream;
 use async_nats::jetstream::stream::{Config as StreamConfig, RetentionPolicy};
 use petri_domain::human::{HumanTaskCancellation, HumanTaskClient, HumanTaskRequest};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use crate::subjects::Subjects;
 
 /// Stream name for human task requests.
 pub const HUMAN_STREAM_NAME: &str = "HUMAN_REQUESTS";
@@ -100,8 +100,14 @@ impl HumanTaskClient for HumanNatsClient {
         }
 
         let net_id = request.net_id.clone().unwrap();
-        let place = request.place.clone().unwrap_or_else(|| "default".to_string());
-        let task_id = request.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let place = request
+            .place
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let task_id = request
+            .task_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let subject = Subjects::human_request(&net_id, &place);
 
@@ -110,12 +116,10 @@ impl HumanTaskClient for HumanNatsClient {
 
         // Publish to NATS JetStream for reliability
         match self.jetstream.publish(subject, payload.into()).await {
-            Ok(ack_future) => {
-                match ack_future.await {
-                    Ok(_) => Ok(task_id),
-                    Err(e) => Err(format!("NATS publish acknowledgment failed: {}", e)),
-                }
-            }
+            Ok(ack_future) => match ack_future.await {
+                Ok(_) => Ok(task_id),
+                Err(e) => Err(format!("NATS publish acknowledgment failed: {}", e)),
+            },
             Err(e) => Err(format!("NATS publish failed: {}", e)),
         }
     }
@@ -140,19 +144,17 @@ impl HumanTaskClient for HumanNatsClient {
             .map_err(|e| format!("Failed to serialize cancel request: {}", e))?;
 
         match self.jetstream.publish(subject, payload.into()).await {
-            Ok(ack_future) => {
-                match ack_future.await {
-                    Ok(_) => {
-                        tracing::info!(
-                            task_id = %task_id,
-                            place = %place,
-                            "Human task cancel request published"
-                        );
-                        Ok(())
-                    }
-                    Err(e) => Err(format!("NATS cancel publish ack failed: {}", e)),
+            Ok(ack_future) => match ack_future.await {
+                Ok(_) => {
+                    tracing::info!(
+                        task_id = %task_id,
+                        place = %place,
+                        "Human task cancel request published"
+                    );
+                    Ok(())
                 }
-            }
+                Err(e) => Err(format!("NATS cancel publish ack failed: {}", e)),
+            },
             Err(e) => Err(format!("NATS cancel publish failed: {}", e)),
         }
     }

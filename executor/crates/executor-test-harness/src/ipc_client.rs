@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use aithericon_executor_process::ProcessConfig;
 use aithericon_executor_domain::{
     ExecutionJob, InputDeclaration, InputSource, JobPriority, OutputDeclaration,
 };
+use aithericon_executor_process::ProcessConfig;
 
 static CLIENT_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -95,6 +95,7 @@ pub fn ipc_client_job(
         timeout: None,
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     }
 }

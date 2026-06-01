@@ -18,8 +18,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use mekhan_service::compiler::compile_to_air;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
+use mekhan_service::compiler::compile_to_air;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     FieldKind, Port, PortField, Position, WorkflowEdge, WorkflowGraph, WorkflowNode,
@@ -62,8 +62,8 @@ fn simple_graph() -> WorkflowGraph {
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
-                terminal: mekhan_service::models::template::default_terminal_port(),
-                result_mapping: Vec::new(),
+                    terminal: mekhan_service::models::template::default_terminal_port(),
+                    result_mapping: Vec::new(),
                 },
                 parent_id: None,
                 width: None,
@@ -79,7 +79,10 @@ fn simple_graph() -> WorkflowGraph {
             label: None,
             edge_type: "sequence".to_string(),
         }],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -88,7 +91,13 @@ async fn insert_published_template(db: &sqlx::PgPool) -> Uuid {
     let template_id = Uuid::new_v4();
     let author_id = Uuid::new_v4();
     let graph = simple_graph();
-    let air = compile_to_air(&graph, "test-template", "", &std::collections::HashMap::new()).expect("compile AIR");
+    let air = compile_to_air(
+        &graph,
+        "test-template",
+        "",
+        &std::collections::HashMap::new(),
+    )
+    .expect("compile AIR");
 
     sqlx::query(
         r#"INSERT INTO workflow_templates
@@ -177,15 +186,17 @@ async fn create_instance_engine_down_returns_502_and_cleans_db() {
     );
 
     // Verify no orphaned instance in DB (cleanup should have deleted it)
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1",
-    )
-    .bind(template_id)
-    .fetch_one(&db)
-    .await
-    .expect("count instances");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1")
+            .bind(template_id)
+            .fetch_one(&db)
+            .await
+            .expect("count instances");
 
-    assert_eq!(count, 0, "should have no orphaned instance rows after failed deploy");
+    assert_eq!(
+        count, 0,
+        "should have no orphaned instance rows after failed deploy"
+    );
 }
 
 // ===========================================================================
@@ -219,13 +230,11 @@ async fn cancel_instance_engine_down_still_cancels_in_db() {
     );
 
     // Verify DB status is cancelled
-    let status: String = sqlx::query_scalar(
-        "SELECT status FROM workflow_instances WHERE id = $1",
-    )
-    .bind(instance_id)
-    .fetch_one(&db)
-    .await
-    .expect("fetch status");
+    let status: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+        .bind(instance_id)
+        .fetch_one(&db)
+        .await
+        .expect("fetch status");
 
     assert_eq!(status, "cancelled");
 }
@@ -238,17 +247,29 @@ async fn cancel_instance_engine_down_still_cancels_in_db() {
 async fn lifecycle_listener_retries_then_succeeds() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
-    let nats = MekhanNats::connect(&nats_url, None).await.expect("connect NATS");
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("connect NATS");
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
     // Start lifecycle listener
-    let kv = nats.ensure_catalogue_subscriptions_kv().await.expect("create KV");
+    let kv = nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("create KV");
     let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(kv, nats.jetstream().clone()));
     let listener_nats = nats.clone();
     let listener_db = db.clone();
     tokio::spawn(async move {
-        start_lifecycle_listener(listener_nats, listener_db, sub_mgr, None, mekhan_service::triggers::ResultWaiters::new()).await;
+        start_lifecycle_listener(
+            listener_nats,
+            listener_db,
+            sub_mgr,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+        .await;
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -288,13 +309,12 @@ async fn lifecycle_listener_retries_then_succeeds() {
     // Wait for the retry to pick it up
     let start = std::time::Instant::now();
     loop {
-        let status: String = sqlx::query_scalar(
-            "SELECT status FROM workflow_instances WHERE id = $1",
-        )
-        .bind(instance_id)
-        .fetch_one(&db)
-        .await
-        .expect("fetch status");
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+                .bind(instance_id)
+                .fetch_one(&db)
+                .await
+                .expect("fetch status");
 
         if status == "completed" {
             break;
@@ -315,7 +335,9 @@ async fn instance_state_engine_unavailable_shows_events() {
     let nats_url = common::nats_url();
     let (app, db) = common::test_app_with_petri_url(&nats_url, "http://localhost:1").await;
 
-    let nats = MekhanNats::connect(&nats_url, None).await.expect("connect NATS");
+    let nats = MekhanNats::connect(&nats_url, None)
+        .await
+        .expect("connect NATS");
     ensure_petri_global_stream(nats.jetstream()).await;
 
     let template_id = insert_published_template(&db).await;
@@ -339,7 +361,10 @@ async fn instance_state_engine_unavailable_shows_events() {
         "previous_hash": null
     });
     nats.jetstream()
-        .publish(event_subject, serde_json::to_vec(&event_payload).unwrap().into())
+        .publish(
+            event_subject,
+            serde_json::to_vec(&event_payload).unwrap().into(),
+        )
         .await
         .expect("publish event")
         .await
@@ -428,8 +453,8 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
-                terminal: mekhan_service::models::template::default_terminal_port(),
-                result_mapping: Vec::new(),
+                    terminal: mekhan_service::models::template::default_terminal_port(),
+                    result_mapping: Vec::new(),
                 },
                 parent_id: None,
                 width: None,
@@ -445,10 +470,18 @@ async fn insert_published_template_with_required_start_field(db: &sqlx::PgPool) 
             label: None,
             edge_type: "sequence".to_string(),
         }],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     };
-    let air = compile_to_air(&graph, "typed-template", "", &std::collections::HashMap::new())
-        .expect("compile AIR");
+    let air = compile_to_air(
+        &graph,
+        "typed-template",
+        "",
+        &std::collections::HashMap::new(),
+    )
+    .expect("compile AIR");
 
     sqlx::query(
         r#"INSERT INTO workflow_templates
@@ -497,14 +530,16 @@ async fn create_instance_rejects_missing_start_tokens_for_typed_start() {
         "should return 400 when typed Start has no matching start_tokens"
     );
 
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1",
-    )
-    .bind(template_id)
-    .fetch_one(&db)
-    .await
-    .expect("count instances");
-    assert_eq!(count, 0, "no instance row should be created on validation failure");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM workflow_instances WHERE template_id = $1")
+            .bind(template_id)
+            .fetch_one(&db)
+            .await
+            .expect("count instances");
+    assert_eq!(
+        count, 0,
+        "no instance row should be created on validation failure"
+    );
 }
 
 #[tokio::test]

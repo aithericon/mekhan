@@ -44,11 +44,7 @@ pub(crate) fn lower_progress_update(cx: &mut LoweringCtx) -> Result<(), CompileE
     let frac = format!("{fraction:?}");
     let cur = current_step.as_ref().map_or(0, |v| *v);
     let tot = total_steps.as_ref().map_or(0, |v| *v);
-    let (msg_let, detail_msg) = match message
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    let (msg_let, detail_msg) = match message.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(m) => {
             let e = interpolate_to_rhai_expr(m);
             (format!("let __mg = {e}; "), ", message: __mg".to_string())

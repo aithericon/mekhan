@@ -88,7 +88,12 @@ fn boundary_place(id: &str, name: &str, place_type: &str) -> ScenarioPlace {
 
 /// Forwarding transition: consume `from`(port "tok") → produce `to`(port
 /// "tok"), identity logic. Used for inbox→Start and terminal→reply_out.
-fn forward_transition(id: &str, name: &str, from_place: &str, to_place: &str) -> ScenarioTransition {
+fn forward_transition(
+    id: &str,
+    name: &str,
+    from_place: &str,
+    to_place: &str,
+) -> ScenarioTransition {
     ScenarioTransition {
         id: id.to_string(),
         name: name.to_string(),
@@ -267,10 +272,7 @@ mod tests {
         ScenarioDefinition {
             name: "child".to_string(),
             description: None,
-            places: vec![
-                place("p_s_ready", "state"),
-                place("p_e_done", "terminal"),
-            ],
+            places: vec![place("p_s_ready", "state"), place("p_e_done", "terminal")],
             transitions: vec![forward_transition(
                 "t_s_park",
                 "park",
@@ -313,7 +315,11 @@ mod tests {
         assert_eq!(t.place_type, "state");
 
         // inbox → Start entry connector.
-        let inbox_t = c.transitions.iter().find(|t| t.id == "__sub_inbox").unwrap();
+        let inbox_t = c
+            .transitions
+            .iter()
+            .find(|t| t.id == "__sub_inbox")
+            .unwrap();
         assert_eq!(inbox_t.inputs[0].place, CHILD_INBOX);
         assert_eq!(inbox_t.outputs[0].place, "p_s_ready");
 
@@ -347,8 +353,7 @@ mod tests {
         let mut c = minimal_child();
         make_child_callable(&mut c, "p_s_ready", &["p_e_done".to_string()]).unwrap();
         // Second application collides on `inbox`.
-        let err =
-            make_child_callable(&mut c, "p_s_ready", &["p_e_done".to_string()]).unwrap_err();
+        let err = make_child_callable(&mut c, "p_s_ready", &["p_e_done".to_string()]).unwrap_err();
         assert!(matches!(err, CompileError::Compilation(_)));
     }
 
@@ -356,9 +361,7 @@ mod tests {
     // derive_child_io
     // -------------------------------------------------------------------
 
-    use crate::models::template::{
-        FieldMapping, Position, WorkflowEdge, WorkflowNode,
-    };
+    use crate::models::template::{FieldMapping, Position, WorkflowEdge, WorkflowNode};
 
     fn gnode(id: &str, data: WorkflowNodeData) -> WorkflowNode {
         WorkflowNode {
@@ -379,7 +382,8 @@ mod tests {
             edges: Vec::<WorkflowEdge>::new(),
             viewport: None,
             instance_concurrency: Default::default(),
-            definitions: Default::default(), default_scheduler: None,
+            definitions: Default::default(),
+            default_scheduler: None,
         }
     }
 
@@ -426,13 +430,19 @@ mod tests {
         let initial = Port {
             id: "in".to_string(),
             label: "Input".to_string(),
-            fields: vec![field("message", FieldKind::Text), field("amount", FieldKind::Number)],
+            fields: vec![
+                field("message", FieldKind::Text),
+                field("amount", FieldKind::Number),
+            ],
         };
         let g = graph(vec![
             gnode("s", start(initial.clone())),
             gnode(
                 "e",
-                end(vec![rm("invoice_amount", "review.amount"), rm("status", "decision.outcome")]),
+                end(vec![
+                    rm("invoice_amount", "review.amount"),
+                    rm("status", "decision.outcome"),
+                ]),
             ),
         ]);
 
@@ -454,7 +464,10 @@ mod tests {
         let g = graph(vec![
             gnode("s", start(Port::empty_input())),
             gnode("e1", end(vec![rm("a", "x.a"), rm("b", "x.b")])),
-            gnode("e2", end(vec![rm("b", "y.b"), rm("c", "y.c"), rm("  ", "ignored")])),
+            gnode(
+                "e2",
+                end(vec![rm("b", "y.b"), rm("c", "y.c"), rm("  ", "ignored")]),
+            ),
         ]);
 
         let (_input, output) = derive_child_io(&g);

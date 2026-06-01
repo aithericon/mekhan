@@ -1,8 +1,6 @@
-
 pub use super::*;
 pub use crate::compiler::error::CompileError;
 pub use crate::models::template::{FieldKind, Port, WorkflowGraph, WorkflowNode, WorkflowNodeData};
-
 
 #[cfg(test)]
 mod port_contract_tests {
@@ -219,9 +217,11 @@ mod scope_reachability_tests {
         // reported unresolved — the picker never lies about resolvability.
         for (nid, entries) in &report.scopes {
             for e in entries {
-                let contradicted = report.diagnostics.iter().any(|d| matches!(d,
+                let contradicted = report.diagnostics.iter().any(|d| {
+                    matches!(d,
                     ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
-                        if node_id == nid && referenced == &e.path));
+                        if node_id == nid && referenced == &e.path)
+                });
                 assert!(
                     !contradicted,
                     "picker offered {} at {} but it is reported unresolved",
@@ -374,12 +374,15 @@ mod scope_reachability_tests {
 
         // (1) Start's declared input is borrow-reachable, namespaced by the
         //     Start's slug (derived from node id `start`) — never flat.
-        let note = scope.iter().find(|e| e.path == "start.note").unwrap_or_else(|| {
-            panic!(
-                "start.note must be pickable at the decision; offered: {:?}",
-                scope.iter().map(|e| &e.path).collect::<Vec<_>>()
-            )
-        });
+        let note = scope
+            .iter()
+            .find(|e| e.path == "start.note")
+            .unwrap_or_else(|| {
+                panic!(
+                    "start.note must be pickable at the decision; offered: {:?}",
+                    scope.iter().map(|e| &e.path).collect::<Vec<_>>()
+                )
+            });
         assert_eq!(note.producer_node, "start");
         assert_eq!(note.ty.kind_label(), "String");
         assert!(
@@ -424,9 +427,11 @@ mod scope_reachability_tests {
         // (4) The picker never lies: nothing it offers is, at that node,
         //     reported unresolved.
         for e in scope {
-            let contradicted = report.diagnostics.iter().any(|d| matches!(d,
+            let contradicted = report.diagnostics.iter().any(|d| {
+                matches!(d,
                 ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
-                    if node_id == "dec" && referenced == &e.path));
+                    if node_id == "dec" && referenced == &e.path)
+            });
             assert!(
                 !contradicted,
                 "picker offered {} but it is reported unresolved",
@@ -472,8 +477,10 @@ mod scope_reachability_tests {
         }"#;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
 
-        let mut inline: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
-            HashMap::new();
+        let mut inline: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, String>,
+        > = HashMap::new();
         let mut step_files = HashMap::new();
         step_files.insert(
             "main.py".to_string(),
@@ -614,7 +621,11 @@ mod scope_reachability_tests {
         }"#;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser borrow graph");
         let borrows = human_task_borrow_plan(&g).expect("borrow plan");
-        assert_eq!(borrows.len(), 1, "expected exactly one borrow; got: {borrows:?}");
+        assert_eq!(
+            borrows.len(),
+            1,
+            "expected exactly one borrow; got: {borrows:?}"
+        );
         assert_eq!(borrows[0].consumer_node_id, "review");
         assert_eq!(borrows[0].slug, "start");
         assert_eq!(borrows[0].producer_node, "s");
@@ -746,7 +757,9 @@ mod scope_reachability_tests {
     #[test]
     fn llm_prompt_simple_borrow() {
         use std::collections::HashMap;
-        let g = ocr_classify_graph(r#""Classify: {{ ocr_step.content }} for {{ review.vendor_name }}""#);
+        let g = ocr_classify_graph(
+            r#""Classify: {{ ocr_step.content }} for {{ review.vendor_name }}""#,
+        );
         let borrows = automated_step_borrow_plan(&g, &HashMap::new()).expect("borrow plan");
 
         let pairs: Vec<(String, String)> = borrows
@@ -773,7 +786,10 @@ mod scope_reachability_tests {
             } = b
             {
                 if consumer_node_id == "classify" {
-                    assert!(!*is_path_site, "prompt site must be content (is_path_site=false)");
+                    assert!(
+                        !*is_path_site,
+                        "prompt site must be content (is_path_site=false)"
+                    );
                 }
             }
         }
@@ -783,8 +799,8 @@ mod scope_reachability_tests {
     fn llm_unknown_slug_is_hard_error() {
         use std::collections::HashMap;
         let g = ocr_classify_graph(r#""Classify: {{ typo_slug.content }}""#);
-        let err = automated_step_borrow_plan(&g, &HashMap::new())
-            .expect_err("unknown slug must error");
+        let err =
+            automated_step_borrow_plan(&g, &HashMap::new()).expect_err("unknown slug must error");
         match err {
             CompileError::BackendRefUnresolved {
                 backend,
@@ -806,8 +822,8 @@ mod scope_reachability_tests {
     fn llm_unknown_field_on_known_slug_is_hard_error() {
         use std::collections::HashMap;
         let g = ocr_classify_graph(r#""Classify: {{ ocr_step.no_such_field }}""#);
-        let err = automated_step_borrow_plan(&g, &HashMap::new())
-            .expect_err("unknown field must error");
+        let err =
+            automated_step_borrow_plan(&g, &HashMap::new()).expect_err("unknown field must error");
         match err {
             CompileError::BackendRefUnresolved {
                 kind,
@@ -899,7 +915,10 @@ mod scope_reachability_tests {
                 assert_eq!(producer_node, "uploader");
                 assert_eq!(attr, "pdf");
                 assert!(*is_path_site);
-                assert_eq!(*producer_field_kind, crate::models::template::FieldKind::File);
+                assert_eq!(
+                    *producer_field_kind,
+                    crate::models::template::FieldKind::File
+                );
             }
             other => panic!("Kreuzberg borrow must be PerField, got {other:?}"),
         }
@@ -944,7 +963,10 @@ mod scope_reachability_tests {
             AutomatedStepDataBorrow::PerField {
                 producer_field_kind,
                 ..
-            } => assert_eq!(*producer_field_kind, crate::models::template::FieldKind::Text),
+            } => assert_eq!(
+                *producer_field_kind,
+                crate::models::template::FieldKind::Text
+            ),
             other => panic!("Kreuzberg borrow must be PerField, got {other:?}"),
         }
     }

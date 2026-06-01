@@ -140,7 +140,10 @@ pub fn build_token_pool_net(resource_id: Uuid, capacity: u32) -> ScenarioDefinit
 
     // Seed N clean capacity tokens.
     for i in 0..capacity {
-        ctx.seed_one(&pool, DynamicToken(json!({ "unit_id": format!("unit-{i}") })));
+        ctx.seed_one(
+            &pool,
+            DynamicToken(json!({ "unit_id": format!("unit-{i}") })),
+        );
     }
 
     ctx.build()
@@ -192,7 +195,15 @@ pub async fn ensure_token_pool_net_deployed(
         }
     };
 
-    if let Err(e) = crate::petri::instance::deploy_instance(petri, &net_id, &air).await {
+    if let Err(e) = crate::petri::instance::deploy_instance(
+        petri,
+        &net_id,
+        &air,
+        petri_api_types::DispatchOptions::default(),
+        None,
+    )
+    .await
+    {
         tracing::warn!(
             net_id,
             capacity,
@@ -322,6 +333,9 @@ impl DatacenterConnection {
 ///
 /// ## Contract (lines up with R1 `DatacenterLease` + R2 + R4a)
 ///
+/// Every `Scheduled` step (standalone or inside a `LeaseScope`) bridges to
+/// this net's `well_known::pool_net_id(resource_id)` = `pool-<id>`, and:
+///
 /// - **claim** → `claim_inbox` carries `ClaimRequest { grant_id, request }`.
 ///   `t_request` fires `resource_lease_acquire` (effect_config = the resolved
 ///   connection `{ allocator_url, token }`). The effect POSTs the request to
@@ -437,12 +451,16 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
         .auto_input("reg", &register_inbox)
         .auto_output("hold", &in_use)
         .logic(
+            // `alloc_id` is load-bearing (release/reap DELETE key); the rest is
+            // adapter-side traceability. `node`/`expiry`/`scheduler` ride from the
+            // echoed lease when present (Rhai yields `()` for an absent optional —
+            // harmless on this observational hold). `gpu_uuid` is gone.
             r#"#{ hold: #{
                 grant_id: reg.grant_id,
                 alloc_id: reg.alloc_id,
                 node: reg.node,
-                gpu_uuid: reg.gpu_uuid,
-                expiry: reg.expiry
+                expiry: reg.expiry,
+                scheduler: reg.scheduler
             } }"#,
         );
 
@@ -534,7 +552,10 @@ pub async fn ensure_datacenter_adapter_deployed(
         petri.try_get_run_mode(&net_id).await,
         Some(petri_api_types::RunMode::Running)
     ) {
-        tracing::debug!(net_id, "datacenter lease-adapter net already deployed + running; no-op");
+        tracing::debug!(
+            net_id,
+            "datacenter lease-adapter net already deployed + running; no-op"
+        );
         return;
     }
 
@@ -546,7 +567,15 @@ pub async fn ensure_datacenter_adapter_deployed(
         }
     };
 
-    if let Err(e) = crate::petri::instance::deploy_instance(petri, &net_id, &air).await {
+    if let Err(e) = crate::petri::instance::deploy_instance(
+        petri,
+        &net_id,
+        &air,
+        petri_api_types::DispatchOptions::default(),
+        None,
+    )
+    .await
+    {
         tracing::warn!(
             net_id,
             scheduler_flavor,
@@ -557,7 +586,11 @@ pub async fn ensure_datacenter_adapter_deployed(
         );
         return;
     }
-    tracing::info!(net_id, scheduler_flavor, "deployed + activated datacenter lease-adapter net");
+    tracing::info!(
+        net_id,
+        scheduler_flavor,
+        "deployed + activated datacenter lease-adapter net"
+    );
 }
 
 #[cfg(test)]
@@ -574,7 +607,10 @@ mod tests {
     }
 
     fn transition<'a>(air: &'a serde_json::Value, id: &str) -> Option<&'a serde_json::Value> {
-        air["transitions"].as_array()?.iter().find(|t| t["id"] == id)
+        air["transitions"]
+            .as_array()?
+            .iter()
+            .find(|t| t["id"] == id)
     }
 
     /// The cross-net contract places exist with the right kinds + names the R2
@@ -738,9 +774,11 @@ mod tests {
             .map(|a| a["port"].as_str().unwrap())
             .collect();
         assert!(in_ports.contains(&"request"), "inputs: {in_ports:?}");
-        let out_to_grant = t["outputs"].as_array().unwrap().iter().any(|o| {
-            o["port"] == "lease" && o["place"] == "grant_outbox"
-        });
+        let out_to_grant = t["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["port"] == "lease" && o["place"] == "grant_outbox");
         assert!(out_to_grant, "lease output must route to grant_outbox: {t}");
     }
 
@@ -809,7 +847,10 @@ mod tests {
         assert_eq!(cfg["resource_version"], 3);
         assert_eq!(cfg["nomad_addr"], "http://nomad.test:4646");
         assert_eq!(cfg["nomad_region"], "global");
-        assert_eq!(cfg["nomad_token"], "{{secret:resources/ws/dc/v3#nomad_token}}");
+        assert_eq!(
+            cfg["nomad_token"],
+            "{{secret:resources/ws/dc/v3#nomad_token}}"
+        );
         assert!(cfg.get("ssh_host").is_none());
         assert!(cfg.get("allocator_url").is_none());
     }
@@ -835,7 +876,10 @@ mod tests {
             nomad_token_secret_ref: None,
         };
         let cfg = conn.effect_config();
-        assert!(cfg.get("nomad_token").is_none(), "absent token must be omitted, not null");
+        assert!(
+            cfg.get("nomad_token").is_none(),
+            "absent token must be omitted, not null"
+        );
         assert!(cfg.get("nomad_region").is_none());
     }
 
@@ -894,14 +938,20 @@ mod tests {
         let rel = transition(&a, "t_release").expect("t_release");
         assert_eq!(rel["logic"]["type"], "effect");
         assert_eq!(rel["logic"]["handler_id"], "resource_lease_release");
-        assert_eq!(rel["logic"]["config"]["allocator_url"], "http://allocator.test/leases");
+        assert_eq!(
+            rel["logic"]["config"]["allocator_url"],
+            "http://allocator.test/leases"
+        );
         let rel_in: Vec<&str> = rel["inputs"]
             .as_array()
             .unwrap()
             .iter()
             .map(|a| a["port"].as_str().unwrap())
             .collect();
-        assert!(rel_in.contains(&"release"), "release effect input port: {rel_in:?}");
+        assert!(
+            rel_in.contains(&"release"),
+            "release effect input port: {rel_in:?}"
+        );
     }
 
     /// Held-allocation death (docs/16 §7): the adapter net has a `lease_failed`

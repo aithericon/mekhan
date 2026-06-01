@@ -37,6 +37,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time;
@@ -97,10 +98,19 @@ impl OllamaSubprocess {
             "Spawning managed Ollama subprocess"
         );
 
-        let child = Command::new(binary)
+        let mut child = Command::new(binary)
             .arg("serve")
             .env("OLLAMA_HOST", &host)
             // Capture stdout / stderr so they can be drained for logs (spec).
+            // Spawned drain tasks below forward each line to tracing — without
+            // them, Ollama's writes fill the pipe buffer (~16KB initial, grows
+            // to ~64KB max on macOS / 64KB hard cap on Linux) within minutes
+            // of routine heartbeat probes, after which Ollama's next stdout
+            // write() blocks indefinitely and the entire Ollama subprocess
+            // appears unresponsive. Root cause of the Session N+3 Wave 4
+            // Degraded-health observation; empirically confirmed via
+            // `lsof -p <ollama_pid>` showing the stdout pipe at 65536 bytes
+            // (the macOS pipe max) after ~4 minutes of routine heartbeats.
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // Do NOT kill on drop — let the operator decide shutdown
@@ -113,6 +123,72 @@ impl OllamaSubprocess {
                     "failed to spawn ollama subprocess (binary={binary}): {e}"
                 ))
             })?;
+
+        // Drain stdout + stderr. Each task reads line-by-line and forwards
+        // to tracing at info level so operators see Ollama's logs through
+        // the executor's tracing pipeline (RUST_LOG=info). When the child
+        // exits, the pipes close → drain tasks see EOF → exit cleanly.
+        // Handles are deliberately not retained: tokio tasks aren't
+        // cancelled on JoinHandle drop, and EOF-on-pipe-close is the natural
+        // termination signal.
+        if let Some(stdout) = child.stdout.take() {
+            let port = config.port;
+            tokio::spawn(async move {
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                loop {
+                    match lines.next_line().await {
+                        Ok(Some(line)) => {
+                            tracing::info!(
+                                target: "ollama_subprocess",
+                                port,
+                                "ollama[stdout]: {}",
+                                line
+                            );
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            tracing::debug!(
+                                target: "ollama_subprocess",
+                                port,
+                                error = %e,
+                                "ollama stdout drain error; ending task"
+                            );
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let port = config.port;
+            tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                loop {
+                    match lines.next_line().await {
+                        Ok(Some(line)) => {
+                            tracing::info!(
+                                target: "ollama_subprocess",
+                                port,
+                                "ollama[stderr]: {}",
+                                line
+                            );
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            tracing::debug!(
+                                target: "ollama_subprocess",
+                                port,
+                                error = %e,
+                                "ollama stderr drain error; ending task"
+                            );
+                            break;
+                        }
+                    }
+                }
+            });
+        }
 
         let subprocess = Self {
             port: config.port,

@@ -205,9 +205,8 @@ pub fn derive_resource_type(input: TokenStream) -> TokenStream {
                     is_secret = true;
                     Ok(())
                 } else {
-                    Err(meta.error(
-                        "unknown #[resource(...)] key on field: only `secret` is supported",
-                    ))
+                    Err(meta
+                        .error("unknown #[resource(...)] key on field: only `secret` is supported"))
                 }
             });
             if let Err(e) = res {

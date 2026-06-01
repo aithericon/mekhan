@@ -34,7 +34,8 @@ use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 // existing callers can keep importing from `crate::backends::*`.
 pub use aithericon_backends::{
     BackendMeta, DispatchMode, ResourceChannel, CATALOGUE_QUERY_META, DOCKER_META, FILE_OPS_META,
-    HTTP_META, KREUZBERG_META, LLM_META, PROCESS_META, PYTHON_META, SMTP_META,
+    HTTP_META, KREUZBERG_META, LLM_META, POSTGRES_META, PROCESS_META, PYTHON_META, SMTP_META,
+    SURYA_META,
 };
 
 pub mod catalogue_query;
@@ -43,9 +44,11 @@ pub mod file_ops;
 pub mod http;
 pub mod kreuzberg;
 pub mod llm;
+pub mod postgres;
 pub mod process;
 pub mod python;
 pub mod smtp;
+pub mod surya;
 
 /// Build a self-contained JSON Schema for a `ToSchema` config type `T`.
 ///
@@ -73,8 +76,7 @@ pub fn self_contained_config_schema<T: utoipa::PartialSchema>() -> Value {
         .cloned()
         .unwrap_or_default();
 
-    let mut root =
-        serde_json::to_value(T::schema()).expect("schema serialization cannot fail");
+    let mut root = serde_json::to_value(T::schema()).expect("schema serialization cannot fail");
 
     fn inline(
         value: &mut Value,
@@ -109,9 +111,7 @@ pub fn self_contained_config_schema<T: utoipa::PartialSchema>() -> Value {
                     {
                         for (k, v) in site {
                             if k != "$ref" {
-                                resolved_obj
-                                    .entry(k.clone())
-                                    .or_insert_with(|| v.clone());
+                                resolved_obj.entry(k.clone()).or_insert_with(|| v.clone());
                             }
                         }
                     }
@@ -444,9 +444,11 @@ pub static BACKENDS: &[&BackendDecl] = &[
     &http::HTTP_DECL,
     &kreuzberg::KREUZBERG_DECL,
     &llm::LLM_DECL,
+    &postgres::POSTGRES_DECL,
     &process::PROCESS_DECL,
     &python::PYTHON_DECL,
     &smtp::SMTP_DECL,
+    &surya::SURYA_DECL,
 ];
 
 /// Look up the decl for a backend type. Returns `None` only if `BACKENDS`
@@ -568,6 +570,7 @@ mod tests {
             ExecutionBackendType::Llm,
             ExecutionBackendType::FileOps,
             ExecutionBackendType::Kreuzberg,
+            ExecutionBackendType::Surya,
             ExecutionBackendType::Smtp,
             ExecutionBackendType::CatalogueQuery,
         ] {

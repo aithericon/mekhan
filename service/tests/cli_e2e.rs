@@ -55,9 +55,7 @@ async fn ws_connect_and_sync(
     addr: &std::net::SocketAddr,
     template_id: Uuid,
 ) -> (
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     Doc,
 ) {
     let url = format!("ws://{addr}/api/yjs/{template_id}");
@@ -194,11 +192,7 @@ async fn cli_workflow_roundtrip() {
     // -----------------------------------------------------------------------
     let nodes_dir = pull_dir.join("nodes");
     std::fs::create_dir_all(nodes_dir.join("start")).unwrap();
-    std::fs::write(
-        nodes_dir.join("start/main.py"),
-        "print('hello from CLI')",
-    )
-    .unwrap();
+    std::fs::write(nodes_dir.join("start/main.py"), "print('hello from CLI')").unwrap();
 
     // -----------------------------------------------------------------------
     // 4. STATUS — Compare local vs remote, assert diff shows the new file
@@ -412,10 +406,7 @@ fn apply_graph_to_doc(doc: &Doc, graph: &WorkflowGraph) {
     let nodes_map = txn.get_or_insert_map("nodes");
 
     // Collect existing node IDs
-    let existing_ids: Vec<String> = nodes_map
-        .iter(&txn)
-        .map(|(id, _)| id.to_string())
-        .collect();
+    let existing_ids: Vec<String> = nodes_map.iter(&txn).map(|(id, _)| id.to_string()).collect();
 
     let graph_ids: std::collections::HashSet<&str> =
         graph.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -532,6 +523,7 @@ async fn graph_topology_roundtrip() {
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
                     stream_output: false,
+                    stream_input: false,
                 },
                 parent_id: None,
                 width: None,
@@ -545,8 +537,8 @@ async fn graph_topology_roundtrip() {
                 data: WorkflowNodeData::End {
                     label: "End".to_string(),
                     description: None,
-                terminal: mekhan_service::models::template::default_terminal_port(),
-                result_mapping: Vec::new(),
+                    terminal: mekhan_service::models::template::default_terminal_port(),
+                    result_mapping: Vec::new(),
                 },
                 parent_id: None,
                 width: None,
@@ -573,7 +565,10 @@ async fn graph_topology_roundtrip() {
                 edge_type: "sequence".to_string(),
             },
         ],
-        viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
     };
 
     // -----------------------------------------------------------------------
@@ -707,7 +702,10 @@ async fn graph_topology_roundtrip() {
         "should be back to 1 edge after restoring"
     );
     assert!(
-        final_graph.nodes.iter().all(|n| n.id == "start" || n.id == "end"),
+        final_graph
+            .nodes
+            .iter()
+            .all(|n| n.id == "start" || n.id == "end"),
         "should only have start and end nodes"
     );
     assert!(
@@ -781,6 +779,7 @@ async fn yaml_format_roundtrip() {
                         retry_policy: Default::default(),
                         deployment_model: Default::default(),
                         stream_output: false,
+                        stream_input: false,
                     },
                     parent_id: None,
                     width: None,
@@ -794,8 +793,8 @@ async fn yaml_format_roundtrip() {
                     data: WorkflowNodeData::End {
                         label: "End".to_string(),
                         description: None,
-                    terminal: mekhan_service::models::template::default_terminal_port(),
-                    result_mapping: Vec::new(),
+                        terminal: mekhan_service::models::template::default_terminal_port(),
+                        result_mapping: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -822,7 +821,10 @@ async fn yaml_format_roundtrip() {
                     edge_type: "sequence".to_string(),
                 },
             ],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         }
     };
 
@@ -878,11 +880,19 @@ async fn yaml_format_roundtrip() {
     assert_eq!(process.data.label(), "Process Data");
 
     // Verify edges
-    assert!(verify_graph.edges.iter().any(|e| e.source == "start" && e.target == "process"));
-    assert!(verify_graph.edges.iter().any(|e| e.source == "process" && e.target == "end"));
+    assert!(verify_graph
+        .edges
+        .iter()
+        .any(|e| e.source == "start" && e.target == "process"));
+    assert!(verify_graph
+        .edges
+        .iter()
+        .any(|e| e.source == "process" && e.target == "end"));
 
     // Verify file
-    let process_files = verify_files.get("process").expect("process should have files");
+    let process_files = verify_files
+        .get("process")
+        .expect("process should have files");
     assert_eq!(process_files.get("main.py").unwrap(), "print('processing')");
 }
 
@@ -918,9 +928,7 @@ async fn asset_upload_roundtrip() {
     let form = reqwest::multipart::Form::new().part("file", part);
 
     let resp = client
-        .post(format!(
-            "{server}/api/v1/files/upload/{template_id}/start"
-        ))
+        .post(format!("{server}/api/v1/files/upload/{template_id}/start"))
         .multipart(form)
         .send()
         .await
@@ -984,8 +992,7 @@ async fn asset_upload_roundtrip() {
     // The Y.Doc should not contain the binary file
     let start_files = files.get("start");
     assert!(
-        start_files.is_none()
-            || !start_files.unwrap().contains_key("screenshot.png"),
+        start_files.is_none() || !start_files.unwrap().contains_key("screenshot.png"),
         "binary assets should NOT appear in Y.Doc text files"
     );
 
@@ -999,9 +1006,7 @@ async fn asset_upload_roundtrip() {
     let form = reqwest::multipart::Form::new().part("file", part);
 
     let resp = client
-        .post(format!(
-            "{server}/api/v1/files/upload/{template_id}/start"
-        ))
+        .post(format!("{server}/api/v1/files/upload/{template_id}/start"))
         .multipart(form)
         .send()
         .await

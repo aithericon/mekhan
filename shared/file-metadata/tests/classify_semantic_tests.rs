@@ -39,10 +39,7 @@ mod new_patterns {
 
     #[test]
     fn iso_date_detection() {
-        let confidence = classify_col(
-            "date\n2024-01-15\n2023-12-31\n2025-06-01\n",
-            "iso_date",
-        );
+        let confidence = classify_col("date\n2024-01-15\n2023-12-31\n2025-06-01\n", "iso_date");
         assert!(confidence.is_some(), "should detect ISO dates");
     }
 
@@ -259,10 +256,7 @@ mod semantic {
         classify_semantic(&mut meta, &opts).unwrap();
 
         let col = meta.columns.iter().find(|c| c.name == "year").unwrap();
-        let tag = col
-            .classifications
-            .iter()
-            .find(|t| t.category == "year");
+        let tag = col.classifications.iter().find(|t| t.category == "year");
         assert!(tag.is_some(), "should detect year column");
     }
 
@@ -291,18 +285,15 @@ mod semantic {
         let csv = write_csv("latitude,year\n45.5,2020\n");
         let mut meta = extract_metadata(csv.path()).unwrap();
 
-        let opts =
-            ClassificationOptions::new().with_categories(vec!["latitude".into()]);
+        let opts = ClassificationOptions::new().with_categories(vec!["latitude".into()]);
         classify_semantic(&mut meta, &opts).unwrap();
 
         // latitude should be tagged
         let lat_col = meta.columns.iter().find(|c| c.name == "latitude").unwrap();
-        assert!(
-            lat_col
-                .classifications
-                .iter()
-                .any(|t| t.category == "latitude")
-        );
+        assert!(lat_col
+            .classifications
+            .iter()
+            .any(|t| t.category == "latitude"));
 
         // year should NOT be tagged (filtered out)
         let year_col = meta.columns.iter().find(|c| c.name == "year").unwrap();

@@ -1,0 +1,40 @@
+[project]
+name = "surya-pool-server"
+version = "0.1.0"
+description = "FastAPI wrapper around Surya OCR — bundled with aithericon-executor-surya for managed-subprocess invocation."
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+# Note: this wrapper script is Apache-2.0 (our code). The bundled
+# `surya-ocr` dep below is GPL-3.0 + modified OpenRAIL-M weights; we
+# isolate it cleanly via subprocess process-isolation (no static
+# linking; no FFI into our Rust binary). Production rollout above
+# $2M revenue/funding threshold requires Datalab commercial license
+# (workstream #71). See ../src/surya_subprocess.rs § "License
+# isolation" for the architectural rationale.
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "surya-ocr>=0.17.1,<0.18",
+    # surya-ocr 0.17.x not yet validated against transformers 5.x; pin
+    # the upper bound until upstream confirms compat (inherited from
+    # legacy online-clinic/ocr/pyproject.toml as known-good baseline).
+    "transformers<5.0.0",
+    "Pillow>=10.0.0",
+    "pdf2image>=1.17.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Top-level single-file module — runnable via `python -m surya_pool_server`
+# after `uv pip install -e .` in the venv. Keeps the wrapper structure
+# minimal; the FastAPI app + main() entry point live in one file.
+py-modules = ["surya_pool_server"]

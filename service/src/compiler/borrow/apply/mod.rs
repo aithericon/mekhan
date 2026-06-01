@@ -128,7 +128,11 @@ pub(crate) fn find_prepare_transition_mut<'a>(
 /// as the staged file name AND the `{{input:NAME}}` / `{{input_path:NAME}}`
 /// substitution key.
 pub(crate) fn borrow_input_name(slug: &str, attr: &str) -> String {
-    format!("__borrow_{}__{}", sanitize_ident(slug), sanitize_ident(attr))
+    format!(
+        "__borrow_{}__{}",
+        sanitize_ident(slug),
+        sanitize_ident(attr)
+    )
 }
 
 /// Sanitize an identifier-like string for use in generated Rhai variable

@@ -8,18 +8,15 @@ use tracing::{error, info, warn};
 
 #[cfg(feature = "docker")]
 use aithericon_executor_docker::DockerBackend;
+use aithericon_executor_domain::ExecutionJob;
 #[cfg(feature = "http")]
 use aithericon_executor_http::HttpBackend;
-use aithericon_executor_process::ProcessBackend;
-#[cfg(feature = "python")]
-use aithericon_executor_python::PythonBackend;
 #[cfg(feature = "kreuzberg")]
 use aithericon_executor_kreuzberg::KreuzbergBackend;
+#[cfg(feature = "surya")]
+use aithericon_executor_surya::SuryaBackend;
 #[cfg(feature = "llm")]
 use aithericon_executor_llm::LlmBackend;
-#[cfg(feature = "smtp")]
-use aithericon_executor_smtp::SmtpBackend;
-use aithericon_executor_domain::ExecutionJob;
 use aithericon_executor_logs::{
     CompositeLogSink, FileLogSink, LevelFilterSink, LogSink, LogSinkConfig, NatsLogSink,
 };
@@ -27,17 +24,25 @@ use aithericon_executor_metrics::{
     CompositeMetricSink, InMemoryMetricSink, LokiMetricSink, MetricSink, MetricSinkConfig,
     NatsMetricSink,
 };
+use aithericon_executor_process::ProcessBackend;
+#[cfg(feature = "python")]
+use aithericon_executor_python::cache::{BuildRequest, VenvCache};
+#[cfg(feature = "python")]
+use aithericon_executor_python::PythonBackend;
+#[cfg(feature = "smtp")]
+use aithericon_executor_smtp::SmtpBackend;
+#[cfg(feature = "postgres")]
+use aithericon_executor_postgres::PostgresBackend;
 #[cfg(feature = "opendal")]
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
-#[cfg(feature = "python")]
-use aithericon_executor_python::cache::{BuildRequest, VenvCache};
 use aithericon_executor_worker::{
     drain_signal, handle_execution, BackendRegistry, BatchRunner, CancellationRegistry,
-    CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,
-    NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
+    ChunkRegistry, CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource,
+    Lifetime, NatsCancelListener, NatsChunkListener, NixEnvironmentHook, SidecarLogConfig,
+    StatusReporter,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -220,7 +225,7 @@ async fn run_nats_daemon(
     info!("connected to NATS");
 
     let reporter =
-        StatusReporter::new(jetstream, config.name.clone(), config.status_replicas).await?;
+        StatusReporter::new(jetstream.clone(), config.name.clone(), config.status_replicas).await?;
 
     let nats_config = build_apalis_nats_config(&config);
 
@@ -253,12 +258,28 @@ async fn run_nats_daemon(
         );
     }
 
+    // Set up the inbound live chunk feed (the "live IPC reducer"). Always-on:
+    // the per-job opt-in lives on `job.feed_chunks`, not here. The listener
+    // drains the ordered+lossless `EXECUTOR_CHUNKS` JetStream into per-job
+    // channels; reuses the cancel-listener shutdown token.
+    let chunk_registry = ChunkRegistry::new();
+    NatsChunkListener::ensure_stream(&jetstream, config.status_replicas).await?;
+    NatsChunkListener::start(
+        jetstream.clone(),
+        chunk_registry.clone(),
+        None,
+        cancel_shutdown.clone(),
+    )
+    .await?;
+    info!("NATS chunk listener started");
+
     // Build the JobExecutor
     let executor = Arc::new(build_executor(
         &config,
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
+        chunk_registry,
     )?);
 
     let worker = build_worker!(
@@ -308,7 +329,7 @@ async fn run_nats_drain(
     info!("connected to NATS");
 
     let reporter =
-        StatusReporter::new(jetstream, config.name.clone(), config.status_replicas).await?;
+        StatusReporter::new(jetstream.clone(), config.name.clone(), config.status_replicas).await?;
 
     let nats_config = build_apalis_nats_config(&config);
 
@@ -330,6 +351,18 @@ async fn run_nats_drain(
         info!("NATS cancel listener started");
     }
 
+    // Inbound live chunk feed (see `run_nats_daemon` for the rationale).
+    let chunk_registry = ChunkRegistry::new();
+    NatsChunkListener::ensure_stream(&jetstream, config.status_replicas).await?;
+    NatsChunkListener::start(
+        jetstream.clone(),
+        chunk_registry.clone(),
+        None,
+        cancel_shutdown.clone(),
+    )
+    .await?;
+    info!("NATS chunk listener started");
+
     // Build the executor with a completion tracker
     let tracker = Arc::new(CompletionTracker::new());
     let drain_rx = tracker.subscribe();
@@ -340,6 +373,7 @@ async fn run_nats_drain(
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
+        chunk_registry,
     )?;
     executor.completion_tracker = Some(tracker);
     let executor = Arc::new(executor);
@@ -448,13 +482,17 @@ async fn run_manifest(
     let storage =
         NatsStorage::<ExecutionJob>::new_with_config(nats_client.clone(), nats_config).await?;
 
-    // Build executor — same pipeline as daemon mode
+    // Build executor — same pipeline as daemon mode. Manifest mode runs local
+    // jobs with no live inbound feed, so the chunk registry is present but never
+    // populated (no `NatsChunkListener`); reducer jobs aren't a manifest path.
     let cancel_registry = CancellationRegistry::new();
+    let chunk_registry = ChunkRegistry::new();
     let executor = Arc::new(build_executor(
         &config,
         reporter.clone(),
         &nats_client,
         cancel_registry,
+        chunk_registry,
     )?);
 
     // Start the apalis worker in the background (same pipeline as daemon)
@@ -572,10 +610,20 @@ fn register_executor_backend(
             info!("kreuzberg backend registered");
             registry.register(KreuzbergBackend::new())
         }
+        #[cfg(feature = "surya")]
+        "surya" => {
+            info!("surya backend registered");
+            registry.register(SuryaBackend::new())
+        }
         #[cfg(feature = "smtp")]
         "smtp" => {
             info!("smtp backend registered");
             registry.register(SmtpBackend::new())
+        }
+        #[cfg(feature = "postgres")]
+        "postgres" => {
+            info!("postgres backend registered");
+            registry.register(PostgresBackend::new())
         }
         other => {
             info!(
@@ -598,6 +646,7 @@ fn build_executor(
     reporter: StatusReporter,
     nats_client: &async_nats::Client,
     cancel_registry: CancellationRegistry,
+    chunk_registry: ChunkRegistry,
 ) -> Result<JobExecutor, Box<dyn std::error::Error + Send + Sync>> {
     let base_dir = PathBuf::from(&config.base_dir);
 
@@ -626,27 +675,23 @@ fn build_executor(
     let log_sink = build_log_sink(config, nats_client, &base_dir)?;
 
     // Build optional Nix environment hook
-    let nix_hook = config
-        .nix
-        .as_ref()
-        .filter(|n| n.enabled)
-        .map(|n| {
-            let cache = n
-                .cache_dir
-                .as_deref()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| base_dir.join("nix-envs"));
-            let mut hook = NixEnvironmentHook::new(cache.clone());
+    let nix_hook = config.nix.as_ref().filter(|n| n.enabled).map(|n| {
+        let cache = n
+            .cache_dir
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| base_dir.join("nix-envs"));
+        let mut hook = NixEnvironmentHook::new(cache.clone());
 
-            // Discover aithericon SDK path for inclusion in Nix environments
-            if let Some(sdk_path) = find_sdk_path() {
-                info!(sdk_path = %sdk_path.display(), "nix hook: SDK path discovered");
-                hook = hook.with_sdk_path(sdk_path);
-            }
+        // Discover aithericon SDK path for inclusion in Nix environments
+        if let Some(sdk_path) = find_sdk_path() {
+            info!(sdk_path = %sdk_path.display(), "nix hook: SDK path discovered");
+            hook = hook.with_sdk_path(sdk_path);
+        }
 
-            info!(cache_dir = %cache.display(), "nix environment hook enabled");
-            hook
-        });
+        info!(cache_dir = %cache.display(), "nix environment hook enabled");
+        hook
+    });
 
     // Build the staging pipeline with default hooks
     let secret_store: Arc<dyn aithericon_secrets::SecretStore> = build_secret_store();
@@ -680,6 +725,7 @@ fn build_executor(
         metric_sink,
         log_sink,
         cancel_registry,
+        chunk_registry,
         log_config,
         completion_tracker: None,
     })
@@ -958,9 +1004,8 @@ fn newest_mtime_unix(root: &Path) -> Option<u64> {
 /// cache hit and returns immediately.
 #[cfg(feature = "python")]
 async fn warm_venv() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let reqs_path = std::env::var("EXECUTOR_WARM_REQUIREMENTS").map_err(|_| {
-        "EXECUTOR_WARM_REQUIREMENTS must be set (path to a requirements.txt file)"
-    })?;
+    let reqs_path = std::env::var("EXECUTOR_WARM_REQUIREMENTS")
+        .map_err(|_| "EXECUTOR_WARM_REQUIREMENTS must be set (path to a requirements.txt file)")?;
     let python = std::env::var("EXECUTOR_WARM_PYTHON").unwrap_or_else(|_| "python3".into());
     let include_sdk = std::env::var("EXECUTOR_WARM_SDK")
         .ok()
@@ -1118,7 +1163,8 @@ fn build_secret_store() -> Arc<dyn aithericon_secrets::SecretStore> {
     {
         if let Some(vault) = aithericon_secrets::VaultSecretStore::from_env() {
             let prefix = std::env::var("VAULT_SECRET_PREFIX").unwrap_or_default();
-            let mount = std::env::var("VAULT_SECRET_MOUNT").unwrap_or_else(|_| "secret".to_string());
+            let mount =
+                std::env::var("VAULT_SECRET_MOUNT").unwrap_or_else(|_| "secret".to_string());
             let vault = vault.mount(mount).key_prefix(prefix);
             info!("secret store: env_var -> vault");
             return Arc::new(aithericon_secrets::ChainedSecretStore::new(vec![

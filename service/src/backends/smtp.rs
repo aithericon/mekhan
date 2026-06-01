@@ -18,8 +18,16 @@ use crate::models::template::{ExecutionBackendType, FieldKind};
 use super::{BackendDecl, DefaultPortField, RefSite, ScanCtx, ValidationCtx, SMTP_META};
 
 const DEFAULT_OUTPUT_FIELDS: &[DefaultPortField] = &[
-    DefaultPortField { name: "outcome", label: "Outcome", kind: FieldKind::Json },
-    DefaultPortField { name: "subject", label: "Subject", kind: FieldKind::Text },
+    DefaultPortField {
+        name: "outcome",
+        label: "Outcome",
+        kind: FieldKind::Json,
+    },
+    DefaultPortField {
+        name: "subject",
+        label: "Subject",
+        kind: FieldKind::Text,
+    },
     DefaultPortField {
         name: "body_text_preview",
         label: "Body (text)",
@@ -132,8 +140,7 @@ fn validate(
         validate_placeholders(f, node_id, "smtp", "from")?;
     }
 
-    let mut seen_input_names: std::collections::BTreeSet<&str> =
-        std::collections::BTreeSet::new();
+    let mut seen_input_names: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for a in &parsed.attachments {
         if !seen_input_names.insert(a.input_name.as_str()) {
             return Err(CompileError::Validation(format!(
@@ -143,9 +150,8 @@ fn validate(
         }
     }
 
-    let canonical_config = serde_json::to_value(&parsed).map_err(|e| {
-        CompileError::Compilation(format!("failed to serialize smtp config: {e}"))
-    })?;
+    let canonical_config = serde_json::to_value(&parsed)
+        .map_err(|e| CompileError::Compilation(format!("failed to serialize smtp config: {e}")))?;
 
     Ok((canonical_config, vec![]))
 }
@@ -199,4 +205,3 @@ fn ref_scanner(ctx: &ScanCtx<'_>) -> Vec<RefSite> {
     }
     out
 }
-

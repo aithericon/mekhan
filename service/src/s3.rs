@@ -53,12 +53,7 @@ impl ArtifactStore {
 
     /// Ensure the bucket exists, creating it if necessary.
     pub async fn ensure_bucket(&self) -> Result<(), ArtifactStoreError> {
-        let exists = self
-            .client
-            .head_bucket()
-            .bucket(&self.bucket)
-            .send()
-            .await;
+        let exists = self.client.head_bucket().bucket(&self.bucket).send().await;
 
         if exists.is_ok() {
             return Ok(());

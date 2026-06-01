@@ -150,7 +150,9 @@ pub async fn run_message_loop_cancellable<H: MessageHandler>(
                 // Transient error — NACK for redelivery (e.g., target net not yet created)
                 tracing::warn!(listener = %name, error = %e, "Transient error, NACKing for redelivery");
                 if let Err(e) = msg
-                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(Duration::from_millis(500))))
+                    .ack_with(async_nats::jetstream::AckKind::Nak(Some(
+                        Duration::from_millis(500),
+                    )))
                     .await
                 {
                     tracing::error!(listener = %name, error = %e, "Failed to NACK message");
@@ -182,4 +184,3 @@ pub async fn run_message_loop_cancellable<H: MessageHandler>(
     tracing::info!(listener = %name, "Listener stopped");
     Ok(())
 }
-

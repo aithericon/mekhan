@@ -98,19 +98,14 @@ mod tests {
 
     #[tokio::test]
     async fn returns_first_success() {
-        let chain = ChainedSecretStore::new(vec![
-            Box::new(FailStore),
-            Box::new(FixedStore("found_it")),
-        ]);
+        let chain =
+            ChainedSecretStore::new(vec![Box::new(FailStore), Box::new(FixedStore("found_it"))]);
         assert_eq!(chain.get("any").await.unwrap(), "found_it");
     }
 
     #[tokio::test]
     async fn all_not_found_returns_not_found() {
-        let chain = ChainedSecretStore::new(vec![
-            Box::new(FailStore),
-            Box::new(FailStore),
-        ]);
+        let chain = ChainedSecretStore::new(vec![Box::new(FailStore), Box::new(FailStore)]);
         assert!(matches!(
             chain.get("missing").await,
             Err(SecretError::NotFound(_))
@@ -131,10 +126,7 @@ mod tests {
 
     #[tokio::test]
     async fn name_shows_chain() {
-        let chain = ChainedSecretStore::new(vec![
-            Box::new(EnvVarSecretStore),
-            Box::new(FailStore),
-        ]);
+        let chain = ChainedSecretStore::new(vec![Box::new(EnvVarSecretStore), Box::new(FailStore)]);
         assert_eq!(chain.name(), "env_var -> fail");
     }
 }

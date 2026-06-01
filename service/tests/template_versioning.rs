@@ -7,11 +7,11 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use mekhan_service::models::template::WorkflowGraph;
+use mekhan_service::yjs::persistence::YjsPersistence;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
-use mekhan_service::models::template::WorkflowGraph;
-use mekhan_service::yjs::persistence::YjsPersistence;
 use yrs::{Any, Map, Out, ReadTxn, StateVector, Transact, WriteTxn};
 
 async fn body_json(body: Body) -> Value {
@@ -206,13 +206,12 @@ async fn new_version_from_published() {
 
     // Verify old version is no longer latest
     let v1_id_uuid: Uuid = v1_id.parse().unwrap();
-    let (is_latest,): (bool,) = sqlx::query_as(
-        "SELECT is_latest FROM workflow_templates WHERE id = $1",
-    )
-    .bind(v1_id_uuid)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let (is_latest,): (bool,) =
+        sqlx::query_as("SELECT is_latest FROM workflow_templates WHERE id = $1")
+            .bind(v1_id_uuid)
+            .fetch_one(&db)
+            .await
+            .unwrap();
 
     assert!(!is_latest, "v1 should no longer be is_latest");
 }
@@ -367,10 +366,8 @@ async fn list_versions_returns_ordered() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let versions: Vec<Value> = serde_json::from_slice(
-        &resp.into_body().collect().await.unwrap().to_bytes(),
-    )
-    .unwrap();
+    let versions: Vec<Value> =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
 
     assert_eq!(versions.len(), 3, "should have 3 versions");
 
@@ -692,13 +689,12 @@ async fn apply_bumps_published_head() {
     assert_eq!(v2["source_ref"]["sha"], "deadbeef");
 
     let v1_uuid: Uuid = v1_id.parse().unwrap();
-    let (is_latest, sr): (bool, Option<Value>) = sqlx::query_as(
-        "SELECT is_latest, source_ref FROM workflow_templates WHERE id = $1",
-    )
-    .bind(v1_uuid)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let (is_latest, sr): (bool, Option<Value>) =
+        sqlx::query_as("SELECT is_latest, source_ref FROM workflow_templates WHERE id = $1")
+            .bind(v1_uuid)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert!(!is_latest, "v1 must no longer be latest");
     assert!(sr.is_none(), "UI-published v1 must keep source_ref NULL");
 }

@@ -64,9 +64,10 @@ pub async fn install_requirements_uv(
     if let Some(cache) = uv_cache_dir {
         cmd.env("UV_CACHE_DIR", cache);
     }
-    let output = cmd.output().await.map_err(|e| {
-        ExecutorError::StagingFailed(format!("failed to run uv pip install: {e}"))
-    })?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| ExecutorError::StagingFailed(format!("failed to run uv pip install: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -94,13 +95,15 @@ pub async fn install_local_package_uv(
     if build_copy.exists() {
         tokio::fs::remove_dir_all(&build_copy).await.ok();
     }
-    copy_dir_recursive(package_dir, &build_copy).await.map_err(|e| {
-        ExecutorError::StagingFailed(format!(
-            "failed to stage package '{}' into '{}': {e}",
-            package_dir.display(),
-            build_copy.display()
-        ))
-    })?;
+    copy_dir_recursive(package_dir, &build_copy)
+        .await
+        .map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "failed to stage package '{}' into '{}': {e}",
+                package_dir.display(),
+                build_copy.display()
+            ))
+        })?;
 
     let mut cmd = tokio::process::Command::new("uv");
     cmd.args(["pip", "install", "--python"])
@@ -168,9 +171,7 @@ pub async fn create_virtualenv(
         .output()
         .await
         .map_err(|e| {
-            ExecutorError::StagingFailed(format!(
-                "failed to run '{python_cmd} -m venv': {e}"
-            ))
+            ExecutorError::StagingFailed(format!("failed to run '{python_cmd} -m venv': {e}"))
         })?;
 
     if !output.status.success() {
@@ -213,9 +214,10 @@ pub async fn install_requirements_with_cache(
     if let Some(cache) = pip_cache_dir {
         cmd.env("PIP_CACHE_DIR", cache);
     }
-    let output = cmd.output().await.map_err(|e| {
-        ExecutorError::StagingFailed(format!("failed to run pip install: {e}"))
-    })?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| ExecutorError::StagingFailed(format!("failed to run pip install: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -253,13 +255,15 @@ pub async fn install_local_package_with_cache(
     if build_copy.exists() {
         tokio::fs::remove_dir_all(&build_copy).await.ok();
     }
-    copy_dir_recursive(package_dir, &build_copy).await.map_err(|e| {
-        ExecutorError::StagingFailed(format!(
-            "failed to stage package '{}' into '{}': {e}",
-            package_dir.display(),
-            build_copy.display()
-        ))
-    })?;
+    copy_dir_recursive(package_dir, &build_copy)
+        .await
+        .map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "failed to stage package '{}' into '{}': {e}",
+                package_dir.display(),
+                build_copy.display()
+            ))
+        })?;
     let mut cmd = tokio::process::Command::new(&pip_bin);
     cmd.args(["install", "--quiet"]).arg(&build_copy);
     if let Some(cache) = pip_cache_dir {
@@ -292,7 +296,10 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
             let ft = entry.file_type().await?;
             let name = entry.file_name();
             // Skip build artifacts that collide with setuptools output.
-            if matches!(name.to_str(), Some("build") | Some("dist") | Some("__pycache__")) {
+            if matches!(
+                name.to_str(),
+                Some("build") | Some("dist") | Some("__pycache__")
+            ) {
                 continue;
             }
             if name.to_string_lossy().ends_with(".egg-info") {

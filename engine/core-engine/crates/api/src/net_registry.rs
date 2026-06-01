@@ -18,27 +18,27 @@ use parking_lot::RwLock;
 use tokio::sync::{broadcast, Notify};
 use tokio_util::sync::CancellationToken;
 
+use crate::slurm_allocator::FlavorDispatchAllocatorClient;
 use petri_application::pre_dispatch::{
     HttpPreDispatchHook, PreDispatchChain, PreDispatchChainEntry, PreDispatchHook,
     PreDispatchHookConfig, PreDispatchRuntime, PreDispatchTransport, RegistrationError,
 };
-use petri_application::{
-    AdapterScheduler, EventRepository, HttpAllocatorClient, MockSchedulerClient, PetriNetService,
-    ProcessCompleteHandler, ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler,
-    ProcessStartHandler, ProcessStatusDetailHandler, ResourceLeaseAcquireHandler,
-    ResourceLeaseReleaseHandler, SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection,
-    subworkflow_handlers::SubWorkflowCancelHandler, TimerCancelHandler, TimerScheduleHandler,
-    TopologyRepository,
-};
 use petri_application::resource_lease_handlers::AllocatorClient;
-use crate::slurm_allocator::FlavorDispatchAllocatorClient;
+use petri_application::{
+    subworkflow_handlers::SubWorkflowCancelHandler, AdapterScheduler, EventRepository,
+    HttpAllocatorClient, MockSchedulerClient, PetriNetService, ProcessCompleteHandler,
+    ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler, ProcessStartHandler,
+    ProcessStatusDetailHandler, ResourceLeaseAcquireHandler, ResourceLeaseReleaseHandler,
+    SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection, TimerCancelHandler,
+    TimerScheduleHandler, TopologyRepository,
+};
 #[cfg(feature = "catalogue")]
 use petri_application::{
     CatalogueLookupHandler, CatalogueRegisterHandler, CatalogueSubscribeHandler,
     CatalogueUnsubscribeHandler,
 };
 #[cfg(feature = "executor")]
-use petri_application::{ExecutorCancelHandler, ExecutorSubmitHandler};
+use petri_application::{ExecutorCancelHandler, ExecutorStreamFeedHandler, ExecutorSubmitHandler};
 use petri_domain::human::HumanTaskClient;
 #[cfg(feature = "executor")]
 use petri_domain::ExecutorClient;
@@ -164,6 +164,45 @@ impl std::fmt::Debug for ExecutorIntegrationConfig {
     }
 }
 
+/// Configuration for the HTTP-dispatch executor integration (sub-phase 2.3b).
+///
+/// When set on the `NetRegistry`, every new net instance will have an
+/// HTTP-based `executor_submit` handler ([`HttpInferenceHandler`]) registered.
+/// The handler reads cap-routing's pre-dispatch enrichment (`base_url` +
+/// `lease_token`) from `EffectInput.config` and dispatches inference
+/// synchronously via HTTP to `{base_url}/v1/inference` (the endpoint added in
+/// `executor-llm/src/inference_handler.rs`).
+///
+/// Mutually exclusive with [`ExecutorIntegrationConfig`] (NATS dispatch);
+/// `get_or_create` panics if both are set on the registry.
+///
+/// No `executor_cancel` is registered in HTTP-sync mode — there is no
+/// in-flight job to cancel from outside (the handler's `submit` is
+/// synchronous). Cancellation in HTTP-sync mode is a separate workstream.
+///
+/// [`HttpInferenceHandler`]: petri_application::http_executor_client::HttpInferenceHandler
+#[cfg(feature = "executor")]
+#[derive(Clone, Debug)]
+pub struct HttpExecutorConfig {
+    /// Input port name. Defaults to `EXECUTOR_SUBMIT.default_input_port`
+    /// (`"job"`) so scenarios authored against the NATS handler stay
+    /// portable.
+    pub input_port: String,
+    /// Output port name. Defaults to `EXECUTOR_SUBMIT.default_output_port`
+    /// (`"submitted"`).
+    pub output_port: String,
+}
+
+#[cfg(feature = "executor")]
+impl Default for HttpExecutorConfig {
+    fn default() -> Self {
+        Self {
+            input_port: effects::EXECUTOR_SUBMIT.default_input_port.to_string(),
+            output_port: effects::EXECUTOR_SUBMIT.default_output_port.to_string(),
+        }
+    }
+}
+
 /// Configuration for the data catalogue integration.
 ///
 /// When set on the `NetRegistry`, every new net instance will have
@@ -199,6 +238,11 @@ where
     pub on_scenario_loaded: RwLock<Vec<OnScenarioLoaded>>,
     /// Cancellation token for graceful shutdown of per-net tasks (eval loop, listeners).
     pub cancel_token: CancellationToken,
+    /// Sub-phase 2.5e-γ.mekhan per-run dispatch options (skip_mask +
+    /// stage_overrides). Owned here per-NetInstance so concurrent loads on
+    /// distinct net_ids never collide. `as_app_state` clones the Arc into
+    /// the per-request AppState facade.
+    pub dispatch_options: Arc<RwLock<petri_domain::DispatchOptions>>,
 }
 
 impl<E, T, S> NetInstance<E, T, S>
@@ -223,6 +267,7 @@ where
             run_mode: self.run_mode.clone(),
             eval_notify: self.eval_notify.clone(),
             event_tx: self.event_tx.clone(),
+            dispatch_options: self.dispatch_options.clone(),
         }
     }
 }
@@ -274,6 +319,8 @@ where
     cluster_registry: RwLock<Option<Arc<crate::cluster_registry::ClusterRegistry>>>,
     #[cfg(feature = "executor")]
     executor_config: Option<ExecutorIntegrationConfig>,
+    #[cfg(feature = "executor")]
+    http_executor_config: Option<HttpExecutorConfig>,
     human_config: Option<HumanIntegrationConfig>,
     #[cfg(feature = "catalogue")]
     catalogue_config: Option<CatalogueIntegrationConfig>,
@@ -310,6 +357,8 @@ where
             cluster_registry: RwLock::new(None),
             #[cfg(feature = "executor")]
             executor_config: None,
+            #[cfg(feature = "executor")]
+            http_executor_config: None,
             human_config: None,
             #[cfg(feature = "catalogue")]
             catalogue_config: None,
@@ -463,10 +512,7 @@ where
     /// `get_or_create`. The registry is also held by main.rs for the
     /// `GET /api/clusters` management surface.
     #[cfg(any(feature = "slurm", feature = "nomad"))]
-    pub fn set_cluster_registry(
-        &self,
-        registry: Arc<crate::cluster_registry::ClusterRegistry>,
-    ) {
+    pub fn set_cluster_registry(&self, registry: Arc<crate::cluster_registry::ClusterRegistry>) {
         *self.cluster_registry.write() = Some(registry);
     }
 
@@ -492,6 +538,17 @@ where
     #[cfg(feature = "executor")]
     pub fn set_executor_config(&mut self, config: ExecutorIntegrationConfig) {
         self.executor_config = Some(config);
+    }
+
+    /// Configure the HTTP-dispatch executor integration (sub-phase 2.3b).
+    ///
+    /// When set, every new net instance will have the HTTP-based
+    /// `executor_submit` handler ([`petri_application::http_executor_client::HttpInferenceHandler`])
+    /// registered. Mutually exclusive with [`set_executor_config`] —
+    /// `get_or_create` panics if both have been set on the registry.
+    #[cfg(feature = "executor")]
+    pub fn set_http_executor_config(&mut self, config: HttpExecutorConfig) {
+        self.http_executor_config = Some(config);
     }
 
     /// Configure the data catalogue integration.
@@ -595,6 +652,7 @@ where
             event_tx: event_tx.clone(),
             on_scenario_loaded: RwLock::new(Vec::new()),
             cancel_token: cancel_token.clone(),
+            dispatch_options: Arc::new(RwLock::new(petri_domain::DispatchOptions::default())),
         });
 
         // Spawn evaluation loop for this net
@@ -815,17 +873,70 @@ where
                 .register_effect_handler(
                     effects::EXECUTOR_CANCEL.handler_id,
                     Arc::new(ExecutorCancelHandler::new(
-                        executor_client,
+                        executor_client.clone(),
                         effects::EXECUTOR_CANCEL.default_input_port,
                         effects::EXECUTOR_CANCEL.default_output_port,
                     )),
                 )
                 .expect("register executor_cancel effect handler");
 
+            service
+                .register_effect_handler(
+                    effects::EXECUTOR_STREAM_FEED.handler_id,
+                    Arc::new(ExecutorStreamFeedHandler::new(executor_client)),
+                )
+                .expect("register executor_stream_feed effect handler");
+
             tracing::info!(
                 net_id = %net_id,
                 namespace = %ecfg.namespace,
                 "Registered executor effect handlers",
+            );
+        }
+
+        // Register HTTP-dispatch executor handler if configured (sub-phase 2.3b).
+        // Mutually exclusive with NATS dispatch above; panics at registration
+        // if both configs are set.
+        #[cfg(feature = "executor")]
+        if let Some(ref hcfg) = self.http_executor_config {
+            assert!(
+                self.executor_config.is_none(),
+                "NetRegistry: executor_config (NATS) and http_executor_config (HTTP) \
+                 are mutually exclusive — set at most one"
+            );
+
+            service
+                .register_effect_handler(
+                    effects::EXECUTOR_SUBMIT.handler_id,
+                    Arc::new(
+                        petri_application::http_executor_client::HttpInferenceHandler::new(
+                            hcfg.input_port.clone(),
+                            hcfg.output_port.clone(),
+                        ),
+                    ),
+                )
+                .expect("register HTTP executor_submit effect handler");
+
+            // Compiler-generated nets (graph→AIR) emit an `executor_cancel`
+            // transition for every executor step, and deploy validation
+            // requires the referenced handler to be registered. Under HTTP-sync
+            // dispatch there is no async job to cancel, so register a no-op ack.
+            service
+                .register_effect_handler(
+                    effects::EXECUTOR_CANCEL.handler_id,
+                    Arc::new(
+                        petri_application::http_executor_client::HttpExecutorCancelNoop::new(
+                            effects::EXECUTOR_CANCEL.default_output_port,
+                        ),
+                    ),
+                )
+                .expect("register HTTP executor_cancel no-op effect handler");
+
+            tracing::info!(
+                net_id = %net_id,
+                input_port = %hcfg.input_port,
+                output_port = %hcfg.output_port,
+                "Registered HTTP executor_submit + no-op executor_cancel handlers (cloud-layer dispatch)"
             );
         }
 
@@ -946,9 +1057,9 @@ where
         let cluster_registry = self.cluster_registry.read().clone();
         #[cfg(any(feature = "slurm", feature = "nomad"))]
         let allocator_client: Arc<dyn AllocatorClient> = match cluster_registry {
-            Some(reg) => Arc::new(
-                crate::cluster_registry::ClusterRegistryAllocatorClient::new(reg),
-            ),
+            Some(reg) => {
+                Arc::new(crate::cluster_registry::ClusterRegistryAllocatorClient::new(reg))
+            }
             None => Self::build_env_flavor_dispatch(),
         };
         #[cfg(not(any(feature = "slurm", feature = "nomad")))]
@@ -1153,9 +1264,8 @@ where
         let Some(registry) = self.cluster_registry.read().clone() else {
             return; // no multi-cluster registry installed (plain http dev stack)
         };
-        let allocator: Arc<dyn AllocatorClient> = Arc::new(
-            crate::cluster_registry::ClusterRegistryAllocatorClient::new(registry),
-        );
+        let allocator: Arc<dyn AllocatorClient> =
+            Arc::new(crate::cluster_registry::ClusterRegistryAllocatorClient::new(registry));
 
         // grant_id is `<instance_id>:<loop_id>` where `<instance_id>` is the BARE
         // workflow-instance UUID (`loop_.rs`: `input._instance_id + ":<loop_id>"`),
@@ -1423,12 +1533,9 @@ fn spawn_net_evaluation_loop<E, T, S>(
                             // branch here, so the success path and root
                             // lifecycle are untouched.
                             if let Some(params) = service.net_parameters() {
-                                let parent =
-                                    params.get("parent_net_id").and_then(|v| v.as_str());
-                                let fplace =
-                                    params.get("failure_place").and_then(|v| v.as_str());
-                                if let (Some(parent_net_id), Some(failure_place)) =
-                                    (parent, fplace)
+                                let parent = params.get("parent_net_id").and_then(|v| v.as_str());
+                                let fplace = params.get("failure_place").and_then(|v| v.as_str());
+                                if let (Some(parent_net_id), Some(failure_place)) = (parent, fplace)
                                 {
                                     let payload = serde_json::json!({
                                         "reason":        failure.reason,
@@ -1465,9 +1572,9 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                         let all_events = service.get_events().await;
                                         for event in &all_events {
                                             if event.sequence > last_broadcast_seq {
-                                                let _ = event_tx.send(SseSignal::Event(
-                                                    Box::new(event.clone()),
-                                                ));
+                                                let _ = event_tx.send(SseSignal::Event(Box::new(
+                                                    event.clone(),
+                                                )));
                                             }
                                         }
                                     }
@@ -1870,7 +1977,10 @@ mod tests {
             if tokio::time::Instant::now() > deadline {
                 panic!(
                     "Timed out waiting for NetFailed. Events: {:?}",
-                    events.iter().map(|e| format!("{:?}", e.event)).collect::<Vec<_>>()
+                    events
+                        .iter()
+                        .map(|e| format!("{:?}", e.event))
+                        .collect::<Vec<_>>()
                 );
             }
         }
@@ -1885,9 +1995,7 @@ mod tests {
                     target_net_id,
                     target_place_name,
                     ..
-                } if target_net_id == "parent-xyz"
-                    && target_place_name == "p_sub_failure" =>
-                {
+                } if target_net_id == "parent-xyz" && target_place_name == "p_sub_failure" => {
                     Some(token.clone())
                 }
                 _ => None,
@@ -2595,9 +2703,7 @@ where
         {
             Ok(()) => Ok(true),
             Err(e) if e.starts_with("Net '") && e.ends_with("' not found") => Ok(false),
-            Err(e) => Err(
-                petri_domain::subworkflow::SubWorkflowCancelError::CancellationFailed(e),
-            ),
+            Err(e) => Err(petri_domain::subworkflow::SubWorkflowCancelError::CancellationFailed(e)),
         }
     }
 

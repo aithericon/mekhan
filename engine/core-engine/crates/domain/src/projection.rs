@@ -38,6 +38,14 @@ pub fn apply_event_to_marking(marking: &mut Marking, event: &DomainEvent) {
             consumed_tokens,
             produced_tokens,
             ..
+        }
+        // Sub-phase 2.5e-γ.mekhan: skipped transitions consume inputs and
+        // produce default tokens; marking effect is structurally identical
+        // to TransitionFired (different semantic, same marking math).
+        | DomainEvent::TransitionSkipped {
+            consumed_tokens,
+            produced_tokens,
+            ..
         } => {
             for (place_id, token_id) in consumed_tokens {
                 marking.remove_token(place_id, token_id);

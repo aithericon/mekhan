@@ -11,7 +11,7 @@
 //!
 //! Both must complete. If either deadlocks the test panics on the timeout.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). Run
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`) — the lifecycle listener writes back to
 //! the shared `workflow_instances` table.
 
@@ -38,7 +38,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -83,23 +83,21 @@ async fn spawn_lifecycle(nats: MekhanNats, db: sqlx::PgPool) -> TaskHandle {
 async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
-        if st == "completed" {
-            return;
-        }
-        if st == "failed" {
-            let result: Option<Value> = sqlx::query_scalar(
-                "SELECT result FROM workflow_instances WHERE id = $1",
-            )
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
             .bind(id)
             .fetch_one(db)
             .await
             .unwrap();
+        if st == "completed" {
+            return;
+        }
+        if st == "failed" {
+            let result: Option<Value> =
+                sqlx::query_scalar("SELECT result FROM workflow_instances WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(db)
+                    .await
+                    .unwrap();
             panic!("instance {id} reached `failed` (result: {result:?})");
         }
         if start.elapsed() > timeout {
@@ -114,14 +112,12 @@ async fn wait_for_completion(db: &sqlx::PgPool, id: Uuid, timeout: Duration) {
 }
 
 async fn fetch_result(db: &sqlx::PgPool, id: Uuid) -> Value {
-    sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT result FROM workflow_instances WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .unwrap()
-    .expect("result column was null — End produced no envelope")
+    sqlx::query_scalar::<_, Option<Value>>("SELECT result FROM workflow_instances WHERE id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+        .expect("result column was null — End produced no envelope")
 }
 
 async fn publish_and_start(app: &axum::Router, graph: Value, start_token: Value) -> Uuid {
@@ -278,11 +274,13 @@ async fn join_any_completes_on_single_branch_arrival() {
     wait_for_completion(&db, id_high, Duration::from_secs(30)).await;
     let result = fetch_result(&db, id_high).await;
     assert_eq!(
-        result["ok"], json!(true),
+        result["ok"],
+        json!(true),
         "high-branch instance must produce a success envelope, got {result}"
     );
     assert_eq!(
-        result["value"]["amount"], json!(250),
+        result["value"]["amount"],
+        json!(250),
         "amount must pass through Decision + Join unchanged: {result}"
     );
 
@@ -293,7 +291,8 @@ async fn join_any_completes_on_single_branch_arrival() {
     wait_for_completion(&db, id_low, Duration::from_secs(30)).await;
     let result = fetch_result(&db, id_low).await;
     assert_eq!(
-        result["value"]["amount"], json!(5),
+        result["value"]["amount"],
+        json!(5),
         "amount must pass through default branch + Join unchanged: {result}"
     );
 }

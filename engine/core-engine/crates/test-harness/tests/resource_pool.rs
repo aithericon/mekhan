@@ -56,9 +56,7 @@ fn build_pool_net() -> TestScenario {
         .auto_input("job", &jobs)
         .auto_input("cap", &pool)
         .auto_output("hold", &in_use)
-        .logic(
-            r#"#{ hold: #{ grant_id: job.job_id, gpu_id: cap.gpu_id, job_id: job.job_id } }"#,
-        );
+        .logic(r#"#{ hold: #{ grant_id: job.job_id, gpu_id: cap.gpu_id, job_id: job.job_id } }"#);
 
     // t_release — body finished: return the held capacity to the pool.
     // Correlates the release request to the matching hold by grant_id.
@@ -284,7 +282,10 @@ async fn pool_conserves_capacity_and_drains_all_jobs() {
     // unwaiting job immediately claims. Drive to completion.
     for i in 0..M_JOBS {
         ctx.service
-            .create_token(pid(&scenario, "release_inbox"), grant_ref(&format!("job-{i}")))
+            .create_token(
+                pid(&scenario, "release_inbox"),
+                grant_ref(&format!("job-{i}")),
+            )
             .await
             .unwrap();
         run_to_quiescent_checking(&ctx, &scenario).await;
@@ -327,7 +328,10 @@ async fn expired_lease_is_reaped_and_capacity_reclaimed() {
     }
     run_to_quiescent_checking(&ctx, &scenario).await;
     assert_eq!(
-        ctx.service.get_marking().await.token_count(&pid(&scenario, "in_use")),
+        ctx.service
+            .get_marking()
+            .await
+            .token_count(&pid(&scenario, "in_use")),
         2
     );
 
@@ -345,7 +349,11 @@ async fn expired_lease_is_reaped_and_capacity_reclaimed() {
         1,
         "reaped capacity is back in the pool"
     );
-    assert_eq!(marking.token_count(&pid(&scenario, "in_use")), 1, "job-1 still holds");
+    assert_eq!(
+        marking.token_count(&pid(&scenario, "in_use")),
+        1,
+        "job-1 still holds"
+    );
 
     // job-1 releases normally; pool fully restored.
     ctx.service
@@ -354,7 +362,10 @@ async fn expired_lease_is_reaped_and_capacity_reclaimed() {
         .unwrap();
     run_to_quiescent_checking(&ctx, &scenario).await;
     assert_eq!(
-        ctx.service.get_marking().await.token_count(&pid(&scenario, "pool")),
+        ctx.service
+            .get_marking()
+            .await
+            .token_count(&pid(&scenario, "pool")),
         N_CAPACITY
     );
 }
@@ -388,7 +399,10 @@ async fn schedule_is_replay_deterministic() {
         ctx.service.evaluate_until_quiescent(50).await.unwrap();
         for i in 1..3 {
             ctx.service
-                .create_token(pid(scenario, "release_inbox"), grant_ref(&format!("job-{i}")))
+                .create_token(
+                    pid(scenario, "release_inbox"),
+                    grant_ref(&format!("job-{i}")),
+                )
                 .await
                 .unwrap();
             ctx.service.evaluate_until_quiescent(50).await.unwrap();

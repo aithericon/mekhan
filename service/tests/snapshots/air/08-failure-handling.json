@@ -349,7 +349,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -456,7 +456,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -621,7 +621,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",
@@ -790,7 +790,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -897,7 +897,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -1062,7 +1062,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",
@@ -2253,7 +2253,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"risky_step\"; d.run = 0; d.retries = 0; d.max_retries = 0; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Risky Step — succeeds, raises, or exits depending on input.fail_mode.\\n#\\n# Two ways to \\\"fail\\\" an AutomatedStep from user code:\\n#   - raise an unhandled exception (Python tears down with a traceback +\\n#     non-zero exit code), or\\n#   - call sys.exit(<nonzero>) directly.\\n#\\n# Either way the executor reports a job-level failure. With\\n# retryPolicy.maxRetries == 0 (see graph.json) the token routes straight\\n# out the AutomatedStep's `error` handle — no retry attempts. Bump\\n# maxRetries to watch retries fire before exhaustion.\\n#\\n# `summary` is an implicit output: the runner sweeps any global matching a\\n# declared output field at the end of a successful run. On a raise/exit we\\n# never reach the assignment, so no output is produced and downstream\\n# success-path consumers never see this step.\\n\\nimport sys\\n\\nmode = input.fail_mode\\n\\nif mode == \\\"raise\\\":\\n    raise RuntimeError(f\\\"Synthetic failure: rejecting payload {input.payload!r}\\\")\\n\\nif mode == \\\"exit\\\":\\n    log_warn(\\\"exiting non-zero on purpose\\\", payload=input.payload)\\n    sys.exit(7)\\n\\nsummary = f\\\"Processed payload of length {len(input.payload or '')}\\\"\\nlog_info(\\\"processed\\\", chars=len(input.payload or \\\"\\\"))\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"summary\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/risky_step/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"risky_step\"; d.run = 0; d.retries = 0; d.max_retries = 0; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Risky Step — succeeds, raises, or exits depending on input.fail_mode.\\n#\\n# Two ways to \\\"fail\\\" an AutomatedStep from user code:\\n#   - raise an unhandled exception (Python tears down with a traceback +\\n#     non-zero exit code), or\\n#   - call sys.exit(<nonzero>) directly.\\n#\\n# Either way the executor reports a job-level failure. With\\n# retryPolicy.maxRetries == 0 (see graph.json) the token routes straight\\n# out the AutomatedStep's `error` handle — no retry attempts. Bump\\n# maxRetries to watch retries fire before exhaustion.\\n#\\n# `summary` is an implicit output: the runner sweeps any global matching a\\n# declared output field at the end of a successful run. On a raise/exit we\\n# never reach the assignment, so no output is produced and downstream\\n# success-path consumers never see this step.\\n\\nimport sys\\n\\nmode = input.fail_mode\\n\\nif mode == \\\"raise\\\":\\n    raise RuntimeError(f\\\"Synthetic failure: rejecting payload {input.payload!r}\\\")\\n\\nif mode == \\\"exit\\\":\\n    log_warn(\\\"exiting non-zero on purpose\\\", payload=input.payload)\\n    sys.exit(7)\\n\\nsummary = f\\\"Processed payload of length {len(input.payload or '')}\\\"\\nlog_info(\\\"processed\\\", chars=len(input.payload or \\\"\\\"))\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"summary\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/risky_step/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; d.feed_chunks = false; #{ job: d }",
         "type": "rhai"
       },
       "name": "Risky Step - Prepare",

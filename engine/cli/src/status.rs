@@ -17,11 +17,7 @@ pub fn run_status(client: &EngineClient) {
     if let Ok(nets) = client.get::<Value>("/api/nets") {
         if let Some(arr) = nets.as_array() {
             if !arr.is_empty() {
-                println!(
-                    "{:<30} {:>8}",
-                    "NET".bold(),
-                    "ID".bold(),
-                );
+                println!("{:<30} {:>8}", "NET".bold(), "ID".bold(),);
                 for net in arr {
                     let id = net.as_str().unwrap_or("?");
                     println!("{:<30}", id);
@@ -46,7 +42,10 @@ pub fn run_status(client: &EngineClient) {
                 "TOKENS".bold(),
                 "EVENTS".bold()
             );
-            println!("{:<30} {:>8} {:>8}", "(single net)", token_count, event_count);
+            println!(
+                "{:<30} {:>8} {:>8}",
+                "(single net)", token_count, event_count
+            );
         }
         Err(_) => {
             eprintln!("No engine found. Is it running?");
@@ -89,10 +88,7 @@ fn print_multi_net_status(metadata: &Value) {
     }
 
     for net in nets {
-        let net_id = net
-            .get("net_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
+        let net_id = net.get("net_id").and_then(|v| v.as_str()).unwrap_or("?");
         let status = net
             .get("status")
             .and_then(|v| v.as_str())
@@ -108,14 +104,8 @@ fn print_multi_net_status(metadata: &Value) {
         };
 
         if has_counts {
-            let token_count = net
-                .get("token_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let event_count = net
-                .get("event_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let token_count = net.get("token_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let event_count = net.get("event_count").and_then(|v| v.as_u64()).unwrap_or(0);
             println!(
                 "{:<30} {:<12} {:>8} {:>8}",
                 net_id, status_colored, token_count, event_count
@@ -126,10 +116,7 @@ fn print_multi_net_status(metadata: &Value) {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let mem_str = if in_memory { "loaded" } else { "-" };
-            println!(
-                "{:<30} {:<12} {:>10}",
-                net_id, status_colored, mem_str
-            );
+            println!("{:<30} {:<12} {:>10}", net_id, status_colored, mem_str);
         }
     }
 }
@@ -168,22 +155,22 @@ pub fn run_state(client: &EngineClient, net_id: &str) {
         };
         has_tokens = true;
 
-        println!(
-            "  {}: {} token(s)",
-            place.cyan(),
-            arr.len()
-        );
+        println!("  {}: {} token(s)", place.cyan(), arr.len());
 
         for token in arr {
             let color = token.get("color");
             match color {
-                Some(Value::Object(map)) if map.get("type").and_then(|t| t.as_str()) == Some("Data") => {
+                Some(Value::Object(map))
+                    if map.get("type").and_then(|t| t.as_str()) == Some("Data") =>
+                {
                     if let Some(value) = map.get("value") {
                         let summary = summarize_json(value, 100);
                         println!("    {}", summary.dimmed());
                     }
                 }
-                Some(Value::Object(map)) if map.get("type").and_then(|t| t.as_str()) == Some("Unit") => {
+                Some(Value::Object(map))
+                    if map.get("type").and_then(|t| t.as_str()) == Some("Unit") =>
+                {
                     println!("    {}", "(unit)".dimmed());
                 }
                 _ => {}
@@ -199,10 +186,15 @@ pub fn run_state(client: &EngineClient, net_id: &str) {
     if let Some(enabled) = state.get("enabled_transitions").and_then(|v| v.as_array()) {
         if !enabled.is_empty() {
             println!();
-            println!("  {} {}", "Enabled:".bold(), enabled.iter()
-                .filter_map(|v| v.as_str())
-                .collect::<Vec<_>>()
-                .join(", "));
+            println!(
+                "  {} {}",
+                "Enabled:".bold(),
+                enabled
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
     }
 }

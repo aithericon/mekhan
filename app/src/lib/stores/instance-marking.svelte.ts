@@ -58,9 +58,31 @@ export function createInstanceMarkingStore(netId: string) {
 		return toks.length;
 	}
 
+	/** The color data of the first `Data` token parked in a place (null when the
+	 *  place is empty, absent, or holds a non-Data token). Used to surface the
+	 *  parked lease envelope (`p_{scope}_data` → `{ lease, … }`) in the drawer. */
+	function tokenData(placeId: string): Record<string, unknown> | null {
+		const toks: Token[] = marking.get(placeId) ?? [];
+		for (const t of toks) {
+			if (t.color?.type === 'Data' && t.color.value !== null && typeof t.color.value === 'object') {
+				return t.color.value as Record<string, unknown>;
+			}
+		}
+		return null;
+	}
+
 	/** Whether the deployed instance net declares this place id at all. */
 	function hasPlace(placeId: string): boolean {
 		return placeIds.has(placeId);
+	}
+
+	/** The target net id a `bridge_out` place forwards to (e.g. a pooled node's
+	 *  `p_{id}_claim_out` → `pool-<resource_id>`). Lets the pool overlay resolve
+	 *  the REAL backing-net id from the deployed topology instead of guessing.
+	 *  Null when the place is absent or not a bridge_out. */
+	function bridgeTarget(placeId: string): string | null {
+		const p = topology?.places.find((pl) => pl.id === placeId);
+		return p?.bridge_target?.target_net_id ?? p?.target_net_id ?? null;
 	}
 
 	async function fetchTopology(): Promise<void> {
@@ -168,7 +190,9 @@ export function createInstanceMarkingStore(netId: string) {
 			return events.length;
 		},
 		count,
+		tokenData,
 		hasPlace,
+		bridgeTarget,
 		init,
 		refresh,
 		destroy
@@ -205,4 +229,91 @@ export function isAwaitingResource(store: InstanceMarkingStore, nodeId: string):
 	// non-pool nodes never light up.
 	if (!store.hasPlace(pending)) return false;
 	return store.count(pending) > 0 && store.count(held) === 0;
+}
+
+// ---------------------------------------------------------------------------
+// Cluster lease runtime — per-LeaseScope lifecycle + typed lease detail
+// ---------------------------------------------------------------------------
+
+/** Lifecycle of a LeaseScope's datacenter allocation, derived from the
+ *  instance net marking. */
+export type LeaseState = 'idle' | 'claiming' | 'held' | 'released' | 'failed';
+
+/** The typed lease the engine parked (the `DatacenterLease` shape + grant_id),
+ *  surfaced generically so the view never hard-codes a flavor's fields. */
+export interface LeaseRuntime {
+	state: LeaseState;
+	/** alloc_id, node, expiry, executor_namespace — present once acquired. */
+	allocId: string | null;
+	node: string | null;
+	expiry: string | null;
+	executorNamespace: string | null;
+	/** Scheduler flavor (`scheduler.flavor`) when acquired. */
+	flavor: string | null;
+	/** Remaining scheduler-specific detail (`scheduler.<field>` minus flavor),
+	 *  stringified for display — e.g. `{ partition }` (slurm), `{ eval_id }`
+	 *  (nomad). Empty for http. */
+	schedulerDetail: Record<string, string>;
+}
+
+/** String-coerce a scalar JSON value for display; null for non-scalars. */
+function asScalar(v: unknown): string | null {
+	if (v === null || v === undefined) return null;
+	if (typeof v === 'object') return null;
+	return String(v);
+}
+
+/**
+ * Read a LeaseScope's lease lifecycle + typed detail from the instance marking.
+ *
+ * Places (from `emit_lease_bridge`): `p_{id}_pending` (claim parked),
+ * `p_{id}_held` (hold), `p_{id}_data` (the parked `{ lease, … }` envelope),
+ * `p_{id}_lease_failed_parked` (held-alloc death). The lease detail lives under
+ * the envelope's `lease` key once acquired. Returns null when the node isn't a
+ * lease holder in this net (no `p_{id}_data`).
+ */
+export function leaseRuntimeFor(store: InstanceMarkingStore, nodeId: string): LeaseRuntime | null {
+	const dataPlace = `p_${nodeId}_data`;
+	const heldPlace = `p_${nodeId}_held`;
+	const pendingPlace = `p_${nodeId}_pending`;
+	const failedPlace = `p_${nodeId}_lease_failed_parked`;
+	// A lease holder always declares these places; bail otherwise so non-lease
+	// nodes never produce a (misleading) lease panel.
+	if (!store.hasPlace(dataPlace) || !store.hasPlace(heldPlace)) return null;
+
+	const envelope = store.tokenData(dataPlace);
+	const lease =
+		envelope && typeof envelope.lease === 'object' && envelope.lease !== null
+			? (envelope.lease as Record<string, unknown>)
+			: null;
+
+	let state: LeaseState;
+	if (store.count(failedPlace) > 0) state = 'failed';
+	else if (store.count(heldPlace) > 0) state = 'held';
+	else if (lease) state = 'released'; // acquired then exited (held consumed)
+	else if (store.count(pendingPlace) > 0) state = 'claiming';
+	else state = 'idle';
+
+	const scheduler =
+		lease && typeof lease.scheduler === 'object' && lease.scheduler !== null
+			? (lease.scheduler as Record<string, unknown>)
+			: null;
+	const schedulerDetail: Record<string, string> = {};
+	if (scheduler) {
+		for (const [k, v] of Object.entries(scheduler)) {
+			if (k === 'flavor') continue;
+			const s = asScalar(v);
+			if (s !== null) schedulerDetail[k] = s;
+		}
+	}
+
+	return {
+		state,
+		allocId: lease ? asScalar(lease.alloc_id) : null,
+		node: lease ? asScalar(lease.node) : null,
+		expiry: lease ? asScalar(lease.expiry) : null,
+		executorNamespace: lease ? asScalar(lease.executor_namespace) : null,
+		flavor: scheduler ? asScalar(scheduler.flavor) : null,
+		schedulerDetail
+	};
 }

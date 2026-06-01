@@ -25,25 +25,18 @@
 	let { value, schedulable = true, readonly = false, onchange }: Props = $props();
 
 	// Deployment model — executor (our executor daemon pool over the NATS work
-	// queue) vs scheduled (scheduler-net, Nomad/Slurm GPU). Optional-chained so
+	// queue) vs scheduled (external cluster — Nomad/Slurm). Optional-chained so
 	// legacy templates (no field) render as executor; Rust `#[serde(default)]`
 	// covers the wire side.
 	const deploymentMode = $derived(value?.mode ?? 'executor');
 	const jobTemplate = $derived(value?.mode === 'scheduled' ? value.jobTemplate : '');
 	const allowScheduled = $derived(schedulable);
 
-	// Scheduled sub-fields. `operation` selects submit (today's dispatch) vs
-	// lease (R4, requires a concrete datacenter scheduler alias). `scheduler` is
-	// the datacenter resource alias; null/'' = env-global scheduler-net (only
-	// valid for submit).
-	const operation = $derived(
-		value?.mode === 'scheduled' ? (value.operation ?? 'submit') : 'submit'
-	);
 	const scheduler = $derived(value?.mode === 'scheduled' ? (value.scheduler ?? '') : '');
 
 	// Switching to scheduled drops any executor pool (pool is Executor-only — a
 	// datacenter cluster is bound under Scheduled instead). Defaults to
-	// operation=submit, env-global scheduler.
+	// env-global scheduler.
 	function setDeploymentMode(mode: string) {
 		onchange(
 			mode === 'scheduled'
@@ -55,11 +48,6 @@
 	function setJobTemplate(v: string) {
 		if (value?.mode !== 'scheduled') return;
 		onchange({ ...value, jobTemplate: v });
-	}
-
-	function setOperation(op: 'submit' | 'lease') {
-		if (value?.mode !== 'scheduled') return;
-		onchange({ ...value, operation: op });
 	}
 
 	function setScheduler(alias: string) {
@@ -95,15 +83,9 @@
 	}
 
 	// ── Optional raw-JSON `request` params (v1: a textarea, not a schema form).
-	// Bound to Executor.pool.request / Scheduled.request. Kept as text locally so
+	// Bound to Executor.pool.request. Kept as text locally so
 	// invalid JSON mid-typing doesn't clobber the model; committed on valid parse.
-	const requestValue = $derived(
-		value?.mode === 'executor'
-			? value.pool?.request
-			: value?.mode === 'scheduled'
-				? value.request
-				: undefined
-	);
+	const requestValue = $derived(value?.mode === 'executor' ? value.pool?.request : undefined);
 	let requestText = $state('');
 	let requestError = $state<string | null>(null);
 	$effect(() => {
@@ -136,11 +118,6 @@
 			const pool: { alias: string; request?: unknown } = { alias: dm.pool.alias };
 			if (parsed !== undefined) pool.request = parsed;
 			onchange({ mode: 'executor', pool });
-		} else if (dm.mode === 'scheduled') {
-			const next = { ...dm };
-			if (parsed !== undefined) next.request = parsed;
-			else delete next.request;
-			onchange(next);
 		}
 	}
 
@@ -177,7 +154,7 @@
 		return found ? `${found.path} — ${found.display_name}` : poolAlias;
 	}
 	function schedulerLabel(): string {
-		if (!scheduler) return 'Environment default (no datacenter resource)';
+		if (!scheduler) return 'Select a datacenter resource…';
 		const found = schedulerResources.find((r) => r.path === scheduler);
 		return found ? `${found.path} — ${found.display_name}` : scheduler;
 	}
@@ -196,34 +173,15 @@
 		>
 			<Select.Trigger disabled={readonly} data-testid="select-deployment-model">
 				{deploymentMode === 'scheduled'
-					? 'Scheduled (Nomad/Slurm, GPU)'
+					? 'Scheduled (Nomad/Slurm cluster)'
 					: 'Executor (worker pool)'}
 			</Select.Trigger>
 			<Select.Content>
 				<Select.Item value="executor" label="Executor (worker pool)" />
-				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
+				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm cluster)" />
 			</Select.Content>
 		</Select.Root>
 		{#if deploymentMode === 'scheduled'}
-			<FormField label="Operation" for="scheduled-operation">
-				<Select.Root
-					type="single"
-					value={operation}
-					onValueChange={(v) => {
-						if (v === 'submit' || v === 'lease') setOperation(v);
-					}}
-					disabled={readonly}
-				>
-					<Select.Trigger disabled={readonly} data-testid="select-scheduled-operation">
-						{operation === 'lease' ? 'Lease (hold an allocation)' : 'Submit (dispatch a job)'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="submit" label="Submit (dispatch a job)" />
-						<Select.Item value="lease" label="Lease (hold an allocation)" />
-					</Select.Content>
-				</Select.Root>
-			</FormField>
-
 			<FormField label="Scheduler (datacenter resource)" for="scheduled-scheduler">
 				<Select.Root
 					type="single"
@@ -235,67 +193,46 @@
 						<span class="truncate text-sm">{schedulerLabel()}</span>
 					</Select.Trigger>
 					<Select.Content>
-						<Select.Item value="" label="Environment default (no datacenter resource)" />
 						{#each schedulerResources as r (r.id)}
 							<Select.Item value={r.path} label={`${r.path} — ${r.display_name}`} />
 						{/each}
 					</Select.Content>
 				</Select.Root>
 			</FormField>
-			{#if operation === 'lease' && !scheduler}
+			{#if !scheduler}
 				<p class="text-sm text-destructive">
-					Lease requires a datacenter resource — select one above (the
-					environment-default scheduler only supports Submit).
+					Select a datacenter — a Scheduled step must lease an allocation from a specific cluster.
 				</p>
 			{:else if schedulerResources.length === 0 && schedulerResourcesLoaded}
 				<p class="text-sm italic text-muted-foreground">
 					No <code class="font-mono">datacenter</code> resources in this workspace. Add one under
-					<code class="font-mono">/resources</code> to lease external cluster allocations.
+					<code class="font-mono">/resources</code> to lease allocations on an external cluster.
 				</p>
 			{/if}
 
-			{#if operation === 'submit'}
-				<FormField label="Job template" for="deployment-job-template">
-					<Select.Root
-						type="single"
-						value={jobTemplate}
-						onValueChange={(v) => {
-							if (v) setJobTemplate(v);
-						}}
-						disabled={readonly}
-					>
-						<Select.Trigger disabled={readonly} data-testid="select-job-template">
-							{GPU_JOB_TEMPLATES.find((t) => t.value === jobTemplate)?.label ??
-								(jobTemplate || 'Select a job template…')}
-						</Select.Trigger>
-						<Select.Content>
-							{#each GPU_JOB_TEMPLATES as t (t.value)}
-								<Select.Item value={t.value} label={t.label} />
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</FormField>
-			{/if}
-
-			<FormField label="Request (optional)" for="scheduled-request">
-				<Textarea
-					id="scheduled-request"
-					class="font-mono text-sm"
-					rows={3}
-					value={requestText}
+			<FormField label="Job template" for="deployment-job-template">
+				<Select.Root
+					type="single"
+					value={jobTemplate}
+					onValueChange={(v) => {
+						if (v) setJobTemplate(v);
+					}}
 					disabled={readonly}
-					placeholder={'{ "gpu_count": 1, "gpu_type": "a100" }'}
-					oninput={(e) => commitRequest((e.currentTarget as HTMLTextAreaElement).value)}
-					data-testid="textarea-scheduled-request"
-				/>
+				>
+					<Select.Trigger disabled={readonly} data-testid="select-job-template">
+						{GPU_JOB_TEMPLATES.find((t) => t.value === jobTemplate)?.label ??
+							(jobTemplate || 'Select a job template…')}
+					</Select.Trigger>
+					<Select.Content>
+						{#each GPU_JOB_TEMPLATES as t (t.value)}
+							<Select.Item value={t.value} label={t.label} />
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</FormField>
-			{#if requestError}
-				<p class="text-sm text-destructive">{requestError}</p>
-			{/if}
+
 			<p class="text-sm text-muted-foreground">
-				{operation === 'lease'
-					? 'Lease params validated against the datacenter kind’s claim schema; the granted lease is readable in the body as lease.node / lease.gpu_uuid / lease.alloc_id.'
-					: 'Submitted through the scheduler-net, which owns queueing, GPU allocation and retry/backoff.'}
+				Leases a warm allocation from the datacenter for the step's duration; the granted lease is readable in the body as <code>lease.node</code> / <code>lease.alloc_id</code>.
 			</p>
 		{/if}
 	{:else}

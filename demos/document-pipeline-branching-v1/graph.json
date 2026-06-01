@@ -1,0 +1,514 @@
+{
+  "nodes": [
+    {
+      "id": "trg_document_pipeline_branching_v1",
+      "type": "trigger",
+      "position": { "x": 52, "y": 60 },
+      "data": {
+        "type": "trigger",
+        "label": "Intake API",
+        "source": {
+          "kind": "manual",
+          "form": []
+        },
+        "concurrency": "allow",
+        "payloadMapping": [
+          { "targetField": "document_file", "expression": "document_file" },
+          { "targetField": "document_id", "expression": "document_id" }
+        ],
+        "enabled": true
+      }
+    },
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 52, "y": 330 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Document branching — {{ document_id }}",
+        "initial": {
+          "id": "in",
+          "label": "Document Intake",
+          "fields": [
+            {
+              "name": "document_file",
+              "label": "Document (PDF, PNG, JPG)",
+              "kind": "file",
+              "required": true,
+              "accept": "application/pdf,image/png,image/jpeg,image/webp"
+            },
+            {
+              "name": "document_id",
+              "label": "Document ID",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "render",
+      "type": "automated_step",
+      "position": { "x": 224, "y": 330 },
+      "data": {
+        "type": "automated_step",
+        "label": "Render (PDF → page PNGs, Python)",
+        "description": "Rasterizes the uploaded document to per-page PNG images so the vision steps get raster pages, NOT a raw PDF (Ollama rejects a PDF in `images[].path` with HTTP 500 `image: unknown format`). Generic 'rasterize document to page images' stage — no clinic-domain vocabulary. Uses PyMuPDF (`pymupdf`/`fitz`) at 150 dpi. Reads the upstream file-ref `start.document_file` (Envelope borrow — metadata, NOT bytes; the step fetches the bytes from the file-ref url/key) and emits `page_1` (kind: file, the lead-page vision-borrow target), plus `pages` (all page file-refs) and `page_count`.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": ["pymupdf"],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Rendered pages",
+          "fields": [
+            { "name": "page_1", "label": "Page 1 image", "kind": "file", "required": true },
+            { "name": "pages", "label": "Page images", "kind": "json", "required": true },
+            { "name": "page_count", "label": "Page count", "kind": "number", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "classify",
+      "type": "automated_step",
+      "position": { "x": 396, "y": 330 },
+      "data": {
+        "type": "automated_step",
+        "label": "Classify (vision LLM, raw file)",
+        "description": "Vision-only classification on the RAW uploaded file — runs BEFORE OCR (Decision 3: classify→ocr ordering). The model looks at the document image directly (no OCR text available yet) and returns one document_type plus a confidence. NEEDS-LIVE-EXPERIMENTATION: classifying without OCR text is unvalidated — a vision model may misread dense lab tables vs. narrative letters without the text layer. Only explicit lab classes (lab_result / laborergebnis) route into the bloodwork branch; everything else (including befund) falls through to the generic branch.",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "medgemma:27b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "reasoning": false,
+            "max_tokens": 4096,
+            "system_prompt": "You are a document classification assistant. Look at the document image and classify it into exactly one of the allowed classes, with a confidence in 0..1. You have NO OCR text — judge from the visual layout alone.",
+            "prompt": "Classify this document into ONE of: lab_result, laborergebnis, befund, referral_letter, imaging_report, discharge_summary, consultation_note, insurance_form, invoice, consent_form, other.\n\nReturn JSON: {document_type, confidence}.",
+            "images": [
+              { "path": "{{ render.page_1 }}" }
+            ],
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "required": ["document_type", "confidence"],
+                "properties": {
+                  "document_type": {
+                    "type": "string",
+                    "enum": [
+                      "lab_result",
+                      "laborergebnis",
+                      "befund",
+                      "referral_letter",
+                      "imaging_report",
+                      "discharge_summary",
+                      "consultation_note",
+                      "insurance_form",
+                      "invoice",
+                      "consent_form",
+                      "other"
+                    ]
+                  },
+                  "confidence": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Classification",
+          "fields": [
+            { "name": "document_type", "label": "Document type", "kind": "text", "required": true },
+            { "name": "confidence", "label": "Confidence", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "route-by-class",
+      "type": "decision",
+      "position": { "x": 740, "y": 330 },
+      "data": {
+        "type": "decision",
+        "label": "Route by class",
+        "description": "DAG branch on classify.document_type. Only explicit lab classes route to the bloodwork (OCR + bbox-grounded) branch; befund is NOT pinned to bloodwork in Phase 1 — it (and every other class) falls through to the generic extractor.",
+        "conditions": [
+          {
+            "edgeId": "branch-bloodwork",
+            "label": "lab_result / laborergebnis",
+            "guard": "classify.document_type == \"lab_result\" || classify.document_type == \"laborergebnis\""
+          }
+        ],
+        "defaultBranch": "default"
+      }
+    },
+    {
+      "id": "ocr",
+      "type": "automated_step",
+      "position": { "x": 1084, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "OCR (Surya, per-word boxes)",
+        "description": "Bloodwork-branch OCR. Surya emits the full text plus per-word bounding boxes (normalised 0..1) with a global word_index and page — the geometry the downstream resolve-bbox step unions into per-field visual_refs. No model field: Surya IS the OCR engine.",
+        "executionSpec": {
+          "backendType": "surya",
+          "config": {
+            "mode": "single",
+            "file": "{{ start.document_file }}"
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "OCR result",
+          "fields": [
+            { "name": "full_text", "label": "Full text", "kind": "textarea", "required": true },
+            { "name": "words", "label": "Words (with bounding boxes)", "kind": "json", "required": true },
+            { "name": "pages", "label": "Pages (geometry)", "kind": "json", "required": false },
+            { "name": "page_count", "label": "Page count", "kind": "number", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "extract-bloodwork",
+      "type": "automated_step",
+      "position": { "x": 1428, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "Extract — Bloodwork (vision + OCR text)",
+        "description": "Lab-result + metadata extractor fed BOTH the page image (render.page_1, for visual layout/structure) AND the OCR text rows (ocr_layout, for exact characters). Emits patient/lab metadata (category patient_info/lab_info) for cross-checking plus every analyte row (category test_result: key=exact test name, value, unit, reference_range). Reasoning is disabled (medgemma is non-reasoning; reasoning models loop here). Bounding boxes are NOT emitted — resolve-bbox grounds each field via Surya word geometry matched by key.",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "medgemma:27b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "reasoning": false,
+            "max_tokens": 8192,
+            "system_prompt": "You are a medical lab-report extractor. You are given the page IMAGE plus the same report as OCR text rows (one row per line; columns left-to-right: test-name, value, unit, reference-range). Use the image for layout and structure and the OCR text for exact characters; cross-check them. EVERY field you output MUST have a `category`. Extract two kinds of fields:\n(1) DOCUMENT METADATA (category 'patient_info' or 'lab_info') for patient cross-checking and report provenance — use these stable English keys (value = the text as printed; omit any the document lacks): patient_name, patient_date_of_birth, patient_sex, patient_id, lab_name, report_date, lab_number.\n(2) LAB RESULTS (category 'test_result'), one per analyte row — `key` = the test name EXACTLY as spelled (it is matched back to the document layout downstream); `value` = the patient's measured number; `unit` = the unit; `reference_range` = the normal-range column. `reference_range` is REQUIRED on every field: for a test_result set it to the printed normal-range column (e.g. <35, 0.-129, 28-100, 0.50-1.20, 60-100 — present on essentially every analyte row); for metadata fields (patient_info/lab_info) set it to the empty string \"\". value and reference_range are DIFFERENT columns — never copy the range into value, and never leave reference_range empty when the row shows a range.",
+            "prompt": "Extract the patient/report metadata AND every lab value from this lab report. The OCR rows below mirror the page image (analyte rows: test-name, value, unit, reference-range, left-to-right).\n\nOCR rows:\n---\n{{ ocr_layout.layout_text }}\n---\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, category}]}.",
+            "images": [
+              { "path": "{{ render.page_1 }}" }
+            ],
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Bloodwork fields",
+          "fields": [
+            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ocr-layout",
+      "type": "automated_step",
+      "position": { "x": 1430, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "OCR layout (Python)",
+        "description": "Reconstructs column-aligned table rows from Surya's per-word geometry (group words by row-y, order each row left-to-right by x), so the extractor reads aligned 'test-name value unit reference-range' lines instead of Surya's flattened reading order (which interleaves columns and causes shifted rows / range-as-value errors). Reads ocr.words (read-arc borrow).",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "OCR layout text",
+          "fields": [
+            { "name": "layout_text", "label": "Column-aligned OCR rows", "kind": "textarea", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "resolve-bbox",
+      "type": "automated_step",
+      "position": { "x": 1772, "y": 130 },
+      "data": {
+        "type": "automated_step",
+        "label": "Resolve bbox (Python)",
+        "description": "Grounds each extracted field to a visual_ref {page (1-based), bbox{x,y,w,h ∈ 0..1}} using Surya's OCR word geometry DIRECTLY — never the LLM. Matches the field's test-name key to its OCR row (value-match fallback) and unions that row's word boxes. Reads ocr.words (read-arc borrow) + extract_bloodwork.fields.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Fields with visual_ref",
+          "fields": [
+            { "name": "fields", "label": "Fields (with visual_ref)", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "extract-generic",
+      "type": "automated_step",
+      "position": { "x": 1084, "y": 530 },
+      "data": {
+        "type": "automated_step",
+        "label": "Extract — Generic (vision)",
+        "description": "Generic-fallback branch for every non-lab class (including befund). No OCR layer and no bbox grounding — the vision model reads the raw file directly and emits a flat fields[] list.",
+        "executionSpec": {
+          "backendType": "llm",
+          "config": {
+            "provider": "ollama",
+            "model": "medgemma:27b",
+            "base_url": "http://localhost:11434",
+            "temperature": 0,
+            "reasoning": false,
+            "max_tokens": 6144,
+            "system_prompt": "You are a general-purpose document extractor. Pull every identifiable structured or semi-structured field from the document image. EVERY field MUST have a `category`: 'patient_info' for patient identity, 'lab_info' for issuing-lab/report provenance, 'test_result' for a measured result with a value, otherwise 'other'.",
+            "prompt": "Extract every identifiable field from this {{ classify.document_type }} document.\n\nReturn JSON conforming to the schema: {fields: [{key, value, unit, reference_range, confidence, category}]}.",
+            "images": [
+              { "path": "{{ render.page_1 }}" }
+            ],
+            "response_format": {
+              "type": "json_schema",
+              "schema": {
+                "$ref": "#/definitions/ExtractionFields"
+              }
+            }
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Generic fields",
+          "fields": [
+            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "merge-extraction",
+      "type": "join",
+      "slug": "extraction",
+      "position": { "x": 2116, "y": 330 },
+      "data": {
+        "type": "join",
+        "label": "Merge branches",
+        "description": "Bloodwork (resolve-bbox) and generic (extract-generic) branch tails converge here. `mode: \"any\"` — XOR-join, fires on the first incoming control token (the dual of route-by-class's decision split). Re-parks whichever branch's payload under slug `extraction` so downstream validate does a single clean borrow extraction.fields.",
+        "mode": "any",
+        "output": {
+          "id": "out",
+          "label": "Extraction",
+          "fields": [
+            { "name": "fields", "label": "Extracted fields", "kind": "json", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "validate",
+      "type": "automated_step",
+      "position": { "x": 2460, "y": 330 },
+      "data": {
+        "type": "automated_step",
+        "label": "Validate (shape coerce, Python)",
+        "description": "Shape-coerces the merged fields into a defaults-filled list (preserving any visual_ref the bloodwork branch produced) and stamps the document_type from the classifier. Reads extraction.fields + classify.document_type.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Validated extraction",
+          "fields": [
+            { "name": "fields", "label": "Fields", "kind": "json", "required": true },
+            { "name": "document_type", "label": "Document type", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end-ok",
+      "type": "end",
+      "position": { "x": 2804, "y": 330 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "document_id", "expression": "start.document_id" },
+          { "targetField": "document_type", "expression": "classify.document_type" },
+          { "targetField": "fields", "expression": "validate.fields" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-trigger-start",
+      "source": "trg_document_pipeline_branching_v1",
+      "target": "start",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-start-render",
+      "source": "start",
+      "target": "render",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-render-classify",
+      "source": "render",
+      "target": "classify",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-classify-route",
+      "source": "classify",
+      "target": "route-by-class",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-route-bloodwork",
+      "source": "route-by-class",
+      "target": "ocr",
+      "sourceHandle": "branch-bloodwork",
+      "targetHandle": "in",
+      "label": "lab_result / laborergebnis",
+      "type": "conditional"
+    },
+    {
+      "id": "e-route-generic",
+      "source": "route-by-class",
+      "target": "extract-generic",
+      "sourceHandle": "default",
+      "targetHandle": "in",
+      "label": "default",
+      "type": "conditional"
+    },
+    {
+      "id": "e-ocr-layout",
+      "source": "ocr",
+      "target": "ocr-layout",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-layout-extract",
+      "source": "ocr-layout",
+      "target": "extract-bloodwork",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-extract-resolve",
+      "source": "extract-bloodwork",
+      "target": "resolve-bbox",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-resolve-merge",
+      "source": "resolve-bbox",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-generic-merge",
+      "source": "extract-generic",
+      "target": "merge-extraction",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-merge-validate",
+      "source": "merge-extraction",
+      "target": "validate",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e-validate-end",
+      "source": "validate",
+      "target": "end-ok",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ],
+  "definitions": {
+    "ExtractionFields": {
+      "type": "object",
+      "required": ["fields"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "value", "confidence", "category", "reference_range"],
+            "properties": {
+              "key": { "type": "string" },
+              "value": { "type": "string" },
+              "unit": { "type": ["string", "null"] },
+              "reference_range": { "type": "string" },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "category": { "type": "string", "enum": ["patient_info", "lab_info", "test_result", "other"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

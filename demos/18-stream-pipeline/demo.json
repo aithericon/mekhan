@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000f18",
+  "name": "18 · Stream Pipeline",
+  "description": "Three-stage streaming pipeline, all Python: producer → transform → reducer. The producer (streamOutput) emits 4 lowercase word chunks (the/quick/brown/fox). The transform is BOTH a stream consumer AND producer (streamInput + streamOutput): it receives each chunk via aithericon.chunks(), uppercases it, and re-emits it on its own stream via set_output. The reducer (streamInput) receives the transform's chunks and concatenates them into 'THE QUICK BROWN FOX'. Each stage runs as a long-lived process fed over IPC; the control edges (producer.out→transform.in, transform.out→reducer.in) carry stream_count and trigger each stage's EOF.",
+  "visibility": "public"
+}

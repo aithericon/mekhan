@@ -17,7 +17,7 @@ use utoipa::OpenApi;
     ),
     servers(
         (url = "/", description = "Same-origin BFF (production single-origin posture)."),
-        (url = "http://localhost:13100", description = "Local mekhan-service direct."),
+        (url = "http://localhost:3100", description = "Local mekhan-service direct."),
         (url = "http://localhost:15173", description = "SvelteKit dev server (proxies /api/* to mekhan).")
     ),
     components(
@@ -73,6 +73,8 @@ use utoipa::OpenApi;
             aithericon_executor_backend_configs::process::ProcessConfig,
             aithericon_executor_backend_configs::python::PythonConfig,
             aithericon_executor_backend_configs::postgres::PostgresConfig,
+            aithericon_executor_backend_configs::postgres::PgOperation,
+            aithericon_executor_backend_configs::postgres::RlsContext,
             aithericon_executor_backend_configs::kreuzberg::KreuzbergConfig,
             aithericon_executor_backend_configs::kreuzberg::ExtractionMode,
             aithericon_executor_backend_configs::kreuzberg::OcrSettings,

@@ -40,7 +40,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -274,10 +274,9 @@ async fn setup(
     let l_db = db.clone();
     let l_sub = sub_mgr.clone();
     let l_waiters = waiters.clone(); // SAME Arc as AppState.result_waiters
-    let lifecycle = spawn_consumer(move || {
-        start_lifecycle_listener(l_nats, l_db, l_sub, None, l_waiters)
-    })
-    .await;
+    let lifecycle =
+        spawn_consumer(move || start_lifecycle_listener(l_nats, l_db, l_sub, None, l_waiters))
+            .await;
 
     // Create + publish the template (publish registers the trigger live).
     let resp = app
@@ -364,8 +363,7 @@ async fn faf_default_has_no_outcome_and_polls() {
         body["result"]["outcome"]["outcome"], "spawned",
         "FAF still spawns an instance: {body}"
     );
-    let iid = Uuid::parse_str(body["result"]["outcome"]["instance_id"].as_str().unwrap())
-        .unwrap();
+    let iid = Uuid::parse_str(body["result"]["outcome"]["instance_id"].as_str().unwrap()).unwrap();
 
     // Poll path: the shared lifecycle consumer drives it to terminal + persists
     // the same envelope the WaitForResult caller would have received.
@@ -423,7 +421,10 @@ async fn wait_for_result_returns_envelope_no_leak() {
         let (kind, data) = events
             .first()
             .unwrap_or_else(|| panic!("{label}: empty SSE body: {body:?}"));
-        assert_eq!(kind, "fire", "{label}: first SSE event is `fire`: {events:?}");
+        assert_eq!(
+            kind, "fire",
+            "{label}: first SSE event is `fire`: {events:?}"
+        );
         let fire_v: Value = serde_json::from_str(data)
             .unwrap_or_else(|e| panic!("{label}: fire data not JSON: {e}: {data:?}"));
         let iid = fire_v["outcome"]["instance_id"]
@@ -439,7 +440,10 @@ async fn wait_for_result_returns_envelope_no_leak() {
         let (rkind, rdata) = events
             .last()
             .unwrap_or_else(|| panic!("{label}: no terminal event: {events:?}"));
-        assert_eq!(rkind, "result", "{label}: stream ends with `result`: {events:?}");
+        assert_eq!(
+            rkind, "result",
+            "{label}: stream ends with `result`: {events:?}"
+        );
         let envelope: Value = serde_json::from_str(rdata)
             .unwrap_or_else(|e| panic!("{label}: result data not JSON: {e}: {rdata:?}"));
         assert_eq!(
@@ -455,18 +459,24 @@ async fn wait_for_result_returns_envelope_no_leak() {
         .oneshot(fire_req("?reply=wait", None))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "WaitForResult success is 200");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "WaitForResult success is 200"
+    );
     let body = body_json(resp.into_body()).await;
 
-    assert_eq!(body["outcome"]["status"], "completed", "terminal status: {body}");
+    assert_eq!(
+        body["outcome"]["status"], "completed",
+        "terminal status: {body}"
+    );
     assert_eq!(
         body["outcome"]["result"],
         SUCCESS_ENVELOPE(),
         "WaitForResult returns the structured envelope: {body}"
     );
 
-    let iid = Uuid::parse_str(body["result"]["outcome"]["instance_id"].as_str().unwrap())
-        .unwrap();
+    let iid = Uuid::parse_str(body["result"]["outcome"]["instance_id"].as_str().unwrap()).unwrap();
     assert_eq!(
         fetch_result(&db, iid).await,
         Some(SUCCESS_ENVELOPE()),
@@ -518,7 +528,10 @@ async fn wait_for_result_times_out_202_and_deregisters() {
             result: None,
         },
     );
-    assert!(waiters.is_empty(), "resolve on a deregistered id stays a no-op");
+    assert!(
+        waiters.is_empty(),
+        "resolve on a deregistered id stays a no-op"
+    );
     eprintln!("  ✓ wait_for_result_times_out_202_and_deregisters");
 }
 
@@ -555,7 +568,11 @@ async fn sse_already_terminal_emits_result_and_404() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "unknown instance ⇒ 404");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "unknown instance ⇒ 404"
+    );
 
     // Already-terminal stream: connected → result(envelope) → close.
     let resp = app

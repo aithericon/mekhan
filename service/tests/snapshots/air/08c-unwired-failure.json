@@ -343,7 +343,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -450,7 +450,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -615,7 +615,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",
@@ -784,7 +784,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -891,7 +891,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -1056,7 +1056,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",
@@ -2188,7 +2188,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"risky_step\"; d.run = 0; d.retries = 0; d.max_retries = 0; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Always fails. The error handle is unwired in graph.json, so once retries\\n# are exhausted (maxRetries == 0 → immediately) the engine must crash the\\n# net (NetFailed) rather than strand the failure token in a dead-end place.\\nraise RuntimeError(f\\\"Synthetic unhandled failure: payload={input.payload!r}\\\")\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"summary\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/risky_step/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"risky_step\"; d.run = 0; d.retries = 0; d.max_retries = 0; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Always fails. The error handle is unwired in graph.json, so once retries\\n# are exhausted (maxRetries == 0 → immediately) the engine must crash the\\n# net (NetFailed) rather than strand the failure token in a dead-end place.\\nraise RuntimeError(f\\\"Synthetic unhandled failure: payload={input.payload!r}\\\")\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"summary\", \"required\": true}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/risky_step/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; d.feed_chunks = false; #{ job: d }",
         "type": "rhai"
       },
       "name": "Risky Step - Prepare",

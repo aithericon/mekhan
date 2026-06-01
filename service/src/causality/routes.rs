@@ -118,17 +118,16 @@ pub async fn cross_link(
     State(state): State<AppState>,
     Path(signal_key): Path<String>,
 ) -> Result<Json<CrossLink>, ApiError> {
-    let link = sqlx::query_as::<_, CrossLink>(
-        "SELECT * FROM causality_cross_links WHERE signal_key = $1",
-    )
-    .bind(&signal_key)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| {
-        tracing::error!("cross-link query failed: {e}");
-        ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
-    })?
-    .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    let link =
+        sqlx::query_as::<_, CrossLink>("SELECT * FROM causality_cross_links WHERE signal_key = $1")
+            .bind(&signal_key)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("cross-link query failed: {e}");
+                ApiError::status_only(StatusCode::INTERNAL_SERVER_ERROR)
+            })?
+            .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
     Ok(Json(link))
 }
 
@@ -172,11 +171,10 @@ pub async fn provenance_from_artifact(
     .await
     .unwrap_or(None);
 
-    let (source_net, signal_key, source_seq) = entry
-        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    let (source_net, signal_key, source_seq) =
+        entry.ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
-    let source_net = source_net
-        .ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
+    let source_net = source_net.ok_or_else(|| ApiError::status_only(StatusCode::NOT_FOUND))?;
 
     // Resolve to (net_id, token_id) for the provenance CTE
     let resolved: Option<(String, String)> = if let Some(seq) = source_seq {
@@ -517,13 +515,13 @@ pub async fn event_detail(
 
     // Fetch the event + new payload columns in one go.
     type EventRow = (
-        String,                                // event_type
-        Option<String>,                        // transition_name
-        Option<String>,                        // effect_handler
-        chrono::DateTime<chrono::Utc>,         // timestamp
-        Option<serde_json::Value>,             // effect_result
-        Option<String>,                        // bridge_target_net
-        Option<String>,                        // bridge_target_place
+        String,                        // event_type
+        Option<String>,                // transition_name
+        Option<String>,                // effect_handler
+        chrono::DateTime<chrono::Utc>, // timestamp
+        Option<serde_json::Value>,     // effect_result
+        Option<String>,                // bridge_target_net
+        Option<String>,                // bridge_target_place
     );
     let event: Option<EventRow> = sqlx::query_as(
         "SELECT event_type, transition_name, effect_handler, timestamp, \
@@ -662,13 +660,11 @@ pub async fn event_detail(
     match effect_handler.as_deref() {
         Some("human_task") => {
             if let Some(ref sk) = signal_key {
-                task = sqlx::query_as(
-                    "SELECT * FROM hpi_tasks WHERE id = $1",
-                )
-                .bind(sk)
-                .fetch_optional(db)
-                .await
-                .unwrap_or(None);
+                task = sqlx::query_as("SELECT * FROM hpi_tasks WHERE id = $1")
+                    .bind(sk)
+                    .fetch_optional(db)
+                    .await
+                    .unwrap_or(None);
             }
         }
         Some("catalogue_register") => {
@@ -707,13 +703,12 @@ pub async fn event_detail(
                 .unwrap_or_default();
 
                 // Also fetch the catalogue artifact this execution produced.
-                artifact = sqlx::query_as(
-                    "SELECT * FROM catalogue_entries WHERE signal_key = $1 LIMIT 1",
-                )
-                .bind(sk)
-                .fetch_optional(db)
-                .await
-                .unwrap_or(None);
+                artifact =
+                    sqlx::query_as("SELECT * FROM catalogue_entries WHERE signal_key = $1 LIMIT 1")
+                        .bind(sk)
+                        .fetch_optional(db)
+                        .await
+                        .unwrap_or(None);
             }
         }
         Some("process_log_metric") => {

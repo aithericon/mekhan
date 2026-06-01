@@ -33,9 +33,9 @@ use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
 use mekhan_service::catalogue::repository::PgCatalogueRepository;
 use mekhan_service::causality::live::LiveBroadcasts;
+use mekhan_service::handlers::resources::vault_path_for;
 use mekhan_service::nats::MekhanNats;
 use mekhan_service::petri::client::PetriClient;
-use mekhan_service::handlers::resources::vault_path_for;
 use mekhan_service::s3::ArtifactStore;
 use mekhan_service::triggers::TriggerDispatcher;
 use mekhan_service::yjs::manager::YjsManager;
@@ -59,7 +59,11 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
     let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
     let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
-    let triggers = Arc::new(TriggerDispatcher::new(db.clone(), petri.clone(), nats.clone()));
+    let triggers = Arc::new(TriggerDispatcher::new(
+        db.clone(),
+        petri.clone(),
+        nats.clone(),
+    ));
     let resource_store = Arc::new(InMemoryResourceStore::new());
 
     let state = AppState {
@@ -234,13 +238,12 @@ async fn create_persists_public_config_and_writes_secret_via_store() {
 
     // Confirm the secret made it into the store at the launcher-deterministic
     // vault path.
-    let workspace_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT workspace_id FROM resources WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let workspace_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM resources WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     let vault_path = vault_path_for(workspace_id, id, 1);
     let secrets = store
         .get_version(&vault_path)
@@ -391,13 +394,12 @@ async fn update_bumps_version_and_writes_new_vault_path() {
 
     // Both v1 and v2 vault paths must be populated; v1 is intact for any
     // pinned instance, v2 holds the new secret.
-    let workspace_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT workspace_id FROM resources WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let workspace_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM resources WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     let v1 = vault_path_for(workspace_id, id, 1);
     let v2 = vault_path_for(workspace_id, id, 2);
     assert!(store.get_version(&v1).await.is_some(), "v1 must remain");
@@ -405,13 +407,12 @@ async fn update_bumps_version_and_writes_new_vault_path() {
     assert_eq!(v2_secrets["password"], "new-secret");
 
     // Both `resource_versions` rows must exist.
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM resource_versions WHERE resource_id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM resource_versions WHERE resource_id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert_eq!(count, 2);
 }
 
@@ -441,23 +442,21 @@ async fn delete_marks_row_and_preserves_versions() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let deleted_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT deleted_at FROM resources WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let deleted_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT deleted_at FROM resources WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert!(deleted_at.is_some(), "deleted_at must be set");
 
     // `resource_versions` survive the soft delete — pinned instances need them.
-    let versions: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM resource_versions WHERE resource_id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let versions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM resource_versions WHERE resource_id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert_eq!(versions, 1);
 }
 
@@ -501,13 +500,12 @@ async fn rotate_bumps_version_without_changing_schema() {
     let summary = body_json(resp.into_body()).await;
     assert_eq!(summary["latest_version"].as_i64(), Some(2));
 
-    let workspace_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT workspace_id FROM resources WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let workspace_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM resources WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     let v2 = vault_path_for(workspace_id, id, 2);
     let secrets = store.get_version(&v2).await.expect("v2 was written");
     assert_eq!(secrets["password"], "rotated-secret");
@@ -580,7 +578,10 @@ async fn audit_returns_one_row_per_write_action() {
     let body = body_json(resp.into_body()).await;
     let items = body["items"].as_array().unwrap();
     assert_eq!(items.len(), 3, "got audit items: {items:?}");
-    let mut actions: Vec<&str> = items.iter().map(|i| i["action"].as_str().unwrap()).collect();
+    let mut actions: Vec<&str> = items
+        .iter()
+        .map(|i| i["action"].as_str().unwrap())
+        .collect();
     actions.sort();
     assert_eq!(actions, vec!["create", "delete", "rotate"]);
 }

@@ -345,6 +345,7 @@ impl Subjects {
             DomainEvent::TokenRemoved { .. } => "token.removed",
             DomainEvent::TokenUpdated { .. } => "token.updated",
             DomainEvent::TransitionFired { .. } => "transition.fired",
+            DomainEvent::TransitionSkipped { .. } => "transition.skipped",
             DomainEvent::TransitionScriptUpdated { .. } => "transition.updated",
             DomainEvent::ErrorOccurred { .. } => "error",
             DomainEvent::TokenBridgedOut { .. } => "token.bridged_out",
@@ -374,6 +375,7 @@ impl Subjects {
             DomainEvent::TokenRemoved { .. } => "token.removed",
             DomainEvent::TokenUpdated { .. } => "token.updated",
             DomainEvent::TransitionFired { .. } => "transition.fired",
+            DomainEvent::TransitionSkipped { .. } => "transition.skipped",
             DomainEvent::TransitionScriptUpdated { .. } => "transition.updated",
             DomainEvent::ErrorOccurred { .. } => "error",
             DomainEvent::TokenBridgedOut { .. } => "token.bridged_out",
@@ -405,8 +407,14 @@ mod tests {
             signal_key: None,
             dedup_id: None,
         };
-        assert_eq!(Subjects::for_event(&event, None), "petri.events.token.created");
-        assert_eq!(Subjects::for_event(&event, Some("net-a")), "petri.events.net-a.token.created");
+        assert_eq!(
+            Subjects::for_event(&event, None),
+            "petri.events.token.created"
+        );
+        assert_eq!(
+            Subjects::for_event(&event, Some("net-a")),
+            "petri.events.net-a.token.created"
+        );
     }
 
     #[test]
@@ -543,7 +551,9 @@ mod tests {
     fn test_parse_human_completed_subject_invalid() {
         assert!(Subjects::parse_human_completed_subject("human.request.net-a.review").is_none());
         assert!(Subjects::parse_human_completed_subject("human.completed.net-a").is_none());
-        assert!(Subjects::parse_human_completed_subject("human.completed.net-a.review.extra").is_none());
+        assert!(
+            Subjects::parse_human_completed_subject("human.completed.net-a.review.extra").is_none()
+        );
     }
 
     #[test]
@@ -572,14 +582,24 @@ mod tests {
 
     #[test]
     fn test_roundtrip_human_completed_subject() {
-        let subject = format!("{}.{}.{}", Subjects::HUMAN_COMPLETED_PREFIX, "my-net", "my-place");
+        let subject = format!(
+            "{}.{}.{}",
+            Subjects::HUMAN_COMPLETED_PREFIX,
+            "my-net",
+            "my-place"
+        );
         let parsed = Subjects::parse_human_completed_subject(&subject);
         assert_eq!(parsed, Some(("my-net", "my-place")));
     }
 
     #[test]
     fn test_roundtrip_human_cancelled_subject() {
-        let subject = format!("{}.{}.{}", Subjects::HUMAN_CANCELLED_PREFIX, "my-net", "my-place");
+        let subject = format!(
+            "{}.{}.{}",
+            Subjects::HUMAN_CANCELLED_PREFIX,
+            "my-net",
+            "my-place"
+        );
         let parsed = Subjects::parse_human_cancelled_subject(&subject);
         assert_eq!(parsed, Some(("my-net", "my-place")));
     }
@@ -659,7 +679,12 @@ mod tests {
 
     #[test]
     fn test_roundtrip_human_failed_subject() {
-        let subject = format!("{}.{}.{}", Subjects::HUMAN_FAILED_PREFIX, "my-net", "my-place");
+        let subject = format!(
+            "{}.{}.{}",
+            Subjects::HUMAN_FAILED_PREFIX,
+            "my-net",
+            "my-place"
+        );
         let parsed = Subjects::parse_human_failed_subject(&subject);
         assert_eq!(parsed, Some(("my-net", "my-place")));
     }

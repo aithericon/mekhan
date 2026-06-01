@@ -10,9 +10,7 @@
 
 use std::sync::Arc;
 
-use async_nats::jetstream::consumer::{
-    pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy,
-};
+use async_nats::jetstream::consumer::{pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy};
 use async_nats::jetstream::stream::{Config as StreamConfig, RetentionPolicy};
 use async_nats::jetstream::Message;
 use petri_application::json_to_token_color;
@@ -382,7 +380,13 @@ impl MessageHandler for GlobalCancelledHandler<'_> {
                 dedup_id,
             )
             .await;
-        map_inject_err(inject, &target, net_id, &cancellation.task_id, self.activity)?;
+        map_inject_err(
+            inject,
+            &target,
+            net_id,
+            &cancellation.task_id,
+            self.activity,
+        )?;
 
         tracing::info!(
             net_id = %net_id,

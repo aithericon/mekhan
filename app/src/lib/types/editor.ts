@@ -55,6 +55,7 @@ export type JoinNodeData = Extract<SchemaWorkflowNodeData, { type: 'join' }>;
 export type LoopNodeData = Extract<SchemaWorkflowNodeData, { type: 'loop' }>;
 export type MapNodeData = Extract<SchemaWorkflowNodeData, { type: 'map' }>;
 export type ScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'scope' }>;
+export type LeaseScopeNodeData = Extract<SchemaWorkflowNodeData, { type: 'lease_scope' }>;
 export type PhaseUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'phase_update' }>;
 export type ProgressUpdateNodeData = Extract<SchemaWorkflowNodeData, { type: 'progress_update' }>;
 export type FailureNodeData = Extract<SchemaWorkflowNodeData, { type: 'failure' }>;
@@ -63,7 +64,7 @@ export type TimeoutNodeData = Extract<SchemaWorkflowNodeData, { type: 'timeout' 
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 export type SubWorkflowNodeData = Extract<SchemaWorkflowNodeData, { type: 'sub_workflow' }>;
 export type AgentNodeData = Extract<SchemaWorkflowNodeData, { type: 'agent' }>;
-export type StreamConsumerNodeData = Extract<SchemaWorkflowNodeData, { type: 'stream_consumer' }>;
+export type StreamFoldNodeData = Extract<SchemaWorkflowNodeData, { type: 'stream_fold' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
 export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
@@ -158,6 +159,8 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 			};
 		case 'scope':
 			return { type: 'scope', label: 'Scope' };
+		case 'lease_scope':
+			return { type: 'lease_scope', label: 'Lease Scope', lease: { scheduler: '' } };
 		case 'phase_update':
 			return {
 				type: 'phase_update',
@@ -218,10 +221,10 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 },
 				deploymentModel: { mode: 'executor' }
 			};
-		case 'stream_consumer':
+		case 'stream_fold':
 			return {
-				type: 'stream_consumer',
-				label: 'Stream Consumer',
+				type: 'stream_fold',
+				label: 'Stream Fold',
 				resultVar: 'item',
 				reduce: { kind: 'array' }
 			};

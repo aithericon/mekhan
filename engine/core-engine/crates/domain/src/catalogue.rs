@@ -170,10 +170,8 @@ pub trait CatalogueClient: Send + Sync {
     /// Create a reactive subscription for catalogue changes.
     ///
     /// Returns a subscription handle ID that can be passed to `unsubscribe`.
-    async fn subscribe(
-        &self,
-        request: CatalogueSubscribeRequest,
-    ) -> Result<String, CatalogueError>;
+    async fn subscribe(&self, request: CatalogueSubscribeRequest)
+        -> Result<String, CatalogueError>;
 
     /// Remove a previously created subscription.
     ///

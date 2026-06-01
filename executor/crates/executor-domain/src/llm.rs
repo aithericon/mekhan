@@ -101,7 +101,10 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: LlmTurnResult = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
-        assert!(!json.contains("tool_calls"), "empty tool_calls must be skipped");
+        assert!(
+            !json.contains("tool_calls"),
+            "empty tool_calls must be skipped"
+        );
     }
 
     #[test]

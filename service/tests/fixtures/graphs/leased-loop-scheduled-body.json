@@ -50,8 +50,7 @@
 				"deploymentModel": {
 					"mode": "scheduled",
 					"operation": "submit",
-					"jobTemplate": "mekhan-executor-worker",
-					"runOnLease": true
+					"jobTemplate": "mekhan-executor-worker"
 				},
 				"output": {
 					"id": "out",

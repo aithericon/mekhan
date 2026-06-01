@@ -1,11 +1,11 @@
+#[cfg(test)]
+mod integration_tests;
 pub mod request;
 pub mod response;
 pub mod selector;
 pub mod template;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod integration_tests;
 
 use std::collections::HashMap;
 
@@ -223,14 +223,8 @@ impl HttpConfig {
         let Some(auth) = self.auth.as_mut() else {
             return Ok(());
         };
-        let envelope =
-            aithericon_executor_backend::load_resource_envelope(run_context, &alias)?;
-        let field = |k: &str| {
-            envelope
-                .get(k)
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        };
+        let envelope = aithericon_executor_backend::load_resource_envelope(run_context, &alias)?;
+        let field = |k: &str| envelope.get(k).and_then(|v| v.as_str()).map(str::to_string);
         match auth {
             AuthConfig::Bearer { token, .. } => {
                 if token.is_none() {
@@ -281,7 +275,11 @@ impl HttpConfig {
                     }
                 }
             }
-            Some(AuthConfig::Basic { password, password_env, .. }) => {
+            Some(AuthConfig::Basic {
+                password,
+                password_env,
+                ..
+            }) => {
                 if password.is_none() {
                     if let Some(env_name) = password_env {
                         *password = Some(
@@ -296,7 +294,9 @@ impl HttpConfig {
                     }
                 }
             }
-            Some(AuthConfig::Header { value, value_env, .. }) => {
+            Some(AuthConfig::Header {
+                value, value_env, ..
+            }) => {
                 if value.is_none() {
                     if let Some(env_name) = value_env {
                         *value = Some(

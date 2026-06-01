@@ -42,9 +42,9 @@ pub mod types;
 
 pub use refs::{ResolvedResource, ResourcePin, ResourceRef};
 pub use registry::{all, lookup, ResourceTypeDescriptor};
-pub use store::{InMemoryResourceStore, ResourceSecretStore, ResourceStoreError};
 #[cfg(feature = "vault")]
 pub use store::VaultResourceStore;
+pub use store::{InMemoryResourceStore, ResourceSecretStore, ResourceStoreError};
 
 /// Re-export the derive macro so consumers can write
 /// `use aithericon_resources::ResourceType;` and have both the trait-like

@@ -42,8 +42,7 @@ use crate::subjects::Subjects;
 fn dedup_msg_id(event: &DomainEvent, net_id: Option<&str>) -> Option<String> {
     match event {
         DomainEvent::TokenCreated {
-            dedup_id: Some(id),
-            ..
+            dedup_id: Some(id), ..
         } if !id.is_empty() => Some(format!("tc:{}:{}", net_id.unwrap_or("_"), id)),
         _ => None,
     }
@@ -217,9 +216,7 @@ impl<C: EventRepository> NatsEventStore<C> {
             .jetstream
             .publish(subject, payload.into())
             .await
-            .map_err(|e| {
-                EventStoreError::PersistFailed(format!("Bridge publish failed: {e}"))
-            })?;
+            .map_err(|e| EventStoreError::PersistFailed(format!("Bridge publish failed: {e}")))?;
 
         ack_future.await.map_err(|e| {
             EventStoreError::PersistFailed(format!("Bridge publish ACK failed: {e}"))
@@ -253,11 +250,7 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
         }
 
         // 2. Create PersistedEvent with correct sequence and hash chain
-        let persisted = PersistedEvent::new(
-            state.next_sequence,
-            event,
-            state.last_hash.clone(),
-        );
+        let persisted = PersistedEvent::new(state.next_sequence, event, state.last_hash.clone());
 
         // 3. Publish to NATS JetStream (synchronous — wait for ACK)
         let subject = Subjects::for_event(&persisted.event, self.config.net_id.as_deref());
@@ -276,21 +269,17 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
             self.jetstream
                 .publish_with_headers(subject.clone(), headers, Bytes::from(payload))
                 .await
-                .map_err(|e| {
-                    EventStoreError::PersistFailed(format!("NATS publish failed: {e}"))
-                })?
+                .map_err(|e| EventStoreError::PersistFailed(format!("NATS publish failed: {e}")))?
         } else {
             self.jetstream
                 .publish(subject.clone(), payload.into())
                 .await
-                .map_err(|e| {
-                    EventStoreError::PersistFailed(format!("NATS publish failed: {e}"))
-                })?
+                .map_err(|e| EventStoreError::PersistFailed(format!("NATS publish failed: {e}")))?
         };
 
-        let ack = ack_future.await.map_err(|e| {
-            EventStoreError::PersistFailed(format!("NATS publish ACK failed: {e}"))
-        })?;
+        let ack = ack_future
+            .await
+            .map_err(|e| EventStoreError::PersistFailed(format!("NATS publish ACK failed: {e}")))?;
 
         // Duplicate detection: JetStream saw this exact `Nats-Msg-Id` within the
         // dedup window. The original event already lives on the stream (and

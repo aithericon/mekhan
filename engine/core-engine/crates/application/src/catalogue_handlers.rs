@@ -15,8 +15,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use petri_domain::catalogue::{
-    CatalogueClient, CatalogueLookupRequest, CatalogueRegisterCommand,
-    CatalogueSubscribeRequest,
+    CatalogueClient, CatalogueLookupRequest, CatalogueRegisterCommand, CatalogueSubscribeRequest,
 };
 use serde_json::Value as JsonValue;
 
@@ -69,10 +68,7 @@ pub struct CatalogueRegisterHandler {
 }
 
 impl CatalogueRegisterHandler {
-    pub fn new(
-        input_port: impl Into<String>,
-        output_port: impl Into<String>,
-    ) -> Self {
+    pub fn new(input_port: impl Into<String>, output_port: impl Into<String>) -> Self {
         Self {
             input_port: input_port.into(),
             output_port: output_port.into(),
@@ -180,8 +176,14 @@ fn build_command_from_event(
     let source_net = extract_provenance(&merged, "source_net", "petri_net_id");
     let source_place = extract_provenance(&merged, "source_place", "petri_place");
     let signal_key = extract_provenance(&merged, "signal_key", "petri_signal_key");
-    let process_id = merged.get("process_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let process_step = merged.get("process_step").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let process_id = merged
+        .get("process_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let process_step = merged
+        .get("process_step")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     // Job ID from the execution context (not from signal_key — that's a UUID now)
     let job_id = detail
@@ -289,9 +291,10 @@ impl EffectHandler for CatalogueLookupHandler {
 
         let request = build_lookup_request(token_data)?;
 
-        let response = self.client.lookup(request).await.map_err(|e| {
-            EffectError::ExecutionFailed(format!("catalogue lookup failed: {e}"))
-        })?;
+        let response =
+            self.client.lookup(request).await.map_err(|e| {
+                EffectError::ExecutionFailed(format!("catalogue lookup failed: {e}"))
+            })?;
 
         // Collect unique process_ids from returned entries
         let mut process_id_set = std::collections::HashSet::new();
@@ -324,10 +327,7 @@ impl EffectHandler for CatalogueLookupHandler {
         let mut tokens = HashMap::new();
         tokens.insert(self.output_port.clone(), output_token);
 
-        Ok(EffectOutput {
-            tokens,
-            result,
-        })
+        Ok(EffectOutput { tokens, result })
     }
 
     fn replay(&self, _input: &EffectInput, _stored_result: &JsonValue) {
@@ -595,9 +595,7 @@ impl EffectHandler for CatalogueUnsubscribeHandler {
             .get("subscription_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                EffectError::Fatal(
-                    "Missing required 'subscription_id' in unsubscribe input".into(),
-                )
+                EffectError::Fatal("Missing required 'subscription_id' in unsubscribe input".into())
             })?;
 
         let unsubscribed = self
@@ -645,8 +643,7 @@ impl EffectHandler for CatalogueUnsubscribeHandler {
 mod tests {
     use super::*;
     use petri_domain::catalogue::{
-        CatalogueError, CatalogueLookupRequest, CatalogueLookupResponse,
-        CatalogueSubscribeRequest,
+        CatalogueError, CatalogueLookupRequest, CatalogueLookupResponse, CatalogueSubscribeRequest,
     };
     use petri_domain::TransitionId;
     use std::sync::RwLock;
@@ -795,17 +792,28 @@ mod tests {
             .contains(&serde_json::json!("trace-abc")));
 
         // Verify the request was built correctly
-        let req = client.last_lookup_request().expect("lookup should have been called");
+        let req = client
+            .last_lookup_request()
+            .expect("lookup should have been called");
         assert_eq!(
-            req.filters.get("process_id").and_then(|m| m.get("eq")).map(|s| s.as_str()),
+            req.filters
+                .get("process_id")
+                .and_then(|m| m.get("eq"))
+                .map(|s| s.as_str()),
             Some("trace-abc"),
         );
         assert_eq!(
-            req.filters.get("source_net").and_then(|m| m.get("eq")).map(|s| s.as_str()),
+            req.filters
+                .get("source_net")
+                .and_then(|m| m.get("eq"))
+                .map(|s| s.as_str()),
             Some("bo-pipeline"),
         );
         assert_eq!(
-            req.filters.get("category").and_then(|m| m.get("eq")).map(|s| s.as_str()),
+            req.filters
+                .get("category")
+                .and_then(|m| m.get("eq"))
+                .map(|s| s.as_str()),
             Some("model"),
         );
         assert_eq!(req.page_size, Some(10));
@@ -851,7 +859,9 @@ mod tests {
         assert_eq!(result_token["total_count"], 0);
         assert_eq!(result_token["artifacts"].as_array().unwrap().len(), 0);
 
-        let req = client.last_lookup_request().expect("lookup should have been called");
+        let req = client
+            .last_lookup_request()
+            .expect("lookup should have been called");
         assert_eq!(req.page_size, Some(50));
         assert_eq!(req.sort, Some("name".to_string()));
     }
@@ -966,10 +976,7 @@ mod tests {
             output.result["subscription_id"].as_str().unwrap(),
             "mock-sub-id",
         );
-        assert_eq!(
-            output.result["signal_place"].as_str().unwrap(),
-            "inbox",
-        );
+        assert_eq!(output.result["signal_place"].as_str().unwrap(), "inbox",);
     }
 
     #[tokio::test]
@@ -1012,11 +1019,7 @@ mod tests {
     #[tokio::test]
     async fn test_unsubscribe_handler_basic() {
         let client = Arc::new(MockCatalogueClient::new());
-        let handler = CatalogueUnsubscribeHandler::new(
-            client.clone(),
-            "handle",
-            "unsubscribed",
-        );
+        let handler = CatalogueUnsubscribeHandler::new(client.clone(), "handle", "unsubscribed");
 
         let mut inputs = HashMap::new();
         inputs.insert(
@@ -1039,10 +1042,7 @@ mod tests {
 
         assert_eq!(result_token["unsubscribed"].as_bool().unwrap(), true);
         // Original fields preserved
-        assert_eq!(
-            result_token["subscription_id"].as_str().unwrap(),
-            "sub-123",
-        );
+        assert_eq!(result_token["subscription_id"].as_str().unwrap(), "sub-123",);
 
         // Effect result
         assert_eq!(output.result["unsubscribed"].as_bool().unwrap(), true);
@@ -1055,11 +1055,7 @@ mod tests {
     #[tokio::test]
     async fn test_unsubscribe_handler_missing_subscription_id_returns_fatal() {
         let client = Arc::new(MockCatalogueClient::new());
-        let handler = CatalogueUnsubscribeHandler::new(
-            client.clone(),
-            "handle",
-            "unsubscribed",
-        );
+        let handler = CatalogueUnsubscribeHandler::new(client.clone(), "handle", "unsubscribed");
 
         let mut inputs = HashMap::new();
         inputs.insert("handle".to_string(), serde_json::json!({}));

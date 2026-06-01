@@ -206,6 +206,325 @@ pub(crate) fn validate_loop(
     Ok(())
 }
 
+/// LeaseScope: must carry a non-empty `lease.scheduler` alias (a lease is held
+/// against a specific allocator; an empty alias is a config error). The empty-
+/// body check lives in `lower_lease_scope` (it needs the children slice, which
+/// the lowering ctx carries and this structural validator does not).
+pub(crate) fn validate_lease_scope(
+    node: &WorkflowNode,
+    _graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::LeaseScope { lease, .. } = &node.data else {
+        unreachable!("validate_lease_scope on non-LeaseScope variant");
+    };
+    if lease.scheduler.trim().is_empty() {
+        return Err(CompileError::Validation(format!(
+            "lease scope '{}' must name a datacenter resource in `lease.scheduler` \
+             (a lease is held against a specific allocator)",
+            node.id
+        )));
+    }
+    Ok(())
+}
+
+/// The nearest `Loop` ancestor of `node` (walk the `parent_id` chain), or
+/// `None` if no enclosing Loop. Mirrors
+/// `lower::automated_step::enclosing_leased_scope_slug` but stops at the first
+/// `Loop` (a plain LeaseScope/Scope/Map between the node and the loop is walked
+/// through — the relevant boundary for control-token survival is the loop's
+/// continue cycle). Returns the loop node's id.
+fn enclosing_loop<'g>(graph: &'g WorkflowGraph, node: &WorkflowNode) -> Option<&'g WorkflowNode> {
+    let mut current = node.parent_id.as_deref();
+    while let Some(pid) = current {
+        let parent = graph.nodes.iter().find(|n| n.id == pid)?;
+        if matches!(parent.data, WorkflowNodeData::Loop { .. }) {
+            return Some(parent);
+        }
+        current = parent.parent_id.as_deref();
+    }
+    None
+}
+
+/// Reject a control-token read (`input.<field>` / `token.<field>`) of an
+/// upstream business field made by a node INSIDE a loop body.
+///
+/// Such a field rides the control token only on the loop's FIRST iteration:
+/// `lower_loop`'s `t_continue` rebuilds the token each pass (`#{ body:
+/// <body_out>, data: … }`), and any envelope-stripping body step (every
+/// AutomatedStep) drops it — so the read returns `undefined` (Rhai) /
+/// `AttributeError` (Python runner `_AccessibleDict`) on iteration 1+. The
+/// safe form is always the parked borrow `<producer_slug>.<field>` (a
+/// non-consuming read-arc into the producer's write-once `p_<id>_data`, which
+/// survives every iteration — exactly how `lp.iteration` / `bo.observations`
+/// are read in the loop demos). See docs/10 + docs/17.
+///
+/// SOUNDNESS: we flag a reference ONLY when its head segment is a leaf present
+/// on the loop's *enter* shape (`node_in[loop]`) and is NOT a genuine control
+/// leaf (`_*` / `task_id` / `status`) nor the loop's own `<slug>` namespace.
+/// A field produced *within* the body (intra-iteration) is not on the enter
+/// shape, so it is never mis-flagged; only the iteration-0-only fields are.
+/// On a structurally-unanalyzable draft we skip (other passes report first).
+pub(crate) fn validate_loop_body_control_refs(
+    graph: &WorkflowGraph,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), CompileError> {
+    use crate::compiler::borrow::planners::guard::{guard_refs, RefRoot};
+    use crate::compiler::python_refs::extract_python_refs;
+    use crate::compiler::token_shape::analyze;
+    use crate::compiler::token_shape::surface::is_control_leaf;
+
+    let Ok(report) = analyze(graph) else {
+        return Ok(());
+    };
+
+    for node in &graph.nodes {
+        let Some(loop_node) = enclosing_loop(graph, node) else {
+            continue;
+        };
+        let loop_slug = loop_node.slug();
+        let Some(enter) = report.node_in.get(&loop_node.id) else {
+            continue;
+        };
+
+        // (head_segment, exact-source-text) candidates that root on the
+        // control token. Rhai surfaces (Decision guards, nested-Loop conditions,
+        // End/Failure result mappings, Delay/Timeout durations) + Python source.
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        for src in crate::nodes::guard_rhai_sources(&node.data) {
+            for gref in guard_refs(src) {
+                if matches!(gref.root, RefRoot::Input) {
+                    if let Some(head) = gref.segs.first() {
+                        candidates.push((head.clone(), gref.referenced.clone()));
+                    }
+                }
+            }
+        }
+        if let Some(files) = inline_sources.get(&node.id) {
+            for src in files.values() {
+                for r in extract_python_refs(src) {
+                    if r.head == "input" || r.head == "token" {
+                        candidates.push((r.attr.clone(), format!("{}.{}", r.head, r.attr)));
+                    }
+                }
+            }
+        }
+
+        for (head, referenced) in candidates {
+            // Genuine control/identity leaves survive every iteration.
+            if is_control_leaf(&format!("input.{head}")) {
+                continue;
+            }
+            // The loop's own parked namespace (`input.<slug>.iteration`, or a
+            // Python `input.<slug>` access) is loop-stable by construction.
+            if head == loop_slug {
+                continue;
+            }
+            // Only flag a field that DEMONSTRABLY rode the loop's enter token as
+            // business data (present on `node_in[loop]`, not a control leaf).
+            if enter.resolve(std::slice::from_ref(&head)).is_none() {
+                continue;
+            }
+            // Resolve the owning parked producer for a precise suggestion.
+            let suggested = enter
+                .find_by_leaf(&head)
+                .and_then(|(_phys, _ty, prov)| {
+                    graph.nodes.iter().find(|n| n.id == prov.node_id).map(|p| {
+                        let pslug = p.slug();
+                        format!("{pslug}.{head}")
+                    })
+                })
+                .unwrap_or_else(|| format!("<producer>.{head}"));
+
+            return Err(CompileError::LoopBodyStaleControlRef {
+                node_id: node.id.clone(),
+                node_label: node.data.label().to_string(),
+                loop_label: loop_node.data.label().to_string(),
+                referenced,
+                suggested,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The borrowable-field model of `DatacenterLease`, derived from the SAME schema
+/// the engine validates grant tokens against (`pool_kind("datacenter")
+/// .lease_schema()`) — so the borrow-checker and the runtime can never drift.
+/// `core` is the flat top-level field set (minus `scheduler`); `per_flavor` maps
+/// each `scheduler` `oneOf` variant's `flavor` discriminator to the extra fields
+/// that variant carries.
+struct LeaseFieldModel {
+    core: std::collections::BTreeSet<String>,
+    per_flavor: HashMap<String, std::collections::BTreeSet<String>>,
+}
+
+fn lease_field_model() -> LeaseFieldModel {
+    use std::collections::BTreeSet;
+    let mut core = BTreeSet::new();
+    let mut per_flavor: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+    let Some(desc) = aithericon_resources::pool::pool_kind("datacenter") else {
+        return LeaseFieldModel { core, per_flavor };
+    };
+    let schema = (desc.lease_schema)();
+    let Some(props) = schema.get("properties").and_then(|v| v.as_object()) else {
+        return LeaseFieldModel { core, per_flavor };
+    };
+    for (name, sub) in props {
+        if name == "scheduler" {
+            // Each `oneOf` entry is a flavor variant: `properties.flavor.enum =
+            // ["<flavor>"]` + the variant's own fields.
+            if let Some(variants) = sub.get("oneOf").and_then(|v| v.as_array()) {
+                for v in variants {
+                    let Some(vprops) = v.get("properties").and_then(|p| p.as_object()) else {
+                        continue;
+                    };
+                    let Some(flavor) = vprops
+                        .get("flavor")
+                        .and_then(|f| f.get("enum"))
+                        .and_then(|e| e.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|s| s.as_str())
+                    else {
+                        continue;
+                    };
+                    let fields = vprops
+                        .keys()
+                        .filter(|k| k.as_str() != "flavor")
+                        .cloned()
+                        .collect();
+                    per_flavor.insert(flavor.to_string(), fields);
+                }
+            }
+        } else {
+            core.insert(name.clone());
+        }
+    }
+    LeaseFieldModel { core, per_flavor }
+}
+
+/// Borrow-check `<scope>.lease.<path>` references against the typed
+/// [`DatacenterLease`] of the scope's *resolved* datacenter flavor.
+///
+/// The token-shape pass parks the held lease as an `Any` namespace under
+/// `<scope>.lease` (the grant is filled by the allocator at runtime), so the
+/// read-arc resolver synthesises an arc for *any* dotted path under `.lease`
+/// without checking field names — historically `<scope>.lease.gpu_uuid` resolved
+/// purely because the namespace was opaque, not because the field existed.
+///
+/// This pass closes that hole. Because a LeaseScope's `lease.scheduler` alias
+/// resolves to a concrete datacenter resource at compile time, its
+/// `scheduler_flavor` is known here — so we can validate each borrowed lease
+/// field against the typed core ∪ the resolved flavor's `scheduler` variant, and
+/// reject anything else (`LeaseFieldUnknown`). Conservative: a scope whose alias
+/// doesn't resolve (flavor unknown) is skipped — a different error already fires
+/// for the unresolved resource.
+pub(crate) fn validate_lease_field_refs(
+    graph: &WorkflowGraph,
+    known_resources: &crate::compiler::resource_refs::KnownResources,
+) -> Result<(), CompileError> {
+    use crate::compiler::borrow::planners::guard::{guard_refs, RefRoot};
+    use crate::models::template::WorkflowNodeData;
+
+    // Slug → (label, flavor) for every LeaseScope whose datacenter alias resolves.
+    let mut holders: HashMap<String, (String, String)> = HashMap::new();
+    for node in &graph.nodes {
+        let WorkflowNodeData::LeaseScope { lease, .. } = &node.data else {
+            continue;
+        };
+        let alias = lease.scheduler.trim();
+        let Some(flavor) = known_resources
+            .get(alias)
+            .and_then(|r| r.public_config.get("scheduler_flavor"))
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        holders.insert(
+            node.slug().to_string(),
+            (node.data.label().to_string(), flavor.to_string()),
+        );
+    }
+    if holders.is_empty() {
+        return Ok(());
+    }
+
+    let model = lease_field_model();
+
+    for node in &graph.nodes {
+        for src in crate::nodes::guard_rhai_sources(&node.data) {
+            for gref in guard_refs(src) {
+                let RefRoot::Qualified(slug) = &gref.root else {
+                    continue;
+                };
+                // A lease borrow is `<scope_slug>.lease.<…>` on a known holder.
+                let Some((scope_label, flavor)) = holders.get(slug) else {
+                    continue;
+                };
+                if gref.segs.first().map(String::as_str) != Some("lease") {
+                    continue;
+                }
+                if lease_field_violation(&model, flavor, &gref.segs).is_some() {
+                    return Err(CompileError::LeaseFieldUnknown {
+                        node_id: node.id.clone(),
+                        node_label: node.data.label().to_string(),
+                        scope_label: scope_label.clone(),
+                        flavor: flavor.clone(),
+                        referenced: gref.referenced.clone(),
+                        allowed: lease_allowed_list(&model, flavor),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns `Some(())` when the lease path (`segs` = `["lease", …]`) names a field
+/// the typed lease for `flavor` does not carry. `None` = a valid borrow (incl.
+/// borrowing the whole `lease` or whole `scheduler` object).
+fn lease_field_violation(model: &LeaseFieldModel, flavor: &str, segs: &[String]) -> Option<()> {
+    // segs[0] == "lease"; the field is segs[1], scheduler sub-field segs[2].
+    let field = match segs.get(1) {
+        None => return None, // `<scope>.lease` — the whole typed lease.
+        Some(f) => f.as_str(),
+    };
+    if field == "scheduler" {
+        let sub = match segs.get(2) {
+            None => return None,          // whole `scheduler` object.
+            Some(s) => s.as_str(),
+        };
+        if sub == "flavor" {
+            return None; // discriminator is always present.
+        }
+        return match model.per_flavor.get(flavor) {
+            Some(fields) if fields.contains(sub) => None,
+            // Unknown flavor in the model → can't prove a violation; allow.
+            None => None,
+            Some(_) => Some(()),
+        };
+    }
+    // Core field (deeper segments into a scalar are unusual but not worth
+    // flagging — the field itself is valid).
+    if model.core.contains(field) {
+        return None;
+    }
+    Some(())
+}
+
+/// Human-readable list of borrowable lease fields for `flavor`, for the error.
+fn lease_allowed_list(model: &LeaseFieldModel, flavor: &str) -> String {
+    let mut parts: Vec<String> = model.core.iter().cloned().collect();
+    parts.push("scheduler.flavor".to_string());
+    if let Some(fields) = model.per_flavor.get(flavor) {
+        for f in fields {
+            parts.push(format!("scheduler.{f}"));
+        }
+    }
+    parts.join(", ")
+}
+
 /// Delay: non-empty `durationMsExpr` (parse + ref-resolution happens in
 /// `validate_guards` alongside other Rhai surfaces).
 pub(crate) fn validate_delay(
@@ -266,41 +585,20 @@ pub(crate) fn validate_timeout(
     Ok(())
 }
 
-/// Map: non-empty `itemsRef` + `resultVar`, plus a body — at least one
-/// outgoing edge with `sourceHandle="body_in"` AND at least one incoming edge
-/// with `targetHandle="body_out"` (same body-attach shape as Loop/Timeout).
-/// The structural body-presence check here is the publish-time mirror of the
-/// `MapEmpty` lowering gate (which counts `parent_id == map.id` children).
-/// Structural validation for a `StreamConsumer`: exactly one inbound `stream`
+
+/// Structural validation for a `StreamFold`: exactly one inbound `stream`
 /// handle edge + exactly one inbound `control` handle edge (the producer's data
 /// Signal place + its EOS/completion token). A `Custom` reduce expression must
-/// parse as a Rhai expression. Per `dispatch` mode: `Rhai` must have NO body
-/// edges; `SequentialBody`/`ParallelBody` require a body (body_in+body_out edges,
-/// a valid `resultVar`, a supported body terminal kind, and no enclosing Map);
-/// `LiveReduce` is rejected (Phase-3 capability).
-pub(crate) fn validate_stream_consumer(
+/// parse as a Rhai expression. StreamFold has no body — there is nothing more
+/// to wire.
+pub(crate) fn validate_stream_fold(
     node: &WorkflowNode,
     graph: &WorkflowGraph,
     _wg: &WorkflowDiGraph<'_>,
 ) -> Result<(), CompileError> {
-    use crate::models::template::StreamDispatch;
-    let WorkflowNodeData::StreamConsumer {
-        reduce,
-        result_var,
-        dispatch,
-        ..
-    } = &node.data
-    else {
-        unreachable!("validate_stream_consumer on non-StreamConsumer variant");
+    let WorkflowNodeData::StreamFold { reduce, .. } = &node.data else {
+        unreachable!("validate_stream_fold on non-StreamFold variant");
     };
-
-    // `LiveReduce` is not supported this phase — reject cleanly (same verdict the
-    // lowering raises, surfaced at publish so the editor rings the node).
-    if matches!(dispatch, StreamDispatch::LiveReduce) {
-        return Err(CompileError::StreamConsumerLiveReduceUnsupported {
-            node_id: node.id.clone(),
-        });
-    }
 
     // Count inbound edges per target handle — exactly one `stream` and one
     // `control` are required (a missing/duplicated handle is a wiring bug).
@@ -317,13 +615,13 @@ pub(crate) fn validate_stream_consumer(
         }
     }
     if stream_edges != 1 {
-        return Err(CompileError::StreamConsumerMissingHandle {
+        return Err(CompileError::StreamFoldMissingHandle {
             node_id: node.id.clone(),
             handle: "stream",
         });
     }
     if control_edges != 1 {
-        return Err(CompileError::StreamConsumerMissingHandle {
+        return Err(CompileError::StreamFoldMissingHandle {
             node_id: node.id.clone(),
             handle: "control",
         });
@@ -334,82 +632,12 @@ pub(crate) fn validate_stream_consumer(
     if let StreamReduce::Custom { expr } = reduce {
         let engine = rhai::Engine::new();
         if let Err(err) = engine.compile_expression(expr) {
-            return Err(CompileError::StreamConsumerInvalidReduce {
+            return Err(CompileError::StreamFoldInvalidReduce {
                 node_id: node.id.clone(),
                 expr: expr.clone(),
                 detail: format!("{err}"),
             });
         }
-    }
-
-    // ── Per-dispatch body wiring ────────────────────────────────────────────
-    let has_body_in = graph
-        .edges
-        .iter()
-        .any(|e| e.source == node.id && e.source_handle.as_deref() == Some("body_in"));
-    let has_body_out = graph
-        .edges
-        .iter()
-        .any(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"));
-
-    match dispatch {
-        // `Rhai`: pure fold, no body. Any body wiring is a config error.
-        StreamDispatch::Rhai => {
-            if has_body_in || has_body_out {
-                return Err(CompileError::StreamConsumerRhaiHasBody {
-                    node_id: node.id.clone(),
-                });
-            }
-        }
-        // Body modes: require the body, a valid resultVar, a supported terminal,
-        // and no enclosing Map. Mirrors `validate_map`.
-        StreamDispatch::SequentialBody | StreamDispatch::ParallelBody => {
-            if result_var.trim().is_empty() || !is_rhai_ident(result_var.trim()) {
-                return Err(CompileError::MapResultVarInvalid {
-                    node_id: node.id.clone(),
-                    result_var: result_var.clone(),
-                });
-            }
-            // Nested inside a Map is unsupported (single scatter scope only).
-            if let Some(outer_id) = enclosing_map(graph, node) {
-                return Err(CompileError::StreamConsumerNestedInMap {
-                    node_id: node.id.clone(),
-                    outer_id,
-                });
-            }
-            if !has_body_in || !has_body_out {
-                return Err(CompileError::StreamConsumerBodyEmpty {
-                    node_id: node.id.clone(),
-                });
-            }
-            // Body-terminal kind gate: the node that SOURCES the `body_out` edge
-            // must be a parked-producer kind that emits a
-            // `detail.outputs.<resultVar>` envelope the gather can lift +
-            // correlate — same constraint as a Map body terminal.
-            let by_id: HashMap<&str, &WorkflowNode> =
-                graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-            for e in graph
-                .edges
-                .iter()
-                .filter(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"))
-            {
-                let Some(term) = by_id.get(e.source.as_str()) else {
-                    continue; // dangling source — reachability error surfaces elsewhere
-                };
-                if matches!(term.data, WorkflowNodeData::Map { .. }) {
-                    continue; // nested Map: deferred to that Map's own MapNested check
-                }
-                if !map_body_terminal_supported(&term.data) {
-                    return Err(CompileError::StreamConsumerBodyUnsupported {
-                        node_id: node.id.clone(),
-                        child_id: term.id.clone(),
-                        kind: term.data.type_name().to_string(),
-                    });
-                }
-            }
-        }
-        // Already rejected above.
-        StreamDispatch::LiveReduce => unreachable!("LiveReduce rejected above"),
     }
 
     Ok(())
@@ -423,12 +651,42 @@ pub(crate) fn validate_map(
     let WorkflowNodeData::Map {
         items_ref,
         result_var,
+        stream_source,
         ..
     } = &node.data
     else {
         unreachable!("validate_map on non-Map variant");
     };
-    if items_ref.trim().is_empty() {
+    if *stream_source {
+        // Streaming Map: no itemsRef; instead require exactly one inbound
+        // `stream` edge + one `control` edge (the producer's chunk Signal place
+        // + its EOS/count token), mirroring StreamFold. The shared body /
+        // nested / terminal gates below still apply.
+        let mut stream_edges = 0usize;
+        let mut control_edges = 0usize;
+        for e in &graph.edges {
+            if e.target != node.id {
+                continue;
+            }
+            match e.target_handle.as_deref() {
+                Some("stream") => stream_edges += 1,
+                Some("control") => control_edges += 1,
+                _ => {}
+            }
+        }
+        if stream_edges != 1 {
+            return Err(CompileError::Validation(format!(
+                "streaming map '{}' requires exactly one inbound `stream` edge, found {stream_edges}",
+                node.id
+            )));
+        }
+        if control_edges != 1 {
+            return Err(CompileError::Validation(format!(
+                "streaming map '{}' requires exactly one inbound `control` edge, found {control_edges}",
+                node.id
+            )));
+        }
+    } else if items_ref.trim().is_empty() {
         return Err(CompileError::Validation(format!(
             "map '{}' must have a non-empty itemsRef",
             node.id
@@ -531,7 +789,12 @@ fn map_body_terminal_supported(data: &WorkflowNodeData) -> bool {
                 deployment_model,
                 crate::models::template::DeploymentModel::Executor { .. }
             ) && crate::backends::lookup(execution_spec.backend_type)
-                .map(|d| matches!(d.dispatch_mode(), crate::backends::DispatchMode::ExecutorJob))
+                .map(|d| {
+                    matches!(
+                        d.dispatch_mode(),
+                        crate::backends::DispatchMode::ExecutorJob
+                    )
+                })
                 .unwrap_or(false)
         }
         WorkflowNodeData::Agent { .. } | WorkflowNodeData::SubWorkflow { .. } => true,
@@ -615,6 +878,116 @@ pub(crate) fn validate_parallel_split(
 /// only that token's data, not a merge. Legal Petri, rarely the intent. Warn
 /// (don't fail — existing graphs rely on it); the editor surfaces the same
 /// caveat per-node in the step reference panel.
+/// Structural validation for an `AutomatedStep`. Runs the streamInput reducer
+/// checks when `stream_input` is set, otherwise falls through to the
+/// unmerged-fan-in warning. A `streamInput` step legitimately has two inbound
+/// edges (`stream` + control `in`), so the fan-in warning is skipped for it.
+pub(crate) fn validate_automated_step(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    use crate::models::template::DeploymentModel;
+    let WorkflowNodeData::AutomatedStep {
+        stream_input,
+        deployment_model,
+        ..
+    } = &node.data
+    else {
+        unreachable!("validate_automated_step on non-AutomatedStep variant");
+    };
+
+    if !*stream_input {
+        return warn_unmerged_fan_in(node, graph, wg);
+    }
+
+    let err = |detail: String| CompileError::StreamInputInvalid {
+        node_id: node.id.clone(),
+        detail,
+    };
+
+    // Inline executor only — pooled/leased/scheduled bypass the inline lifecycle
+    // that plumbs the IPC chunk feed, so a streamInput flag there would silently
+    // produce a broken net.
+    match deployment_model {
+        DeploymentModel::Executor { pool: None } => {}
+        DeploymentModel::Executor { pool: Some(_) } => {
+            return Err(err(
+                "streamInput is unsupported on a pooled (token_pool) deployment — \
+                 use a plain inline Executor step"
+                    .to_string(),
+            ));
+        }
+        DeploymentModel::Scheduled { .. } => {
+            return Err(err(
+                "streamInput is unsupported on a Scheduled (cluster) deployment — \
+                 use a plain inline Executor step"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Exactly one inbound `stream` edge + one control `in` edge.
+    let mut stream_src: Option<&str> = None;
+    let mut stream_edges = 0usize;
+    let mut control_src: Option<&str> = None;
+    let mut control_edges = 0usize;
+    for e in &graph.edges {
+        if e.target != node.id {
+            continue;
+        }
+        match e.target_handle.as_deref() {
+            Some("stream") => {
+                stream_edges += 1;
+                stream_src = Some(e.source.as_str());
+                if e.source_handle.as_deref() != Some("stream") {
+                    return Err(err(
+                        "the `stream` edge must come from a producer's `stream` output handle"
+                            .to_string(),
+                    ));
+                }
+            }
+            Some("in") => {
+                control_edges += 1;
+                control_src = Some(e.source.as_str());
+            }
+            _ => {}
+        }
+    }
+    if stream_edges != 1 {
+        return Err(err(format!(
+            "expected exactly one inbound `stream` edge, found {stream_edges}"
+        )));
+    }
+    if control_edges != 1 {
+        return Err(err(format!(
+            "expected exactly one inbound control `in` edge (the EOF trigger), found {control_edges}"
+        )));
+    }
+    // The stream + control edges must originate from the SAME producer, and that
+    // producer must be a `streamOutput` AutomatedStep.
+    if stream_src != control_src {
+        return Err(err(
+            "the `stream` and control `in` edges must come from the same streaming producer"
+                .to_string(),
+        ));
+    }
+    let producer = graph.nodes.iter().find(|n| Some(n.id.as_str()) == stream_src);
+    match producer.map(|n| &n.data) {
+        Some(WorkflowNodeData::AutomatedStep {
+            stream_output: true,
+            ..
+        }) => {}
+        _ => {
+            return Err(err(
+                "the upstream producer must be an AutomatedStep with streamOutput=true".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn warn_unmerged_fan_in(
     node: &WorkflowNode,
     _graph: &WorkflowGraph,
@@ -872,7 +1245,6 @@ pub fn node_output_fields(
             }
             WorkflowNodeData::Loop {
                 accumulators,
-                lease,
                 ..
             } => {
                 let mut fields = std::collections::BTreeMap::new();
@@ -881,14 +1253,6 @@ pub fn node_output_fields(
                 // hatch (mirrors the `TokenShape::Any` declared shape).
                 for acc in accumulators {
                     fields.insert(acc.var.clone(), FieldKind::Json);
-                }
-                // L3: a loop-scoped lease parks the held grant under `lease`
-                // (incl. `alloc_id`/`gpu_uuid`/…) in the same `p_<loop>_data`
-                // envelope. Declare it as a `Json` namespace so body iterations
-                // and downstream blocks borrow `<loop>.lease.<field>` (e.g.
-                // `<loop>.lease.alloc_id`) through the standard read-arc pipeline.
-                if lease.is_some() {
-                    fields.insert("lease".to_string(), FieldKind::Json);
                 }
                 out.insert(node.id.clone(), fields);
             }
@@ -1015,6 +1379,7 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: DeploymentModel::default(),
                 stream_output: false,
+                stream_input: false,
             },
             parent_id: None,
             width: None,
@@ -1041,7 +1406,11 @@ mod tests {
         };
         let err = validate_schema_refs(&graph).expect_err("unresolved ref must fail");
         match err {
-            CompileError::SchemaRefUnresolved { node_id, path, message } => {
+            CompileError::SchemaRefUnresolved {
+                node_id,
+                path,
+                message,
+            } => {
                 assert_eq!(node_id, "extract");
                 assert_eq!(path, "/response_format/schema");
                 assert!(message.contains("Missing"));
@@ -1129,11 +1498,12 @@ pub(crate) fn validate_triggers(graph: &WorkflowGraph) -> Result<(), CompileErro
         // Resolve target port by handle. Triggers always need an explicit
         // `target_handle` — the edge validation in `validate_edges_typed`
         // skips Trigger sources, so we re-enforce target_handle here.
-        let target_handle = edge.target_handle.as_deref().ok_or_else(|| {
-            CompileError::MissingTargetHandle {
-                edge_id: edge.id.clone(),
-            }
-        })?;
+        let target_handle =
+            edge.target_handle
+                .as_deref()
+                .ok_or_else(|| CompileError::MissingTargetHandle {
+                    edge_id: edge.id.clone(),
+                })?;
 
         let Some(tgt_node) = nodes_by_id.get(edge.target.as_str()) else {
             continue;
@@ -1250,12 +1620,16 @@ fn parse_repeater_ref(raw: &str) -> Result<ParsedRepeaterRef<'_>, &'static str> 
         return Err("empty");
     }
     // Find `[*]`. Reject nested iteration (two or more `[*]`s).
-    let first = trimmed.find("[*]").ok_or("missing `[*]` iteration boundary")?;
+    let first = trimmed
+        .find("[*]")
+        .ok_or("missing `[*]` iteration boundary")?;
     if trimmed[first + 3..].contains("[*]") {
         return Err("nested `[*]` is not supported (NestedIterationUnsupported)");
     }
     let before = &trimmed[..first];
-    let after = trimmed[first + 3..].strip_prefix('.').unwrap_or(&trimmed[first + 3..]);
+    let after = trimmed[first + 3..]
+        .strip_prefix('.')
+        .unwrap_or(&trimmed[first + 3..]);
     // `before` must be `<head>.<seg>...` — at least head + one seg.
     let dot = before.find('.').ok_or("expected `<slug>.<field>[*]`")?;
     let head = &before[..dot];
@@ -1393,8 +1767,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                 let resolved = shape.and_then(|s| {
                     let head_seg = parsed.pre[0];
                     let (phys, _ty, _prov) = s.find_by_leaf(head_seg)?;
-                    let mut segs: Vec<String> =
-                        phys.split('.').map(str::to_string).collect();
+                    let mut segs: Vec<String> = phys.split('.').map(str::to_string).collect();
                     for extra in &parsed.pre[1..] {
                         segs.push((*extra).to_string());
                     }
@@ -1405,9 +1778,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                     Some(TokenShape::Array(_))
                     | Some(TokenShape::Any)
                     | Some(TokenShape::Opaque(_))
-                    | Some(TokenShape::Scalar(
-                        crate::compiler::token_shape::ScalarTy::Json,
-                    )) => {
+                    | Some(TokenShape::Scalar(crate::compiler::token_shape::ScalarTy::Json)) => {
                         // Array (canonical), Any/Opaque (deferred to runtime),
                         // or Json (deliberately opaque — the producer declared
                         // arbitrary JSON which the executor will deliver as
@@ -1425,11 +1796,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                             node_id: node.id.clone(),
                             ref_value: items_ref.clone(),
                             slug: parsed.head.to_string(),
-                            available: slugs
-                                .all_slugs()
-                                .iter()
-                                .map(|s| s.to_string())
-                                .collect(),
+                            available: slugs.all_slugs().iter().map(|s| s.to_string()).collect(),
                         });
                     }
                 }
@@ -1465,8 +1832,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
                             node_id: node.id.clone(),
                             site: "item_label_ref".to_string(),
                             ref_value: label_ref.clone(),
-                            message: "expected a `[*].<field>` per-element label path"
-                                .to_string(),
+                            message: "expected a `[*].<field>` per-element label path".to_string(),
                         });
                     }
                 }
@@ -1632,7 +1998,13 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
     // Short-circuit when no HumanTask carries a stepsRef — avoids the analyze
     // pass on graphs that don't use the dynamic-form opt-in.
     if !graph.nodes.iter().any(|n| {
-        matches!(&n.data, WorkflowNodeData::HumanTask { steps_ref: Some(_), .. })
+        matches!(
+            &n.data,
+            WorkflowNodeData::HumanTask {
+                steps_ref: Some(_),
+                ..
+            }
+        )
     }) {
         return Ok(());
     }
@@ -1641,7 +2013,11 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
     let slugs = slug_index(graph)?;
 
     for node in &graph.nodes {
-        let WorkflowNodeData::HumanTask { steps_ref: Some(raw), .. } = &node.data else {
+        let WorkflowNodeData::HumanTask {
+            steps_ref: Some(raw),
+            ..
+        } = &node.data
+        else {
             continue;
         };
 
@@ -1715,8 +2091,10 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
                         return Err(CompileError::HumanTaskStepsRefNotArray {
                             node_id: node.id.clone(),
                             ref_value: raw.clone(),
-                            actual_kind: format!("Schema(type={})",
-                                v.get("type").and_then(|t| t.as_str()).unwrap_or("?")),
+                            actual_kind: format!(
+                                "Schema(type={})",
+                                v.get("type").and_then(|t| t.as_str()).unwrap_or("?")
+                            ),
                         });
                     }
                 }
@@ -1836,14 +2214,20 @@ mod repeater_tests {
     fn rejects_empty_output_slug() {
         let g = graph_with_repeater("extract.tasks[*]", None, "");
         let err = validate_repeaters(&g).unwrap_err();
-        assert!(matches!(err, CompileError::RepeaterOutputSlugInvalid { .. }));
+        assert!(matches!(
+            err,
+            CompileError::RepeaterOutputSlugInvalid { .. }
+        ));
     }
 
     #[test]
     fn rejects_non_ident_output_slug() {
         let g = graph_with_repeater("extract.tasks[*]", None, "9bad");
         let err = validate_repeaters(&g).unwrap_err();
-        assert!(matches!(err, CompileError::RepeaterOutputSlugInvalid { .. }));
+        assert!(matches!(
+            err,
+            CompileError::RepeaterOutputSlugInvalid { .. }
+        ));
     }
 
     #[test]
@@ -1891,11 +2275,7 @@ mod repeater_tests {
 
     #[test]
     fn rejects_label_ref_without_post_segment() {
-        let g = graph_with_repeater(
-            "extract.tasks[*]",
-            Some("extract.tasks[*]"),
-            "review_tasks",
-        );
+        let g = graph_with_repeater("extract.tasks[*]", Some("extract.tasks[*]"), "review_tasks");
         let err = validate_repeaters(&g).unwrap_err();
         assert!(matches!(err, CompileError::RepeaterRefMalformed { .. }));
     }

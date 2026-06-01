@@ -95,10 +95,7 @@ where
     /// # Arguments
     /// * `service` - The Petri net service
     /// * `consumer` - JetStream consumer for `petri.commands.inject.token`
-    pub fn new(
-        service: Arc<PetriNetService<E, T, S>>,
-        consumer: PullConsumer,
-    ) -> Self {
+    pub fn new(service: Arc<PetriNetService<E, T, S>>, consumer: PullConsumer) -> Self {
         Self {
             service,
             consumer,
@@ -334,14 +331,8 @@ where
     T: TopologyRepository + 'static,
     S: StateProjection + 'static,
 {
-    pub fn new(
-        service: Arc<PetriNetService<E, T, S>>,
-        consumer: PullConsumer,
-    ) -> Self {
-        Self {
-            service,
-            consumer,
-        }
+    pub fn new(service: Arc<PetriNetService<E, T, S>>, consumer: PullConsumer) -> Self {
+        Self { service, consumer }
     }
 
     pub async fn run(self) -> Result<(), ListenerError> {
@@ -485,14 +476,8 @@ where
     T: TopologyRepository + 'static,
     S: StateProjection + 'static,
 {
-    pub fn new(
-        service: Arc<PetriNetService<E, T, S>>,
-        consumer: PullConsumer,
-    ) -> Self {
-        Self {
-            service,
-            consumer,
-        }
+    pub fn new(service: Arc<PetriNetService<E, T, S>>, consumer: PullConsumer) -> Self {
+        Self { service, consumer }
     }
 
     pub async fn run(self) -> Result<(), ListenerError> {

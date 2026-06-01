@@ -96,8 +96,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
             .fields
             .iter()
             .map(|f| {
-                let k = serde_json::to_string(&f.name)
-                    .unwrap_or_else(|_| "\"\"".to_string());
+                let k = serde_json::to_string(&f.name).unwrap_or_else(|_| "\"\"".to_string());
                 format!("{k}: __v[{k}]")
             })
             .collect();
@@ -123,8 +122,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
                 .fields
                 .iter()
                 .map(|f| {
-                    let k = serde_json::to_string(&f.name)
-                        .unwrap_or_else(|_| "\"\"".to_string());
+                    let k = serde_json::to_string(&f.name).unwrap_or_else(|_| "\"\"".to_string());
                     format!("{k}: __v[{k}]")
                 })
                 .collect();
@@ -171,14 +169,10 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
     // the spawn handler injects `parent_net_id` + `reply_place`/`failure_place`
     // so the child's reply_out/fail_out route back here by id at runtime —
     // exactly why the outbox below uses the dynamic `$result.child_net_id`.
-    let p_reply: PlaceHandle<DynamicToken> = ctx.bridge_in(
-        reply_place_id.clone(),
-        format!("{label} - Reply"),
-    );
-    let p_failure: PlaceHandle<DynamicToken> = ctx.bridge_in(
-        failure_place_id.clone(),
-        format!("{label} - Failure"),
-    );
+    let p_reply: PlaceHandle<DynamicToken> =
+        ctx.bridge_in(reply_place_id.clone(), format!("{label} - Reply"));
+    let p_failure: PlaceHandle<DynamicToken> =
+        ctx.bridge_in(failure_place_id.clone(), format!("{label} - Failure"));
     let p_outbox: PlaceHandle<DynamicToken> = ctx.bridge_out_labeled(
         format!("p_{id}_outbox"),
         format!("{label} - Outbox"),
@@ -259,9 +253,7 @@ pub(crate) fn lower_subworkflow(cx: &mut LoweringCtx) -> Result<(), CompileError
         .auto_output("error", p_error)
         .logic(r#"#{ error: reply }"#);
     } else {
-        let msg = format!(
-            "sub-workflow '{label}' child failed and no error handler is wired"
-        );
+        let msg = format!("sub-workflow '{label}' child failed and no error handler is wired");
         ctx.transition(
             format!("t_{id}_fail_deadend"),
             format!("{label} - Child Failure (no handler — crash net)"),

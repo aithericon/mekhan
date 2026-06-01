@@ -120,7 +120,6 @@ impl AdapterScheduler {
                 );
             }
         }
-
     }
 
     /// Check if a place has any adapters registered.

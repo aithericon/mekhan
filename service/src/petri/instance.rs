@@ -204,18 +204,108 @@ pub fn parameterize_air(
     Ok(air)
 }
 
+/// Errors returned by `parameterize_for_place` when the named AIR place
+/// can't be seeded with the supplied token.
+#[derive(Debug, thiserror::Error)]
+pub enum ParameterizeForPlaceError {
+    /// `air_json` doesn't have a `places` array, or `places` is not an array.
+    #[error("AIR has no `places` array")]
+    NoPlacesArray,
+
+    /// The named place id was not found among `air_json.places[].id`.
+    #[error("AIR place '{0}' not found")]
+    PlaceNotFound(String),
+}
+
+/// Parameterize the compiled AIR JSON for a pre-AIR (graph-less) instance.
+///
+/// Used by clinic-style headless templates pushed through
+/// `POST /api/templates/apply-air`: the trigger names an AIR place id
+/// directly (no Start block, no graph-level port shape to validate
+/// against), and the fire payload is seeded into that place's
+/// `initial_tokens` after the same template-string substitution +
+/// system-field injection the graph path performs.
+///
+/// Differences from [`parameterize_air`]:
+/// - No `start_tokens` validation: the caller supplies a single opaque
+///   token (clinic embeds task_kind / required_capabilities / etc. as
+///   transition.logic.config in the AIR — those are downstream of the
+///   place-seeding step).
+/// - No `WorkflowGraph` consulted: the graph is a Trigger-only stub.
+/// - The named place must exist in the AIR; missing-place is an error
+///   the caller surfaces (vs the graph path's "missing required field").
+pub fn parameterize_for_place(
+    air_json: &Value,
+    instance_id: Uuid,
+    template_id: Uuid,
+    template_version: i32,
+    created_by: Uuid,
+    air_target_place_id: &str,
+    token: &Value,
+) -> Result<Value, ParameterizeForPlaceError> {
+    let now = Utc::now().to_rfc3339();
+
+    let mut air_str = serde_json::to_string(air_json).unwrap_or_default();
+    air_str = air_str.replace("__INSTANCE_ID__", &instance_id.to_string());
+    air_str = air_str.replace("__TIMESTAMP__", &now);
+    air_str = air_str.replace("__TEMPLATE_ID__", &template_id.to_string());
+    let mut air: Value = serde_json::from_str(&air_str).unwrap_or(json!({}));
+
+    let places = air
+        .get_mut("places")
+        .and_then(|p| p.as_array_mut())
+        .ok_or(ParameterizeForPlaceError::NoPlacesArray)?;
+
+    // Build the seeded token: clone the caller's payload (defaulting to an
+    // empty object if not a JSON object — clinic AIR transitions consume
+    // opaque tokens, no port-shape gate here) + inject system fields.
+    let mut seeded = match token {
+        Value::Object(o) => o.clone(),
+        _ => Map::new(),
+    };
+    seeded.insert("_instance_id".to_string(), json!(instance_id.to_string()));
+    seeded.insert("_template_id".to_string(), json!(template_id.to_string()));
+    seeded.insert("_template_version".to_string(), json!(template_version));
+    seeded.insert("_created_at".to_string(), json!(now));
+    seeded.insert("_created_by".to_string(), json!(created_by.to_string()));
+    let seeded_token = Value::Object(seeded);
+
+    let mut found = false;
+    for place in places.iter_mut() {
+        if place.get("id").and_then(|v| v.as_str()) == Some(air_target_place_id) {
+            if let Some(obj) = place.as_object_mut() {
+                obj.insert("initial_tokens".to_string(), Value::Array(vec![seeded_token]));
+            }
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        return Err(ParameterizeForPlaceError::PlaceNotFound(
+            air_target_place_id.to_string(),
+        ));
+    }
+
+    Ok(air)
+}
+
 /// Deploy a workflow instance to petri-lab.
 ///
 /// 1. Parameterize AIR JSON
-/// 2. Deploy scenario to petri-lab
+/// 2. Deploy scenario + dispatch options to petri-lab
 /// 3. Set run mode to "running"
 pub async fn deploy_instance(
     client: &PetriClient,
     net_id: &str,
     air_json: &Value,
+    dispatch_options: petri_api_types::DispatchOptions,
+    net_parameters: Option<Value>,
 ) -> Result<(), PetriError> {
     // Deploy the scenario
-    client.deploy_scenario(net_id, air_json).await?;
+    client
+        .deploy_scenario(net_id, air_json, dispatch_options, net_parameters)
+        .await?;
 
     // Start execution
     client
@@ -275,7 +365,10 @@ mod tests {
                 label: None,
                 edge_type: "sequence".to_string(),
             }],
-            viewport: None, instance_concurrency: Default::default(), definitions: Default::default(), default_scheduler: None,
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
         }
     }
 

@@ -224,7 +224,13 @@ pub fn python_job_rhai_with_var(
     outputs: &[JobOutput],
 ) -> String {
     python_job_rhai_with_template(
-        input_var, job_id_expr, model_name, None, config, inputs, outputs,
+        input_var,
+        job_id_expr,
+        model_name,
+        None,
+        config,
+        inputs,
+        outputs,
     )
 }
 
@@ -326,15 +332,25 @@ pub fn python_job_rhai_with_template(
         virtualenv = config.virtualenv,
         sdk = config.sdk,
         requirements = reqs_rhai,
-        python_field = config.python.as_ref().map_or(String::new(), |p| format!(",\n                            python: \"{p}\"")),
+        python_field = config.python.as_ref().map_or(String::new(), |p| format!(
+            ",\n                            python: \"{p}\""
+        )),
         nix_field = config.nix_packages.as_ref().map_or(String::new(), |pkgs| {
-            let items = pkgs.iter().map(|p| format!("\"{p}\"")).collect::<Vec<_>>().join(", ");
+            let items = pkgs
+                .iter()
+                .map(|p| format!("\"{p}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(",\n                            nix: #{{ packages: [{items}] }}")
         }),
         inputs = inputs_rhai,
         outputs = outputs_rhai,
         stream_events_field = config.stream_events.as_ref().map_or(String::new(), |cats| {
-            let items = cats.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+            let items = cats
+                .iter()
+                .map(|c| format!("\"{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(",\n                        stream_events: [{items}]")
         }),
     )
@@ -346,7 +362,13 @@ pub fn python_job_rhai_with_template(
 pub fn script_var_name(filename: &str) -> String {
     let sanitized: String = filename
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("__script_{sanitized}")
 }
@@ -430,9 +452,9 @@ pub fn python_job_rhai_with_dynamic(
         )
     };
 
-    let filter_guard = dynamic.filter_expr.map_or(String::new(), |expr| {
-        format!("\n            if {expr} {{")
-    });
+    let filter_guard = dynamic
+        .filter_expr
+        .map_or(String::new(), |expr| format!("\n            if {expr} {{"));
     let filter_close = if dynamic.filter_expr.is_some() {
         "\n            }"
     } else {
@@ -490,14 +512,24 @@ pub fn python_job_rhai_with_dynamic(
         virtualenv = config.virtualenv,
         sdk = config.sdk,
         requirements = reqs_rhai,
-        python_field = config.python.as_ref().map_or(String::new(), |p| format!(",\n                            python: \"{p}\"")),
+        python_field = config.python.as_ref().map_or(String::new(), |p| format!(
+            ",\n                            python: \"{p}\""
+        )),
         nix_field = config.nix_packages.as_ref().map_or(String::new(), |pkgs| {
-            let items = pkgs.iter().map(|p| format!("\"{p}\"")).collect::<Vec<_>>().join(", ");
+            let items = pkgs
+                .iter()
+                .map(|p| format!("\"{p}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(",\n                            nix: #{{ packages: [{items}] }}")
         }),
         outputs = outputs_rhai,
         stream_events_field = config.stream_events.as_ref().map_or(String::new(), |cats| {
-            let items = cats.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+            let items = cats
+                .iter()
+                .map(|c| format!("\"{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(",\n                        stream_events: [{items}]")
         }),
     )
@@ -546,8 +578,10 @@ impl<'a, T: Token> PythonJobDispatch<'a, T> {
         // Stage script as an artifact (preferred) or embed as Rhai variable (legacy)
         if let Some(local_path) = &self.python.script_local_path {
             // New path: stage file for upload, reference by storage_path
-            let storage_path =
-                ctx.stage_file(format!("scripts/{}", self.python.script_filename), local_path);
+            let storage_path = ctx.stage_file(
+                format!("scripts/{}", self.python.script_filename),
+                local_path,
+            );
             self.inputs.insert(
                 0,
                 JobInput::storage_path_literal(&self.python.script_filename, &storage_path),
@@ -556,10 +590,8 @@ impl<'a, T: Token> PythonJobDispatch<'a, T> {
             // Legacy path: embed script content as a Rhai variable
             let var_name = script_var_name(&self.python.script_filename);
             ctx.rhai_var(&var_name, &self.python.script_content);
-            self.inputs.insert(
-                0,
-                JobInput::script(&self.python.script_filename, &var_name),
-            );
+            self.inputs
+                .insert(0, JobInput::script(&self.python.script_filename, &var_name));
         }
 
         let script = python_job_rhai(
@@ -751,15 +783,8 @@ mod tests {
             script_local_path: None,
         };
 
-        let rhai = python_job_rhai_with_template(
-            "trigger",
-            r#""id""#,
-            "m",
-            None,
-            &config,
-            &[],
-            &[],
-        );
+        let rhai =
+            python_job_rhai_with_template("trigger", r#""id""#, "m", None, &config, &[], &[]);
         assert!(
             !rhai.contains("job_template_id"),
             "job_template_id should be absent when None: {}",
@@ -834,9 +859,7 @@ mod tests {
                 collection_var: "observations",
                 name_prefix: "obs_",
                 path_expr: "__item.artifact.storage_path",
-                filter_expr: Some(
-                    "__item.artifact != () && __item.artifact.storage_path != ()",
-                ),
+                filter_expr: Some("__item.artifact != () && __item.artifact.storage_path != ()"),
             },
         );
 

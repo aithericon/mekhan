@@ -205,8 +205,7 @@ impl ResourceResolver {
         let mut audit_targets: Vec<(Uuid, i32)> = Vec::with_capacity(bindings.len());
 
         for (alias, pin) in bindings {
-            let subtree =
-                self.resolve_one(workspace_id, principal_id, pin).await?;
+            let subtree = self.resolve_one(workspace_id, principal_id, pin).await?;
             envelope.insert(alias.clone(), JsonValue::Object(subtree));
             audit_targets.push((pin.resource_id, pin.version));
         }
@@ -246,11 +245,10 @@ impl ResourceResolver {
         })?;
 
         // (2) Look the descriptor up — unknown types fail fast.
-        let descriptor = lookup(&resource.resource_type).ok_or_else(|| {
-            ResolverError::UnknownResourceType {
+        let descriptor =
+            lookup(&resource.resource_type).ok_or_else(|| ResolverError::UnknownResourceType {
                 type_name: resource.resource_type.clone(),
-            }
-        })?;
+            })?;
 
         // (3) ACL check: workspace-membership. Resolves the stopgap that
         // earlier kept this path bypassed pending the `workspace_members`
@@ -328,9 +326,8 @@ impl ResourceResolver {
             return Ok(subtree);
         }
 
-        let mut subtree = JsonMap::with_capacity(
-            descriptor.public_fields.len() + descriptor.secret_fields.len(),
-        );
+        let mut subtree =
+            JsonMap::with_capacity(descriptor.public_fields.len() + descriptor.secret_fields.len());
 
         for field_name in descriptor.public_fields {
             if let Some(v) = public_obj.get(*field_name) {
@@ -354,10 +351,7 @@ impl ResourceResolver {
             // {{secret:<vault_path>#<field>}} — the existing
             // `extract_secret_keys` regex captures the whole key
             // (verified in `shared/resources/tests/registry.rs`).
-            let template = format!(
-                "{{{{secret:{}#{}}}}}",
-                version.vault_path, field_name
-            );
+            let template = format!("{{{{secret:{}#{}}}}}", version.vault_path, field_name);
             subtree.insert((*field_name).to_string(), JsonValue::String(template));
         }
 
@@ -576,9 +570,7 @@ fn json_to_rhai_literal(v: &JsonValue) -> String {
         JsonValue::Null => "()".to_string(),
         JsonValue::Bool(b) => b.to_string(),
         JsonValue::Number(n) => n.to_string(),
-        JsonValue::String(s) => {
-            serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
-        }
+        JsonValue::String(s) => serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string()),
         JsonValue::Array(items) => {
             let parts: Vec<String> = items.iter().map(json_to_rhai_literal).collect();
             format!("[{}]", parts.join(", "))
@@ -587,9 +579,7 @@ fn json_to_rhai_literal(v: &JsonValue) -> String {
             let entries: Vec<String> = obj
                 .iter()
                 .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| {
-                    format!("\"{}\": {}", escape_rhai_key(k), json_to_rhai_literal(v))
-                })
+                .map(|(k, v)| format!("\"{}\": {}", escape_rhai_key(k), json_to_rhai_literal(v)))
                 .collect();
             format!("#{{ {} }}", entries.join(", "))
         }
@@ -713,4 +703,3 @@ mod splice_tests {
         assert_eq!(src2.matches("let __resources").count(), 1);
     }
 }
-

@@ -3,7 +3,8 @@
 **Status:** partially realized by the resource-pool work (`feat/resource-pool-net`).
 A `datacenter` resource **kind** now exists (`shared/resources`), and an
 AutomatedStep binds it via `deploymentModel: Scheduled { scheduler: <alias>, operation }`:
-`operation: submit` is today's scheduler-net job dispatch (unchanged); `operation: lease`
+`operation: submit` is the legacy scheduler-net job dispatch (still valid SDK infrastructure);
+`operation: lease` is now the **primary path** for mekhan-compiled workflows — it
 holds an allocation through the replay-safe `resource_lease` engine effect +
 a per-datacenter lease-adapter net. See `docs/14` ("one claim contract, pluggable
 backends"). Still pending here: engine-side Nomad/Slurm *connection* resolution for the

@@ -91,8 +91,7 @@ impl Authenticator for BffAuthenticator {
 
         match self.oidc.refresh(refresh_token).await {
             Ok(tokens) => {
-                let expires_at =
-                    Utc::now() + chrono::Duration::seconds(tokens.expires_in.max(0));
+                let expires_at = Utc::now() + chrono::Duration::seconds(tokens.expires_in.max(0));
                 self.store
                     .update_tokens(
                         &sid,

@@ -73,8 +73,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     default_output_port, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding,
-    LoopAccumulator, Port, Position, ScheduledOperation, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    LoopAccumulator, Port, Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -148,9 +147,27 @@ fn end(id: &str) -> WorkflowNode {
 ///   - `Loop -> End` on the loop's default (None) source handle (`p_output`,
 ///     the post-exit outer `out`).
 fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
+    let scope_id = format!("{loop_id}_scope");
     WorkflowGraph {
         nodes: vec![
             start("s"),
+            WorkflowNode {
+                id: scope_id.clone(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::LeaseScope {
+                    label: "Lease Scope".to_string(),
+                    description: None,
+                    lease: LeaseBinding {
+                        scheduler: DC_ALIAS.to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
             WorkflowNode {
                 id: loop_id.to_string(),
                 node_type: "loop".to_string(),
@@ -162,16 +179,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     max_iterations: MAX_ITERATIONS,
                     loop_condition: "true".to_string(),
                     accumulators: Vec::<LoopAccumulator>::new(),
-                    // L3: hold ONE datacenter lease for the whole loop. `request:
-                    // None` ⇒ the allocator's default placement (the single-node
-                    // dev Slurm cluster). `scheduler` is the datacenter resource's
-                    // workspace alias, resolved at publish to its `pool-<id>` net.
-                    lease: Some(LeaseBinding {
-                        scheduler: DC_ALIAS.to_string(),
-                        request: None,
-                    }),
                 },
-                parent_id: None,
+                parent_id: Some(scope_id.clone()),
                 width: None,
                 height: None,
             },
@@ -199,24 +208,13 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
                     stream_output: false,
-                    // Drain seam: Scheduled Submit + `runOnLease`. Because the
-                    // body's parent is the leased Loop, the compiler RE-ROUTES it
-                    // off the scheduler-net onto the executor lifecycle and stamps
-                    // `d.executor_namespace = lp.lease.executor_namespace` into the
-                    // body's `prepare`, with the matching Guard read-arc into the
-                    // loop's parked `p_lp_data` envelope — so the iteration enqueues
-                    // to the lease-scoped namespace the held drain executor pulls.
+                    stream_input: false,
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: None,
                         job_template: "mekhan-executor-worker".to_string(),
                         resources: None,
-                        operation: ScheduledOperation::Submit,
-                        request: None,
-                        run_on_lease: true,
                     },
                 },
-                // The body ALWAYS sits inside the leasing loop — this parentage
-                // is what `enclosing_leased_loop_slug` walks to find `lp`.
                 parent_id: Some(loop_id.to_string()),
                 width: None,
                 height: None,
@@ -227,8 +225,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
             WorkflowEdge {
                 id: "e_in".to_string(),
                 source: "s".to_string(),
-                target: loop_id.to_string(),
+                target: scope_id.clone(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_scope_body_in".to_string(),
+                source: scope_id.clone(),
+                target: loop_id.to_string(),
+                source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
@@ -252,8 +259,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
-                id: "e_out".to_string(),
+                id: "e_loop_body_out".to_string(),
                 source: loop_id.to_string(),
+                target: scope_id.clone(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_out".to_string(),
+                source: scope_id.clone(),
                 target: "e".to_string(),
                 source_handle: None,
                 target_handle: Some("in".to_string()),
@@ -263,7 +279,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
         ],
         viewport: None,
         instance_concurrency: Default::default(),
-        definitions: Default::default(), default_scheduler: None,
+        definitions: Default::default(),
+        default_scheduler: None,
     }
 }
 
@@ -285,13 +302,18 @@ async fn engine_available() -> bool {
 
 async fn net_running(net_id: &str) -> bool {
     match reqwest::get(format!("{}/api/nets/{net_id}/state", engine_url())).await {
-        Ok(resp) if resp.status().is_success() => resp
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("run_mode").and_then(|m| m.as_str()).map(str::to_string))
-            .as_deref()
-            == Some("running"),
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("run_mode")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("running")
+        }
         _ => false,
     }
 }
@@ -362,8 +384,8 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     }
     // NOTE: the drain-model leased body uses the EXECUTOR LIFECYCLE (it enqueues
     // to the lease-scoped namespace drained by the executor srun'd onto the held
-    // alloc), NOT the scheduler-net. So unlike `scheduled_slurm_e2e.rs` this test
-    // needs neither scheduler-net nor executor-net — only the engine's SLURM_SSH_*
+    // alloc), NOT a separate cluster dispatch. So unlike `scheduled_slurm_e2e.rs`
+    // this test needs no pre-deployed infra nets — only the engine's SLURM_SSH_*
     // allocator env (so acquire can salloc + srun the drain executor) and the
     // `mekhan-lease-executor.sh` drain template installed in the container, both
     // set up by `just dev slurm-up`.
@@ -371,7 +393,9 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
@@ -399,9 +423,10 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     //    ClusterRegistry lazily builds a `SlurmAllocatorClient::from_connection`
     //    (ssh_host/port/user/known_hosts/template_dir + the inline `ssh_key` PEM,
     //    written to a 0600 tempfile) from the effect_config this resource threads.
-    let ssh_key_pem = std::fs::read_to_string(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../engine/infra/slurm/ssh/slurm_test"),
-    )
+    let ssh_key_pem = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../engine/infra/slurm/ssh/slurm_test"
+    ))
     .expect("read engine/infra/slurm/ssh/slurm_test private key");
     let resp = app
         .clone()
@@ -439,7 +464,11 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         .unwrap();
     let dc_status = resp.status();
     let dc_body = body_json(resp.into_body()).await;
-    assert_eq!(dc_status, StatusCode::CREATED, "create datacenter: {dc_body}");
+    assert_eq!(
+        dc_status,
+        StatusCode::CREATED,
+        "create datacenter: {dc_body}"
+    );
     let resource_id: Uuid = dc_body["id"].as_str().unwrap().parse().unwrap();
 
     // The auto-deployed pool/adapter net id is `pool-<resource_id>` (the same id
@@ -566,7 +595,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         }
         // Runtime witness of the held allocation. Tolerate transient SSH hiccups
         // by only recording successful probes.
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         concurrent_max = concurrent_max.max(ids.len());
         for id in ids {
             seen_alloc_ids.insert(id);
@@ -615,16 +644,16 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         .collect();
 
     for required in [
-        "p_lp_claim_out",
-        "p_lp_grant_inbox",
-        "p_lp_register_out",
-        "p_lp_release_out",
-        "p_lp_held",
+        "p_lp_scope_claim_out",
+        "p_lp_scope_grant_inbox",
+        "p_lp_scope_register_out",
+        "p_lp_scope_release_out",
+        "p_lp_scope_held",
     ] {
         assert!(
             place_ids.iter().any(|p| p == required),
-            "instance net is missing the loop-lease place `{required}` — the \
-             loop-scoped lease was not hoisted (the `lease` binding was dropped?). \
+            "instance net is missing the lease-scope place `{required}` — the \
+             LeaseScope lease was not emitted (the `lease` binding was dropped?). \
              places={place_ids:?}"
         );
     }
@@ -637,7 +666,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     assert!(
         !place_ids.iter().any(|p| p == "p_body_sched_out"),
         "instance net still has the scheduler bridge_out `p_body_sched_out` — the \
-         runOnLease body did not move off the scheduler-net. places={place_ids:?}"
+         runOnLease body did not move off the scheduler dispatch path. places={place_ids:?}"
     );
 
     // ── (6) WARM-REUSE witness: EXACTLY ONE new `/tmp/petri-lease-exec-*.out`
@@ -685,14 +714,24 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         drain_log.contains("Starting lease drain executor"),
         "drain-executor log at {drain_out} is missing its startup banner — the \
          mekhan-lease-executor.sh template may not have launched. tail:\n{}",
-        drain_log.lines().rev().take(20).collect::<Vec<_>>().join("\n")
+        drain_log
+            .lines()
+            .rev()
+            .take(20)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     assert!(
         handled >= MAX_ITERATIONS as usize,
         "the drain executor at {drain_out} handled {handled} jobs, expected \
          >= {MAX_ITERATIONS} (one persistent executor must drain every iteration \
          warm). tail:\n{}",
-        drain_log.lines().rev().take(30).collect::<Vec<_>>().join("\n")
+        drain_log
+            .lines()
+            .rev()
+            .take(30)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 
     // ── (7) Release witness: after the instance completes, the loop's terminal
@@ -701,7 +740,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     //    grant name goes empty within a deadline.
     let release_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if ids.is_empty() {
             break;
         }
@@ -823,13 +862,17 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("kv");
-    let sub_mgr =
-        std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(
@@ -875,7 +918,11 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED, "create template");
-    let template_id: Uuid = body_json(resp.into_body()).await["id"].as_str().unwrap().parse().unwrap();
+    let template_id: Uuid = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let resp = app
         .clone()
@@ -910,13 +957,17 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
 
     // Wait for the held alloc to appear (acquire → salloc).
     let alloc_deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if !ids.is_empty() {
             break;
         }
@@ -935,7 +986,9 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     // grant-derived job name cancels the salloc (and the srun'd drain executor
     // on it) — simulating a cluster-side preemption / node failure.
     let grant = format!("{instance_id}:lp");
-    slurm_ssh(&format!("scancel --name='petri-{grant}' 2>/dev/null || true"));
+    slurm_ssh(&format!(
+        "scancel --name='petri-{grant}' 2>/dev/null || true"
+    ));
 
     // Fail-fast assertion: the instance must reach `failed` — NOT hang, NOT
     // complete — within a bounded window (watcher poll ~5s + signal route +
@@ -968,7 +1021,7 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     // assert it stays gone, i.e. the abort path didn't re-salloc).
     let drain_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if squeue_lease_ids(instance_id, "lp").is_empty() {
+        if squeue_lease_ids(instance_id, "lp_scope").is_empty() {
             break;
         }
         if Instant::now() > drain_deadline {
@@ -997,13 +1050,17 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("kv");
-    let sub_mgr =
-        std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(
@@ -1047,8 +1104,11 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED, "create template");
-    let template_id: Uuid =
-        body_json(resp.into_body()).await["id"].as_str().unwrap().parse().unwrap();
+    let template_id: Uuid = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let resp = app
         .clone()
@@ -1083,13 +1143,17 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
 
     // Wait for the held alloc to appear.
     let alloc_deadline = Instant::now() + Duration::from_secs(120);
     let held_id = loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if let Some(first) = ids.first() {
             break first.clone();
         }
@@ -1118,14 +1182,17 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "cancel instance");
     let cancelled = body_json(resp.into_body()).await;
-    assert_eq!(cancelled["status"], "cancelled", "instance marked cancelled");
+    assert_eq!(
+        cancelled["status"], "cancelled",
+        "instance marked cancelled"
+    );
 
     // No-orphan: the held alloc `held_id` must be scancel'd by the engine's
     // `release_held_leases_for_instance` — squeue for the grant goes empty
     // within a deadline. (The drain executor srun'd onto it dies with the alloc.)
     let release_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if ids.is_empty() {
             break;
         }

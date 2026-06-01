@@ -30,7 +30,10 @@ impl TokenVerifier for NoopTokenVerifier {
     async fn verify(&self, _raw_token: &str) -> Result<VerifiedClaims, AuthError> {
         let mut extra = std::collections::BTreeMap::new();
         if let Some(email) = &self.email {
-            extra.insert("email".to_string(), serde_json::Value::String(email.clone()));
+            extra.insert(
+                "email".to_string(),
+                serde_json::Value::String(email.clone()),
+            );
         }
         if let Some(name) = &self.display_name {
             extra.insert("name".to_string(), serde_json::Value::String(name.clone()));

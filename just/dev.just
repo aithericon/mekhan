@@ -34,7 +34,7 @@ work_dir  := ".dev/work"
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,vault"
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,postgres,vault"
 
 # Local infra + daemon endpoints. These read the per-worktree env exported by
 # just/scripts/dev-ports.sh (via direnv / .envrc), falling back to the historical
@@ -489,6 +489,25 @@ httpbin-down:
       echo "  · httpbin not running"
     fi
 
+# ── Postgres demo fixture (19-postgres-node) ─────────────────────────────────
+#
+# The `19-postgres-node` demo reads/writes a DEDICATED `demo_pg.widgets` fixture
+# table (NEVER mekhan's own application tables). This applies the demo's
+# idempotent seed against the dev Postgres so the demo + its `mekhan test`
+# fixtures have a stable baseline (schema `demo_pg`, three rows: alpha/bravo/
+# charlie). Re-run any time to reset to baseline.
+#
+# Uses the same {{database_url}} the rest of dev points at (slot-aware via env).
+# The `demo_pg` resource the demo binds hardcodes the slot-0 port (15439); on a
+# slotted worktree edit demos/resources/demo_pg.json to match before going live.
+pg-demo-seed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    echo "▶ seeding demo_pg.widgets fixture into {{database_url}}"
+    psql "{{database_url}}" -v ON_ERROR_STOP=1 -f demos/19-postgres-node/seed.sql
+    echo "  ✓ demo_pg.widgets seeded (schema demo_pg, 3 baseline rows)"
+
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 
 up-executor:
@@ -571,11 +590,11 @@ down-executor:
 # ── Engine (engine/core-engine) ──────────────────────────────────────────────
 
 # scheduler="nomad" additionally wires the engine to a Nomad scheduler
-# backend so `Scheduled` AutomatedSteps (which bridge to the long-lived
-# `scheduler-net`) can actually dispatch. Default "off" keeps dev minimal
+# backend so `Scheduled` AutomatedSteps (which use the datacenter lease
+# adapter pattern) can actually dispatch. Default "off" keeps dev minimal
 # (the plain `up` path is unchanged). Use `just dev scheduler-up` rather
-# than calling this directly with nomad — it also stands up the agent,
-# registers the job template, and deploys scheduler-net/executor-net.
+# than calling this directly with nomad — it also stands up the agent
+# and registers the job templates.
 up-engine scheduler="off":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -589,10 +608,11 @@ up-engine scheduler="off":
 
     # core-engine's default features already include `nomad` + `executor`
     # (engine/core-engine/Cargo.toml), so no rebuild is needed — the engine
-    # only needs the scheduler env to register the scheduler_submit handler.
+    # only needs the scheduler env to initialise the cluster client that the
+    # lease adapter's resource_lease_acquire effect uses via ClusterRegistry.
     # Exported (not -i) so the `env` invocation below inherits them.
     if [ "{{scheduler}}" = "nomad" ]; then
-      echo "  ↳ scheduler: Nomad (SCHEDULER_BACKEND=nomad → scheduler-net)"
+      echo "  ↳ scheduler: Nomad (datacenter lease infrastructure)"
       export SCHEDULER_BACKEND="nomad"
       export NOMAD_ADDR="http://127.0.0.1:4646"
       export SCHEDULER_JOB_TEMPLATE="petri-executor-worker"
@@ -601,9 +621,9 @@ up-engine scheduler="off":
     if [ "{{scheduler}}" = "slurm" ]; then
       # Slurm reaches the cluster over SSH against the local docker-compose
       # cluster (engine/infra/slurm/), polls squeue/sacct, and publishes
-      # signals to scheduler-net via NATS. Reverse the whole layer with
+      # status signals via NATS. Reverse the whole layer with
       # `just dev slurm-down`.
-      echo "  ↳ scheduler: Slurm (SCHEDULER_BACKEND=slurm → scheduler-net)"
+      echo "  ↳ scheduler: Slurm (datacenter lease infrastructure)"
       export SCHEDULER_BACKEND="slurm"
       export SCHEDULER_JOB_TEMPLATE="mekhan-executor-worker"
       export SCHEDULER_SIGNAL_ROUTES="running:sig_running,completed:sig_completed,failed:sig_failed,timed_out:sig_failed"
@@ -642,17 +662,18 @@ down-engine:
 # ── Nomad scheduler layer (for `Scheduled` AutomatedSteps) ───────────────────
 #
 # Stands up the real-Nomad dispatch path on top of a running dev stack so a
-# `Scheduled` AutomatedStep can actually run. The compiled parent net bridges
-# to the long-lived `scheduler-net`:
+# `Scheduled` AutomatedStep can actually run. The compiled parent net uses the
+# datacenter lease adapter pattern — mekhan-service deploys a per-resource
+# `pool-{resource_id}` adapter net that acquires a lease via the engine's
+# `resource_lease_acquire` effect, then enqueues work to the held allocation's
+# drain executor:
 #
-#   parent-net ─▶ scheduler-net ─(Nomad dispatch: petri-executor-worker)─▶
-#                 executor-net  ─▶ executor ─▶ result ─▶ back to parent-net
+#   parent-net ─▶ pool-{resource_id} (lease adapter) ─(resource_lease_acquire)─▶
+#                 petri-lease-executor (drain) ─▶ executor ─▶ result ─▶ parent
 #
 # Requires `just dev up` already running (reuses its NATS/rustfs + executor
 # binary) and the `nomad` binary on PATH. Restarts the engine with the
-# scheduler env. Reverse with `just dev scheduler-down`. Modeled on the
-# engine's `just demo three-layer` recipe, minus job-net (mekhan's compiled
-# parent net replaces it).
+# scheduler env. Reverse with `just dev scheduler-down`.
 scheduler-up:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -761,7 +782,7 @@ scheduler-up:
     # claiming its specific `executor.<priority>.<exec_id>` subject ("filtered
     # consumer not unique on workqueue stream"). Final SIGKILL only if a stray
     # process refused to terminate. Nomad/Slurm-launched executors are short-
-    # lived per dispatch and respawned per scheduler_submit, so killing them
+    # lived per dispatch and respawned per resource_lease_acquire, so killing them
     # is harmless.
     pkill -TERM -f aithericon-executor-service 2>/dev/null || true
     for _ in $(seq 1 10); do
@@ -785,9 +806,9 @@ scheduler-up:
       done
     fi
 
-    # 5. Build infra nets, then restart the engine WITH the scheduler env.
-    echo "▶ building scheduler-net + executor-net examples…"
-    (cd engine && cargo build -p aithericon-sdk --example scheduler_net --example executor_net)
+    # 5. Restart the engine WITH the scheduler env so the ClusterRegistry
+    #    initialises the Nomad client that the lease adapter's
+    #    resource_lease_acquire effect uses.
     just dev::down-engine
     just dev::up-engine nomad
     echo "▶ waiting for engine API…"
@@ -799,20 +820,11 @@ scheduler-up:
       echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
     sleep 2  # let the Nomad + executor watchers connect
 
-    # 5. Deploy BOTH infra nets, THEN activate (every bridge target must be
-    #    deployed before either net transitions to Running — Strict gate).
-    echo "▶ deploying + activating executor-net & scheduler-net…"
-    cd engine
-    ./target/debug/examples/executor_net --bridged --process --deploy --net-id executor-net >/dev/null
-    ./target/debug/examples/scheduler_net --deploy --net-id scheduler-net >/dev/null
-    ./target/debug/aithericon activate executor-net
-    ./target/debug/aithericon activate scheduler-net
-
     echo ""
     echo "✓ Nomad scheduler layer up:"
     echo "  nomad        → http://localhost:4646/ui"
-    echo "  scheduler-net + executor-net deployed & running on :{{engine_port}}"
-    echo "  engine now started with SCHEDULER_BACKEND=nomad (Scheduled steps dispatch)"
+    echo "  engine running with SCHEDULER_BACKEND=nomad on :{{engine_port}}"
+    echo "  lease adapter nets deployed per-resource by mekhan-service"
     echo "  dev daemon executor PAUSED — Nomad worker is the sole consumer"
     echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
     echo "    until you revert."
@@ -904,12 +916,12 @@ resource-pool-demo n="4":
 # ── Slurm scheduler layer (for `Scheduled` AutomatedSteps via Slurm) ─────────
 #
 # Mirror of `scheduler-up` but using the local docker-compose Slurm cluster
-# (engine/infra/slurm/) instead of Nomad. Net topology is identical — the
-# parent's `bridge_out` still targets `scheduler-net/job_inbox`; only the
-# backend that scheduler-net dispatches to changes:
+# (engine/infra/slurm/) instead of Nomad. The lease adapter pattern is
+# identical — only the backend that `resource_lease_acquire` dispatches to
+# changes (sbatch over SSH instead of Nomad dispatch):
 #
-#   parent-net ─▶ scheduler-net ─(sbatch over SSH: mekhan-executor-worker)─▶
-#                 executor-net  ─▶ executor (in Slurm job) ─▶ result ─▶ parent
+#   parent-net ─▶ pool-{resource_id} (lease adapter) ─(resource_lease_acquire)─▶
+#                 mekhan-lease-executor (sbatch) ─▶ executor ─▶ result ─▶ parent
 #
 # Requires `just dev up` already running (reuses NATS/rustfs), docker +
 # cargo-zigbuild on PATH (the executor binary must be Linux x86_64 since
@@ -1093,9 +1105,9 @@ slurm-up:
       done
     fi
 
-    # 5. Build infra nets, then restart the engine WITH the Slurm scheduler env.
-    echo "▶ building scheduler-net + executor-net examples…"
-    (cd engine && cargo build -p aithericon-sdk --example scheduler_net --example executor_net)
+    # 5. Restart the engine WITH the Slurm scheduler env so the ClusterRegistry
+    #    initialises the Slurm client that the lease adapter's
+    #    resource_lease_acquire effect uses.
     just dev::down-engine
     just dev::up-engine slurm
     echo "▶ waiting for engine API…"
@@ -1107,19 +1119,11 @@ slurm-up:
       echo "✗ engine did not come back (log: {{log_dir}}/engine.log)" >&2; exit 1; }
     sleep 2  # let the Slurm + executor watchers connect
 
-    # 6. Deploy BOTH infra nets, THEN activate (Strict bridge gate).
-    echo "▶ deploying + activating executor-net & scheduler-net…"
-    cd engine
-    ./target/debug/examples/executor_net --bridged --process --deploy --net-id executor-net >/dev/null
-    ./target/debug/examples/scheduler_net --deploy --net-id scheduler-net >/dev/null
-    ./target/debug/aithericon activate executor-net
-    ./target/debug/aithericon activate scheduler-net
-
     echo ""
     echo "✓ Slurm scheduler layer up:"
     echo "  slurm        → docker compose (login: ssh -p 2222 testuser@localhost)"
-    echo "  scheduler-net + executor-net deployed & running on :{{engine_port}}"
-    echo "  engine now started with SCHEDULER_BACKEND=slurm (Scheduled steps dispatch)"
+    echo "  engine running with SCHEDULER_BACKEND=slurm on :{{engine_port}}"
+    echo "  lease adapter nets deployed per-resource by mekhan-service"
     echo "  dev daemon executor PAUSED — Slurm worker is the sole consumer"
     echo "    of the 'executor' queue. Inline AutomatedSteps will NOT run"
     echo "    until you revert."
@@ -1205,6 +1209,8 @@ up-mekhan auth_mode="dev_noop":
         MEKHAN__DEMOS__DIR="$PWD/demos" \
         VAULT_ADDR="{{vault_addr}}" \
         VAULT_TOKEN="{{vault_token}}" \
+        ${CLOUD_LAYER_JWT_SECRET:+CLOUD_LAYER_JWT_SECRET="$CLOUD_LAYER_JWT_SECRET"} \
+        ${CLOUD_LAYER_BASE_URL:+CLOUD_LAYER_BASE_URL="$CLOUD_LAYER_BASE_URL"} \
         ${mode_assign:+"$mode_assign"} \
         "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service")
     echo "  ✓ mekhan-service (pid $pid)  {{service_url}}  log: {{log_dir}}/mekhan.log"

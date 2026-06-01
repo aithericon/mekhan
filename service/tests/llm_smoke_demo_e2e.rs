@@ -27,8 +27,8 @@
 //! instance here, never on the user's first try.
 //!
 //! Requires:
-//!   - `just dev::up` (engine :13030, executor with `llm` feature, NATS :14333,
-//!     postgres :15439)
+//!   - `just dev::up` (engine :3030, executor with `llm` feature, NATS :4333,
+//!     postgres :5439)
 //!   - `just dev::up-ollama` (Ollama at :11434 with the model the demo
 //!     references — default `qwen3.5:9b`)
 //!
@@ -58,7 +58,7 @@ use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 fn engine_nats_url() -> String {
@@ -101,9 +101,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
         ("PETRI_GLOBAL", "mekhan-lifecycle"),
     ] {
         if let Ok(stream) = nats.jetstream().get_stream(stream_name).await {
-            let _ = stream
-                .delete_consumer(&format!("{prefix}_{base}"))
-                .await;
+            let _ = stream.delete_consumer(&format!("{prefix}_{base}")).await;
         }
     }
 }
@@ -145,7 +143,10 @@ async fn spawn_consumers(nats: MekhanNats, db: sqlx::PgPool) -> (TaskHandle, Tas
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    (TaskHandle(causality.abort_handle()), TaskHandle(lifecycle.abort_handle()))
+    (
+        TaskHandle(causality.abort_handle()),
+        TaskHandle(lifecycle.abort_handle()),
+    )
 }
 
 fn demo_dir() -> std::path::PathBuf {
@@ -155,19 +156,14 @@ fn demo_dir() -> std::path::PathBuf {
         .join("demos/llm-smoke")
 }
 
-async fn wait_for_terminal_status(
-    db: &sqlx::PgPool,
-    id: Uuid,
-    timeout: Duration,
-) -> String {
+async fn wait_for_terminal_status(db: &sqlx::PgPool, id: Uuid, timeout: Duration) -> String {
     let start = std::time::Instant::now();
     loop {
-        let st: String =
-            sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
-                .bind(id)
-                .fetch_one(db)
-                .await
-                .unwrap();
+        let st: String = sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_one(db)
+            .await
+            .unwrap();
         if matches!(st.as_str(), "completed" | "failed" | "cancelled") {
             return st;
         }

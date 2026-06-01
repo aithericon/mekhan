@@ -1,8 +1,10 @@
 //! Example: Nomad batch job net with signal-based completion, retry, and dead-letter routing.
 //!
 //! Defines a Petri net that submits batch jobs to Nomad via the `scheduler_submit`
-//! effect handler, then uses NomadWatcher-delivered signals to detect completion
-//! or failure. Failed jobs are retried up to `max_retries` before being dead-lettered.
+//! effect handler (one of two dispatch patterns — the other is the resource-lease
+//! adapter in `resource_pool_net.rs`), then uses NomadWatcher-delivered signals to
+//! detect completion or failure. Failed jobs are retried up to `max_retries`
+//! before being dead-lettered.
 //!
 //! Net topology:
 //! ```text

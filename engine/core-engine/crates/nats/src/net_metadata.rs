@@ -8,7 +8,9 @@ use async_nats::jetstream::kv::Store;
 use async_nats::jetstream::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::message_loop::{run_message_loop_cancellable, MessageHandler, MessageLoopError, ProcessError};
+use crate::message_loop::{
+    run_message_loop_cancellable, MessageHandler, MessageLoopError, ProcessError,
+};
 use crate::subjects::Subjects;
 
 /// NATS KV bucket name for net metadata.
@@ -86,9 +88,7 @@ impl NetMetadataProjection {
             .jetstream
             .get_or_create_stream(crate::stream_config())
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to get stream: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
         // Subscribe to lifecycle events across all nets
         // Events are published as: petri.events.{net_id}.net.created, etc.
@@ -106,9 +106,7 @@ impl NetMetadataProjection {
         let consumer = stream
             .get_or_create_consumer(consumer_name, consumer_config)
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to create consumer: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to create consumer: {}", e)))?;
 
         let handler = MetadataHandler { kv: &self.kv };
 
@@ -176,8 +174,7 @@ impl MessageHandler for MetadataHandler<'_> {
     async fn process_message(&self, msg: &Message) -> Result<(), ProcessError> {
         // Deserialize the persisted event
         let persisted: petri_domain::PersistedEvent =
-            serde_json::from_slice(&msg.payload)
-                .map_err(|e| ProcessError::Parse(e.to_string()))?;
+            serde_json::from_slice(&msg.payload).map_err(|e| ProcessError::Parse(e.to_string()))?;
 
         match &persisted.event {
             petri_domain::DomainEvent::NetCreated {
@@ -237,9 +234,7 @@ impl MessageHandler for MetadataHandler<'_> {
             }
 
             petri_domain::DomainEvent::NetCompleted {
-                net_id,
-                exit_code,
-                ..
+                net_id, exit_code, ..
             } => {
                 let meta = match self.get_metadata(net_id).await {
                     Some(mut existing) => {
@@ -349,14 +344,10 @@ impl MessageHandler for MetadataHandler<'_> {
 
 impl MetadataHandler<'_> {
     async fn put_metadata(&self, net_id: &str, meta: &NetMetadata) -> Result<(), ProcessError> {
-        let value =
-            serde_json::to_vec(meta).map_err(|e| ProcessError::Business(e.to_string()))?;
-        self.kv
-            .put(net_id, value.into())
-            .await
-            .map_err(|e| {
-                ProcessError::Business(format!("Failed to put metadata for {}: {}", net_id, e))
-            })?;
+        let value = serde_json::to_vec(meta).map_err(|e| ProcessError::Business(e.to_string()))?;
+        self.kv.put(net_id, value.into()).await.map_err(|e| {
+            ProcessError::Business(format!("Failed to put metadata for {}: {}", net_id, e))
+        })?;
         Ok(())
     }
 

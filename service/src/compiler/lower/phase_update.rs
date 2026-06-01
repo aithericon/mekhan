@@ -32,10 +32,8 @@ pub(crate) fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileErro
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_out: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_pu_out"), format!("{label} - Output"));
-    let p_sig: PlaceHandle<DynamicToken> = ctx.state(
-        format!("p_{id}_pu_sig"),
-        format!("{label} - Phase Detail"),
-    );
+    let p_sig: PlaceHandle<DynamicToken> =
+        ctx.state(format!("p_{id}_pu_sig"), format!("{label} - Phase Detail"));
     let p_done: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_pu_done"), format!("{label} - Recorded"));
 
@@ -49,17 +47,10 @@ pub(crate) fn lower_phase_update(cx: &mut LoweringCtx) -> Result<(), CompileErro
     // Bind interpolations to locals so the map literal stays shallow
     // (avoids the debug-build Rhai expr-depth limit) — same shape as
     // the Start `process_name` transition.
-    let (msg_let, detail_msg) = match message
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    let (msg_let, detail_msg) = match message.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(m) => {
             let e = interpolate_to_rhai_expr(m);
-            (
-                format!("let __mg = {e}; "),
-                ", message: __mg".to_string(),
-            )
+            (format!("let __mg = {e}; "), ", message: __mg".to_string())
         }
         None => (String::new(), String::new()),
     };

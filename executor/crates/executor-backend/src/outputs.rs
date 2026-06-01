@@ -137,10 +137,7 @@ mod tests {
     #[test]
     fn fill_missing_required_or_null_uses_fallback_for_required_null_for_optional() {
         let mut outputs = HashMap::new();
-        let decls = vec![
-            decl("required_field", true),
-            decl("optional_field", false),
-        ];
+        let decls = vec![decl("required_field", true), decl("optional_field", false)];
         let fallback = json!("full response");
         fill_missing_declared(
             &mut outputs,
@@ -148,16 +145,16 @@ mod tests {
             MissingOutputFallback::RequiredOrNull(&fallback),
         );
         assert_eq!(outputs.get("required_field"), Some(&json!("full response")));
-        assert_eq!(outputs.get("optional_field"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            outputs.get("optional_field"),
+            Some(&serde_json::Value::Null)
+        );
     }
 
     #[test]
     fn fill_missing_uniform_applies_to_all_missing_regardless_of_required() {
         let mut outputs = HashMap::new();
-        let decls = vec![
-            decl("required_field", true),
-            decl("optional_field", false),
-        ];
+        let decls = vec![decl("required_field", true), decl("optional_field", false)];
         let fallback = json!([1, 2, 3]);
         fill_missing_declared(
             &mut outputs,

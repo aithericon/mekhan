@@ -155,8 +155,18 @@ fn definition(ctx: &mut Context) {
     let config_b_pending = ctx.state::<ConfigPending>("config_B_pending", "Config B Pending");
 
     // Bridge in — receive results and failures from workflow-net
-    let result_inbox = ctx.bridge_in_from::<WorkflowResult>("result_inbox", "Result Inbox", "workflow-net", "result_outbox");
-    let failure_inbox = ctx.bridge_in_from::<WorkflowFailure>("failure_inbox", "Failure Inbox", "workflow-net", "failure_outbox");
+    let result_inbox = ctx.bridge_in_from::<WorkflowResult>(
+        "result_inbox",
+        "Result Inbox",
+        "workflow-net",
+        "result_outbox",
+    );
+    let failure_inbox = ctx.bridge_in_from::<WorkflowFailure>(
+        "failure_inbox",
+        "Failure Inbox",
+        "workflow-net",
+        "failure_outbox",
+    );
 
     // Done places — track completed configs for fan-in gating
     let config_a_done = ctx.state::<ConfigDone>("config_A_done", "Config A Done");
@@ -249,9 +259,11 @@ fn definition(ctx: &mut Context) {
 
     // 4+5. join/fail config A
     ctx.join_pair(
-        "A", "Config A",
+        "A",
+        "Config A",
         &config_a_pending,
-        &result_inbox, &config_a_done,
+        &result_inbox,
+        &config_a_done,
         r#"#{
                 out: #{
                     campaign_id: pending.campaign_id,
@@ -260,7 +272,8 @@ fn definition(ctx: &mut Context) {
                     final_detail: result.final_detail
                 }
             }"#,
-        &failure_inbox, &campaign_failed,
+        &failure_inbox,
+        &campaign_failed,
         r#"#{
                 out: #{
                     campaign_id: pending.campaign_id,
@@ -274,9 +287,11 @@ fn definition(ctx: &mut Context) {
 
     // 6+7. join/fail config B
     ctx.join_pair(
-        "B", "Config B",
+        "B",
+        "Config B",
         &config_b_pending,
-        &result_inbox, &config_b_done,
+        &result_inbox,
+        &config_b_done,
         r#"#{
                 out: #{
                     campaign_id: pending.campaign_id,
@@ -285,7 +300,8 @@ fn definition(ctx: &mut Context) {
                     final_detail: result.final_detail
                 }
             }"#,
-        &failure_inbox, &campaign_failed,
+        &failure_inbox,
+        &campaign_failed,
         r#"#{
                 out: #{
                     campaign_id: pending.campaign_id,

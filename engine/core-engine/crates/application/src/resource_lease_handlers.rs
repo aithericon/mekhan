@@ -3,7 +3,7 @@
 //!
 //! A `datacenter` resource (docs/13) is an external cluster that owns
 //! placement. Instead of submitting a job and awaiting its result (the
-//! `submit` operation → scheduler-net), the `lease` operation *holds an
+//! `submit` operation → scheduler dispatch), the `lease` operation *holds an
 //! allocation* on the cluster for the step's duration: acquire a lease, run the
 //! body on it, release the lease. The net holds only the lease handle — the
 //! external allocator stays the source of truth (no DC-state mirror).
@@ -62,7 +62,7 @@ pub enum AllocatorError {
 /// adapters become concrete `scheduler_flavor` configs later):
 ///   - **acquire**: `POST {allocator_url}` with `request` as the JSON body and
 ///     a bearer `token`; the `grant_id` rides as the `Idempotency-Key` header.
-///     Returns the lease JSON `{ node, gpu_uuid, alloc_id, expiry }`.
+///     Returns the lease JSON `{ alloc_id, node?, expiry?, scheduler }`.
 ///   - **release**: `DELETE {allocator_url}/{alloc_id}` with the bearer `token`.
 #[async_trait::async_trait]
 pub trait AllocatorClient: Send + Sync {
@@ -281,8 +281,9 @@ impl AllocatorClient for HttpAllocatorClient {
 /// Acquires a cluster lease and emits the typed lease token.
 ///
 /// Input port (`request`): `{ grant_id, request: { gpu_count, gpu_type, … } }`.
-/// Output port (`lease`): `{ grant_id, node, gpu_uuid, alloc_id, expiry }` (the
-/// `DatacenterLease` shape, plus `grant_id` for correlation). `effect_result`
+/// Output port (`lease`): the allocator's `DatacenterLease` shape
+/// (`{ alloc_id, node?, expiry?, executor_namespace?, scheduler }`) plus
+/// `grant_id` for correlation, passed through verbatim. `effect_result`
 /// journals `{ alloc_id, lease }` so replay re-emits without the allocator.
 pub struct ResourceLeaseAcquireHandler {
     client: Arc<dyn AllocatorClient>,
@@ -378,9 +379,14 @@ impl EffectHandler for ResourceLeaseAcquireHandler {
             .await
             .map_err(|e| EffectError::ExecutionFailed(format!("lease acquire failed: {e}")))?;
 
-        // Typed lease for the body: the allocator's lease fields + grant_id.
-        let node = lease.get("node").cloned().unwrap_or(JsonValue::Null);
-        let gpu_uuid = lease.get("gpu_uuid").cloned().unwrap_or(JsonValue::Null);
+        // The allocator returns the full `DatacenterLease` shape: `alloc_id`
+        // (required — the release/reap key), `node`/`expiry`/`executor_namespace`
+        // optional and OMITTED when absent (no empty-string placeholders), and a
+        // typed per-flavor `scheduler` detail. The handler's only additions are
+        // (1) validate `alloc_id` and (2) stamp `grant_id` for correlation — it
+        // passes every other field through untouched, so the typed
+        // `Lease__datacenter` schema (with its optional core + `oneOf` scheduler
+        // discriminator) validates the grant on injection.
         let alloc_id = lease
             .get("alloc_id")
             .and_then(|v| v.as_str())
@@ -388,25 +394,21 @@ impl EffectHandler for ResourceLeaseAcquireHandler {
                 EffectError::ExecutionFailed("allocator response missing alloc_id".into())
             })?
             .to_string();
-        let expiry = lease.get("expiry").cloned().unwrap_or(JsonValue::Null);
-        // The lease-scoped NATS namespace the persistent drain executor consumes
-        // and the leased loop body enqueues to. The slurm/nomad allocator legs
-        // emit it; the HTTP leg does not (no persistent executor), so default to
-        // "" — empty-not-null keeps the required-String `Lease__datacenter`
-        // schema valid on grant-inbox injection.
-        let executor_namespace = lease
-            .get("executor_namespace")
-            .cloned()
-            .unwrap_or(JsonValue::String(String::new()));
 
-        let lease_token = serde_json::json!({
-            "grant_id": grant_id,
-            "node": node,
-            "gpu_uuid": gpu_uuid,
-            "alloc_id": alloc_id,
-            "expiry": expiry,
-            "executor_namespace": executor_namespace,
-        });
+        let mut lease_token = lease.clone();
+        match lease_token.as_object_mut() {
+            Some(map) => {
+                map.insert(
+                    "grant_id".to_string(),
+                    JsonValue::String(grant_id.to_string()),
+                );
+            }
+            None => {
+                return Err(EffectError::ExecutionFailed(
+                    "allocator response is not a JSON object".into(),
+                ));
+            }
+        }
 
         tracing::info!(
             grant_id = %grant_id,
@@ -554,11 +556,11 @@ mod tests {
             *self.last_grant_id.lock().unwrap() = Some(grant_id.to_string());
             *self.last_request.lock().unwrap() = Some(request.clone());
             Ok(serde_json::json!({
-                "node": "node-7",
-                "gpu_uuid": "GPU-abc123",
                 "alloc_id": "alloc-42",
+                "node": "node-7",
                 "expiry": "2026-01-01T00:00:00Z",
-                "executor_namespace": "lease-instance-1-render"
+                "executor_namespace": "lease-instance-1-render",
+                "scheduler": { "flavor": "http" }
             }))
         }
 
@@ -603,19 +605,24 @@ mod tests {
 
         let out = handler.execute(acquire_input()).await.unwrap();
 
-        // Output token on "lease" is the typed lease + grant_id.
+        // Output token on "lease" is the typed lease + grant_id, passed through
+        // from the allocator verbatim (no gpu_uuid, no field re-coercion).
         let lease = out.tokens.get("lease").expect("lease token");
         assert_eq!(lease["grant_id"], "instance-1:render");
         assert_eq!(lease["node"], "node-7");
-        assert_eq!(lease["gpu_uuid"], "GPU-abc123");
         assert_eq!(lease["alloc_id"], "alloc-42");
         assert_eq!(lease["expiry"], "2026-01-01T00:00:00Z");
+        assert_eq!(lease["scheduler"]["flavor"], "http");
+        assert!(
+            lease.get("gpu_uuid").is_none(),
+            "retired gpu_uuid must not appear on the lease token"
+        );
         // The lease-scoped drain-executor namespace rides the typed lease token.
         assert_eq!(lease["executor_namespace"], "lease-instance-1-render");
 
         // effect_result journals alloc_id (for replay + traceability).
         assert_eq!(out.result["alloc_id"], "alloc-42");
-        assert_eq!(out.result["lease"]["gpu_uuid"], "GPU-abc123");
+        assert_eq!(out.result["lease"]["scheduler"]["flavor"], "http");
 
         // The allocator was called exactly once, with grant_id as the
         // idempotency key and the author's request params passed through.
@@ -736,7 +743,10 @@ mod tests {
 
         let out = handler.execute(input).await.unwrap();
 
-        assert_eq!(out.tokens.get("released").unwrap()["grant_id"], "instance-1:render");
+        assert_eq!(
+            out.tokens.get("released").unwrap()["grant_id"],
+            "instance-1:render"
+        );
         assert_eq!(out.result["alloc_id"], "alloc-42");
         assert_eq!(out.result["released"], true);
 
@@ -791,10 +801,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(alloc.acquire_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            alloc.last_grant_id.lock().unwrap().as_deref(),
-            Some("g1")
-        );
+        assert_eq!(alloc.last_grant_id.lock().unwrap().as_deref(), Some("g1"));
     }
 
     /// The flavor-aware acquire delegates to the leaf `acquire` for the default
@@ -847,7 +854,7 @@ mod tests {
             let mut buf = vec![0u8; 8192];
             let n = sock.read(&mut buf).await.unwrap();
             *captured_srv.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
-            let body = r#"{"node":"n1","gpu_uuid":"GPU-x","alloc_id":"a99","expiry":"2026-02-02T00:00:00Z"}"#;
+            let body = r#"{"alloc_id":"a99","node":"n1","expiry":"2026-02-02T00:00:00Z","scheduler":{"flavor":"http"}}"#;
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
@@ -871,7 +878,7 @@ mod tests {
         server.await.unwrap();
 
         assert_eq!(lease["alloc_id"], "a99");
-        assert_eq!(lease["gpu_uuid"], "GPU-x");
+        assert_eq!(lease["scheduler"]["flavor"], "http");
 
         // The request carried the bearer token + the grant_id idempotency key.
         let raw = captured.lock().unwrap().clone();

@@ -46,6 +46,23 @@ pub struct HeartbeatConfig {
     pub hardware: HardwareAdvertisement,
     pub engine_capabilities: Vec<String>,
     pub heartbeat_token: String,
+    /// Phase-1a OCR-framing gate: when `true`, every heartbeat tick
+    /// includes `services.kreuzberg = { healthy: true }` so cap-routing's
+    /// resolver continues to grant `Capability::Ocr` on the row. When
+    /// `false`, the payload omits a `services` key entirely (preserving
+    /// pre-OCR wire-shape parity).
+    ///
+    /// **Why heartbeat parity matters:** cap-routing's heartbeat handler
+    /// (`cloud-layer-capability-routing/src/lib.rs:137`) clones
+    /// `payload.services` and OVERWRITES the row's services column via
+    /// `update_pool_heartbeat(..., &services, ...)`. If the executor
+    /// emits the kreuzberg block at register-time but omits it on every
+    /// heartbeat, the FIRST heartbeat (5s after boot) wipes the block —
+    /// `Capability::Ocr` would only be granted for a 5-second window
+    /// post-register. Hence: enabled-at-register ⇒ enabled-on-heartbeat,
+    /// strictly. The two flags share a single source of truth via
+    /// [`crate::pool_boot::PoolBootConfig::kreuzberg_enabled`].
+    pub kreuzberg_enabled: bool,
 }
 
 /// Long-running heartbeat task. Spawned by `executor-service::main` after
@@ -119,10 +136,7 @@ async fn apply_backoff(backoff: &mut u64, cancel: &CancellationToken) {
     *backoff = (*backoff * 2).min(MAX_BACKOFF_SECS);
 }
 
-async fn build_payload(
-    config: &HeartbeatConfig,
-    ollama: &OllamaSubprocess,
-) -> serde_json::Value {
+async fn build_payload(config: &HeartbeatConfig, ollama: &OllamaSubprocess) -> serde_json::Value {
     let health = if ollama.health_check().await {
         "Ready"
     } else {
@@ -133,7 +147,30 @@ async fn build_payload(
     let loaded_models = probe_loaded_models(ollama).await;
     let ollama_version = probe_ollama_version(ollama).await;
 
-    serde_json::json!({
+    build_payload_from_parts(config, &ollama_version, loaded_models, health)
+}
+
+/// Pure payload assembly. Split out of [`build_payload`] so it can be
+/// asserted in unit tests without standing up a live Ollama subprocess.
+/// `build_payload` is the runtime entry point; this helper is the testable
+/// surface.
+///
+/// Wire-shape contract:
+///
+/// - Always emits: `pool_id`, `pool_url`, `hardware`, `engines`,
+///   `loaded_models`, `queue_depth`, `health`.
+/// - Conditionally emits `services` ONLY when at least one feature
+///   advertises (today: kreuzberg). When no feature is advertising the
+///   `services` key is OMITTED ENTIRELY — preserves byte-identical parity
+///   with the pre-OCR heartbeat wire shape so non-kreuzberg deployments
+///   see zero diff.
+fn build_payload_from_parts(
+    config: &HeartbeatConfig,
+    ollama_version: &str,
+    loaded_models: Vec<String>,
+    health: &str,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
         "pool_id": config.pool_id,
         "pool_url": config.pool_url,
         "hardware": config.hardware,
@@ -145,7 +182,23 @@ async fn build_payload(
         "loaded_models": loaded_models,
         "queue_depth": 0,
         "health": health,
-    })
+    });
+
+    if config.kreuzberg_enabled {
+        // Mirror the register-side shape: services.kreuzberg.healthy=true.
+        // The cap-routing resolver consumes either services.kreuzberg or
+        // (separately, legacy) services.ocr_sidecar to grant Capability::Ocr.
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert(
+                "services".to_string(),
+                serde_json::json!({
+                    "kreuzberg": { "healthy": true },
+                }),
+            );
+        }
+    }
+
+    payload
 }
 
 /// Probe Ollama for currently-loaded models. Exposed so the executor's
@@ -189,10 +242,7 @@ async fn probe_ollama_version(ollama: &OllamaSubprocess) -> String {
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
-                json["version"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .to_string()
+                json["version"].as_str().unwrap_or("unknown").to_string()
             } else {
                 "unknown".to_string()
             }
@@ -227,5 +277,67 @@ mod tests {
         assert_eq!(b, 30, "16 doubles to 32, capped at 30");
         apply_backoff(&mut b, &cancel).await;
         assert_eq!(b, 30, "cap holds");
+    }
+
+    /// Shared fixture: a `HeartbeatConfig` with the kreuzberg flag
+    /// caller-controlled. All non-kreuzberg fields are dummy stand-ins;
+    /// they're not load-bearing for the services-block assertion.
+    fn fixture_config(kreuzberg_enabled: bool) -> HeartbeatConfig {
+        HeartbeatConfig {
+            capability_routing_url: "http://127.0.0.1:3101".to_string(),
+            pool_id: Uuid::nil(),
+            pool_url: "http://127.0.0.1:3301".to_string(),
+            hardware: HardwareAdvertisement::Metal {
+                unified_memory_gb: 128,
+            },
+            engine_capabilities: vec!["GgufQuantization".to_string()],
+            heartbeat_token: "fixture-token".to_string(),
+            kreuzberg_enabled,
+        }
+    }
+
+    /// When kreuzberg is enabled in `HeartbeatConfig`, every heartbeat tick
+    /// MUST include `services.kreuzberg.healthy = true`. Necessary because
+    /// cap-routing's heartbeat handler overwrites the row's services field
+    /// — omitting the block on heartbeat would wipe the kreuzberg
+    /// advertisement set at register time.
+    #[test]
+    fn build_payload_emits_kreuzberg_block_when_enabled() {
+        let config = fixture_config(true);
+        let payload = build_payload_from_parts(
+            &config,
+            "0.x-test",
+            vec![],
+            "Ready",
+        );
+        assert_eq!(
+            payload["services"]["kreuzberg"]["healthy"], true,
+            "heartbeat MUST advertise kreuzberg healthy=true when enabled — got {payload}"
+        );
+    }
+
+    /// Honest-absence: when kreuzberg is disabled, the heartbeat payload
+    /// MUST NOT contain a `services` key at all. Preserves pre-OCR wire
+    /// shape byte-for-byte — non-kreuzberg deployments see zero diff on
+    /// the heartbeat wire.
+    #[test]
+    fn build_payload_omits_services_key_when_kreuzberg_disabled() {
+        let config = fixture_config(false);
+        let payload = build_payload_from_parts(
+            &config,
+            "0.x-test",
+            vec![],
+            "Ready",
+        );
+        assert!(
+            payload.get("services").is_none(),
+            "heartbeat MUST omit `services` key entirely when no feature advertises — got {:?}",
+            payload.get("services")
+        );
+        // Sanity: the always-emitted fields still present so we know the
+        // assertion above isn't a false positive on a malformed payload.
+        assert!(payload.get("pool_id").is_some(), "pool_id always emitted");
+        assert!(payload.get("hardware").is_some(), "hardware always emitted");
+        assert_eq!(payload["health"], "Ready");
     }
 }

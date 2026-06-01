@@ -60,9 +60,8 @@ use crate::AppState;
 /// names: both are dereferenced as `<head>.<field>` in workflow source and
 /// so must be valid identifiers (lowercase leading letter, then lowercase
 /// letters / digits / underscore).
-static IDENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z][a-z0-9_]*$").expect("IDENT_REGEX must compile")
-});
+static IDENT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9_]*$").expect("IDENT_REGEX must compile"));
 
 /// Caller-implicit workspace: falls back to the user's session workspace
 /// (set by the resolver from claims), then to `Uuid::nil()` for code paths
@@ -179,10 +178,12 @@ fn validate_datacenter_connection(
     }
 }
 
+type ConfigSplit = (JsonMap<String, Value>, JsonMap<String, Value>);
+
 fn split_config(
     descriptor: &aithericon_resources::ResourceTypeDescriptor,
     config: Value,
-) -> Result<(JsonMap<String, Value>, JsonMap<String, Value>), ApiError> {
+) -> Result<ConfigSplit, ApiError> {
     let Value::Object(map) = config else {
         return Err(ApiError::bad_request(
             "config must be a JSON object keyed by field name",
@@ -225,7 +226,10 @@ fn split_config(
             )));
         }
         keys.sort();
-        public.insert(KV_KEYS_FIELD.to_string(), Value::Array(keys.into_iter().map(Value::String).collect()));
+        public.insert(
+            KV_KEYS_FIELD.to_string(),
+            Value::Array(keys.into_iter().map(Value::String).collect()),
+        );
         return Ok((public, secret));
     }
 
@@ -466,7 +470,9 @@ pub async fn list_resources(
     user: AuthUser,
     Query(params): Query<ListResourcesQuery>,
 ) -> Result<Json<PaginatedResponse<ResourceSummary>>, ApiError> {
-    let workspace_id = params.workspace_id.unwrap_or_else(|| caller_workspace(&user));
+    let workspace_id = params
+        .workspace_id
+        .unwrap_or_else(|| caller_workspace(&user));
     let offset = (params.page - 1) * params.per_page;
 
     let (rows, total) = if let Some(ref ty) = params.resource_type {
@@ -669,7 +675,14 @@ pub(crate) async fn create_resource_internal(
     .execute(&state.db)
     .await;
 
-    write_audit(&state.db, resource_id, version, principal_id, AuditAction::Create).await?;
+    write_audit(
+        &state.db,
+        resource_id,
+        version,
+        principal_id,
+        AuditAction::Create,
+    )
+    .await?;
 
     // R3/R4b: if this is a pool-backed kind (token_pool / datacenter), deploy
     // its backing net (idempotent, engine-down-tolerant). Runs after the
@@ -778,7 +791,10 @@ async fn ensure_pool_net_for_kind(
                 "slurm" => public.get("ssh_host").and_then(|v| v.as_str()).is_some(),
                 "nomad" => public.get("nomad_addr").and_then(|v| v.as_str()).is_some(),
                 // http (or unknown) → needs allocator_url
-                _ => public.get("allocator_url").and_then(|v| v.as_str()).is_some(),
+                _ => public
+                    .get("allocator_url")
+                    .and_then(|v| v.as_str())
+                    .is_some(),
             };
             if !required_present {
                 tracing::warn!(
@@ -805,8 +821,7 @@ async fn ensure_pool_net_for_kind(
                 ssh_user: s("ssh_user"),
                 ssh_known_hosts: s("ssh_known_hosts"),
                 template_dir: s("template_dir"),
-                ssh_key_secret_ref: (scheduler_flavor == "slurm")
-                    .then(|| secret_ref("ssh_key")),
+                ssh_key_secret_ref: (scheduler_flavor == "slurm").then(|| secret_ref("ssh_key")),
 
                 nomad_addr: s("nomad_addr"),
                 nomad_region: s("nomad_region"),
@@ -937,13 +952,11 @@ pub async fn update_resource(
         if trimmed.is_empty() {
             return Err(ApiError::bad_request("display_name cannot be empty"));
         }
-        sqlx::query(
-            "UPDATE resources SET display_name = $1, updated_at = NOW() WHERE id = $2",
-        )
-        .bind(&trimmed)
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE resources SET display_name = $1, updated_at = NOW() WHERE id = $2")
+            .bind(&trimmed)
+            .bind(row.id)
+            .execute(&state.db)
+            .await?;
         display_name = trimmed;
     }
 
@@ -967,15 +980,20 @@ pub async fn update_resource(
         )
         .await?;
 
-        sqlx::query(
-            "UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2",
-        )
-        .bind(latest_version)
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2")
+            .bind(latest_version)
+            .bind(row.id)
+            .execute(&state.db)
+            .await?;
 
-        write_audit(&state.db, row.id, latest_version, principal_id, AuditAction::Update).await?;
+        write_audit(
+            &state.db,
+            row.id,
+            latest_version,
+            principal_id,
+            AuditAction::Update,
+        )
+        .await?;
 
         // R3/R4b: re-deploy the backing net on a pool-kind version bump so a
         // config change (capacity / allocator url+token) takes effect
@@ -998,7 +1016,10 @@ pub async fn update_resource(
     // request.
     let dynamic_keys = if new_kv_keys.is_some() {
         new_kv_keys
-    } else if lookup(&row.resource_type).map(|d| d.dynamic_fields).unwrap_or(false) {
+    } else if lookup(&row.resource_type)
+        .map(|d| d.dynamic_fields)
+        .unwrap_or(false)
+    {
         fetch_dynamic_keys(&state.db, std::slice::from_ref(&row))
             .await?
             .remove(&row.id)
@@ -1044,12 +1065,10 @@ pub async fn delete_resource(
     .await?
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
-    sqlx::query(
-        "UPDATE resources SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1",
-    )
-    .bind(row.id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE resources SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1")
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
 
     write_audit(
         &state.db,
@@ -1113,15 +1132,20 @@ pub async fn rotate_resource(
     )
     .await?;
 
-    sqlx::query(
-        "UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2",
-    )
-    .bind(new_version)
-    .bind(row.id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE resources SET latest_version = $1, updated_at = NOW() WHERE id = $2")
+        .bind(new_version)
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
 
-    write_audit(&state.db, row.id, new_version, principal_id, AuditAction::Rotate).await?;
+    write_audit(
+        &state.db,
+        row.id,
+        new_version,
+        principal_id,
+        AuditAction::Rotate,
+    )
+    .await?;
 
     let dynamic_keys = extract_kv_keys(&public);
     Ok(Json(ResourceSummary {
@@ -1157,12 +1181,10 @@ pub async fn list_resource_audit(
 ) -> Result<Json<PaginatedResponse<ResourceAuditEntry>>, ApiError> {
     // Soft-delete tolerance: audit trail is still queryable for deleted
     // resources (compliance), so we don't filter `deleted_at`.
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM resources WHERE id = $1)",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM resources WHERE id = $1)")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
     if !exists {
         return Err(ApiError::not_found("resource not found"));
     }
@@ -1179,12 +1201,11 @@ pub async fn list_resource_audit(
     .bind(offset)
     .fetch_all(&state.db)
     .await?;
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM resource_audit WHERE resource_id = $1",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM resource_audit WHERE resource_id = $1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
 
     Ok(Json(PaginatedResponse {
         items: rows,

@@ -202,8 +202,13 @@ mod tests {
         assert_eq!(claims.issuer, "https://issuer");
         assert_eq!(claims.audience, vec!["mekhan".to_string()]);
         assert_eq!(claims.expires_at, 1_700_000_000);
-        assert_eq!(claims.extra.get("email").and_then(|v| v.as_str()), Some("u@e"));
-        assert!(claims.extra.contains_key("urn:zitadel:iam:org:project:roles"));
+        assert_eq!(
+            claims.extra.get("email").and_then(|v| v.as_str()),
+            Some("u@e")
+        );
+        assert!(claims
+            .extra
+            .contains_key("urn:zitadel:iam:org:project:roles"));
     }
 
     #[test]

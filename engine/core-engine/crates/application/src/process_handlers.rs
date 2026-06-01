@@ -57,11 +57,10 @@ impl EffectHandler for ProcessStartHandler {
             .as_ref()
             .ok_or_else(|| EffectError::Fatal("ProcessStartHandler requires config".into()))?;
 
-        let trigger = input
-            .inputs
-            .values()
-            .next()
-            .ok_or_else(|| EffectError::Fatal("ProcessStartHandler requires an input".into()))?;
+        let trigger =
+            input.inputs.values().next().ok_or_else(|| {
+                EffectError::Fatal("ProcessStartHandler requires an input".into())
+            })?;
 
         // Build process_id from config
         let prefix = config
@@ -107,7 +106,10 @@ impl EffectHandler for ProcessStartHandler {
             .get("description")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let steps = config.get("steps").cloned().unwrap_or(JsonValue::Array(vec![]));
+        let steps = config
+            .get("steps")
+            .cloned()
+            .unwrap_or(JsonValue::Array(vec![]));
 
         // Build output tokens
         let mut tokens = HashMap::new();
@@ -150,10 +152,7 @@ impl EffectHandler for ProcessStartHandler {
     fn port_schemas(&self) -> Option<crate::effect::EffectPortSchemas> {
         Some(crate::effect::EffectPortSchemas {
             inputs: HashMap::new(),
-            outputs: HashMap::from([(
-                "process".into(),
-                "#/definitions/ProcessStarted".into(),
-            )]),
+            outputs: HashMap::from([("process".into(), "#/definitions/ProcessStarted".into())]),
         })
     }
 }
@@ -188,9 +187,7 @@ impl EffectHandler for ProcessCompleteHandler {
             .chain(input.inputs.values())
             .find_map(|v| v.get("process_id").and_then(|p| p.as_str()))
             .ok_or_else(|| {
-                EffectError::Fatal(
-                    "ProcessCompleteHandler: no process_id found in inputs".into(),
-                )
+                EffectError::Fatal("ProcessCompleteHandler: no process_id found in inputs".into())
             })?
             .to_string();
 

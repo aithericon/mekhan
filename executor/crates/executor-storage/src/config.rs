@@ -1,8 +1,6 @@
 // Re-export storage types from the shared crate.
 // This preserves backward compatibility for all downstream consumers.
-pub use aithericon_executor_storage_types::{
-    StorageBackend, StorageConfig, StorageCredentials,
-};
+pub use aithericon_executor_storage_types::{StorageBackend, StorageConfig, StorageCredentials};
 
 #[cfg(test)]
 mod tests {

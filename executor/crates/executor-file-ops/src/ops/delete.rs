@@ -18,11 +18,7 @@ use super::{resolve_path, FileOpsError, FileOpsResult};
 ///
 /// - `path` — the path from the config
 /// - `deleted` — always `true` on success
-pub async fn execute(
-    config: &DeleteConfig,
-    operator: &Operator,
-    prefix: &str,
-) -> FileOpsResult {
+pub async fn execute(config: &DeleteConfig, operator: &Operator, prefix: &str) -> FileOpsResult {
     let full_path = resolve_path(prefix, &config.path);
 
     if !config.ignore_missing {

@@ -209,7 +209,12 @@ async fn resolve_returns_envelope_with_inline_public_and_secret_refs() {
     );
 
     let envelope = resolver
-        .resolve(workspace_id, principal_id, &bindings, audit_ctx_for(principal_id))
+        .resolve(
+            workspace_id,
+            principal_id,
+            &bindings,
+            audit_ctx_for(principal_id),
+        )
         .await
         .expect("resolve must succeed");
 
@@ -276,16 +281,20 @@ async fn resolve_writes_one_audit_row_per_alias() {
     );
 
     resolver
-        .resolve(workspace_id, principal_id, &bindings, audit_ctx_for(principal_id))
+        .resolve(
+            workspace_id,
+            principal_id,
+            &bindings,
+            audit_ctx_for(principal_id),
+        )
         .await
         .expect("two-alias resolve must succeed");
 
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT resource_id, action FROM resource_audit ORDER BY id ASC",
-    )
-    .fetch_all(&db)
-    .await
-    .expect("read audit rows");
+    let rows: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT resource_id, action FROM resource_audit ORDER BY id ASC")
+            .fetch_all(&db)
+            .await
+            .expect("read audit rows");
     assert_eq!(rows.len(), 2, "expected one audit row per alias");
     let resource_ids: Vec<Uuid> = rows.iter().map(|(rid, _)| *rid).collect();
     assert!(resource_ids.contains(&pg_id));
@@ -395,7 +404,12 @@ async fn resolve_wrong_workspace_returns_not_found() {
     );
 
     let err = resolver
-        .resolve(other_workspace, principal, &bindings, audit_ctx_for(principal))
+        .resolve(
+            other_workspace,
+            principal,
+            &bindings,
+            audit_ctx_for(principal),
+        )
         .await
         .expect_err("cross-workspace read must fail");
     match err {
@@ -444,7 +458,12 @@ async fn resolve_unknown_resource_type_returns_error() {
     );
 
     let err = resolver
-        .resolve(workspace_id, principal_id, &bindings, audit_ctx_for(principal_id))
+        .resolve(
+            workspace_id,
+            principal_id,
+            &bindings,
+            audit_ctx_for(principal_id),
+        )
         .await
         .expect_err("unknown type must error");
 
@@ -506,7 +525,12 @@ async fn resolve_pin_to_old_version_returns_old_public_config() {
         },
     );
     let env_v1 = resolver
-        .resolve(workspace_id, principal_id, &pin_v1, audit_ctx_for(principal_id))
+        .resolve(
+            workspace_id,
+            principal_id,
+            &pin_v1,
+            audit_ctx_for(principal_id),
+        )
         .await
         .expect("v1 resolve must succeed");
     assert_eq!(env_v1["db"]["host"], "old.example.internal");
@@ -522,7 +546,12 @@ async fn resolve_pin_to_old_version_returns_old_public_config() {
         },
     );
     let env_v2 = resolver
-        .resolve(workspace_id, principal_id, &pin_v2, audit_ctx_for(principal_id))
+        .resolve(
+            workspace_id,
+            principal_id,
+            &pin_v2,
+            audit_ctx_for(principal_id),
+        )
         .await
         .expect("v2 resolve must succeed");
     assert_eq!(env_v2["db"]["host"], "new.example.internal");
@@ -532,6 +561,12 @@ async fn resolve_pin_to_old_version_returns_old_public_config() {
     // so v1 secret ref must differ from v2.
     let v1_password = env_v1["db"]["password"].as_str().unwrap();
     let v2_password = env_v2["db"]["password"].as_str().unwrap();
-    assert!(v1_password.contains("/v1#password"), "v1 template was {v1_password}");
-    assert!(v2_password.contains("/v2#password"), "v2 template was {v2_password}");
+    assert!(
+        v1_password.contains("/v1#password"),
+        "v1 template was {v1_password}"
+    );
+    assert!(
+        v2_password.contains("/v2#password"),
+        "v2 template was {v2_password}"
+    );
 }

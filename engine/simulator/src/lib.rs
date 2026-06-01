@@ -34,7 +34,9 @@ use std::sync::Arc;
 
 use petri_application::{EvaluateFinalState as AppFinalState, PetriNetService};
 use petri_domain::{Marking, PlaceId};
-use petri_test_harness::doubles::{MockEventRepository, MockStateProjection, MockTopologyRepository};
+use petri_test_harness::doubles::{
+    MockEventRepository, MockStateProjection, MockTopologyRepository,
+};
 use petri_test_harness::fixtures::{TestContext, TestScenario};
 
 pub use petri_application::EffectHandler;

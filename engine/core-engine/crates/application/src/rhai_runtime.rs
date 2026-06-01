@@ -94,12 +94,21 @@ impl RhaiRuntime {
     pub fn new() -> Self {
         let mut engine = Engine::new();
 
-        // Sandbox configuration
+        // Sandbox configuration.
+        //
+        // Limits are defense-in-depth against runaway *compiler-generated*
+        // transition logic — not an untrusted-script boundary — so they are
+        // sized for real AI-pipeline payloads, which the original 10k caps were
+        // not. A document-intelligence net projects whole OCR results through a
+        // transition's token map: a multi-page Surya `words` array (one map per
+        // word, with bounding boxes) plus `full_text` easily blows past a
+        // 10k array/map cap (`Size of object map too large` at `ocr/t_success`).
+        // Keep finite ceilings to still catch genuine runaways / OOM.
         engine.set_max_expr_depths(64, 64);
-        engine.set_max_operations(10_000);
-        engine.set_max_string_size(1_000_000); // 1MB strings
-        engine.set_max_array_size(10_000);
-        engine.set_max_map_size(10_000);
+        engine.set_max_operations(50_000_000);
+        engine.set_max_string_size(16_000_000); // 16MB strings (large OCR full_text)
+        engine.set_max_array_size(2_000_000); // OCR words / extraction-field arrays
+        engine.set_max_map_size(2_000_000); // large nested result maps
 
         // Compiler-emitted helpers. Registered natively so transitions
         // don't have to ship a script-side definition for every emit
@@ -337,7 +346,7 @@ mod tests {
     #[test]
     fn test_runtime_new() {
         let runtime = RhaiRuntime::new();
-        assert_eq!(runtime.engine().max_operations(), 10_000);
+        assert_eq!(runtime.engine().max_operations(), 50_000_000);
     }
 
     #[test]
@@ -429,10 +438,8 @@ mod tests {
         inputs.insert("x".to_string(), json!(42));
 
         // Test quoted "type" key (as used in bo_oracle_net.rs)
-        let result = runtime.execute_script(
-            r#"#{ source: #{ "type": "inline", value: x } }"#,
-            &inputs,
-        );
+        let result =
+            runtime.execute_script(r#"#{ source: #{ "type": "inline", value: x } }"#, &inputs);
 
         let output = result.unwrap();
         let source = &output["source"];

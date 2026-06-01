@@ -61,8 +61,7 @@ impl Selector {
         match rest {
             None => Ok(Selector::Base(base.to_string())),
             Some(path) => {
-                let segments: Vec<String> =
-                    path.split('.').map(|s| s.to_string()).collect();
+                let segments: Vec<String> = path.split('.').map(|s| s.to_string()).collect();
                 if segments.iter().any(|s| s.is_empty()) {
                     return Err(ExecutorError::Config(format!(
                         "output selector '{s}' contains an empty segment"
@@ -247,10 +246,7 @@ mod tests {
                     "Content-Type": "application/json"
                 }),
             ),
-            (
-                "content_type".into(),
-                serde_json::json!("application/json"),
-            ),
+            ("content_type".into(), serde_json::json!("application/json")),
             ("response_time_ms".into(), serde_json::json!(150)),
         ])
     }
@@ -402,10 +398,7 @@ mod tests {
     fn apply_mapping_produces_extra_outputs() {
         let outputs = sample_outputs();
         let mapping = HashMap::from([
-            (
-                "item_id".into(),
-                Selector::parse("body.data.id").unwrap(),
-            ),
+            ("item_id".into(), Selector::parse("body.data.id").unwrap()),
             (
                 "req_id".into(),
                 Selector::parse("headers.x-request-id").unwrap(),

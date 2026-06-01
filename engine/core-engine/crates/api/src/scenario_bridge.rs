@@ -4,8 +4,7 @@
 //! parsing types, enabling a clean separation between API concerns and domain logic.
 
 use crate::dto::{
-    ScenarioArc, ScenarioPlace, ScenarioPort, ScenarioToken, ScenarioTransition,
-    TransitionLogic,
+    ScenarioArc, ScenarioPlace, ScenarioPort, ScenarioToken, ScenarioTransition, TransitionLogic,
 };
 use petri_application::scenario_loader::{
     ScenarioArcInput, ScenarioGuardInput, ScenarioLogicInput, ScenarioParser, ScenarioPlaceInput,
@@ -44,9 +43,10 @@ impl ScenarioBridge {
             bridge_reply: place.bridge_reply,
             bridge_reply_channel: place.bridge_reply_channel.clone(),
             token_schema: place.token_schema.clone(),
-            bridge_in_source: place.bridge_in.as_ref().map(|b| {
-                (b.source_net_id.clone(), b.source_place_name.clone())
-            }),
+            bridge_in_source: place
+                .bridge_in
+                .as_ref()
+                .map(|b| (b.source_net_id.clone(), b.source_place_name.clone())),
         }
     }
 

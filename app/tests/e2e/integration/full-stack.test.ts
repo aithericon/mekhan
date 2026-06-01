@@ -2,8 +2,8 @@
  * Full-stack E2E integration tests.
  *
  * These tests call real APIs against the running infrastructure:
- *   - mekhan-service (http://localhost:13100)
- *   - petri-lab      (http://localhost:13030)
+ *   - mekhan-service (http://localhost:3100)
+ *   - petri-lab      (http://localhost:3030)
  *
  * NO MOCKS. The full stack must be running before executing these tests.
  */

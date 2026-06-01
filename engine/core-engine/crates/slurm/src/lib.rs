@@ -10,7 +10,9 @@
 //! ## Architecture
 //!
 //! `SlurmClient` implements `SchedulerClient` from `petri-domain` — used by
-//! `SchedulerSubmitHandler` (Side 1: imperative commands).
+//! `SchedulerSubmitHandler` (Side 1: imperative commands). This is one of two
+//! dispatch patterns: the other is the resource-lease adapter (see
+//! `resource_lease_handlers`).
 //!
 //! `SlurmWatcher` is a standalone async loop — publishes to NATS signals
 //! (Side 2: reactive observations).
@@ -35,7 +37,7 @@ pub mod watcher;
 #[cfg(test)]
 mod integration_tests;
 
-pub use alloc::{Allocation, AllocError};
+pub use alloc::{AllocError, Allocation};
 pub use client::SlurmClient;
 pub use config::{SlurmConfig, SlurmConnectionParams};
 pub use watcher::{SlurmWatcher, WatcherError};

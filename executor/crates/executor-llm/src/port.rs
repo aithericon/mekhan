@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use aithericon_executor_domain::{LlmStopReason, LlmToolCall, LlmUsage, ToolSchema};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::config::LlmConfig;
 pub use crate::config::{ResponseFormat, Role};
@@ -27,6 +28,10 @@ pub struct CompletionRequest {
     pub messages: Vec<Message>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
+    /// Reasoning toggle ("thinking"). `None` = provider default, `Some(false)`
+    /// disables it, `Some(true)` forces it. Mapped to Ollama's `think` param;
+    /// ignored by adapters whose models don't reason.
+    pub reasoning: Option<bool>,
     pub response_format: ResponseFormat,
     /// Tools the LLM may call. Empty for non-agent single-shot calls.
     /// Adapters serialize these into provider-specific tool blocks.
@@ -82,6 +87,7 @@ pub struct ImageData {
 }
 
 /// Provider-agnostic completion response — full observability.
+#[derive(Debug)]
 pub struct CompletionResponse {
     pub content: String,
     pub usage: LlmUsage,
@@ -106,6 +112,26 @@ pub enum LlmError {
 
     #[error("response parse error: {0}")]
     Parse(String),
+}
+
+/// Error returned when a tool invocation fails inside the agent loop.
+///
+/// Fork-local — no upstream domain equivalent. Used by `agent_loop.rs`
+/// to surface dispatch failures back to the LLM as structured tool
+/// results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolError {
+    pub message: String,
+    pub kind: ToolErrorKind,
+}
+
+/// Classification of tool failure modes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorKind {
+    ExecutionFailed,
+    Timeout,
+    NotFound,
 }
 
 impl CompletionRequest {
@@ -150,6 +176,7 @@ impl CompletionRequest {
             messages,
             temperature: config.temperature,
             max_tokens: config.max_tokens,
+            reasoning: config.reasoning,
             response_format,
             tools: config.tools.clone(),
         }

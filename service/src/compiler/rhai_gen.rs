@@ -468,8 +468,8 @@ pub(crate) fn build_retry_topology(
         // Handled: surface as the node error output (routes to the wired
         // handler — or, on the pooled path, to the held-consuming release
         // transition). Byte-identical to the historical behavior.
-        let p_error = p_error
-            .expect("error_handled == true requires a p_error sink for the exhausted token");
+        let p_error =
+            p_error.expect("error_handled == true requires a p_error sink for the exhausted token");
         ctx.transition("exhausted", "Retries Exhausted")
             .auto_input("f", &failure)
             .auto_output("err", p_error)
@@ -484,14 +484,15 @@ pub(crate) fn build_retry_topology(
         // (which still fires), so observability is preserved before the crash.
         // No output port — `_deadend` suffix exempts it from the
         // every-transition-wired structural check (mirrors Decision's sink).
-        let msg = format!(
-            "automated step '{node_label}' failed and no error handler is wired"
-        );
-        ctx.transition("exhausted_deadend", "Retries Exhausted (no handler — crash net)")
-            .auto_input("f", &failure)
-            .guard_rhai("f.retries >= f.max_retries")
-            .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
-            .done();
+        let msg = format!("automated step '{node_label}' failed and no error handler is wired");
+        ctx.transition(
+            "exhausted_deadend",
+            "Retries Exhausted (no handler — crash net)",
+        )
+        .auto_input("f", &failure)
+        .guard_rhai("f.retries >= f.max_retries")
+        .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+        .done();
     }
 }
 
@@ -547,7 +548,9 @@ pub(crate) fn build_join_merge_logic_full(
         MergeStrategy::ShallowLastWins => {
             let mut s = format!("let result = {first}; ");
             for name in rest {
-                s.push_str(&format!("for k in {name}.keys() {{ result[k] = {name}[k]; }} "));
+                s.push_str(&format!(
+                    "for k in {name}.keys() {{ result[k] = {name}[k]; }} "
+                ));
             }
             s.push_str(tail);
             s
@@ -721,8 +724,7 @@ fn build_repeater_payload_block(steps: &[TaskStepConfig]) -> String {
     // emitted `null` / `()` (Option<Value>::None at the wire). __set_path
     // also defends against this internally, but a clean preamble keeps
     // the generated Rhai readable when authors inspect compiled AIR.
-    let mut out =
-        String::from("if type_of(d.payload) != \"map\" { d.payload = #{}; } ");
+    let mut out = String::from("if type_of(d.payload) != \"map\" { d.payload = #{}; } ");
     for e in emissions {
         out.push_str(&e);
     }
@@ -745,8 +747,7 @@ mod tests {
     //! `dotted_slug_path_*` cases below codify that gap.
     use super::*;
     use crate::models::template::{
-        CalloutSeverity, Position, TaskBlockConfig, TaskStepConfig, WorkflowNode,
-        WorkflowNodeData,
+        CalloutSeverity, Position, TaskBlockConfig, TaskStepConfig, WorkflowNode, WorkflowNodeData,
     };
 
     fn ht_node(
@@ -1002,8 +1003,7 @@ mod tests {
         // And critically — NOT against a slug-namespaced map. If the
         // model ever changes, this line is what fails first.
         assert!(
-            !script.contains(r#"__pluck(input.start"#)
-                && !script.contains(r#"__pluck(scopes,"#),
+            !script.contains(r#"__pluck(input.start"#) && !script.contains(r#"__pluck(scopes,"#),
             "dotted-path lowering should still hit `input` at the root: {script}"
         );
     }

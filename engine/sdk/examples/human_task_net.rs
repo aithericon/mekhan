@@ -77,7 +77,8 @@ fn definition(ctx: &mut Context) {
                 "input_ref": "PETRI-DEMO-001",
                 "origin": "demo-script"
             }
-        })).unwrap()],
+        }))
+        .unwrap()],
     );
 
     // -- Transitions ----------------------------------------------------------

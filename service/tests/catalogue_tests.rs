@@ -85,8 +85,28 @@ async fn catalogue_list_empty() {
 async fn catalogue_list_returns_seeded_entries() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "gp_model", "model", Some("bo-surrogate"), Some("campaign-1"), Some(1024)).await;
-    seed_entry(&db, "art-2", "exec-2", "observations", "dataset", Some("bo-surrogate"), Some("campaign-1"), Some(512)).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "gp_model",
+        "model",
+        Some("bo-surrogate"),
+        Some("campaign-1"),
+        Some(1024),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "observations",
+        "dataset",
+        Some("bo-surrogate"),
+        Some("campaign-1"),
+        Some(512),
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -114,7 +134,10 @@ async fn catalogue_list_returns_seeded_entries() {
 async fn catalogue_filter_bracket_notation() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "gp_model", "model", None, None, None).await;
+    seed_entry(
+        &db, "art-1", "exec-1", "gp_model", "model", None, None, None,
+    )
+    .await;
     seed_entry(&db, "art-2", "exec-2", "data", "dataset", None, None, None).await;
     seed_entry(&db, "art-3", "exec-3", "chart", "plot", None, None, None).await;
 
@@ -142,9 +165,39 @@ async fn catalogue_filter_bracket_notation() {
 async fn catalogue_filter_contains() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "gp_model_v1", "model", None, None, None).await;
-    seed_entry(&db, "art-2", "exec-2", "gp_model_v2", "model", None, None, None).await;
-    seed_entry(&db, "art-3", "exec-3", "observations", "dataset", None, None, None).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "gp_model_v1",
+        "model",
+        None,
+        None,
+        None,
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "gp_model_v2",
+        "model",
+        None,
+        None,
+        None,
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-3",
+        "exec-3",
+        "observations",
+        "dataset",
+        None,
+        None,
+        None,
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -169,7 +222,10 @@ async fn catalogue_filter_in() {
     let (app, db) = common::test_app().await;
 
     seed_entry(&db, "art-1", "exec-1", "model_a", "model", None, None, None).await;
-    seed_entry(&db, "art-2", "exec-2", "data_a", "dataset", None, None, None).await;
+    seed_entry(
+        &db, "art-2", "exec-2", "data_a", "dataset", None, None, None,
+    )
+    .await;
     seed_entry(&db, "art-3", "exec-3", "chart_a", "plot", None, None, None).await;
 
     let resp = app
@@ -194,9 +250,39 @@ async fn catalogue_filter_in() {
 async fn catalogue_sort_desc() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "small", "model", None, None, Some(100)).await;
-    seed_entry(&db, "art-2", "exec-2", "big", "model", None, None, Some(9999)).await;
-    seed_entry(&db, "art-3", "exec-3", "medium", "model", None, None, Some(500)).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "small",
+        "model",
+        None,
+        None,
+        Some(100),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "big",
+        "model",
+        None,
+        None,
+        Some(9999),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-3",
+        "exec-3",
+        "medium",
+        "model",
+        None,
+        None,
+        Some(500),
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -223,8 +309,28 @@ async fn catalogue_sort_desc() {
 async fn catalogue_search() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "gp_model_rbf", "model", None, None, None).await;
-    seed_entry(&db, "art-2", "exec-2", "observations", "dataset", None, None, None).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "gp_model_rbf",
+        "model",
+        None,
+        None,
+        None,
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "observations",
+        "dataset",
+        None,
+        None,
+        None,
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -249,10 +355,50 @@ async fn catalogue_search() {
 async fn catalogue_combined_query() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "gp_model_v1", "model", Some("net-a"), None, Some(100)).await;
-    seed_entry(&db, "art-2", "exec-2", "gp_model_v2", "model", Some("net-a"), None, Some(200)).await;
-    seed_entry(&db, "art-3", "exec-3", "gp_model_v3", "model", Some("net-a"), None, Some(300)).await;
-    seed_entry(&db, "art-4", "exec-4", "observations", "dataset", Some("net-a"), None, Some(50)).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "gp_model_v1",
+        "model",
+        Some("net-a"),
+        None,
+        Some(100),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "gp_model_v2",
+        "model",
+        Some("net-a"),
+        None,
+        Some(200),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-3",
+        "exec-3",
+        "gp_model_v3",
+        "model",
+        Some("net-a"),
+        None,
+        Some(300),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-4",
+        "exec-4",
+        "observations",
+        "dataset",
+        Some("net-a"),
+        None,
+        Some(50),
+    )
+    .await;
 
     // Filter by category=model, search=gp, sort by size desc, page_size=2
     let resp = app
@@ -294,7 +440,10 @@ async fn catalogue_invalid_filter_field() {
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp.into_body()).await;
-    assert!(body["error"].as_str().unwrap().contains("invalid filter field"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("invalid filter field"));
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +466,10 @@ async fn catalogue_invalid_sort_field() {
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp.into_body()).await;
-    assert!(body["error"].as_str().unwrap().contains("invalid sort field"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("invalid sort field"));
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +480,17 @@ async fn catalogue_invalid_sort_field() {
 async fn catalogue_get_single_entry() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-42", "my_model", "model", Some("test-net"), None, Some(2048)).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-42",
+        "my_model",
+        "model",
+        Some("test-net"),
+        None,
+        Some(2048),
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -375,9 +537,39 @@ async fn catalogue_get_not_found() {
 async fn catalogue_stats_filterable() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "model_1", "model", Some("net-a"), None, Some(1000)).await;
-    seed_entry(&db, "art-2", "exec-2", "model_2", "model", Some("net-b"), None, Some(2000)).await;
-    seed_entry(&db, "art-3", "exec-3", "data_1", "dataset", Some("net-a"), None, Some(500)).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "model_1",
+        "model",
+        Some("net-a"),
+        None,
+        Some(1000),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "model_2",
+        "model",
+        Some("net-b"),
+        None,
+        Some(2000),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-3",
+        "exec-3",
+        "data_1",
+        "dataset",
+        Some("net-a"),
+        None,
+        Some(500),
+    )
+    .await;
 
     // Unfiltered stats
     let resp = app
@@ -420,9 +612,39 @@ async fn catalogue_stats_filterable() {
 async fn catalogue_stats_by_net() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "m1", "model", Some("net-a"), None, Some(100)).await;
-    seed_entry(&db, "art-2", "exec-2", "m2", "model", Some("net-a"), None, Some(200)).await;
-    seed_entry(&db, "art-3", "exec-3", "d1", "dataset", Some("net-b"), None, Some(50)).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "m1",
+        "model",
+        Some("net-a"),
+        None,
+        Some(100),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "m2",
+        "model",
+        Some("net-a"),
+        None,
+        Some(200),
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-3",
+        "exec-3",
+        "d1",
+        "dataset",
+        Some("net-b"),
+        None,
+        Some(50),
+    )
+    .await;
 
     let resp = app
         .oneshot(
@@ -450,9 +672,39 @@ async fn catalogue_stats_by_net() {
 async fn catalogue_lineage() {
     let (app, db) = common::test_app().await;
 
-    seed_entry(&db, "art-1", "exec-1", "iter_0_model", "model", None, Some("campaign-42"), None).await;
-    seed_entry(&db, "art-2", "exec-2", "iter_1_model", "model", None, Some("campaign-42"), None).await;
-    seed_entry(&db, "art-3", "exec-3", "other_model", "model", None, Some("campaign-99"), None).await;
+    seed_entry(
+        &db,
+        "art-1",
+        "exec-1",
+        "iter_0_model",
+        "model",
+        None,
+        Some("campaign-42"),
+        None,
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-2",
+        "exec-2",
+        "iter_1_model",
+        "model",
+        None,
+        Some("campaign-42"),
+        None,
+    )
+    .await;
+    seed_entry(
+        &db,
+        "art-3",
+        "exec-3",
+        "other_model",
+        "model",
+        None,
+        Some("campaign-99"),
+        None,
+    )
+    .await;
 
     let resp = app
         .oneshot(

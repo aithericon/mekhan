@@ -620,9 +620,8 @@ impl ClusterRegistry {
         };
         let config = SlurmConfig::from_connection(params);
 
-        let allocator: Arc<dyn AllocatorClient> = Arc::new(
-            crate::slurm_allocator::SlurmAllocatorClient::from_connection(config.clone()),
-        );
+        let allocator: Arc<dyn AllocatorClient> =
+            Arc::new(crate::slurm_allocator::SlurmAllocatorClient::from_connection(config.clone()));
 
         let health = Arc::new(ClusterHealth::new(WatcherState::Reconnecting));
         let watcher = self
@@ -914,10 +913,11 @@ impl AllocatorClient for ClusterRegistryAllocatorClient {
             ..Default::default()
         };
         let client = self.registry.get_or_build(&conn).await?;
-        let res = client.allocator.release(allocator_url, token, alloc_id).await;
-        self.registry
-            .release(DEV_BOOTSTRAP_RESOURCE_ID, 0)
+        let res = client
+            .allocator
+            .release(allocator_url, token, alloc_id)
             .await;
+        self.registry.release(DEV_BOOTSTRAP_RESOURCE_ID, 0).await;
         res
     }
 
@@ -1065,7 +1065,11 @@ mod tests {
             }
             other => panic!("expected BadResponse, got {other:?}"),
         }
-        assert_eq!(reg.len().await, 0, "a bad-flavor fire must not cache a client");
+        assert_eq!(
+            reg.len().await,
+            0,
+            "a bad-flavor fire must not cache a client"
+        );
     }
 
     #[test]

@@ -121,10 +121,7 @@ async fn create_instance_from_unpublished_returns_400() {
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_json(resp.into_body()).await;
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("not published"));
+    assert!(body["error"].as_str().unwrap().contains("not published"));
 }
 
 // ---------------------------------------------------------------------------
@@ -310,13 +307,12 @@ async fn cancel_instance_updates_status_in_db() {
     assert_eq!(body["status"], "cancelled");
 
     // Verify in DB
-    let (status,): (String,) = sqlx::query_as(
-        "SELECT status FROM workflow_instances WHERE id = $1",
-    )
-    .bind(instance_id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    let (status,): (String,) =
+        sqlx::query_as("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
 
     assert_eq!(status, "cancelled");
 }

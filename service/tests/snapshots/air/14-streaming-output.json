@@ -337,7 +337,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -444,7 +444,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -609,7 +609,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",
@@ -778,7 +778,7 @@
                       "type": "null"
                     }
                   ],
-                  "description": "Per-input storage backend config. Supports `{{secret:KEY}}` in credentials."
+                  "description": "Per-input storage backend config. Supports `{{ secret:KEY }}` in credentials."
                 },
                 "type": {
                   "enum": [
@@ -885,7 +885,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Upload this file output to a specific storage destination after execution. Supports `{{secret:KEY}}` patterns in storage credentials."
+              "description": "Upload this file output to a specific storage destination after execution. Supports `{{ secret:KEY }}` patterns in storage credentials."
             }
           },
           "required": [
@@ -1050,7 +1050,7 @@
           "type": "object"
         },
         "StorageCredentials": {
-          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{secret:KEY}}` patterns that are resolved by the staging pipeline before use.",
+          "description": "Credentials for accessing a storage backend.\n\nLoaded from environment variables (`EXECUTOR_STORAGE_CREDENTIALS_ACCESS_KEY`, `EXECUTOR_STORAGE_CREDENTIALS_SECRET_KEY`) or from the `[storage.credentials]` section in `executor.toml`.\n\nCredential fields support `{{ secret:KEY }}` patterns that are resolved by the staging pipeline before use.",
           "properties": {
             "access_key": {
               "default": "",
@@ -2250,7 +2250,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Producer — streaming-output demo.\\n#\\n# `streamOutput: true` (graph.json) makes every `set_output(name, value)` call\\n# emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this\\n# node's stream side-channel (the `p_producer_stream` Signal place). A downstream\\n# StreamConsumer wired from the \\\"stream\\\" handle drains each chunk as it arrives.\\n#\\n# We emit one DISTINCT-named chunk per word, each value a plain string (distinct\\n# names matter: the stream token dedup id is content-addressable per output\\n# name). The consumer's Concat reduce joins them in stream order into the full\\n# sentence \\\"the quick brown fox\\\".\\n#\\n# IMPORTANT: a streaming producer must emit ONLY stream chunks — every\\n# `set_output` becomes a stream token and is counted into `stream_count` (the\\n# end-of-stream N). Do NOT also set a `produced`/`count` control output here, or\\n# it inflates N and pollutes the consumer's reduction.\\n#\\n# At job end the executor stamps `stream_count` (= 4 here) on the terminal\\n# Completed detail; it rides the producer's control token to the consumer's\\n# \\\"control\\\" handle, where it sizes the end-of-stream gather barrier. The sleeps\\n# space the chunks out so they stream over time.\\n\\nimport time\\n\\nfrom aithericon import set_output\\n\\nwords = [\\\"the\\\", \\\"quick\\\", \\\"brown\\\", \\\"fox\\\"]\\nfor i, w in enumerate(words):\\n    set_output(f\\\"chunk_{i}\\\", w)\\n    time.sleep(1.0)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\", \"output\"] }; #{ job: d }",
+        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Producer — streaming-output demo.\\n#\\n# `streamOutput: true` (graph.json) makes every `set_output(name, value)` call\\n# emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this\\n# node's stream side-channel (the `p_producer_stream` Signal place). A downstream\\n# StreamFold wired from the \\\"stream\\\" handle drains each chunk as it arrives.\\n#\\n# We emit one DISTINCT-named chunk per word, each value a plain string (distinct\\n# names matter: the stream token dedup id is content-addressable per output\\n# name). The consumer's Concat reduce joins them in stream order into the full\\n# sentence \\\"the quick brown fox\\\".\\n#\\n# IMPORTANT: a streaming producer must emit ONLY stream chunks — every\\n# `set_output` becomes a stream token and is counted into `stream_count` (the\\n# end-of-stream N). Do NOT also set a `produced`/`count` control output here, or\\n# it inflates N and pollutes the consumer's reduction.\\n#\\n# At job end the executor stamps `stream_count` (= 4 here) on the terminal\\n# Completed detail; it rides the producer's control token to the consumer's\\n# \\\"control\\\" handle, where it sizes the end-of-stream gather barrier. The sleeps\\n# space the chunks out so they stream over time.\\n\\nimport time\\n\\nfrom aithericon import set_output\\n\\nwords = [\\\"the\\\", \\\"quick\\\", \\\"brown\\\", \\\"fox\\\"]\\nfor i, w in enumerate(words):\\n    set_output(f\\\"chunk_{i}\\\", w)\\n    time.sleep(1.0)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\", \"output\"] }; d.feed_chunks = false; #{ job: d }",
         "type": "rhai"
       },
       "name": "Producer - Prepare",

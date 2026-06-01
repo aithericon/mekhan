@@ -174,10 +174,7 @@ impl StagingHook for CreateRunDirectoryHook {
             let mut perms = tokio::fs::metadata(&ctx.run_dir.root)
                 .await
                 .map_err(|e| {
-                    ExecutorError::RunDirectory(format!(
-                        "stat {}: {e}",
-                        ctx.run_dir.root.display()
-                    ))
+                    ExecutorError::RunDirectory(format!("stat {}: {e}", ctx.run_dir.root.display()))
                 })?
                 .permissions();
             perms.set_mode(0o700);
@@ -368,10 +365,8 @@ impl StagingHook for StageInputsHook {
                     // would land the unresolved placeholder in the input
                     // file the child reads (e.g. Python's AccessibleDict
                     // would surface the literal "{{secret:...}}" string).
-                    let effective_value = ctx
-                        .resolved_inline_inputs
-                        .get(&input.name)
-                        .unwrap_or(value);
+                    let effective_value =
+                        ctx.resolved_inline_inputs.get(&input.name).unwrap_or(value);
                     let dest = ctx.run_dir.inputs_dir.join(&input.name);
                     let data = serde_json::to_vec_pretty(effective_value).map_err(|e| {
                         ExecutorError::StagingFailed(format!(
@@ -389,12 +384,14 @@ impl StagingHook for StageInputsHook {
                 }
                 aithericon_executor_domain::InputSource::Raw { content } => {
                     let dest = ctx.run_dir.inputs_dir.join(&input.name);
-                    tokio::fs::write(&dest, content.as_bytes()).await.map_err(|e| {
-                        ExecutorError::StagingFailed(format!(
-                            "failed to write raw input '{}': {e}",
-                            input.name
-                        ))
-                    })?;
+                    tokio::fs::write(&dest, content.as_bytes())
+                        .await
+                        .map_err(|e| {
+                            ExecutorError::StagingFailed(format!(
+                                "failed to write raw input '{}': {e}",
+                                input.name
+                            ))
+                        })?;
                     ctx.staged_inputs.insert(input.name.clone(), dest);
                 }
                 aithericon_executor_domain::InputSource::StoragePath { path, storage } => {
@@ -432,14 +429,12 @@ impl StagingHook for StageInputsHook {
                                     input.name, path
                                 ))
                             })?;
-                            tokio::fs::write(&dest, data.to_vec()).await.map_err(
-                                |e| {
-                                    ExecutorError::StagingFailed(format!(
-                                        "write input '{}': {e}",
-                                        input.name
-                                    ))
-                                },
-                            )?;
+                            tokio::fs::write(&dest, data.to_vec()).await.map_err(|e| {
+                                ExecutorError::StagingFailed(format!(
+                                    "write input '{}': {e}",
+                                    input.name
+                                ))
+                            })?;
                             ctx.staged_events.push(StagedEvent {
                                 category: EventCategory::Artifact,
                                 detail: StatusDetail::ArtifactConsumed {
@@ -466,14 +461,12 @@ impl StagingHook for StageInputsHook {
                             let dest = ctx.run_dir.inputs_dir.join(&final_name);
                             if let Some(store) = &self.store {
                                 let storage_path = StoragePath(path.clone());
-                                store.download(&storage_path, &dest).await.map_err(
-                                    |e| {
-                                        ExecutorError::StagingFailed(format!(
-                                            "download input '{}' from '{}': {e}",
-                                            input.name, path
-                                        ))
-                                    },
-                                )?;
+                                store.download(&storage_path, &dest).await.map_err(|e| {
+                                    ExecutorError::StagingFailed(format!(
+                                        "download input '{}' from '{}': {e}",
+                                        input.name, path
+                                    ))
+                                })?;
                                 ctx.staged_events.push(StagedEvent {
                                     category: EventCategory::Artifact,
                                     detail: StatusDetail::ArtifactConsumed {
@@ -695,23 +688,22 @@ impl StagingHook for PlanSecretsHook {
         // Determine which store to use for resolving {{secret:KEY}} patterns.
         // If the job carries a Vault wrapping token, unwrap it to get an in-memory
         // store. Otherwise, fall back to the configured store (env, vault, etc.).
-        let effective_store: Arc<dyn SecretStore> =
-            match (&job.wrapped_secrets, &self.vault_addr) {
-                #[cfg(feature = "vault")]
-                (Some(wrapping_token), Some(vault_addr)) => {
-                    debug!("unwrapping Vault wrapping token for secrets");
-                    let unwrapped =
-                        aithericon_secrets::vault_unwrap_secrets(vault_addr, wrapping_token)
-                            .await
-                            .map_err(|e| {
-                                ExecutorError::SecretResolutionFailed(format!(
-                                    "failed to unwrap secrets: {e}"
-                                ))
-                            })?;
-                    Arc::new(aithericon_secrets::InMemorySecretStore::new(unwrapped))
-                }
-                _ => self.store.clone(),
-            };
+        let effective_store: Arc<dyn SecretStore> = match (&job.wrapped_secrets, &self.vault_addr) {
+            #[cfg(feature = "vault")]
+            (Some(wrapping_token), Some(vault_addr)) => {
+                debug!("unwrapping Vault wrapping token for secrets");
+                let unwrapped =
+                    aithericon_secrets::vault_unwrap_secrets(vault_addr, wrapping_token)
+                        .await
+                        .map_err(|e| {
+                            ExecutorError::SecretResolutionFailed(format!(
+                                "failed to unwrap secrets: {e}"
+                            ))
+                        })?;
+                Arc::new(aithericon_secrets::InMemorySecretStore::new(unwrapped))
+            }
+            _ => self.store.clone(),
+        };
 
         // 1. Plan resolved env values WITHOUT mutating ctx.env.
         //    The on-disk `env` keeps the {{secret:KEY}} templates so that
@@ -762,9 +754,7 @@ impl StagingHook for PlanSecretsHook {
                     let resolved =
                         aithericon_secrets::resolve_secrets(&val, effective_store.as_ref())
                             .await
-                            .map_err(|e| {
-                                ExecutorError::SecretResolutionFailed(e.to_string())
-                            })?;
+                            .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?;
                     ctx.resolved_input_storage
                         .insert(input.name.clone(), resolved);
                 }
@@ -784,9 +774,7 @@ impl StagingHook for PlanSecretsHook {
                     let resolved =
                         aithericon_secrets::resolve_secrets(&val, effective_store.as_ref())
                             .await
-                            .map_err(|e| {
-                                ExecutorError::SecretResolutionFailed(e.to_string())
-                            })?;
+                            .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?;
                     ctx.resolved_output_storage
                         .insert(output.name.clone(), resolved);
                 }
@@ -809,9 +797,7 @@ impl StagingHook for PlanSecretsHook {
                     let resolved =
                         aithericon_secrets::resolve_secrets(value, effective_store.as_ref())
                             .await
-                            .map_err(|e| {
-                                ExecutorError::SecretResolutionFailed(e.to_string())
-                            })?;
+                            .map_err(|e| ExecutorError::SecretResolutionFailed(e.to_string()))?;
                     ctx.resolved_inline_inputs
                         .insert(input.name.clone(), resolved);
                 }
@@ -844,8 +830,8 @@ fn json_contains_secret_template(v: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aithericon_executor_process::ProcessConfig;
     use aithericon_executor_domain::RunDirectory;
+    use aithericon_executor_process::ProcessConfig;
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -864,6 +850,7 @@ mod tests {
             timeout: None,
             priority: aithericon_executor_domain::JobPriority::Medium,
             stream_events: None,
+            feed_chunks: false,
             wrapped_secrets: None,
         }
     }
@@ -1165,14 +1152,16 @@ mod tests {
 
         let tmp = PathBuf::from("/tmp/staging-plan-fail-test");
         let mut ctx = test_context(&tmp);
-        ctx.env
-            .insert("TOKEN".into(), "{{secret:MISSING}}".into());
+        ctx.env.insert("TOKEN".into(), "{{secret:MISSING}}".into());
 
         let result = hook.stage(&test_job(), ctx).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             ExecutorError::SecretResolutionFailed(msg) => {
-                assert!(msg.contains("MISSING"), "Error should mention the key: {msg}");
+                assert!(
+                    msg.contains("MISSING"),
+                    "Error should mention the key: {msg}"
+                );
             }
             other => panic!("Expected SecretResolutionFailed, got {:?}", other),
         }

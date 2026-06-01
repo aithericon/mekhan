@@ -45,7 +45,8 @@ pub async fn list_entries(
 ) -> Result<Paginated<CatalogueEntry>, QueryError> {
     // -- COUNT query --
     let count = {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM catalogue_entries");
+        let mut qb =
+            QueryBuilder::<Postgres>::new("SELECT COUNT(*)::bigint FROM catalogue_entries");
         append_where(&mut qb, params, ALLOWED_FILTER_FIELDS)?;
         let row: (i64,) = qb.build_query_as().fetch_one(pool).await?;
         row.0
@@ -53,8 +54,7 @@ pub async fn list_entries(
 
     // -- SELECT query --
     let entries = {
-        let mut qb =
-            QueryBuilder::<Postgres>::new("SELECT * FROM catalogue_entries");
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT * FROM catalogue_entries");
         append_where(&mut qb, params, ALLOWED_FILTER_FIELDS)?;
 
         // ORDER BY
@@ -207,10 +207,7 @@ pub async fn stats_by_net(pool: &PgPool) -> Result<Vec<NetStats>, sqlx::Error> {
 /// 3. Causality resolution: the entry's `signal_key` maps to a
 ///    `causality_cross_links` egress event whose consumed tokens belong
 ///    to this process (via `causality_process_tags`)
-pub async fn lineage(
-    pool: &PgPool,
-    process_id: &str,
-) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
+pub async fn lineage(pool: &PgPool, process_id: &str) -> Result<Vec<CatalogueEntry>, sqlx::Error> {
     let job_prefix = format!("{process_id}:%");
     sqlx::query_as::<_, CatalogueEntry>(
         r#"
@@ -301,17 +298,17 @@ pub async fn lineage_grouped(
     let total_artifacts = entries.len() as i64;
 
     // Group entries by step extracted from job_id ("{process_id}:{step}") or process_step field.
-    let mut step_map: indexmap::IndexMap<String, Vec<CatalogueEntry>> =
-        indexmap::IndexMap::new();
+    let mut step_map: indexmap::IndexMap<String, Vec<CatalogueEntry>> = indexmap::IndexMap::new();
 
     for entry in entries {
         let step_name = entry
             .process_step
             .clone()
             .or_else(|| {
-                entry.job_id.as_ref().and_then(|jid| {
-                    jid.split_once(':').map(|(_, s)| s.to_string())
-                })
+                entry
+                    .job_id
+                    .as_ref()
+                    .and_then(|jid| jid.split_once(':').map(|(_, s)| s.to_string()))
             })
             .unwrap_or_else(|| "unknown".to_string());
         step_map.entry(step_name).or_default().push(entry);
@@ -369,10 +366,7 @@ pub async fn resolve_process_id_from_causality(
 }
 
 /// Distinct values for a column (for populating filter dropdowns).
-pub async fn distinct_values(
-    pool: &PgPool,
-    column: &str,
-) -> Result<Vec<String>, QueryError> {
+pub async fn distinct_values(pool: &PgPool, column: &str) -> Result<Vec<String>, QueryError> {
     // Validate column is allowed
     let field = builder::validate_field(column, ALLOWED_FILTER_FIELDS)?;
 

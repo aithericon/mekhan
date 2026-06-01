@@ -160,9 +160,10 @@ Add the `kind()` arm `"datacenter_connection_incomplete"` and the `node_id()` ar
 
 ### 1.3 `pool.rs` impact
 
-`DatacenterClaim` / `DatacenterLease` / `pool_kind("datacenter")` are UNCHANGED — the
-lease shape (`{ node, gpu_uuid, alloc_id, expiry, executor_namespace }`) and claim schema
-don't depend on connection fields. The only `pool.rs` consideration: none. The connection
+`DatacenterClaim` / `pool_kind("datacenter")` don't depend on connection fields. (The
+lease shape was later generalized to `{ alloc_id, node?, expiry?, executor_namespace?,
+scheduler: { flavor, … } }` — a typed core plus a per-flavor `scheduler` tagged union,
+with `gpu_uuid` removed; see `shared/resources/src/pool.rs`.) The only `pool.rs` consideration: none. The connection
 lives on `types::Datacenter`, the claim/lease on `pool::Datacenter{Claim,Lease}`, and they
 join only by the `"datacenter"` wire name.
 

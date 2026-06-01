@@ -44,10 +44,7 @@ mod json_tests {
             .unwrap();
 
         let json_format = meta.attributes.get("json_format").unwrap();
-        assert_eq!(
-            json_format,
-            &fmeta::AttributeValue::String("array".into())
-        );
+        assert_eq!(json_format, &fmeta::AttributeValue::String("array".into()));
     }
 
     // ---- JSONL ----
@@ -84,10 +81,7 @@ mod json_tests {
             .unwrap();
 
         let json_format = meta.attributes.get("json_format").unwrap();
-        assert_eq!(
-            json_format,
-            &fmeta::AttributeValue::String("jsonl".into())
-        );
+        assert_eq!(json_format, &fmeta::AttributeValue::String("jsonl".into()));
     }
 
     // ---- Single object ----

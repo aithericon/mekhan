@@ -198,8 +198,8 @@ impl ZitadelMgmt {
             .call(reqwest::Method::GET, &format!("/v2/users/{id}"), None)
             .await
             .map_err(|_| MgmtError::NotFound)?;
-        let username = str_at(&user, &["user", "username"])
-            .or_else(|| str_at(&user, &["user", "userName"]));
+        let username =
+            str_at(&user, &["user", "username"]).or_else(|| str_at(&user, &["user", "userName"]));
         if !username.map(|n| n.starts_with(&prefix)).unwrap_or(false) {
             return Err(MgmtError::NotFound);
         }
@@ -237,7 +237,9 @@ impl ZitadelMgmt {
         let Some(results) = found["result"].as_array() else {
             return Ok(None);
         };
-        Ok(results.first().and_then(|u| u["userId"].as_str().map(str::to_string)))
+        Ok(results
+            .first()
+            .and_then(|u| u["userId"].as_str().map(str::to_string)))
     }
 
     /// Best-effort PAT expiry for a token's machine user. Any failure (the
@@ -299,7 +301,10 @@ mod tests {
     #[test]
     fn prefix_sanitizes_and_is_stable() {
         // Zitadel numeric subs pass straight through.
-        assert_eq!(token_user_prefix("316843900891"), "mekhan-tok-316843900891-");
+        assert_eq!(
+            token_user_prefix("316843900891"),
+            "mekhan-tok-316843900891-"
+        );
         // Same input → same prefix (ownership boundary must be deterministic).
         assert_eq!(token_user_prefix("abc"), token_user_prefix("abc"));
     }

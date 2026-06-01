@@ -40,7 +40,11 @@ fn invoice_files() -> HashMap<String, HashMap<String, InputSource>> {
 }
 
 fn place<'a>(air: &'a Value, id: &str) -> Option<&'a Value> {
-    air["places"].as_array().unwrap().iter().find(|p| p["id"] == id)
+    air["places"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == id)
 }
 fn transition<'a>(air: &'a Value, id: &str) -> Option<&'a Value> {
     air["transitions"]
@@ -57,8 +61,14 @@ fn native_split_is_emitted_with_enforced_schemas() {
 
     // 1. Every task/process node split: data + ctrl place + yield transition.
     for n in ["review", "extract", "manager-approval", "compliance"] {
-        assert!(place(&air, &format!("p_{n}_data")).is_some(), "{n} data place");
-        assert!(place(&air, &format!("p_{n}_ctrl")).is_some(), "{n} ctrl place");
+        assert!(
+            place(&air, &format!("p_{n}_data")).is_some(),
+            "{n} data place"
+        );
+        assert!(
+            place(&air, &format!("p_{n}_ctrl")).is_some(),
+            "{n} ctrl place"
+        );
         assert!(
             transition(&air, &format!("t_{n}_yield")).is_some(),
             "{n} yield transition"
@@ -83,11 +93,9 @@ fn native_split_is_emitted_with_enforced_schemas() {
         for a in t["inputs"].as_array().cloned().unwrap_or_default() {
             let p = a["place"].as_str().unwrap_or("");
             if p.starts_with("p_") && p.ends_with("_data") {
-                let owner = p
-                    .trim_start_matches("p_")
-                    .trim_end_matches("_data");
-                let is_owner_loop_rewrite = tid == format!("t_{owner}_enter")
-                    || tid == format!("t_{owner}_continue");
+                let owner = p.trim_start_matches("p_").trim_end_matches("_data");
+                let is_owner_loop_rewrite =
+                    tid == format!("t_{owner}_enter") || tid == format!("t_{owner}_continue");
                 if is_owner_loop_rewrite {
                     continue;
                 }
@@ -109,9 +117,12 @@ fn native_split_is_emitted_with_enforced_schemas() {
         "guard not rebound: {g}"
     );
     assert!(
-        b0["inputs"].as_array().unwrap().iter().any(|a| a["place"]
-            == serde_json::json!("p_review_data")
-            && a["read"] == serde_json::json!(true)),
+        b0["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["place"] == serde_json::json!("p_review_data")
+                && a["read"] == serde_json::json!(true)),
         "missing read-arc into p_review_data"
     );
 
@@ -125,9 +136,12 @@ fn native_split_is_emitted_with_enforced_schemas() {
         "default guard not the rebound negated conjunction: {dg}"
     );
     assert!(
-        dflt["inputs"].as_array().unwrap().iter().any(|a| a["place"]
-            == serde_json::json!("p_review_data")
-            && a["read"] == serde_json::json!(true)),
+        dflt["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["place"] == serde_json::json!("p_review_data")
+                && a["read"] == serde_json::json!(true)),
         "default branch missing read-arc into p_review_data"
     );
 
@@ -148,9 +162,12 @@ fn native_split_is_emitted_with_enforced_schemas() {
             "{tid} loop guard not rebound to parked data"
         );
         assert!(
-            t["inputs"].as_array().unwrap().iter().any(|a| a["place"]
-                == serde_json::json!("p_review_data")
-                && a["read"] == serde_json::json!(true)),
+            t["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["place"] == serde_json::json!("p_review_data")
+                    && a["read"] == serde_json::json!(true)),
             "{tid} missing read-arc"
         );
     }
@@ -322,7 +339,10 @@ fn surface_types_emits_nested_tree_for_file_envelope() {
         .unwrap_or_else(|| {
             panic!(
                 "start.document must be a single picker root carrying the file tree, got: {:?}",
-                ocr_scope.iter().map(|e| e.path.as_str()).collect::<Vec<_>>()
+                ocr_scope
+                    .iter()
+                    .map(|e| e.path.as_str())
+                    .collect::<Vec<_>>()
             )
         });
 
@@ -357,5 +377,7 @@ fn surface_types_emits_nested_tree_for_file_envelope() {
     // emitted as their own picker roots. The picker walks the tree
     // recursively to surface them.
     assert!(!ocr_scope.iter().any(|e| e.path == "start.document.url"));
-    assert!(!ocr_scope.iter().any(|e| e.path == "start.document.filename"));
+    assert!(!ocr_scope
+        .iter()
+        .any(|e| e.path == "start.document.filename"));
 }

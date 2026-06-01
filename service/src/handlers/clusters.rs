@@ -94,18 +94,19 @@ fn petri_err(e: PetriError) -> ApiError {
 /// Best-effort: a DB error or an `_env` / unparseable id leaves the names blank.
 async fn resolve_names(
     state: &AppState,
+    workspace_id: Uuid,
     ids: &[String],
 ) -> HashMap<String, (String, String)> {
-    let uuids: Vec<Uuid> = ids
-        .iter()
-        .filter_map(|s| Uuid::parse_str(s).ok())
-        .collect();
+    let uuids: Vec<Uuid> = ids.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
     if uuids.is_empty() {
         return HashMap::new();
     }
     let rows = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT id, path, display_name FROM resources WHERE id = ANY($1)",
+        "SELECT id, path, display_name \
+         FROM resources \
+         WHERE workspace_id = $1 AND id = ANY($2)",
     )
+    .bind(workspace_id)
     .bind(&uuids)
     .fetch_all(&state.db)
     .await
@@ -141,8 +142,10 @@ async fn resolve_names(
 )]
 pub async fn list_clusters(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
 ) -> Result<Json<ClustersResponse>, ApiError> {
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+
     // Live engine state, keyed by resource_id. The engine being unreachable is a
     // bad-gateway — but we still want the registered datacenters, so tolerate an
     // empty/missing array rather than failing the whole list on a cold engine.
@@ -167,12 +170,15 @@ pub async fn list_clusters(
          FROM resources r \
          JOIN resource_versions rv \
            ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.resource_type = 'datacenter' \
+         WHERE r.workspace_id = $1 \
+           AND r.resource_type = 'datacenter' \
+           AND r.deleted_at IS NULL \
          ORDER BY r.path",
     )
+    .bind(workspace_id)
     .fetch_all(&state.db)
     .await
-    .unwrap_or_default();
+    .map_err(|e| ApiError::internal(format!("cluster datacenter lookup: {e}")))?;
 
     // Helper: read a live engine entry into a ClusterSummary, given the names.
     let from_live = |c: &Value, resource_id: String, path: Option<String>, name: Option<String>| {
@@ -224,13 +230,22 @@ pub async fn list_clusters(
     }
 
     // Live engine clusters not backed by a current DB datacenter row (e.g. the
-    // `_env` dev bootstrap, or a resource deleted while still draining).
-    let orphan_ids: Vec<String> = live.keys().filter(|id| !covered.contains(*id)).cloned().collect();
-    let names = resolve_names(&state, &orphan_ids).await;
+    // `_env` dev bootstrap, or a current-workspace resource deleted while still
+    // draining). UUID live entries from another workspace are skipped here; the
+    // engine registry is global, but this endpoint is workspace-scoped.
+    let orphan_ids: Vec<String> = live
+        .keys()
+        .filter(|id| !covered.contains(*id))
+        .cloned()
+        .collect();
+    let names = resolve_names(&state, workspace_id, &orphan_ids).await;
     for id in orphan_ids {
         if let Some(c) = live.get(&id) {
-            let (path, name) = names
-                .get(&id)
+            let resolved_name = names.get(&id);
+            if id != "_env" && resolved_name.is_none() {
+                continue;
+            }
+            let (path, name) = resolved_name
                 .map(|(p, d)| (Some(p.clone()), Some(d.clone())))
                 .unwrap_or((None, None));
             clusters.push(from_live(c, id, path, name));
@@ -298,7 +313,11 @@ pub async fn drain_cluster(
 
 /// Re-shape the engine's `ClusterActionResponse` JSON into the typed mekhan DTO,
 /// falling back to the requested id/action if the engine omits a field.
-fn action_from_value(v: serde_json::Value, resource_id: &str, action: &str) -> ClusterActionResponse {
+fn action_from_value(
+    v: serde_json::Value,
+    resource_id: &str,
+    action: &str,
+) -> ClusterActionResponse {
     ClusterActionResponse {
         resource_id: v
             .get("resource_id")

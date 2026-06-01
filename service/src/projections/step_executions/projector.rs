@@ -42,7 +42,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use petri_domain::{DomainEvent, PersistedEvent, PlaceId, Token, TokenColor, TokenId, TransitionId};
+use petri_domain::{
+    DomainEvent, PersistedEvent, PlaceId, Token, TokenColor, TokenId, TransitionId,
+};
 
 use crate::compiler::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
 
@@ -171,8 +173,7 @@ impl<'a> Lookups<'a> {
                     .or_insert_with(|| iface.node_id.clone());
             }
             for (key, place) in &iface.outputs {
-                output_to_node_branch
-                    .insert(place.clone(), (iface.node_id.clone(), key.clone()));
+                output_to_node_branch.insert(place.clone(), (iface.node_id.clone(), key.clone()));
             }
             for t in &iface.workflow_terminals {
                 workflow_terminal_to_node.insert(t.clone(), iface.node_id.clone());
@@ -240,7 +241,9 @@ impl State {
 
     fn absorb(&mut self, persisted: &PersistedEvent, lookups: &Lookups<'_>) {
         match &persisted.event {
-            DomainEvent::TokenCreated { token, place_id, .. } => {
+            DomainEvent::TokenCreated {
+                token, place_id, ..
+            } => {
                 self.note_entry_arrival(place_id, token, persisted.timestamp, lookups);
             }
             DomainEvent::TransitionFired {
@@ -351,19 +354,21 @@ impl State {
         let assigned = *iter;
         *iter += 1;
         self.active_iter.insert(node_id.clone(), assigned);
-        self.rows.entry((node_id.clone(), assigned)).or_insert_with(|| StepExecutionRow {
-            node_id: node_id.clone(),
-            iteration_index: assigned,
-            node_kind: lookups.kind_of(node_id),
-            status: StepStatus::Pending,
-            inputs: None,
-            outputs: None,
-            branch_taken: None,
-            started_at: Some(arrived_at),
-            completed_at: None,
-            error: None,
-            last_sequence: 0,
-        });
+        self.rows
+            .entry((node_id.clone(), assigned))
+            .or_insert_with(|| StepExecutionRow {
+                node_id: node_id.clone(),
+                iteration_index: assigned,
+                node_kind: lookups.kind_of(node_id),
+                status: StepStatus::Pending,
+                inputs: None,
+                outputs: None,
+                branch_taken: None,
+                started_at: Some(arrived_at),
+                completed_at: None,
+                error: None,
+                last_sequence: 0,
+            });
     }
 
     /// A produced token landed at some node's entry place: that token IS
@@ -454,13 +459,7 @@ impl State {
         //    collects user-entered data.
         for (place_id, token) in produced_tokens {
             self.note_entry_arrival(place_id, token, ts, lookups);
-            self.note_inbound_at_entry(
-                place_id,
-                token,
-                transition_id,
-                consumed_tokens,
-                lookups,
-            );
+            self.note_inbound_at_entry(place_id, token, transition_id, consumed_tokens, lookups);
         }
 
         // 2. Find the owning node of this transition (if any) and update its
@@ -560,8 +559,10 @@ impl State {
             // 5a. data_port deposit (Start/HumanTask/AutomatedStep/Loop/SubWorkflow park)
             if let Some(dp_owner) = lookups.data_port_to_node.get(&place_id.0) {
                 if dp_owner == &owner {
-                    row.outputs =
-                        Some(canonical_output_payload(owner_kind, token_color_to_json(&token.color)));
+                    row.outputs = Some(canonical_output_payload(
+                        owner_kind,
+                        token_color_to_json(&token.color),
+                    ));
                     if row.status != StepStatus::Failed {
                         row.status = StepStatus::Completed;
                         row.completed_at = Some(ts);
@@ -571,8 +572,10 @@ impl State {
             // 5b. Workflow-terminal deposit (End nodes)
             if let Some(t_owner) = lookups.workflow_terminal_to_node.get(&place_id.0) {
                 if t_owner == &owner {
-                    row.outputs =
-                        Some(canonical_output_payload(owner_kind, token_color_to_json(&token.color)));
+                    row.outputs = Some(canonical_output_payload(
+                        owner_kind,
+                        token_color_to_json(&token.color),
+                    ));
                     if row.status != StepStatus::Failed {
                         row.status = StepStatus::Completed;
                         row.completed_at = Some(ts);
@@ -769,7 +772,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn ts(secs: i64) -> DateTime<Utc> {
-        Utc.timestamp_opt(secs, 0).single().expect("valid timestamp")
+        Utc.timestamp_opt(secs, 0)
+            .single()
+            .expect("valid timestamp")
     }
 
     fn place(s: &str) -> PlaceId {
@@ -940,7 +945,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     (place("p_s_main"), unit_token()),
                 ],
                 vec![],
@@ -955,10 +963,7 @@ mod tests {
             .expect("s row exists");
         assert_eq!(s_row.status, StepStatus::Completed);
         assert_eq!(s_row.iteration_index, 0);
-        assert_eq!(
-            s_row.outputs,
-            Some(serde_json::json!({"name": "Alice"}))
-        );
+        assert_eq!(s_row.outputs, Some(serde_json::json!({"name": "Alice"})));
         // started_at = T0 (entry token created at 100), NOT T2 (firing at
         // 101). For effect-backed steps the firing event is emitted only
         // when the executor result returns; using the firing timestamp
@@ -978,7 +983,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     (place("p_s_main"), unit_token()),
                 ],
                 vec![],
@@ -988,10 +996,16 @@ mod tests {
                 102,
                 trans("t_a_park"),
                 vec![
-                    (place("p_a_data"), data_token(serde_json::json!({"greeting": "hi Alice"}))),
+                    (
+                        place("p_a_data"),
+                        data_token(serde_json::json!({"greeting": "hi Alice"})),
+                    ),
                     (place("p_a_main"), unit_token()),
                 ],
-                vec![(place("p_s_data"), data_token(serde_json::json!({"name": "Alice"})))],
+                vec![(
+                    place("p_s_data"),
+                    data_token(serde_json::json!({"name": "Alice"})),
+                )],
             ),
         ];
 
@@ -1030,8 +1044,14 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
-                    (place("p_s_main"), data_token(serde_json::json!({"_instance_id": "abc"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
+                    (
+                        place("p_s_main"),
+                        data_token(serde_json::json!({"_instance_id": "abc"})),
+                    ),
                 ],
                 vec![],
             ),
@@ -1084,10 +1104,7 @@ mod tests {
         // Wire-edge transition `t_edge_e1` belongs to the consumer (the
         // HumanTask) because `derive_node_ownership`'s post-pass attributes
         // wire-edge transitions to whichever node's entry they produce into.
-        h.owned_transitions = vec![
-            "t_h_finalize".to_string(),
-            "t_edge_e1".to_string(),
-        ];
+        h.owned_transitions = vec!["t_h_finalize".to_string(), "t_edge_e1".to_string()];
         reg.insert("h".to_string(), h);
 
         // Upstream control token: we share the same id between the
@@ -1164,14 +1181,22 @@ mod tests {
         let mut seq = 0u64;
         for iter in 0..3 {
             let entry_tok = Token::new_unit();
-            events.push(token_created(seq, 100 + iter * 10, place("p_b_entry"), entry_tok));
+            events.push(token_created(
+                seq,
+                100 + iter * 10,
+                place("p_b_entry"),
+                entry_tok,
+            ));
             seq += 1;
             events.push(fired(
                 seq,
                 101 + iter * 10,
                 trans("t_b_park"),
                 vec![
-                    (place("p_b_data"), data_token(serde_json::json!({"i": iter}))),
+                    (
+                        place("p_b_data"),
+                        data_token(serde_json::json!({"i": iter})),
+                    ),
                     (place("p_b_out"), unit_token()),
                 ],
                 vec![],
@@ -1185,10 +1210,7 @@ mod tests {
         for (idx, row) in b_rows.iter().enumerate() {
             assert_eq!(row.iteration_index, idx as i32);
             assert_eq!(row.status, StepStatus::Completed);
-            assert_eq!(
-                row.outputs,
-                Some(serde_json::json!({"i": idx as i64}))
-            );
+            assert_eq!(row.outputs, Some(serde_json::json!({"i": idx as i64})));
         }
     }
 
@@ -1231,7 +1253,10 @@ mod tests {
             .expect("d row exists");
         assert_eq!(d_row.status, StepStatus::Completed);
         assert_eq!(d_row.branch_taken.as_deref(), Some("edge:e_yes"));
-        assert_eq!(d_row.outputs, None, "Decision nodes carry no data_port output");
+        assert_eq!(
+            d_row.outputs, None,
+            "Decision nodes carry no data_port output"
+        );
     }
 
     /// AutomatedStep retry-exhaustion routes a token out the node's named
@@ -1251,7 +1276,10 @@ mod tests {
         let a = reg.get_mut("a").expect("a registered");
         a.outputs = BTreeMap::from([
             (OutputKey::Default, "p_a_main".to_string()),
-            (OutputKey::Edge("error".to_string()), "p_a_error".to_string()),
+            (
+                OutputKey::Edge("error".to_string()),
+                "p_a_error".to_string(),
+            ),
         ]);
         a.owned_places = vec![
             "p_a_main".to_string(),
@@ -1270,7 +1298,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     (place("p_s_main"), unit_token()),
                 ],
                 vec![],
@@ -1299,7 +1330,10 @@ mod tests {
                 "job_id": "a", "run": 1, "retries": 0, "max_retries": 0, "reason": "failed"
             }))
         );
-        assert_eq!(a_row.outputs, None, "data_port stays empty on the failure path");
+        assert_eq!(
+            a_row.outputs, None,
+            "data_port stays empty on the failure path"
+        );
     }
 
     #[test]
@@ -1312,7 +1346,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     (place("p_s_main"), unit_token()),
                 ],
                 vec![],
@@ -1328,7 +1365,10 @@ mod tests {
         assert_eq!(a_row.status, StepStatus::Failed);
         assert_eq!(a_row.completed_at, Some(ts(102)));
         let err = a_row.error.as_ref().expect("error payload");
-        assert_eq!(err.get("error_message"), Some(&serde_json::json!("io error")));
+        assert_eq!(
+            err.get("error_message"),
+            Some(&serde_json::json!("io error"))
+        );
     }
 
     #[test]
@@ -1341,7 +1381,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     (place("p_s_main"), unit_token()),
                 ],
                 vec![],
@@ -1375,7 +1418,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     // a.entry — opens a's row (Pending).
                     (place("p_s_main"), unit_token()),
                 ],
@@ -1463,7 +1509,13 @@ mod tests {
                 data_token(serde_json::json!({ "x": i, "__map_idx": i })),
             ));
         }
-        events.push(fired(1, 101, trans("t_mp_scatter"), scatter_produced, vec![]));
+        events.push(fired(
+            1,
+            101,
+            trans("t_mp_scatter"),
+            scatter_produced,
+            vec![],
+        ));
 
         // 2: only the FIRST body iteration actually completes (parks output).
         events.push(fired(
@@ -1471,7 +1523,10 @@ mod tests {
             102,
             trans("t_body_park"),
             vec![
-                (place("p_body_data"), data_token(serde_json::json!({"y": 0}))),
+                (
+                    place("p_body_data"),
+                    data_token(serde_json::json!({"y": 0})),
+                ),
                 (place("p_body_out"), unit_token()),
             ],
             vec![],
@@ -1509,7 +1564,10 @@ mod tests {
             .iter()
             .filter(|r| r.status == StepStatus::Completed)
             .count();
-        assert_eq!(completed, 1, "exactly the one finished iteration is Completed");
+        assert_eq!(
+            completed, 1,
+            "exactly the one finished iteration is Completed"
+        );
         let skipped = body_rows
             .iter()
             .filter(|r| r.status == StepStatus::Skipped)
@@ -1586,7 +1644,11 @@ mod tests {
         // Both body iterations exist and both are Skipped.
         let body_rows: Vec<&StepExecutionRow> =
             rows.iter().filter(|r| r.node_id == "body").collect();
-        assert_eq!(body_rows.len(), 2, "stray post-terminal arrival still opens a row");
+        assert_eq!(
+            body_rows.len(),
+            2,
+            "stray post-terminal arrival still opens a row"
+        );
         assert!(
             body_rows.iter().all(|r| r.status == StepStatus::Skipped),
             "every body row closes Skipped under NetCompleted"
@@ -1603,7 +1665,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     (place("p_s_main"), unit_token()),
                 ],
                 vec![],
@@ -1613,7 +1678,10 @@ mod tests {
                 102,
                 trans("t_a_park"),
                 vec![
-                    (place("p_a_data"), data_token(serde_json::json!({"greeting": "hi"}))),
+                    (
+                        place("p_a_data"),
+                        data_token(serde_json::json!({"greeting": "hi"})),
+                    ),
                     (place("p_a_main"), unit_token()),
                 ],
                 vec![],
@@ -1622,7 +1690,10 @@ mod tests {
                 3,
                 103,
                 trans("t_e_complete"),
-                vec![(place("p_e_result"), data_token(serde_json::json!({"ok": true})))],
+                vec![(
+                    place("p_e_result"),
+                    data_token(serde_json::json!({"ok": true})),
+                )],
                 vec![],
             ),
             net_completed(4, 104),
@@ -1665,7 +1736,10 @@ mod tests {
                 101,
                 trans("t_s_park"),
                 vec![
-                    (place("p_s_data"), data_token(serde_json::json!({"name": "Alice"}))),
+                    (
+                        place("p_s_data"),
+                        data_token(serde_json::json!({"name": "Alice"})),
+                    ),
                     (place("p_s_main"), unit_token()),
                 ],
                 vec![],

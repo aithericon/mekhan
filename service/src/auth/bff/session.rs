@@ -63,11 +63,7 @@ pub trait SessionStore: Send + Sync {
 
     async fn get_session(&self, id: &str) -> Result<Option<Session>, AuthError>;
 
-    async fn update_tokens(
-        &self,
-        id: &str,
-        tokens: &RefreshedTokens,
-    ) -> Result<(), AuthError>;
+    async fn update_tokens(&self, id: &str, tokens: &RefreshedTokens) -> Result<(), AuthError>;
 
     async fn delete_session(&self, id: &str) -> Result<(), AuthError>;
 
@@ -176,11 +172,7 @@ impl SessionStore for PgSessionStore {
         }))
     }
 
-    async fn update_tokens(
-        &self,
-        id: &str,
-        tokens: &RefreshedTokens,
-    ) -> Result<(), AuthError> {
+    async fn update_tokens(&self, id: &str, tokens: &RefreshedTokens) -> Result<(), AuthError> {
         // COALESCE keeps the existing refresh/id token when the IdP didn't
         // return a fresh one on this refresh.
         sqlx::query(

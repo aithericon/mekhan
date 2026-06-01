@@ -78,14 +78,18 @@ pub async fn execute(
     outputs.insert("path".into(), serde_json::json!(config.path));
     outputs.insert(
         "metadata".into(),
-        serde_json::to_value(&metadata)
-            .map_err(|e| FileOpsError::Metadata(e.to_string()))?,
+        serde_json::to_value(&metadata).map_err(|e| FileOpsError::Metadata(e.to_string()))?,
     );
-    outputs.insert("format".into(), serde_json::json!(format!("{:?}", metadata.format)));
+    outputs.insert(
+        "format".into(),
+        serde_json::json!(format!("{:?}", metadata.format)),
+    );
 
     if let Some(ref checksum) = metadata.checksum {
-        outputs.insert("checksum".into(), serde_json::to_value(checksum)
-            .map_err(|e| FileOpsError::Metadata(e.to_string()))?);
+        outputs.insert(
+            "checksum".into(),
+            serde_json::to_value(checksum).map_err(|e| FileOpsError::Metadata(e.to_string()))?,
+        );
     }
     if let Some(num_rows) = metadata.num_rows {
         outputs.insert("num_rows".into(), serde_json::json!(num_rows));
@@ -100,7 +104,10 @@ pub async fn execute(
         outputs.insert("mime_type".into(), serde_json::json!(mime));
     }
     if !metadata.column_names.is_empty() {
-        outputs.insert("column_names".into(), serde_json::json!(metadata.column_names));
+        outputs.insert(
+            "column_names".into(),
+            serde_json::json!(metadata.column_names),
+        );
     }
 
     Ok(outputs)

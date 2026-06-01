@@ -154,9 +154,7 @@ fn interpolate_string(
         if let Some(after_prefix) = from_pattern.strip_prefix(PATH_PATTERN_PREFIX) {
             // {{input_path:NAME}} — resolve to file path
             let end = after_prefix.find(PATTERN_SUFFIX).ok_or_else(|| {
-                InputResolveError::Resolution(format!(
-                    "unclosed input_path reference in: {s}"
-                ))
+                InputResolveError::Resolution(format!("unclosed input_path reference in: {s}"))
             })?;
             let name = &after_prefix[..end];
             if name.is_empty() {
@@ -170,9 +168,7 @@ fn interpolate_string(
         } else if let Some(after_prefix) = from_pattern.strip_prefix(PATTERN_PREFIX) {
             // {{input:NAME}} — resolve to file content
             let end = after_prefix.find(PATTERN_SUFFIX).ok_or_else(|| {
-                InputResolveError::Resolution(format!(
-                    "unclosed input reference in: {s}"
-                ))
+                InputResolveError::Resolution(format!("unclosed input reference in: {s}"))
             })?;
             let name = &after_prefix[..end];
             if name.is_empty() {
@@ -254,10 +250,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     /// Helper: create a staged input as a temp file containing JSON.
-    fn stage_input(
-        name: &str,
-        value: &serde_json::Value,
-    ) -> (String, PathBuf, NamedTempFile) {
+    fn stage_input(name: &str, value: &serde_json::Value) -> (String, PathBuf, NamedTempFile) {
         let mut tmp = NamedTempFile::new().unwrap();
         write!(tmp, "{}", serde_json::to_string(value).unwrap()).unwrap();
         (name.to_string(), tmp.path().to_path_buf(), tmp)
@@ -287,8 +280,7 @@ mod tests {
 
     #[test]
     fn resolve_string_interpolation() {
-        let (name, path, _tmp) =
-            stage_input("subdir", &serde_json::json!("2026/feb"));
+        let (name, path, _tmp) = stage_input("subdir", &serde_json::json!("2026/feb"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -297,16 +289,12 @@ mod tests {
 
         resolve_inputs(&mut config, &staged).unwrap();
 
-        assert_eq!(
-            config["path"],
-            serde_json::json!("data/2026/feb/file.csv")
-        );
+        assert_eq!(config["path"], serde_json::json!("data/2026/feb/file.csv"));
     }
 
     #[test]
     fn resolve_nested_objects() {
-        let (name, path, _tmp) =
-            stage_input("target", &serde_json::json!("nested/path.csv"));
+        let (name, path, _tmp) = stage_input("target", &serde_json::json!("nested/path.csv"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -329,8 +317,7 @@ mod tests {
 
     #[test]
     fn resolve_missing_input_errors() {
-        let (name, path, _tmp) =
-            stage_input("other", &serde_json::json!("irrelevant"));
+        let (name, path, _tmp) = stage_input("other", &serde_json::json!("irrelevant"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -344,8 +331,7 @@ mod tests {
 
     #[test]
     fn resolve_no_patterns_noop() {
-        let (name, path, _tmp) =
-            stage_input("unused", &serde_json::json!("value"));
+        let (name, path, _tmp) = stage_input("unused", &serde_json::json!("value"));
         let staged = HashMap::from([(name, path)]);
 
         let original = serde_json::json!({
@@ -360,10 +346,8 @@ mod tests {
 
     #[test]
     fn resolve_multiple_references() {
-        let (name1, path1, _tmp1) =
-            stage_input("src", &serde_json::json!("source.csv"));
-        let (name2, path2, _tmp2) =
-            stage_input("dst", &serde_json::json!("dest.csv"));
+        let (name1, path1, _tmp1) = stage_input("src", &serde_json::json!("source.csv"));
+        let (name2, path2, _tmp2) = stage_input("dst", &serde_json::json!("dest.csv"));
         let staged = HashMap::from([(name1, path1), (name2, path2)]);
 
         let mut config = serde_json::json!({
@@ -389,8 +373,7 @@ mod tests {
         // an entirely natural prompt shape.
         let (name_obj, path_obj, _tmp_obj) =
             stage_input("obj", &serde_json::json!({"key": "value"}));
-        let (name_arr, path_arr, _tmp_arr) =
-            stage_input("arr", &serde_json::json!([1, 2, 3]));
+        let (name_arr, path_arr, _tmp_arr) = stage_input("arr", &serde_json::json!([1, 2, 3]));
         let staged = HashMap::from([(name_obj, path_obj), (name_arr, path_arr)]);
 
         let mut config = serde_json::json!({
@@ -404,7 +387,10 @@ mod tests {
             prompt.contains("\"key\": \"value\""),
             "object should be pretty-printed JSON: {prompt}"
         );
-        assert!(prompt.contains("1") && prompt.contains("3"), "array elements should appear: {prompt}");
+        assert!(
+            prompt.contains("1") && prompt.contains("3"),
+            "array elements should appear: {prompt}"
+        );
     }
 
     #[test]
@@ -422,8 +408,7 @@ mod tests {
 
     #[test]
     fn resolve_array_elements() {
-        let (name, path, _tmp) =
-            stage_input("tag", &serde_json::json!("important"));
+        let (name, path, _tmp) = stage_input("tag", &serde_json::json!("important"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -432,16 +417,12 @@ mod tests {
 
         resolve_inputs(&mut config, &staged).unwrap();
 
-        assert_eq!(
-            config["tags"],
-            serde_json::json!(["static", "important"])
-        );
+        assert_eq!(config["tags"], serde_json::json!(["static", "important"]));
     }
 
     #[test]
     fn resolve_same_input_referenced_twice() {
-        let (name, path, _tmp) =
-            stage_input("path", &serde_json::json!("shared.csv"));
+        let (name, path, _tmp) = stage_input("path", &serde_json::json!("shared.csv"));
         let staged = HashMap::from([(name, path)]);
 
         let mut config = serde_json::json!({
@@ -462,8 +443,7 @@ mod tests {
 
     #[test]
     fn resolve_path_full_value_replacement() {
-        let (name, path, _tmp) =
-            stage_input("image", &serde_json::json!("unused content"));
+        let (name, path, _tmp) = stage_input("image", &serde_json::json!("unused content"));
         let expected_path = path.display().to_string();
         let staged = HashMap::from([(name, path)]);
 
@@ -478,8 +458,7 @@ mod tests {
 
     #[test]
     fn resolve_path_string_interpolation() {
-        let (name, path, _tmp) =
-            stage_input("doc", &serde_json::json!("unused"));
+        let (name, path, _tmp) = stage_input("doc", &serde_json::json!("unused"));
         let expected_path = path.display().to_string();
         let staged = HashMap::from([(name, path)]);
 
@@ -511,10 +490,8 @@ mod tests {
 
     #[test]
     fn resolve_path_and_content_mixed() {
-        let (name1, path1, _tmp1) =
-            stage_input("image", &serde_json::json!("binary data"));
-        let (name2, path2, _tmp2) =
-            stage_input("config", &serde_json::json!({"key": "value"}));
+        let (name1, path1, _tmp1) = stage_input("image", &serde_json::json!("binary data"));
+        let (name2, path2, _tmp2) = stage_input("config", &serde_json::json!({"key": "value"}));
         let expected_path = path1.display().to_string();
         let staged = HashMap::from([(name1, path1), (name2, path2)]);
 
@@ -531,8 +508,7 @@ mod tests {
 
     #[test]
     fn resolve_path_in_array() {
-        let (name, path, _tmp) =
-            stage_input("photo", &serde_json::json!("unused"));
+        let (name, path, _tmp) = stage_input("photo", &serde_json::json!("unused"));
         let expected_path = path.display().to_string();
         let staged = HashMap::from([(name, path)]);
 
@@ -555,9 +531,7 @@ mod tests {
         // The file doesn't need to contain valid JSON for input_path
         let mut tmp = NamedTempFile::new().unwrap();
         write!(tmp, "this is not JSON at all! \x00\x01\x02").unwrap();
-        let staged = HashMap::from([
-            ("binary".to_string(), tmp.path().to_path_buf()),
-        ]);
+        let staged = HashMap::from([("binary".to_string(), tmp.path().to_path_buf())]);
         let expected_path = tmp.path().display().to_string();
 
         let mut config = serde_json::json!({

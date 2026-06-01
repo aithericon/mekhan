@@ -7,8 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use aithericon_executor_backend::ExecutionBackend;
-use aithericon_executor_python::{PythonBackend, PythonConfig};
 use aithericon_executor_domain::{ExecutionSpec, InputSource, RunContext, RunDirectory};
+use aithericon_executor_python::{PythonBackend, PythonConfig};
 
 use super::kit::BackendTestKit;
 
@@ -33,10 +33,7 @@ impl BackendTestKit for PythonTestKit {
             .await
         {
             Ok(output) if output.status.success() => None,
-            Ok(output) => Some(format!(
-                "python3 exited with status {}",
-                output.status
-            )),
+            Ok(output) => Some(format!("python3 exited with status {}", output.status)),
             Err(e) => Some(format!("python3 not found: {e}")),
         }
     }
@@ -96,13 +93,9 @@ impl BackendTestKit for PythonTestKit {
         let user_code_path = run_dir.inputs_dir.join(&config.script);
 
         let runner_path = run_dir.root.join("__runner__.py");
-        aithericon_executor_python::runner::write_runner(
-            &runner_path,
-            &user_code_path,
-            &[],
-        )
-        .await
-        .unwrap();
+        aithericon_executor_python::runner::write_runner(&runner_path, &user_code_path, &[])
+            .await
+            .unwrap();
 
         let backend_state = serde_json::json!({
             "python_bin": config.python,

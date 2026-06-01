@@ -9,9 +9,7 @@
 
 use std::sync::Arc;
 
-use async_nats::jetstream::consumer::{
-    pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy,
-};
+use async_nats::jetstream::consumer::{pull::Config as ConsumerConfig, AckPolicy, DeliverPolicy};
 use async_nats::jetstream::Message;
 use petri_application::json_to_token_color;
 use petri_domain::{ExternalSignal, ReplyRouting, TokenColor};
@@ -122,9 +120,7 @@ impl GlobalSignalListener {
             .jetstream
             .get_or_create_stream(crate::stream_config())
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to get stream: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to get stream: {}", e)))?;
 
         // Subscribe to ALL signal subjects across all nets
         let filter = format!("{}.>", Subjects::SIGNAL_PREFIX);
@@ -140,9 +136,7 @@ impl GlobalSignalListener {
         let consumer = stream
             .create_consumer(consumer_config)
             .await
-            .map_err(|e| {
-                MessageLoopError::Consumer(format!("Failed to create consumer: {}", e))
-            })?;
+            .map_err(|e| MessageLoopError::Consumer(format!("Failed to create consumer: {}", e)))?;
 
         let handler = GlobalSignalHandler {
             resolver: &self.resolver,

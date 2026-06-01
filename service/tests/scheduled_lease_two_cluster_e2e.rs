@@ -59,8 +59,7 @@ use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::models::template::{
     default_output_port, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding,
-    LoopAccumulator, Port, Position, ScheduledOperation, WorkflowEdge, WorkflowGraph, WorkflowNode,
-    WorkflowNodeData,
+    LoopAccumulator, Port, Position, WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowNodeData,
 };
 use mekhan_service::nats::MekhanNats;
 
@@ -111,9 +110,27 @@ fn end(id: &str) -> WorkflowNode {
     }
 }
 
-/// A leased loop with a `Scheduled{runOnLease}` Python body, leasing `dc_alias`.
+/// A LeaseScope wrapping a Loop with a `Scheduled` Python body, leasing `dc_alias`.
 fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode> {
+    let scope_id = format!("{loop_id}_scope");
     vec![
+        WorkflowNode {
+            id: scope_id,
+            node_type: "lease_scope".to_string(),
+            slug: None,
+            position: pos(),
+            data: WorkflowNodeData::LeaseScope {
+                label: format!("Lease Scope ({dc_alias})"),
+                description: None,
+                lease: LeaseBinding {
+                    scheduler: dc_alias.to_string(),
+                    request: None,
+                },
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        },
         WorkflowNode {
             id: loop_id.to_string(),
             node_type: "loop".to_string(),
@@ -125,12 +142,8 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                 max_iterations: MAX_ITERATIONS,
                 loop_condition: "true".to_string(),
                 accumulators: Vec::<LoopAccumulator>::new(),
-                lease: Some(LeaseBinding {
-                    scheduler: dc_alias.to_string(),
-                    request: None,
-                }),
             },
-            parent_id: None,
+            parent_id: Some(format!("{loop_id}_scope")),
             width: None,
             height: None,
         },
@@ -158,13 +171,11 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                 output: default_output_port(ExecutionBackendType::Python),
                 retry_policy: Default::default(),
                 stream_output: false,
+                stream_input: false,
                 deployment_model: DeploymentModel::Scheduled {
                     scheduler: None,
                     job_template: "mekhan-executor-worker".to_string(),
                     resources: None,
-                    operation: ScheduledOperation::Submit,
-                    request: None,
-                    run_on_lease: true,
                 },
             },
             parent_id: Some(loop_id.to_string()),
@@ -234,13 +245,18 @@ async fn engine_available() -> bool {
 
 async fn net_running(net_id: &str) -> bool {
     match reqwest::get(format!("{}/api/nets/{net_id}/state", engine_url())).await {
-        Ok(resp) if resp.status().is_success() => resp
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("run_mode").and_then(|m| m.as_str()).map(str::to_string))
-            .as_deref()
-            == Some("running"),
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("run_mode")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("running")
+        }
         _ => false,
     }
 }
@@ -260,8 +276,13 @@ async fn clusters_snapshot() -> Vec<(String, i64, String)> {
             arr.iter()
                 .map(|c| {
                     (
-                        c.get("flavor").and_then(Value::as_str).unwrap_or("").to_string(),
-                        c.get("active_lease_count").and_then(Value::as_i64).unwrap_or(0),
+                        c.get("flavor")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        c.get("active_lease_count")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
                         c.get("watcher_state")
                             .and_then(Value::as_str)
                             .unwrap_or("")
@@ -307,7 +328,11 @@ async fn create_datacenter(
         .unwrap();
     let status = resp.status();
     let body = body_json(resp.into_body()).await;
-    assert_eq!(status, StatusCode::CREATED, "create datacenter {alias}: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create datacenter {alias}: {body}"
+    );
     body["id"].as_str().unwrap().parse().unwrap()
 }
 
@@ -321,13 +346,17 @@ async fn one_instance_leases_two_clusters_of_different_kinds() {
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
 
-    let listener_nats = MekhanNats::connect(&engine_nats_url, None).await.expect("nats");
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
     let kv = listener_nats
         .ensure_catalogue_subscriptions_kv()
         .await
         .expect("kv");
-    let sub_mgr =
-        std::sync::Arc::new(SubscriptionManager::new(kv, listener_nats.jetstream().clone()));
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(
@@ -451,7 +480,11 @@ async fn one_instance_leases_two_clusters_of_different_kinds() {
         .unwrap();
     let inst_status = resp.status();
     let instance = body_json(resp.into_body()).await;
-    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    assert_eq!(
+        inst_status,
+        StatusCode::CREATED,
+        "create instance: {instance}"
+    );
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(instance["status"], "running");
 
@@ -506,8 +539,7 @@ async fn one_instance_leases_two_clusters_of_different_kinds() {
          run; saw {flavors_ever_built:?}"
     );
     assert!(
-        flavors_with_active_lease.contains("slurm")
-            && flavors_with_active_lease.contains("nomad"),
+        flavors_with_active_lease.contains("slurm") && flavors_with_active_lease.contains("nomad"),
         "expected BOTH clusters to hold an active lease (streaming watcher) while \
          their loop ran; saw {flavors_with_active_lease:?}"
     );

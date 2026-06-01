@@ -45,6 +45,7 @@ fn make_job(spec: ExecutionSpec) -> ExecutionJob {
         timeout: None,
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     }
 }
@@ -267,7 +268,11 @@ async fn ollama_vision_basic() {
     // Verify usage metrics are populated
     let usage = result.outputs.get("usage").expect("missing 'usage' output");
     assert!(
-        usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+        usage
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            > 0,
         "input_tokens should be > 0, got: {usage}"
     );
 }

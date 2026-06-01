@@ -11,7 +11,7 @@ use crate::compiler::interface::InterfaceRegistry;
 /// transition belonging to the consumer node — either the unscoped
 /// `t_<consumer>_*` ids (Decision/Loop/scheduled-prepare) OR the
 /// scoped-prefix `<consumer>/*` ids (the executor lifecycle, e.g. a
-/// `run_on_lease` body's `<consumer>/prepare`). If the guard or logic
+/// lease-enclosed body's `<consumer>/prepare`). If the guard or logic
 /// source mentions the dotted ref, wire a read-arc (with the broader
 /// "any arc" collision check — Loop's lower_loop pre-wires consume arcs)
 /// and word-boundary-substitute `<dotted>` → `d_<producer>.<producer_path>`.
@@ -21,7 +21,11 @@ pub(crate) fn apply_guard_borrows(
     borrows: &[Borrow],
 ) {
     for b in borrows {
-        let BorrowResolution::Guard { dotted, producer_path } = &b.resolution else {
+        let BorrowResolution::Guard {
+            dotted,
+            producer_path,
+        } = &b.resolution
+        else {
             continue; // unreachable per partition
         };
         if interfaces
@@ -35,7 +39,7 @@ pub(crate) fn apply_guard_borrows(
         let new_ref = format!("{var}.{producer_path}");
         // Unscoped (`t_<consumer>_*`) and scoped-prefix (`<consumer>/*`) ids both
         // belong to the consumer. The executor lifecycle scopes its prepare as
-        // `<consumer>/prepare` (e.g. a `run_on_lease` body), so a `t_<id>_`-only
+        // `<consumer>/prepare` (e.g. a lease-enclosed body), so a `t_<id>_`-only
         // match would silently skip the rewrite and leave a dangling raw ref.
         let t_prefix = format!("t_{}_", b.consumer_node_id);
         let scoped_prefix = format!("{}/", b.consumer_node_id);

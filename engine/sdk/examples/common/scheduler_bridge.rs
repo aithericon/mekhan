@@ -1,11 +1,11 @@
-//! Typed connector for scheduler-net bridge interface.
+//! Typed connector for the scheduler relay net bridge interface.
 //!
-//! Scheduler-net uses two named reply channels ("result" and "failure") to route
+//! The scheduler relay net uses two named reply channels ("result" and "failure") to route
 //! results and failures back to the originating job-net instance. This module
 //! provides:
 //!
 //! - Shared token types (`SchedulerJobResult`, `SchedulerJobFailure`) used by
-//!   both scheduler-net and job-net.
+//!   both the scheduler relay net and job-net.
 //! - A typed connector (`SchedulerReply` + `connect_to_scheduler`) that wires
 //!   up the reply channels with compile-time type safety — missing or mistyped
 //!   channels cause compile errors.
@@ -26,7 +26,7 @@
 
 use aithericon_sdk::prelude::*;
 
-/// Result relayed back from scheduler-net (success path).
+/// Result relayed back from the scheduler relay net (success path).
 #[token]
 pub struct SchedulerJobResult {
     pub job_id: String,
@@ -34,7 +34,7 @@ pub struct SchedulerJobResult {
     pub detail: serde_json::Value,
 }
 
-/// Failure relayed back from scheduler-net (failure path).
+/// Failure relayed back from the scheduler relay net (failure path).
 #[token]
 pub struct SchedulerJobFailure {
     pub job_id: String,
@@ -46,9 +46,9 @@ pub struct SchedulerJobFailure {
     pub model_name: String,
 }
 
-/// Reply channels expected by scheduler-net.
+/// Reply channels expected by the scheduler relay net.
 ///
-/// Scheduler-net's `result_outbox` uses channel "result" and `failure_outbox`
+/// The scheduler relay net's `result_outbox` uses channel "result" and `failure_outbox`
 /// uses channel "failure". This struct enforces that callers provide both.
 pub struct SchedulerReply<'a> {
     /// Place where successful job results should land.
@@ -57,7 +57,7 @@ pub struct SchedulerReply<'a> {
     pub failure: &'a PlaceHandle<SchedulerJobFailure>,
 }
 
-/// Wire up a bridge_out to scheduler-net with typed reply channels.
+/// Wire up a bridge_out to the scheduler relay net with typed reply channels.
 ///
 /// Returns a `PlaceHandle<SchedulerSubmitInput>` — the dispatch outbox.
 pub fn connect_to_scheduler(

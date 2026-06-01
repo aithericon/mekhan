@@ -88,10 +88,7 @@ impl LiveZitadel {
         let resp = rb.send().await.expect("zitadel mgmt request");
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        assert!(
-            status.is_success(),
-            "zitadel {path} -> {status}: {text}"
-        );
+        assert!(status.is_success(), "zitadel {path} -> {status}: {text}");
         serde_json::from_str(&text).unwrap_or(Value::Null)
     }
 

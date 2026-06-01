@@ -122,13 +122,12 @@ fn main() {
                                     if let Some(max_rows) = cli.preview {
                                         let preview_opts =
                                             PreviewOptions::new().with_max_rows(max_rows);
-                                        meta.preview =
-                                            fmeta::preview::extract_preview(
-                                                &result.path,
-                                                &meta.format,
-                                                &preview_opts,
-                                                meta.num_rows,
-                                            );
+                                        meta.preview = fmeta::preview::extract_preview(
+                                            &result.path,
+                                            &meta.format,
+                                            &preview_opts,
+                                            meta.num_rows,
+                                        );
                                     }
                                     output_meta(&meta, &cli);
                                 }
@@ -156,24 +155,15 @@ fn main() {
             match result {
                 Ok(mut meta) => {
                     if let Some(algo) = &cli.checksum {
-                        meta.checksum =
-                            fmeta::compute_checksum(path, algo.clone()).ok();
+                        meta.checksum = fmeta::compute_checksum(path, algo.clone()).ok();
                     }
                     if cli.statistics {
                         let stats_opts = fmeta::StatisticsOptions::new();
-                        let _ = fmeta::compute_statistics(
-                            path,
-                            &mut meta,
-                            &stats_opts,
-                        );
+                        let _ = fmeta::compute_statistics(path, &mut meta, &stats_opts);
                     }
                     if cli.classify {
                         let classify_opts = fmeta::ClassificationOptions::new();
-                        let _ = fmeta::classify_columns(
-                            path,
-                            &mut meta,
-                            &classify_opts,
-                        );
+                        let _ = fmeta::classify_columns(path, &mut meta, &classify_opts);
                     }
                     output_meta(&meta, &cli);
                 }

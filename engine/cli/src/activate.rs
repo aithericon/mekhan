@@ -16,11 +16,7 @@ pub fn run_activate_one(client: &EngineClient, net_id: &str) {
             println!("{}: {}", net_id.bold(), "running".green());
         }
         Err(PutError::HttpStatus { code: 422, body }) => {
-            eprintln!(
-                "{}: {}",
-                net_id.bold(),
-                "bridge validation failed".red()
-            );
+            eprintln!("{}: {}", net_id.bold(), "bridge validation failed".red());
             if let Ok(report) = serde_json::from_str::<AnalysisReport>(&body) {
                 print_analysis_report(&report);
             } else {
@@ -53,11 +49,7 @@ pub fn run_activate_all(client: &EngineClient) {
                 println!("{}: {}", net_id.bold(), "running".green());
             }
             Err(PutError::HttpStatus { code: 422, body }) => {
-                eprintln!(
-                    "{}: {}",
-                    net_id.bold(),
-                    "bridge validation failed".red()
-                );
+                eprintln!("{}: {}", net_id.bold(), "bridge validation failed".red());
                 if let Ok(report) = serde_json::from_str::<AnalysisReport>(&body) {
                     print_analysis_report(&report);
                 } else {

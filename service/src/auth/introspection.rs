@@ -133,10 +133,7 @@ impl IntrospectionVerifier {
 
 /// Fetch `introspection_endpoint` from the OIDC discovery document. `None` on
 /// any failure — the caller falls back to the well-known Zitadel path.
-async fn discover_introspection_endpoint(
-    http: &reqwest::Client,
-    issuer: &str,
-) -> Option<String> {
+async fn discover_introspection_endpoint(http: &reqwest::Client, issuer: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Disco {
         introspection_endpoint: Option<String>,

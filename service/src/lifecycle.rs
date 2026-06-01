@@ -339,22 +339,16 @@ async fn cleanup_finished_instances(
         // compiler emits — note `net_id` is `mekhan-{instance_id}`, a
         // different string). Best-effort: a failed delete must not block
         // archival, and a no-op when the instance ran no agent nodes.
-        if let Err(e) = s3
-            .delete_prefix(&format!("instances/{instance_id}/"))
-            .await
-        {
-            tracing::warn!(
-                "cleanup: failed to delete transcript blobs for {instance_id}: {e}"
-            );
+        if let Err(e) = s3.delete_prefix(&format!("instances/{instance_id}/")).await {
+            tracing::warn!("cleanup: failed to delete transcript blobs for {instance_id}: {e}");
         }
 
         // Update status to archived
-        if let Err(e) = sqlx::query(
-            "UPDATE workflow_instances SET status = 'archived' WHERE id = $1",
-        )
-        .bind(instance_id)
-        .execute(db)
-        .await
+        if let Err(e) =
+            sqlx::query("UPDATE workflow_instances SET status = 'archived' WHERE id = $1")
+                .bind(instance_id)
+                .execute(db)
+                .await
         {
             tracing::error!("failed to archive instance {instance_id}: {e}");
         }
@@ -364,12 +358,7 @@ async fn cleanup_finished_instances(
 }
 
 /// Clean up a single net's resources. All operations are idempotent.
-pub async fn cleanup_net(
-    net_id: &str,
-    nats: &MekhanNats,
-    petri: &PetriClient,
-    purge_events: bool,
-) {
+pub async fn cleanup_net(net_id: &str, nats: &MekhanNats, petri: &PetriClient, purge_events: bool) {
     // Step 1: Remove from petri-lab in-memory registry
     if let Err(e) = petri.delete_net(net_id).await {
         tracing::warn!("cleanup: failed to delete net {net_id} from engine: {e}");

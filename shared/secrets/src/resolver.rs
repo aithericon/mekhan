@@ -15,10 +15,7 @@ static SECRET_PATTERN: LazyLock<Regex> =
 /// - Numbers/Booleans/Null: passed through unchanged
 ///
 /// Returns a new JSON value with secrets resolved. The original is not modified.
-pub async fn resolve_secrets(
-    value: &Value,
-    store: &dyn SecretStore,
-) -> Result<Value, SecretError> {
+pub async fn resolve_secrets(value: &Value, store: &dyn SecretStore) -> Result<Value, SecretError> {
     match value {
         Value::String(s) => resolve_string(s, store).await,
         Value::Object(map) => {

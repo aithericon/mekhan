@@ -99,9 +99,7 @@ impl MetadataExtractor for YamlExtractor {
         // Extract columns from the first document's structure.
         let (column_names, columns, num_rows) = match first {
             // Sequence of mappings → tabular
-            Some(serde_yaml::Value::Sequence(seq))
-                if seq.iter().all(|v| v.is_mapping()) =>
-            {
+            Some(serde_yaml::Value::Sequence(seq)) if seq.iter().all(|v| v.is_mapping()) => {
                 if let Some(serde_yaml::Value::Mapping(first_map)) = seq.first() {
                     let names: Vec<String> = first_map
                         .keys()

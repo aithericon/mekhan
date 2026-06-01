@@ -27,12 +27,12 @@ pub(crate) static AUTOMATED_STEP_DECL: NodeDecl = NodeDecl {
     is_join: false,
     parks_data_envelope: true,
     lower: Some(crate::compiler::lower::automated_step::lower_automated_step),
-    input_ports: input_ports,
-    output_ports: output_ports,
+    input_ports,
+    output_ports,
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     // The unmerged-fan-in warning (shared with HumanTask) — never errors.
-    validate: Some(crate::compiler::validate::warn_unmerged_fan_in),
+    validate: Some(crate::compiler::validate::validate_automated_step),
     token_shape: Some(crate::compiler::token_shape::analyze::out_shape_automated_step),
 };
 
@@ -41,10 +41,24 @@ fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // serde defaults give an empty pass-through for templates that never
     // authored an input shape. Matches the central
     // `WorkflowNodeData::input_ports` arm.
-    let WorkflowNodeData::AutomatedStep { input, .. } = data else {
+    let WorkflowNodeData::AutomatedStep {
+        input, stream_input, ..
+    } = data
+    else {
         unreachable!("automated_step::input_ports on non-AutomatedStep variant");
     };
-    vec![input.clone()]
+    let mut ports = vec![input.clone()];
+    // streamInput reducer exposes a SECOND input handle "stream" alongside the
+    // implicit control "in". The compiler routes it to `p_{id}_stream_in` (the
+    // producer's per-chunk Signal tokens) via `input_handles`.
+    if *stream_input {
+        ports.push(Port {
+            id: "stream".to_string(),
+            label: "Stream".to_string(),
+            fields: vec![],
+        });
+    }
+    ports
 }
 
 fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
@@ -83,11 +97,7 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     ports
 }
 
-fn yjs_encode(
-    txn: &mut yrs::TransactionMut<'_>,
-    config: &yrs::MapRef,
-    data: &WorkflowNodeData,
-) {
+fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &WorkflowNodeData) {
     use yrs::Map;
     let WorkflowNodeData::AutomatedStep {
         execution_spec,
@@ -96,6 +106,7 @@ fn yjs_encode(
         retry_policy,
         deployment_model,
         stream_output,
+        stream_input,
         ..
     } = data
     else {
@@ -114,7 +125,7 @@ fn yjs_encode(
     // Y.Doc→graph reconstruction (`doc_to_graph`) silently reset them.
     // Without input/output the editor's "Output port — Fields" panel reads
     // back empty; without retry/deployment we'd lose authored retries and
-    // collapse a Scheduled step to Inline (never reaches scheduler-net).
+    // collapse a Scheduled step to Inline (never reaches external cluster dispatch).
     let in_val = serde_json::to_value(input).unwrap_or_default();
     config.insert(txn, "input", json_value_to_any(&in_val));
     let out_val = serde_json::to_value(output).unwrap_or_default();
@@ -130,5 +141,11 @@ fn yjs_encode(
         txn,
         "streamOutput",
         json_value_to_any(&serde_json::Value::Bool(*stream_output)),
+    );
+    // `stream_input` — same round-trip rationale as `stream_output`.
+    config.insert(
+        txn,
+        "streamInput",
+        json_value_to_any(&serde_json::Value::Bool(*stream_input)),
     );
 }
