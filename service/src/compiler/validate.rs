@@ -299,7 +299,7 @@ pub(crate) fn validate_timeout(
 /// parse as a Rhai expression. Per `dispatch` mode: `Rhai` must have NO body
 /// edges; `SequentialBody`/`ParallelBody` require a body (body_in+body_out edges,
 /// a valid `resultVar`, a supported body terminal kind, and no enclosing Map);
-/// `LiveReduce` is rejected (Phase-3 capability).
+/// `LiveReduce` requires a body (same structural gate as Sequential/Parallel).
 pub(crate) fn validate_stream_consumer(
     node: &WorkflowNode,
     graph: &WorkflowGraph,
@@ -315,14 +315,6 @@ pub(crate) fn validate_stream_consumer(
     else {
         unreachable!("validate_stream_consumer on non-StreamConsumer variant");
     };
-
-    // `LiveReduce` is not supported this phase — reject cleanly (same verdict the
-    // lowering raises, surfaced at publish so the editor rings the node).
-    if matches!(dispatch, StreamDispatch::LiveReduce) {
-        return Err(CompileError::StreamConsumerLiveReduceUnsupported {
-            node_id: node.id.clone(),
-        });
-    }
 
     // Count inbound edges per target handle — exactly one `stream` and one
     // `control` are required (a missing/duplicated handle is a wiring bug).
@@ -385,7 +377,9 @@ pub(crate) fn validate_stream_consumer(
         }
         // Body modes: require the body, a valid resultVar, a supported terminal,
         // and no enclosing Map. Mirrors `validate_map`.
-        StreamDispatch::SequentialBody | StreamDispatch::ParallelBody => {
+        StreamDispatch::SequentialBody
+        | StreamDispatch::ParallelBody
+        | StreamDispatch::LiveReduce => {
             if result_var.trim().is_empty() || !is_rhai_ident(result_var.trim()) {
                 return Err(CompileError::MapResultVarInvalid {
                     node_id: node.id.clone(),
@@ -430,8 +424,6 @@ pub(crate) fn validate_stream_consumer(
                 }
             }
         }
-        // Already rejected above.
-        StreamDispatch::LiveReduce => unreachable!("LiveReduce rejected above"),
     }
 
     Ok(())

@@ -66,23 +66,17 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
         unreachable!("lower_stream_consumer on non-StreamConsumer node")
     };
 
-    // `LiveReduce` is a Phase-3 capability (one long-lived Python reducer fed
-    // chunks over IPC). Reject cleanly here so the build is green and the editor
-    // rings the node — no IPC/feed wiring this phase.
-    if matches!(dispatch, StreamDispatch::LiveReduce) {
-        return Err(CompileError::StreamConsumerLiveReduceUnsupported {
-            node_id: id.clone(),
-        });
-    }
-
-    // Body-dispatch modes (Sequential/Parallel) require a wired body — at least
-    // one child (`parent_id == consumer.id`). Mirrors `lower_map`'s `MapEmpty`
-    // gate; the structural `body_in`/`body_out` edge presence is the publish-time
-    // mirror in `validate_stream_consumer`.
+    // Body-dispatch modes (Sequential/Parallel/LiveReduce) require a wired body
+    // — at least one child (`parent_id == consumer.id`). Mirrors `lower_map`'s
+    // `MapEmpty` gate; the structural `body_in`/`body_out` edge presence is the
+    // publish-time mirror in `validate_stream_consumer`.
     let body_mode = matches!(
         dispatch,
-        StreamDispatch::SequentialBody | StreamDispatch::ParallelBody
+        StreamDispatch::SequentialBody
+            | StreamDispatch::ParallelBody
+            | StreamDispatch::LiveReduce
     );
+    let live_reduce = matches!(dispatch, StreamDispatch::LiveReduce);
     let sequential = matches!(dispatch, StreamDispatch::SequentialBody);
     if body_mode && cx.children.is_empty() {
         return Err(CompileError::StreamConsumerBodyEmpty {
@@ -239,6 +233,89 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
                     "#{{ result: #{{ value: body.detail.outputs.{result_var}, \"__map_idx\": body.__map_idx, \"__map_id\": body.__map_id }}, permit: #{{ permit: true }} }}"
                 ))
                 .done();
+        } else if live_reduce {
+            // ── LiveReduce: one long-lived reducer, fed chunks over IPC ─────
+            // Post-mortem fixes (2026-05-31):
+            //  1. Dense renumbering — p_dense_seq renumbers chunks 0..N-1 so
+            //     the executor ReorderBuffer never sees sparse-sequence gaps.
+            //  2. Immediate bootstrapping — seed p_body_in so the reducer job
+            //     starts on node entry (p_exec_id is always populated for EOF).
+            //  3. Clean EOF — uses stream_count from the control token (equals
+            //     the dense total), always one past the last chunk sequence.
+            //  4. No first-chunk duplication — all chunks arrive via IPC only;
+            //     the seed token carries null (no data injection into input).
+
+            ctx.seed_one(
+                &p_body_in,
+                DynamicToken::new(json!({
+                    &result_var: null,
+                    "__map_idx": 0,
+                    "__map_id": id_lit
+                })),
+            );
+
+            let p_dense_seq: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_dense_seq"),
+                format!("{label} - Dense Sequence Counter"),
+            );
+            ctx.seed_one(&p_dense_seq, DynamicToken::new(json!({ "n": 0 })));
+
+            let p_exec_id: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_exec_id"),
+                format!("{label} - Reducer Execution ID"),
+            );
+            let child_id = &cx.children[0].id;
+            let p_child_submitted =
+                PlaceHandle::<DynamicToken>::external(format!("p_{child_id}_submitted"));
+
+            ctx.transition(
+                format!("t_{id}_capture_exec_id"),
+                format!("{label} - Capture Exec ID"),
+            )
+            .read_input("submitted", &p_child_submitted)
+            .auto_output("exec_id", &p_exec_id)
+            .logic_rhai("#{ exec_id: #{ id: submitted.execution_id } }".to_string())
+            .done();
+
+            let p_feed_inbox: PlaceHandle<DynamicToken> =
+                ctx.state(format!("p_{id}_feed_inbox"), format!("{label} - Feed Inbox"));
+            ctx.transition(format!("t_{id}_feed"), format!("{label} - Feed Chunk"))
+                .auto_input("chunk", &p_stream_in)
+                .auto_input("seq", &p_dense_seq)
+                .read_input("exec", &p_exec_id)
+                .auto_output("feed", &p_feed_inbox)
+                .auto_output("seq", &p_dense_seq)
+                .logic_rhai(
+                    "#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: seq.n }, seq: #{ n: seq.n + 1 } }"
+                        .to_string(),
+                )
+                .done();
+
+            ctx.transition(
+                format!("t_{id}_feed_effect"),
+                format!("{label} - Stream Feed Effect"),
+            )
+            .auto_input("feed", &p_feed_inbox)
+            .builtin_effect(&petri_domain::effects::EXECUTOR_STREAM_FEED);
+
+            ctx.transition(format!("t_{id}_eof"), format!("{label} - Feed EOF"))
+                .auto_input("ctrl", &p_control_in)
+                .read_input("exec", &p_exec_id)
+                .auto_output("feed", &p_feed_inbox)
+                .logic_rhai(
+                    "let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; \
+                     #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }"
+                        .to_string(),
+                )
+                .done();
+
+            ctx.transition(format!("t_{id}_collect"), format!("{label} - Collect"))
+                .auto_input("body", &p_body_out)
+                .auto_output("result", &p_gathered)
+                .logic_rhai(format!(
+                    "#{{ result: #{{ output: body.detail.outputs.{result_var} }} }}"
+                ))
+                .done();
         } else {
             // ── ParallelBody: map-style concurrent dispatch ─────────────────
             // t_<id>_ingest dispatches each chunk straight to the body entry
@@ -286,35 +363,42 @@ pub(crate) fn lower_stream_consumer(cx: &mut LoweringCtx) -> Result<(), CompileE
         None
     };
 
-    // t_<id>_close — consume the producer's control/EOS token and emit the
-    // gather coordinator. `stream_count` rides as a TOP-LEVEL leaf on the
-    // streaming producer's slim control token: `split_outputs_streaming`
-    // surfaces it there because the plain `YIELD_LOGIC` strips `detail` down to
-    // `{status, task_id}` (so `ctrl.detail.stream_count` would not survive). If
-    // absent (a non-streaming producer mis-wired into the control handle)
-    // default to 0 so the gather fires immediately on an empty stream rather
-    // than wedging.
-    ctx.transition(format!("t_{id}_close"), format!("{label} - Close Stream"))
-        .auto_input("ctrl", &p_control_in)
-        .auto_output("count", &p_count)
-        .logic_rhai(format!(
-            "let __n = if \"stream_count\" in ctrl {{ ctrl.stream_count }} else {{ 0 }}; \
-             #{{ count: #{{ expected: __n, \"__map_id\": \"{id_lit}\" }} }}"
-        ))
-        .done();
+    // LiveReduce bypasses t_close + t_gather: t_eof consumes p_control_in
+    // (sending the EOF sentinel to the reducer) and t_collect populates
+    // p_gathered directly from the reducer's terminal output. Emitting
+    // t_close/t_gather alongside would create two transitions competing for
+    // p_control_in — a structural deadlock.
+    if !live_reduce {
+        // t_<id>_close — consume the producer's control/EOS token and emit the
+        // gather coordinator. `stream_count` rides as a TOP-LEVEL leaf on the
+        // streaming producer's slim control token: `split_outputs_streaming`
+        // surfaces it there because the plain `YIELD_LOGIC` strips `detail` down to
+        // `{status, task_id}` (so `ctrl.detail.stream_count` would not survive). If
+        // absent (a non-streaming producer mis-wired into the control handle)
+        // default to 0 so the gather fires immediately on an empty stream rather
+        // than wedging.
+        ctx.transition(format!("t_{id}_close"), format!("{label} - Close Stream"))
+            .auto_input("ctrl", &p_control_in)
+            .auto_output("count", &p_count)
+            .logic_rhai(format!(
+                "let __n = if \"stream_count\" in ctrl {{ ctrl.stream_count }} else {{ 0 }}; \
+                 #{{ count: #{{ expected: __n, \"__map_id\": \"{id_lit}\" }} }}"
+            ))
+            .done();
 
-    // t_<id>_gather — COUNTED BARRIER. Read the coordinator (non-consuming) for
-    // `expected` + `__map_id`; `gather_input` the results with
-    // `count_from = "count.expected"` and `correlate_on = "__map_id"`. Fires
-    // only when `expected` results sharing this node's `__map_id` are present,
-    // consumes exactly those, sorts by `__map_idx` (stream sequence order), and
-    // reduces per the node's `StreamReduce`.
-    ctx.transition(format!("t_{id}_gather"), format!("{label} - Gather"))
-        .read_input("count", &p_count)
-        .gather_input("results", &p_results, "count.expected", Some("__map_id"))
-        .auto_output("gathered", &p_gathered)
-        .logic_rhai(reduce_logic(&reduce))
-        .done();
+        // t_<id>_gather — COUNTED BARRIER. Read the coordinator (non-consuming) for
+        // `expected` + `__map_id`; `gather_input` the results with
+        // `count_from = "count.expected"` and `correlate_on = "__map_id"`. Fires
+        // only when `expected` results sharing this node's `__map_id` are present,
+        // consumes exactly those, sorts by `__map_idx` (stream sequence order), and
+        // reduces per the node's `StreamReduce`.
+        ctx.transition(format!("t_{id}_gather"), format!("{label} - Gather"))
+            .read_input("count", &p_count)
+            .gather_input("results", &p_results, "count.expected", Some("__map_id"))
+            .auto_output("gathered", &p_gathered)
+            .logic_rhai(reduce_logic(&reduce))
+            .done();
+    }
 
     // Foundation tail — park the reduced output write-once at `p_<id>_data`
     // and forward a slim control token. Same `split_outputs` helper as

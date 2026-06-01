@@ -38,7 +38,7 @@ use petri_application::{
     CatalogueUnsubscribeHandler,
 };
 #[cfg(feature = "executor")]
-use petri_application::{ExecutorCancelHandler, ExecutorSubmitHandler};
+use petri_application::{ExecutorCancelHandler, ExecutorStreamFeedHandler, ExecutorSubmitHandler};
 use petri_domain::human::HumanTaskClient;
 #[cfg(feature = "executor")]
 use petri_domain::ExecutorClient;
@@ -812,12 +812,19 @@ where
                 .register_effect_handler(
                     effects::EXECUTOR_CANCEL.handler_id,
                     Arc::new(ExecutorCancelHandler::new(
-                        executor_client,
+                        executor_client.clone(),
                         effects::EXECUTOR_CANCEL.default_input_port,
                         effects::EXECUTOR_CANCEL.default_output_port,
                     )),
                 )
                 .expect("register executor_cancel effect handler");
+
+            service
+                .register_effect_handler(
+                    effects::EXECUTOR_STREAM_FEED.handler_id,
+                    Arc::new(ExecutorStreamFeedHandler::new(executor_client)),
+                )
+                .expect("register executor_stream_feed effect handler");
 
             tracing::info!(
                 net_id = %net_id,

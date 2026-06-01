@@ -264,16 +264,16 @@ impl ExecutorNatsClient {
                 )
                 .ok()
             });
-
-        Ok(ExecutionJob {
-            execution_id,
-            spec,
-            metadata: routing_meta.clone(),
-            timeout,
-            priority,
-            stream_events,
-            wrapped_secrets: None,
-        })
+Ok(ExecutionJob {
+    execution_id,
+    spec,
+    metadata: routing_meta.clone(),
+    timeout,
+    priority,
+    stream_events,
+    feed_chunks: request.feed_chunks,
+    wrapped_secrets: None,
+})
     }
 
     /// Idempotently ensure the apalis-nats stream for the given priority and
@@ -445,6 +445,42 @@ impl ExecutorClient for ExecutorNatsClient {
             subject = %subject,
             "Published cancellation request"
         );
+
+        Ok(())
+    }
+
+    async fn feed_chunk(
+        &self,
+        execution_id: &str,
+        value: serde_json::Value,
+        sequence: u64,
+        is_eof: bool,
+    ) -> Result<(), ExecutorError> {
+        // Chunks are published to `executor.chunks.{execution_id}`.
+        let subject = format!("executor.chunks.{}", execution_id);
+
+        let payload = serde_json::json!({
+            "value_json": serde_json::to_string(&value).unwrap_or_default(),
+            "sequence": sequence,
+            "is_eof": is_eof,
+        });
+
+        let payload_vec = serde_json::to_vec(&payload).map_err(|e| {
+            ExecutorError::Fatal(format!("Failed to serialize chunk: {}", e))
+        })?;
+
+        let mut headers = async_nats::HeaderMap::new();
+        // Use the same Nats-Msg-Id format as the listener's dedup window.
+        headers.insert("Nats-Msg-Id", format!("{}-{}", execution_id, sequence));
+
+        self.jetstream
+            .publish_with_headers(subject, headers, Bytes::from(payload_vec))
+            .await
+            .map_err(|e| ExecutorError::SubmissionFailed(format!("NATS chunk publish failed: {}", e)))?
+            .await
+            .map_err(|e| {
+                ExecutorError::SubmissionFailed(format!("NATS chunk publish ack failed: {}", e))
+            })?;
 
         Ok(())
     }

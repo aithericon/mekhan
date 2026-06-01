@@ -45,6 +45,7 @@ fn make_job(spec: ExecutionSpec) -> ExecutionJob {
         timeout: None,
         priority: JobPriority::Medium,
         stream_events: None,
+        feed_chunks: false,
         wrapped_secrets: None,
     }
 }
