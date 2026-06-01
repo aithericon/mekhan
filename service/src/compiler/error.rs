@@ -170,6 +170,32 @@ pub enum CompileError {
     #[error("lease scope '{node_id}' has no body — add at least one node inside the lease-scope container")]
     LeaseScopeEmpty { node_id: String },
 
+    /// A node INSIDE a loop body reads an upstream business field off the
+    /// *control token* (`input.<field>` / `token.<field>`), but that field only
+    /// rides the token on the FIRST iteration. The loop's `t_continue` rebuilds
+    /// the token every pass (`#{ body: <body_out>, data: … }`) — an
+    /// envelope-stripping body (any AutomatedStep) drops the field, so the read
+    /// returns `undefined`/`AttributeError` on iteration 1+. The fix is always
+    /// the parked-borrow form `<producer_slug>.<field>`: a non-consuming read-arc
+    /// into the producer's write-once `p_<id>_data` place, which survives every
+    /// iteration (this is how `lp.iteration`, `bo.observations`, etc. work). See
+    /// docs/10 (control-data token model) and docs/17 (lease scope).
+    #[error(
+        "node '{node_label}' inside loop '{loop_label}' reads `{referenced}` off the control \
+         token, but that field only rides the token on the FIRST iteration — the loop rebuilds \
+         the token each pass and drops it. Use the parked-borrow form `{suggested}` instead (a \
+         non-consuming read-arc that survives every iteration)."
+    )]
+    LoopBodyStaleControlRef {
+        node_id: String,
+        node_label: String,
+        loop_label: String,
+        /// The exact reference text the author wrote (`input.job_name`).
+        referenced: String,
+        /// The suggested parked-borrow replacement (`start.job_name`).
+        suggested: String,
+    },
+
     /// Map has no body — no child node has `parent_id == map.id`. A Map with
     /// nothing to run per element is a config error; wire at least one node
     /// inside the map container.
@@ -754,6 +780,7 @@ impl CompileError {
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
             Self::LeaseScopeEmpty { .. } => "lease_scope_empty",
+            Self::LoopBodyStaleControlRef { .. } => "loop_body_stale_control_ref",
             Self::MapEmpty { .. } => "map_empty",
             Self::MapRefMissingStar { .. } => "map_ref_missing_star",
             Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
@@ -834,6 +861,7 @@ impl CompileError {
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
             | Self::LeaseScopeEmpty { node_id }
+            | Self::LoopBodyStaleControlRef { node_id, .. }
             | Self::MapEmpty { node_id }
             | Self::MapRefMissingStar { node_id, .. }
             | Self::MapResultVarInvalid { node_id, .. }

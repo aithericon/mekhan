@@ -228,6 +228,126 @@ pub(crate) fn validate_lease_scope(
     Ok(())
 }
 
+/// The nearest `Loop` ancestor of `node` (walk the `parent_id` chain), or
+/// `None` if no enclosing Loop. Mirrors
+/// `lower::automated_step::enclosing_leased_scope_slug` but stops at the first
+/// `Loop` (a plain LeaseScope/Scope/Map between the node and the loop is walked
+/// through — the relevant boundary for control-token survival is the loop's
+/// continue cycle). Returns the loop node's id.
+fn enclosing_loop<'g>(graph: &'g WorkflowGraph, node: &WorkflowNode) -> Option<&'g WorkflowNode> {
+    let mut current = node.parent_id.as_deref();
+    while let Some(pid) = current {
+        let parent = graph.nodes.iter().find(|n| n.id == pid)?;
+        if matches!(parent.data, WorkflowNodeData::Loop { .. }) {
+            return Some(parent);
+        }
+        current = parent.parent_id.as_deref();
+    }
+    None
+}
+
+/// Reject a control-token read (`input.<field>` / `token.<field>`) of an
+/// upstream business field made by a node INSIDE a loop body.
+///
+/// Such a field rides the control token only on the loop's FIRST iteration:
+/// `lower_loop`'s `t_continue` rebuilds the token each pass (`#{ body:
+/// <body_out>, data: … }`), and any envelope-stripping body step (every
+/// AutomatedStep) drops it — so the read returns `undefined` (Rhai) /
+/// `AttributeError` (Python runner `_AccessibleDict`) on iteration 1+. The
+/// safe form is always the parked borrow `<producer_slug>.<field>` (a
+/// non-consuming read-arc into the producer's write-once `p_<id>_data`, which
+/// survives every iteration — exactly how `lp.iteration` / `bo.observations`
+/// are read in the loop demos). See docs/10 + docs/17.
+///
+/// SOUNDNESS: we flag a reference ONLY when its head segment is a leaf present
+/// on the loop's *enter* shape (`node_in[loop]`) and is NOT a genuine control
+/// leaf (`_*` / `task_id` / `status`) nor the loop's own `<slug>` namespace.
+/// A field produced *within* the body (intra-iteration) is not on the enter
+/// shape, so it is never mis-flagged; only the iteration-0-only fields are.
+/// On a structurally-unanalyzable draft we skip (other passes report first).
+pub(crate) fn validate_loop_body_control_refs(
+    graph: &WorkflowGraph,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), CompileError> {
+    use crate::compiler::borrow::planners::guard::{guard_refs, RefRoot};
+    use crate::compiler::python_refs::extract_python_refs;
+    use crate::compiler::token_shape::analyze;
+    use crate::compiler::token_shape::surface::is_control_leaf;
+
+    let Ok(report) = analyze(graph) else {
+        return Ok(());
+    };
+
+    for node in &graph.nodes {
+        let Some(loop_node) = enclosing_loop(graph, node) else {
+            continue;
+        };
+        let loop_slug = loop_node.slug();
+        let Some(enter) = report.node_in.get(&loop_node.id) else {
+            continue;
+        };
+
+        // (head_segment, exact-source-text) candidates that root on the
+        // control token. Rhai surfaces (Decision guards, nested-Loop conditions,
+        // End/Failure result mappings, Delay/Timeout durations) + Python source.
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        for src in crate::nodes::guard_rhai_sources(&node.data) {
+            for gref in guard_refs(src) {
+                if matches!(gref.root, RefRoot::Input) {
+                    if let Some(head) = gref.segs.first() {
+                        candidates.push((head.clone(), gref.referenced.clone()));
+                    }
+                }
+            }
+        }
+        if let Some(files) = inline_sources.get(&node.id) {
+            for src in files.values() {
+                for r in extract_python_refs(src) {
+                    if r.head == "input" || r.head == "token" {
+                        candidates.push((r.attr.clone(), format!("{}.{}", r.head, r.attr)));
+                    }
+                }
+            }
+        }
+
+        for (head, referenced) in candidates {
+            // Genuine control/identity leaves survive every iteration.
+            if is_control_leaf(&format!("input.{head}")) {
+                continue;
+            }
+            // The loop's own parked namespace (`input.<slug>.iteration`, or a
+            // Python `input.<slug>` access) is loop-stable by construction.
+            if head == loop_slug {
+                continue;
+            }
+            // Only flag a field that DEMONSTRABLY rode the loop's enter token as
+            // business data (present on `node_in[loop]`, not a control leaf).
+            if enter.resolve(std::slice::from_ref(&head)).is_none() {
+                continue;
+            }
+            // Resolve the owning parked producer for a precise suggestion.
+            let suggested = enter
+                .find_by_leaf(&head)
+                .and_then(|(_phys, _ty, prov)| {
+                    graph.nodes.iter().find(|n| n.id == prov.node_id).map(|p| {
+                        let pslug = p.slug();
+                        format!("{pslug}.{head}")
+                    })
+                })
+                .unwrap_or_else(|| format!("<producer>.{head}"));
+
+            return Err(CompileError::LoopBodyStaleControlRef {
+                node_id: node.id.clone(),
+                node_label: node.data.label().to_string(),
+                loop_label: loop_node.data.label().to_string(),
+                referenced,
+                suggested,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Delay: non-empty `durationMsExpr` (parse + ref-resolution happens in
 /// `validate_guards` alongside other Rhai surfaces).
 pub(crate) fn validate_delay(

@@ -1288,3 +1288,161 @@ fn empty_lease_scope_is_rejected() {
         "expected LeaseScopeEmpty, got {err:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Loop-body control-token scoping (the demo-16 footgun). A node inside a loop
+// body that reads an upstream/Start business field OFF THE CONTROL TOKEN
+// (`input.<field>` / `token.<field>`) only sees it on the first iteration —
+// `t_continue` rebuilds the token each pass and an envelope-stripping body
+// drops it. The safe form is the parked borrow `<producer>.<field>` (a
+// read-arc that survives every iteration). The compiler rejects the unsafe
+// form at publish so the author never hits the runtime `AttributeError`.
+// ---------------------------------------------------------------------------
+
+/// Compile the plain `Start{job_name} → Loop{lp} → render(python) → End` loop
+/// fixture, staging `render/main.py` with the given body source.
+fn compile_loop_with_body(body_src: &str) -> Result<Value, CompileError> {
+    let graph = load_graph("loop-start-field-body.json");
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut render = HashMap::new();
+    render.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: body_src.to_string(),
+        },
+    );
+    files.insert("render".to_string(), render);
+    compile_to_air(&graph, "t", "", &files)
+}
+
+#[test]
+fn loop_body_reading_start_field_off_control_token_is_rejected() {
+    // `input.job_name` is a Start field — it rides the control token only on
+    // iteration 0; the loop's continue path strips it. Must be rejected.
+    let err = compile_loop_with_body("frame = input.job_name\n")
+        .expect_err("reading a Start field off the control token in a loop body must be rejected");
+    let CompileError::LoopBodyStaleControlRef {
+        node_id,
+        referenced,
+        suggested,
+        ..
+    } = err
+    else {
+        panic!("expected LoopBodyStaleControlRef, got {err:?}");
+    };
+    assert_eq!(node_id, "render");
+    assert_eq!(referenced, "input.job_name");
+    // The fix points at the parked-producer borrow (Start's slug).
+    assert_eq!(suggested, "start.job_name");
+}
+
+#[test]
+fn loop_body_reading_start_field_via_token_alias_is_rejected() {
+    // `token` is the other runner alias for the inbound control token — same
+    // footgun, same rejection.
+    let err = compile_loop_with_body("frame = token.job_name\n")
+        .expect_err("`token.<startfield>` in a loop body must be rejected too");
+    assert!(
+        matches!(err, CompileError::LoopBodyStaleControlRef { ref referenced, .. } if referenced == "token.job_name"),
+        "expected LoopBodyStaleControlRef for token.job_name, got {err:?}"
+    );
+}
+
+#[test]
+fn loop_body_reading_start_field_via_parked_slug_compiles() {
+    // The CORRECT form: borrow the Start field as `start.job_name` (Start is a
+    // parked producer; the read-arc into `p_start-1_data` survives every
+    // iteration). Must compile cleanly — proving the suggested fix is valid.
+    let air = compile_loop_with_body("frame = start.job_name\n")
+        .expect("parked-borrow `start.job_name` in a loop body must compile");
+    // And the read-arc into Start's parked place is actually synthesized.
+    let reads_start = transitions(&air).iter().any(|t| {
+        t["id"].as_str().map(|s| s.starts_with("render")).unwrap_or(false)
+            && t["inputs"]
+                .as_array()
+                .map(|ins| {
+                    ins.iter().any(|a| {
+                        a["place"] == "p_start-1_data"
+                            && a["read"] == serde_json::Value::Bool(true)
+                    })
+                })
+                .unwrap_or(false)
+    });
+    assert!(
+        reads_start,
+        "expected a read-arc into p_start-1_data for the `start.job_name` borrow"
+    );
+}
+
+#[test]
+fn loop_body_reading_loop_counter_compiles() {
+    // Negative control — the canonical loop-body pattern (demo 04 / 16): the
+    // loop's own `lp.iteration` is a parked borrow, NOT a control-token field,
+    // so it must NOT be flagged. Guards against over-rejection.
+    compile_loop_with_body("shot = lp.iteration\n")
+        .expect("reading the loop counter `lp.iteration` must compile");
+}
+
+#[test]
+fn loop_body_reading_genuine_control_leaf_compiles() {
+    // Genuine control/identity leaves (`_*` / `task_id` / `status`) survive
+    // every iteration — they ride the slim control token the loop forwards.
+    // `input._instance_id` must NOT be flagged.
+    compile_loop_with_body("rid = input._instance_id\n")
+        .expect("a genuine control-leaf `input._instance_id` read must compile");
+}
+
+/// #4 — the loop counter is in scope at an End that sits OUTSIDE the enclosing
+/// LeaseScope. `lp.iteration` resolves to a non-consuming read-arc into the
+/// loop's parked `p_lp_data` place, synthesized into the End's result-mapping
+/// transition — the read-arc crosses the LeaseScope boundary, so the mapping is
+/// NOT null. Pins the `LeaseScope { Loop { … } } → End(lp.iteration)` shape.
+#[test]
+fn lease_scope_loop_counter_is_in_scope_at_end() {
+    let graph = load_graph("lease-scope-loop-end-counter.json");
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut render = HashMap::new();
+    render.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "shot = lp.iteration\n".to_string(),
+        },
+    );
+    files.insert("render".to_string(), render);
+
+    let air = compile_to_air_with_options(
+        &graph,
+        "t",
+        "",
+        &files,
+        CompileOptions {
+            known_resources: &known_with_prod_dc("datacenter"),
+            ..Default::default()
+        },
+    )
+    .map(|a| a.air)
+    .expect("LeaseScope{Loop} → End(lp.iteration) must compile");
+
+    // The End's result-mapping transition read-arcs the loop's parked counter
+    // place — `lp.iteration` is borrow-reachable across the LeaseScope boundary.
+    let end_reads_counter = transitions(&air).iter().any(|t| {
+        t["id"].as_str().map(|s| s.starts_with("t_end-1")).unwrap_or(false)
+            && t["inputs"]
+                .as_array()
+                .map(|ins| {
+                    ins.iter().any(|a| {
+                        a["place"] == "p_lp_data" && a["read"] == serde_json::Value::Bool(true)
+                    })
+                })
+                .unwrap_or(false)
+    });
+    assert!(
+        end_reads_counter,
+        "End must read-arc p_lp_data so `lp.iteration` resolves (not null) across the \
+         LeaseScope boundary; transitions = {:#?}",
+        transitions(&air)
+            .iter()
+            .map(|t| t["id"].clone())
+            .collect::<Vec<_>>()
+    );
+}
