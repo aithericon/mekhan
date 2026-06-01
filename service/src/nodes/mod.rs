@@ -549,6 +549,7 @@ mod tests {
             label: "m".to_string(),
             description: None,
             items_ref: "extract.tasks".to_string(),
+            stream_source: false,
             item_var: "item".to_string(),
             result_var: "result".to_string(),
             output: None,

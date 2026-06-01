@@ -474,9 +474,21 @@ pub enum WorkflowNodeData {
         description: Option<String>,
         /// Producer-namespaced reference to the array to scatter, carrying
         /// exactly one `[*]` boundary at iteration time (resolved through the
-        /// Repeater items-ref machinery), e.g. `extract.tasks`.
-        #[serde(rename = "itemsRef")]
+        /// Repeater items-ref machinery), e.g. `extract.tasks`. IGNORED when
+        /// `stream_source` is set (a streaming Map sources elements from its
+        /// `stream`/`control` edges, not a static array).
+        #[serde(rename = "itemsRef", default)]
         items_ref: String,
+        /// When `true`, this Map is a STREAMING map: instead of scattering the
+        /// static `items_ref` array, it ingests a streaming producer's chunks
+        /// (one element per chunk over the `stream` handle) and sizes its gather
+        /// barrier on the runtime `stream_count` (from the `control` handle).
+        /// Parallel-only — bodies fan out concurrently exactly like the array
+        /// path; `__map_idx` (the producer sequence) restores order at the
+        /// gather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps
+        /// round-trip unchanged.
+        #[serde(rename = "streamSource", default)]
+        stream_source: bool,
         /// Identifier the per-item element is bound to on each body token.
         /// Body guards / Python read `<item_var>.<field>`. Defaults to `item`.
         #[serde(rename = "itemVar", default = "default_item_var")]

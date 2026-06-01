@@ -5555,6 +5555,7 @@ fn map_node(id: &str, slug: &str, items_ref: &str, result_var: &str) -> Workflow
             label: "Map".to_string(),
             description: None,
             items_ref: items_ref.to_string(),
+            stream_source: false,
             item_var: "item".to_string(),
             result_var: result_var.to_string(),
             output: Some(Port {

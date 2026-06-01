@@ -14426,7 +14426,6 @@
             "description": "Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`\ninto N item tokens (one per element), runs a BODY sub-graph of child\nnodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`\nhandle mechanism as Loop) once per element, gathers the N results, and\nreduces them to one collection token parked at `p_<id>_data`. Downstream\nblocks borrow the gathered collection as `<map_slug>[*].<field>` (the\nRepeater `[*]` machinery generalized to any Array-typed parked producer;\n`<map_slug>.<field>` without `[*]` is a hard `MapRefMissingStar` error).\nThe scatter writes the item namespace ONTO each body token (namespace-\non-token, v1) so body guards / Python read `item.<field>` directly.",
             "required": [
               "label",
-              "itemsRef",
               "resultVar",
               "type"
             ],
@@ -14443,7 +14442,7 @@
               },
               "itemsRef": {
                 "type": "string",
-                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`."
+                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`. IGNORED when\n`stream_source` is set (a streaming Map sources elements from its\n`stream`/`control` edges, not a static array)."
               },
               "label": {
                 "type": "string"
@@ -14462,6 +14461,10 @@
               "resultVar": {
                 "type": "string",
                 "description": "Field on each body output token whose value becomes the gathered\nelement (the per-iteration result the reduce collects)."
+              },
+              "streamSource": {
+                "type": "boolean",
+                "description": "When `true`, this Map is a STREAMING map: instead of scattering the\nstatic `items_ref` array, it ingests a streaming producer's chunks\n(one element per chunk over the `stream` handle) and sizes its gather\nbarrier on the runtime `stream_count` (from the `control` handle).\nParallel-only — bodies fan out concurrently exactly like the array\npath; `__map_idx` (the producer sequence) restores order at the\ngather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps\nround-trip unchanged."
               },
               "type": {
                 "type": "string",

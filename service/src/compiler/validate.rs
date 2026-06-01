@@ -494,12 +494,42 @@ pub(crate) fn validate_map(
     let WorkflowNodeData::Map {
         items_ref,
         result_var,
+        stream_source,
         ..
     } = &node.data
     else {
         unreachable!("validate_map on non-Map variant");
     };
-    if items_ref.trim().is_empty() {
+    if *stream_source {
+        // Streaming Map: no itemsRef; instead require exactly one inbound
+        // `stream` edge + one `control` edge (the producer's chunk Signal place
+        // + its EOS/count token), mirroring StreamFold. The shared body /
+        // nested / terminal gates below still apply.
+        let mut stream_edges = 0usize;
+        let mut control_edges = 0usize;
+        for e in &graph.edges {
+            if e.target != node.id {
+                continue;
+            }
+            match e.target_handle.as_deref() {
+                Some("stream") => stream_edges += 1,
+                Some("control") => control_edges += 1,
+                _ => {}
+            }
+        }
+        if stream_edges != 1 {
+            return Err(CompileError::Validation(format!(
+                "streaming map '{}' requires exactly one inbound `stream` edge, found {stream_edges}",
+                node.id
+            )));
+        }
+        if control_edges != 1 {
+            return Err(CompileError::Validation(format!(
+                "streaming map '{}' requires exactly one inbound `control` edge, found {control_edges}",
+                node.id
+            )));
+        }
+    } else if items_ref.trim().is_empty() {
         return Err(CompileError::Validation(format!(
             "map '{}' must have a non-empty itemsRef",
             node.id

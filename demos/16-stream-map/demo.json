@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000f16",
+  "name": "16 · Stream Map",
+  "description": "Parallel streaming-source Map. A streaming producer (streamOutput=true) emits 4 word chunks (the/quick/brown/fox); a Map in stream-source mode runs a per-chunk Python body that uppercases each chunk CONCURRENTLY (one ephemeral job per chunk), gathers the results in stream order (sized on stream_count), and a trailing joiner concatenates the gathered collection into 'THE QUICK BROWN FOX'. Wire producer.stream → map.stream and producer.out → map.control.",
+  "visibility": "public"
+}

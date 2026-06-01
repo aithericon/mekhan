@@ -5828,9 +5828,11 @@ export interface components {
             /**
              * @description Producer-namespaced reference to the array to scatter, carrying
              *     exactly one `[*]` boundary at iteration time (resolved through the
-             *     Repeater items-ref machinery), e.g. `extract.tasks`.
+             *     Repeater items-ref machinery), e.g. `extract.tasks`. IGNORED when
+             *     `stream_source` is set (a streaming Map sources elements from its
+             *     `stream`/`control` edges, not a static array).
              */
-            itemsRef: string;
+            itemsRef?: string;
             label: string;
             output?: null | components["schemas"]["Port"];
             /**
@@ -5838,6 +5840,17 @@ export interface components {
              *     element (the per-iteration result the reduce collects).
              */
             resultVar: string;
+            /**
+             * @description When `true`, this Map is a STREAMING map: instead of scattering the
+             *     static `items_ref` array, it ingests a streaming producer's chunks
+             *     (one element per chunk over the `stream` handle) and sizes its gather
+             *     barrier on the runtime `stream_count` (from the `control` handle).
+             *     Parallel-only — bodies fan out concurrently exactly like the array
+             *     path; `__map_idx` (the producer sequence) restores order at the
+             *     gather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps
+             *     round-trip unchanged.
+             */
+            streamSource?: boolean;
             /** @enum {string} */
             type: "map";
         } | {
