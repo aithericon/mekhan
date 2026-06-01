@@ -58,11 +58,6 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "13-dynamic-form",
     "14-streaming-output",
     "15-stream-python-body",
-    // 16-leased-gpu: a LeaseScope bound to the `nomad_dc` datacenter. Like
-    // 06/09 it needs publish-time resource resolution — the bare `compile_to_air`
-    // entry-point here has no KnownResources, so the LeaseScope can't resolve its
-    // datacenter backing net. Its compiled shape is pinned by `compiler_e2e`'s
-    // lease-scope tests instead; the live seed (publish path) proves it compiles.
 ];
 
 fn repo_root() -> PathBuf {
@@ -296,11 +291,16 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     // `http` backend references an http resource the resolver would supply;
     // 12a-bo-catalog-trigger carries a Trigger node whose catalogue wiring is
     // resolved at publish time — same class of "needs the publish handler".
+    // 16-leased-gpu's LeaseScope binds the `nomad_dc` datacenter resource, whose
+    // backing net the bare `compile_to_air` has no KnownResources to resolve; its
+    // compiled shape is pinned by `compiler_e2e`'s lease-scope tests and the live
+    // seed (publish path) proves it compiles.
     let documented_skip: std::collections::HashSet<&str> = [
         "06-subworkflow",
         "09-agent-tool-loop",
         "11-http-call",
         "12a-bo-catalog-trigger",
+        "16-leased-gpu",
     ]
     .into_iter()
     .collect();
