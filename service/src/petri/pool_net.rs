@@ -433,6 +433,16 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
     let release_prep: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.state("release_prep", "Release Prep (grant_id + alloc_id)");
 
+    // Internal place catching `t_request`'s `_error` token on an acquire failure.
+    // The engine's `_error`-port path consumes the claim, records `EffectFailed`,
+    // and routes the raw error token HERE (carrying the consumed claim's reply
+    // routing per `firing.rs` `route_output_tokens` internal-place branch) INSTEAD
+    // of NetFailing the whole adapter net — so one claimant's bad acquire never
+    // takes down the SHARED pool. `t_request_failed` reshapes it onto the `fail`
+    // reply channel back to that one claimant.
+    let request_error: aithericon_sdk::PlaceHandle<DynamicToken> =
+        ctx.state("request_error", "Acquire Error (raw _error token)");
+
     // t_request — acquire effect. Consumes the routed claim, fires
     // resource_lease_acquire (effect reads the claim on its "request" port +
     // the resolved connection from effect_config), and emits ONLY the lease on
@@ -440,9 +450,29 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
     ctx.transition("t_request", "Request Lease")
         .auto_input("request", &claim_inbox)
         .auto_output("lease", &grant_outbox)
+        .auto_output("_error", &request_error)
         .effect_with_config(
             effects::RESOURCE_LEASE_ACQUIRE.handler_id,
             effect_config.clone(),
+        );
+
+    // t_request_failed — acquire effect FAILED (e.g. allocator returned 500
+    // 'parameterized job not found'). The engine routed the raw error token to
+    // `request_error`, which carries the consumed claim's reply routing. Reshape
+    // it onto the `fail` reply channel so the SPECIFIC claiming instance's
+    // lease-failed inbox receives `{ grant_id, error, phase }` and aborts (the
+    // instance side's `t_<id>_claim_abort` in `lease_bridge.rs`). `grant_id` is
+    // nested under the effect's `request` input port in the raw error token.
+    // The shared pool net is UNAFFECTED — it consumed the claim and keeps serving.
+    ctx.transition("t_request_failed", "Acquire Failed (notify claimant)")
+        .auto_input("err", &request_error)
+        .auto_output("notify", &fail_outbox)
+        .logic(
+            r#"#{ notify: #{
+                grant_id: err.inputs.request.grant_id,
+                error: err.error,
+                phase: "acquire"
+            } }"#,
         );
 
     // t_register — record the lease hold over the PLAIN register bridge. Keep
@@ -994,6 +1024,30 @@ mod tests {
             .iter()
             .any(|o| o["place"] == "fail_outbox");
         assert!(to_fail, "t_lease_died must route to fail_outbox: {died}");
+    }
+
+    /// On an acquire-effect FAILURE the adapter SURVIVES (no NetFailed) and
+    /// routes the failure to the claimant: t_request has an _error output arc
+    /// to request_error, and t_request_failed reshapes that raw error token
+    /// onto the 'fail' reply channel (fail_outbox).
+    #[test]
+    fn acquire_failure_routes_to_fail_channel_without_netfail() {
+        let a = dc_air(Uuid::nil());
+        let req = transition(&a, "t_request").expect("t_request");
+        let err_arc = req["outputs"].as_array().unwrap().iter()
+            .any(|o| o["port"] == "_error" && o["place"] == "request_error");
+        assert!(err_arc, "t_request must route _error to request_error: {req}");
+        let f = transition(&a, "t_request_failed").expect("t_request_failed");
+        assert_eq!(f["logic"]["type"], "rhai");
+        let in_places: Vec<&str> = f["inputs"].as_array().unwrap().iter()
+            .map(|x| x["place"].as_str().unwrap()).collect();
+        assert!(in_places.contains(&"request_error"), "inputs: {in_places:?}");
+        let to_fail = f["outputs"].as_array().unwrap().iter()
+            .any(|o| o["place"] == "fail_outbox");
+        assert!(to_fail, "t_request_failed must route to fail_outbox: {f}");
+        let src = f["logic"]["source"].as_str().unwrap();
+        assert!(src.contains("err.inputs.request.grant_id") && src.contains("err.error"),
+            "notify must carry grant_id + error: {src}");
     }
 
     /// t_reap drops the expired hold without re-calling release (the allocator

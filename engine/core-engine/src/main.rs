@@ -32,6 +32,12 @@ async fn main() {
 
     info!("Tracing initialized");
 
+    // Dev-only Nomad parameterized-job self-heal (gated by NOMAD_AUTOPROVISION_JOBS=1;
+    // never set in prod). The in-memory dev nomad agent loses its jobs on restart, so
+    // re-register them at every engine boot before any lease/scheduler dispatch.
+    #[cfg(feature = "nomad")]
+    petri_api::nomad_allocator::ensure_parameterized_jobs().await;
+
     let engine_config = EngineConfig::from_env();
 
     let config = NatsConfig::from_env();

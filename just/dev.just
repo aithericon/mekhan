@@ -26,6 +26,7 @@ dev_dir   := ".dev"
 pid_dir   := ".dev/pid"
 log_dir   := ".dev/log"
 work_dir  := ".dev/work"
+nomad_jobs_dir := ".dev/nomad-jobs"
 
 # Executor build features. `llm` is included so an AutomatedStep with
 # backendType=llm can dispatch against the local Ollama daemon
@@ -617,6 +618,13 @@ up-engine scheduler="off":
       export NOMAD_ADDR="http://127.0.0.1:4646"
       export SCHEDULER_JOB_TEMPLATE="petri-executor-worker"
       export SCHEDULER_SIGNAL_ROUTES="running:sig_running,completed:sig_completed,failed:sig_failed"
+      # Self-heal the parameterized jobs at every engine (re)start: the in-memory
+      # dev nomad agent loses them on restart, so the next resource_lease_acquire
+      # 500s with 'parameterized job not found'. scheduler-up renders the
+      # env-interpolated job bodies into {{nomad_jobs_dir}}; the engine reads + POSTs
+      # each on startup when NOMAD_AUTOPROVISION_JOBS=1 (never set in prod).
+      export NOMAD_AUTOPROVISION_JOBS="1"
+      export NOMAD_JOB_TEMPLATE_DIR="$PWD/{{nomad_jobs_dir}}"
     fi
     if [ "{{scheduler}}" = "slurm" ]; then
       # Slurm reaches the cluster over SSH against the local docker-compose
@@ -716,6 +724,12 @@ scheduler-up:
     #    diverts work to the always-on dev daemon and leaves the Nomad
     #    worker idle — proven false-Nomad-execution; explicitly override.
     echo "▶ registering petri-executor-worker Nomad job template…"
+    # Render the interpolated job body to a stable dir AND register it now. The
+    # rendered file is the single source of truth the engine re-POSTs on every
+    # (re)start (NOMAD_AUTOPROVISION_JOBS, see up-engine) so a restarted/cleared
+    # in-memory nomad agent self-heals; the curl here is an idempotent belt-and-
+    # suspenders for the immediate scheduler-up.
+    mkdir -p "{{nomad_jobs_dir}}"
     jq --arg bin "$exec_bin" --arg ep "{{s3_endpoint}}" \
        '.Job.TaskGroups[0].Tasks[0].Config.command = $bin
         | .Job.TaskGroups[0].Tasks[0].Env += {
@@ -728,8 +742,8 @@ scheduler-up:
             "EXECUTOR_STORAGE__CREDENTIALS__SECRET_KEY": "rustfsadmin",
             "EXECUTOR_PYTHON__ENABLED": "true",
             "EXECUTOR_PYTHON__PREFER_UV": "true"
-          }' engine/infra/nomad/executor-job-template.json \
-      | curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @- >/dev/null
+          }' engine/infra/nomad/executor-job-template.json > "{{nomad_jobs_dir}}/executor-job.json"
+    curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @"{{nomad_jobs_dir}}/executor-job.json" >/dev/null
     echo "  ✓ petri-executor-worker registered (binary: $exec_bin)"
 
     # 3b. Register the petri-lease-executor parameterized job (the LEASE path —
@@ -759,8 +773,8 @@ scheduler-up:
             "EXECUTOR_PYTHON__PREFER_UV": "true",
             "EXECUTOR_PYTHON__CACHE_DIR": "/tmp/aithericon-nomad-lease-venvs",
             "EXECUTOR_MAX_ACK_PENDING": "1"
-          }' engine/infra/nomad/lease-executor-job-template.json \
-      | curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @- >/dev/null
+          }' engine/infra/nomad/lease-executor-job-template.json > "{{nomad_jobs_dir}}/lease-executor-job.json"
+    curl -sf -X POST http://127.0.0.1:4646/v1/jobs -d @"{{nomad_jobs_dir}}/lease-executor-job.json" >/dev/null
     echo "  ✓ petri-lease-executor registered (drain/Pool parameterized job)"
 
     # 4. Pause the dev daemon — both it and the Nomad-spawned worker would

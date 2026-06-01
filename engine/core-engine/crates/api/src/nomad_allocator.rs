@@ -283,6 +283,64 @@ impl AllocatorClient for NomadAllocatorClient {
     }
 }
 
+/// Dev-only: register the Nomad parameterized jobs the lease/scheduler path
+/// dispatches against (`petri-lease-executor`, `petri-executor-worker`).
+///
+/// GATED behind `NOMAD_AUTOPROVISION_JOBS=1` so it NEVER runs in prod (there
+/// the parameterized jobs are managed objects). The in-memory dev nomad
+/// agent loses its jobs on restart, so a later `resource_lease_acquire` 500s
+/// with 'parameterized job not found'; registering at engine startup (hence
+/// on every restart) self-heals that. Reads ready-to-register job bodies
+/// (`{ "Job": { ... } }`) from `NOMAD_JOB_TEMPLATE_DIR` (the `scheduler-up` recipe
+/// renders the env-interpolated templates there, staying the single source
+/// of truth for binary/S3/NATS/SDK interpolation) and POSTs each to
+/// `POST {NOMAD_ADDR}/v1/jobs`. Best-effort: failures are logged at WARN and
+/// swallowed so a missing dir / unreachable Nomad never crashes startup.
+#[cfg(feature = "nomad")]
+pub async fn ensure_parameterized_jobs() {
+    if std::env::var("NOMAD_AUTOPROVISION_JOBS").ok().as_deref() != Some("1") {
+        return;
+    }
+    let Some(addr) = std::env::var("NOMAD_ADDR").ok().filter(|s| !s.is_empty()) else {
+        tracing::warn!("NOMAD_AUTOPROVISION_JOBS=1 but NOMAD_ADDR unset — skipping Nomad job provisioning");
+        return;
+    };
+    let dir = std::env::var("NOMAD_JOB_TEMPLATE_DIR")
+        .ok().filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "engine/infra/nomad".to_string());
+    let token = std::env::var("NOMAD_TOKEN").ok().filter(|s| !s.is_empty());
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(%dir, %e, "NOMAD_JOB_TEMPLATE_DIR unreadable — no Nomad jobs provisioned");
+            return;
+        }
+    };
+    let http = reqwest::Client::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") { continue; }
+        let body = match std::fs::read_to_string(&path) {
+            Ok(b) => b,
+            Err(e) => { tracing::warn!(?path, %e, "could not read Nomad job file"); continue; }
+        };
+        let url = format!("{}/v1/jobs", addr.trim_end_matches('/'));
+        let mut req = http.post(&url).header("content-type", "application/json").body(body);
+        if let Some(ref t) = token { req = req.header("X-Nomad-Token", t); }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(?path, "registered Nomad parameterized job (dev autoprovision)");
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let txt = resp.text().await.unwrap_or_default();
+                tracing::warn!(?path, %status, body = %txt, "Nomad job register failed (dev autoprovision)");
+            }
+            Err(e) => tracing::warn!(?path, %e, "Nomad job register request failed (dev autoprovision)"),
+        }
+    }
+}
+
 #[cfg(all(test, feature = "nomad"))]
 mod tests {
     use super::*;

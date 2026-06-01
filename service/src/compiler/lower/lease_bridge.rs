@@ -206,7 +206,7 @@ pub(super) fn emit_lease_bridge(
     )
     .auto_input("fail", &p_lease_failed_inbox)
     .auto_output("flag", &p_lease_failed)
-    .logic_rhai("#{ flag: #{ grant_id: fail.grant_id, failed: true } }")
+    .logic_rhai("let e = if fail.error == () { \"\" } else { fail.error }; #{ flag: #{ grant_id: fail.grant_id, failed: true, error: e } }")
     .done();
 
     // t_{id}_lease_abort — fail fast. CONSUME the parked envelope `p_{id}_data`
@@ -235,6 +235,35 @@ pub(super) fn emit_lease_bridge(
     .guard_rhai(format!("{d_fail}.failed == true"))
     .priority("100")
     .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&abort_msg)))
+    .done();
+
+    // t_{id}_claim_abort — fail fast DURING the pending (pre-acquire) phase.
+    // The acquire effect failed (e.g. allocator 500), so no grant arrives and
+    // t_{id}_enter is permanently disabled, leaving the holder parked at
+    // p_{id}_pending forever. The adapter net's t_request_failed routed a
+    // { grant_id, error, phase } failure onto the 'fail' reply channel, which
+    // t_{id}_lease_failed_register parked. CONSUME p_{id}_pending (the
+    // pre-acquire analogue of t_{id}_lease_abort consuming p_{id}_data) and
+    // read-arc the parked flag, then throw => ErrorOccurred + NetFailed =>
+    // propagates to the caller via the existing failure machinery. Fail-fast,
+    // no retry. Mutually exclusive with t_{id}_enter (same single pending
+    // token; on success enter fires first and no failure is parked) and with
+    // t_{id}_lease_abort (which needs p_{id}_data, produced only post-acquire).
+    let d_fail_claim = format!("dcf_{}", id.replace('-', "_"));
+    let d_pending_abort = format!("dp_{}", id.replace('-', "_"));
+    let claim_abort_prefix = format!("lease scope {}: lease acquire failed — ", label);
+    ctx.transition(
+        format!("t_{id}_claim_abort"),
+        format!("{label} - Acquire Failed (abort)"),
+    )
+    .auto_input(d_pending_abort.clone(), &p_pending)
+    .read_input(d_fail_claim.clone(), &p_lease_failed)
+    .guard_rhai(format!("{d_fail_claim}.failed == true"))
+    .priority("100")
+    .logic_rhai(format!(
+        "throw \"{}\" + {d_fail_claim}.error",
+        rhai_str_escape(&claim_abort_prefix)
+    ))
     .done();
 
     LeaseBridge {

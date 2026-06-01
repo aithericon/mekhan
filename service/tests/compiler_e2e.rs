@@ -64,7 +64,11 @@ fn assert_all_transitions_wired(air: &Value) {
         let id = t["id"].as_str().unwrap();
         let inputs = t["inputs"].as_array().unwrap();
         assert!(!inputs.is_empty(), "transition {id} has no inputs");
-        if id.ends_with("_deadend") || id.ends_with("_panic") || id.ends_with("_lease_abort") {
+        if id.ends_with("_deadend")
+            || id.ends_with("_panic")
+            || id.ends_with("_lease_abort")
+            || id.ends_with("_claim_abort")
+        {
             continue;
         }
         let outputs = t["outputs"].as_array().unwrap();
@@ -1213,6 +1217,74 @@ fn lease_scope_emits_lease_bridges_and_releases_on_exit() {
         exit.get("guard").map(|g| g.is_null()).unwrap_or(true),
         "lease-scope exit is straight-through (no iteration/condition guard): {:?}",
         exit.get("guard")
+    );
+}
+
+/// Acquire-failure fail-fast: when the lease ACQUIRE fails (no grant arrives),
+/// the holder is parked at `p_<scope>_pending` forever — `t_<scope>_enter` can
+/// never fire, and `t_<scope>_lease_abort` can't help (it needs `p_<scope>_data`,
+/// produced only post-acquire). The synthesized `t_<scope>_claim_abort` closes
+/// that gap: it CONSUMES `p_<scope>_pending` and read-arcs the parked lease
+/// failure flag, then throws (-> ErrorOccurred / NetFailed). It also requires
+/// the failure-register transition to carry the `error` so the thrown message
+/// can include the upstream cause.
+#[test]
+fn lease_scope_aborts_when_acquire_fails() {
+    let graph = load_graph("lease-scope-scheduled-body.json");
+    let air = compile_lease_scope_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
+        .expect("lease-scope with a Scheduled body should compile");
+
+    assert_all_transitions_wired(&air);
+    assert_arcs_reference_existing_places(&air);
+
+    // (a) A `_claim_abort` transition exists.
+    let claim_abort = transitions(&air)
+        .iter()
+        .find(|t| t["id"].as_str().unwrap().ends_with("_claim_abort"))
+        .expect("a `_claim_abort` fail-fast transition must exist");
+
+    // (b) It consumes a `_pending` place (the pre-acquire parking spot).
+    let consumes_pending = claim_abort["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| {
+            a["place"].as_str().map(|p| p.ends_with("_pending")).unwrap_or(false)
+                && a["read"] != serde_json::Value::Bool(true)
+        });
+    assert!(
+        consumes_pending,
+        "claim_abort must CONSUME a `_pending` place: {:?}",
+        claim_abort["inputs"]
+    );
+
+    // (c) It read-arcs (non-consuming) the parked lease-failure flag.
+    let reads_failed = claim_abort["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| {
+            a["place"]
+                .as_str()
+                .map(|p| p.ends_with("_lease_failed_parked"))
+                .unwrap_or(false)
+                && a["read"] == serde_json::Value::Bool(true)
+        });
+    assert!(
+        reads_failed,
+        "claim_abort must read-arc a `_lease_failed_parked` place: {:?}",
+        claim_abort["inputs"]
+    );
+
+    // (d) The lease-failed register transition now carries the `error`.
+    let register = transitions(&air)
+        .iter()
+        .find(|t| t["id"].as_str().unwrap().ends_with("_lease_failed_register"))
+        .expect("a `_lease_failed_register` transition must exist");
+    let register_logic = register["logic"]["source"].as_str().unwrap();
+    assert!(
+        register_logic.contains("error"),
+        "lease-failed register must park the `error`: {register_logic}"
     );
 }
 
