@@ -1009,7 +1009,7 @@ impl Context {
     /// ```ignore
     /// let (to_scheduler, from_scheduler) = ctx.bridge_channel::<Request, Response>(
     ///     "scheduler",
-    ///     "scheduler-net",
+    ///     "scheduler-relay", // example net id — any deployed scheduler relay net
     ///     "job_inbox",
     ///     "result_outbox",
     /// );

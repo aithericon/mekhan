@@ -105,7 +105,7 @@ pub struct SubmitRequest {
 
     /// Engine-assigned execution id. Threaded through to the executor so that
     /// per-job consumer modes (sbatch one-shot) can target the right job's
-    /// NATS subject. Stamped by the scheduler-net submit handler before the
+    /// NATS subject. Stamped by the scheduler submit handler before the
     /// scheduler dispatch and the downstream executor publish, both of which
     /// must agree on this id.
     pub execution_id: String,

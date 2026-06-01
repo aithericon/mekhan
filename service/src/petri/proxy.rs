@@ -184,7 +184,7 @@ async fn gate_petri_instance(
         Ok(v) => v,
         // The net_id isn't a mekhan-managed workflow instance. That means it's
         // either a shared INFRA net deployed straight to the engine
-        // (`resource-pool-net`, `scheduler-net`, `executor-net`) or a
+        // (`resource-pool-net`, `executor-net`) or a
         // non-net engine listing path the extractor optimistically treated as
         // an id (e.g. `/api/nets/metadata`). None of these enumerate
         // per-principal instance data, and every genuine user instance lives

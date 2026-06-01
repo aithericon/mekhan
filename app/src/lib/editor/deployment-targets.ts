@@ -3,7 +3,7 @@
  * deployment model is `scheduled`. A small static set kept as a TS twin (like
  * `automated-ports.ts`) so the editor stays offline-capable; swap for a fetch
  * behind the same `{ value, label }[]` contract if it ever needs to be dynamic.
- * Values must match the scheduler-net's registered parameterized job ids.
+ * Values must match the cluster's registered parameterized job ids.
  */
 export const GPU_JOB_TEMPLATES = [
 	{ value: 'petri-mumax3-worker', label: 'mumax3 (micromagnetics, GPU)' },

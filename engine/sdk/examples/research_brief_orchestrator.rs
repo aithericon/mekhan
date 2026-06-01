@@ -7,7 +7,7 @@
 //! 4. **File transfer** — copies raw data between two local storage backends
 //! 5. **Rig/Ollama LLM** — generates a structured research report via extraction
 //! 6. **Human UI (review)** — senior analyst approves or rejects the report
-//! 7. **Nomad scheduler** — all jobs dispatched through Nomad (via scheduler-net)
+//! 7. **Nomad scheduler** — all jobs dispatched through Nomad (via scheduler relay net)
 //!
 //! ## Architecture: 4-Layer Bridged Nets
 //!
@@ -16,7 +16,7 @@
 //!          | bridge_out → bridge_in
 //! Layer 1: job-net            (job_net --bridged --upstream orchestrator-net)
 //!          | bridge_out → bridge_in
-//! Layer 2: scheduler-net      (scheduler_net — Nomad dispatch)
+//! Layer 2: scheduler relay net (scheduler_net — Nomad dispatch)
 //!          | bridge_out → bridge_in
 //! Layer 3: executor-net       (executor_net --bridged — executor lifecycle)
 //! ```

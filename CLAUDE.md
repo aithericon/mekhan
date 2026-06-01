@@ -49,7 +49,7 @@ Auth defaults to `dev_noop` (every request is a fixed dev user, fully offline). 
 
 ### Scheduler layers
 
-Default `just dev` cannot run `Scheduled` AutomatedSteps — there's no `SCHEDULER_BACKEND` set. To exercise that path end-to-end:
+Default `just dev` cannot run `Scheduled` AutomatedSteps — there's no `SCHEDULER_BACKEND` set. The mekhan-service compiler uses the lease adapter pattern for these; to exercise the underlying scheduler dispatch path end-to-end:
 
 ```bash
 just dev scheduler-up      # Nomad-backed (needs `nomad` on PATH)

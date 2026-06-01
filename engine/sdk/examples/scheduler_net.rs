@@ -7,6 +7,11 @@
 //! Results and failures from the executor are relayed back to the originating
 //! job net via bridge_reply (using ReplyRouting.reply_to for dynamic routing).
 //!
+//! > **Note:** This is a standalone SDK example demonstrating the
+//! > `scheduler_submit` effect pattern and multi-net bridge composition.
+//! > The mekhan-service compiler uses the **lease adapter pattern**
+//! > (`resource_pool_net.rs`) for production workflows instead.
+//!
 //! ## Data flow
 //!
 //! ```text
@@ -215,7 +220,7 @@ fn definition(ctx: &mut Context) {
         // message until the executor's consumer pulls it.
         //
         // execution_id flows through here so the executor net's submit
-        // handler reuses the id the scheduler-net stamped (and which the
+        // handler reuses the id this scheduler relay net stamped (and which the
         // dispatcher, e.g. sbatch, already exported as EXECUTOR_TARGET_EXEC_ID).
         ctx.transition("forward_to_executor", "Forward to Executor")
             .auto_input("job", &submitted)

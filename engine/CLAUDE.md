@@ -220,7 +220,7 @@ When something is stuck: `status` -> `errors` -> `state <net>` -> `trace <key>`.
 - **`python_job_rhai_with_dynamic()`** — Generate Rhai with batch loop for dynamic inputs from `read_input_batch`
 - **`PythonJobDispatch::wire()`** — Full wiring in one call (auto-registers `script_content` as Rhai var)
 
-**Important**: When jobs go through Nomad (scheduler-net), use `storage_path` for scripts — Nomad's parameterized job payload has tight size limits. `JobInput::raw()` / `JobInput::script()` embeds content in the token, which can exceed this limit.
+**Important**: When jobs go through Nomad (scheduler relay), use `storage_path` for scripts — Nomad's parameterized job payload has tight size limits. `JobInput::raw()` / `JobInput::script()` embeds content in the token, which can exceed this limit.
 
 ## Documentation
 

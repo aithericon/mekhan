@@ -7556,7 +7556,7 @@
           },
           {
             "type": "object",
-            "description": "Submit/lease through an external cluster. `scheduler` names a\n`datacenter` resource (docs/13); `None` = today's env-global\nscheduler-net (byte-identical). `job_template` selects the scheduler's\nparameterized job (e.g. `petri-mumax3-worker`). `operation` picks\n`Submit` (today's queued dispatch) or `Lease` (R4: hold an allocation,\nrun on it).",
+            "description": "Lease through an external cluster. `scheduler` names a `datacenter`\nresource (docs/13). `job_template` selects the scheduler's parameterized\njob (e.g. `petri-mumax3-worker`).",
             "required": [
               "jobTemplate",
               "mode"
@@ -7586,7 +7586,7 @@
                   "string",
                   "null"
                 ],
-                "description": "`datacenter` resource alias. `None` = env-global scheduler-net."
+                "description": "`datacenter` resource alias."
               }
             }
           }
@@ -7597,7 +7597,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Standard executor dispatch. The compiler emits an executor job; the\nstep's `DeploymentModel` decides whether it's inline via NATS or\nsubmitted to a scheduler-net.",
+            "description": "Standard executor dispatch. The compiler emits an executor job; the\nstep's `DeploymentModel` decides whether it's inline via NATS or\ndispatched to an external cluster.",
             "required": [
               "kind"
             ],
@@ -14005,7 +14005,7 @@
             "properties": {
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `token_pool`\nadmission (`Executor.pool`). `Scheduled` = submit/lease through an\nexternal cluster (a `datacenter` resource, docs/13; or today's\nenv-global scheduler-net when `scheduler` is `None`).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.pool` here (post-R3\nconsolidation pivot)."
+                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `token_pool`\nadmission (`Executor.pool`). `Scheduled` = lease through an external\ncluster (a `datacenter` resource, docs/13).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.pool` here (post-R3\nconsolidation pivot)."
               },
               "description": {
                 "type": [

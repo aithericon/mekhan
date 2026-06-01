@@ -3,7 +3,7 @@
 //!
 //! A `datacenter` resource (docs/13) is an external cluster that owns
 //! placement. Instead of submitting a job and awaiting its result (the
-//! `submit` operation → scheduler-net), the `lease` operation *holds an
+//! `submit` operation → scheduler dispatch), the `lease` operation *holds an
 //! allocation* on the cluster for the step's duration: acquire a lease, run the
 //! body on it, release the lease. The net holds only the lease handle — the
 //! external allocator stays the source of truth (no DC-state mirror).

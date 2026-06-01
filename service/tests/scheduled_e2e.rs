@@ -1,32 +1,29 @@
-//! End-to-end coverage for a `Scheduled` AutomatedStep — the merged
-//! deployment_model that dispatches through the long-lived `scheduler-net`
-//! (real Nomad), the one keystone feature with no prior runtime proof.
+//! End-to-end coverage for a `Scheduled` AutomatedStep using the datacenter
+//! lease adapter pattern (real Nomad), the one keystone feature with no prior
+//! runtime proof.
 //!
 //! Unlike an Inline step (which the compiler lowers to a direct
-//! executor-lifecycle), a Scheduled step compiles to a `bridge_out` carrying
-//! a `SchedulerSubmitInput` to `scheduler-net/job_inbox` with `result` /
-//! `failure` reply channels. The full path exercised here:
+//! executor-lifecycle), a Scheduled step compiles to a lease lifecycle —
+//! claiming capacity from a per-resource `pool-{resource_id}` adapter net
+//! via `resource_lease_acquire`, then enqueuing work to the held allocation's
+//! drain executor. The full path exercised here:
 //!
-//!   parent-net ─▶ scheduler-net ─(Nomad dispatch: petri-executor-worker)─▶
-//!                 executor-net  ─▶ executor ─▶ result ─▶ back to parent-net
+//!   parent-net ─▶ pool-{resource_id} (lease adapter) ─(resource_lease_acquire)─▶
+//!                 petri-lease-executor (drain) ─▶ executor ─▶ result ─▶ parent
 //!
-//! This is the runtime counterpart to the static
-//! `compiler_tests::automated_step_scheduled_emits_scheduler_bridge` unit
-//! test — it proves the emitted bridge contract (net id, inbox place, token
-//! shape, reply channels, per-job `job_template_id`) actually interoperates
-//! with the real `scheduler-net`. It is the exact blind-spot class that
-//! produced the `well_known.rs` scheduler-id bug.
+//! This is the runtime counterpart to the static compiler tests proving the
+//! lease lifecycle lowering (claim → grant → register → held → release).
 //!
 //! Requires the Nomad scheduler layer on top of `just dev up`:
 //!
 //!   just dev scheduler-up
 //!
-//! (Nomad agent :4646, petri-executor-worker registered, engine restarted
-//! with SCHEDULER_BACKEND=nomad, scheduler-net + executor-net deployed &
-//! running.) The Nomad-spawned executor pulls the staged main.py from the
-//! dev rustfs bucket `mekhan-artifacts`, so this test needs the same S3
-//! overrides as the other executor-backed e2e. Run serially
-//! (`--test-threads=1`) — it shares the live engine/executor/Nomad.
+//! (Nomad agent :4646, petri-executor-worker + petri-lease-executor registered,
+//! engine restarted with SCHEDULER_BACKEND=nomad.) The test itself deploys the
+//! lease adapter net for the seeded resource. The Nomad-spawned executor pulls
+//! the staged main.py from the dev rustfs bucket `mekhan-artifacts`, so this
+//! test needs the same S3 overrides as the other executor-backed e2e. Run
+//! serially (`--test-threads=1`) — it shares the live engine/executor/Nomad.
 
 mod common;
 
@@ -92,8 +89,8 @@ fn end(id: &str) -> WorkflowNode {
     }
 }
 
-/// `Start → AutomatedStep(python, Scheduled via petri-executor-worker) → End`.
-fn scheduled_graph(step_id: &str) -> WorkflowGraph {
+/// `Start → AutomatedStep(python, Scheduled via a datacenter lease) → End`.
+fn scheduled_graph(step_id: &str, scheduler: &str) -> WorkflowGraph {
     WorkflowGraph {
         nodes: vec![
             start("s"),
@@ -120,10 +117,9 @@ fn scheduled_graph(step_id: &str) -> WorkflowGraph {
                     input: Port::empty_input(),
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
-                    // The one thing under test: dispatch through scheduler-net
-                    // (real Nomad), not the inline executor-lifecycle.
+                    // Standalone Scheduled step: now performs a single-node lease.
                     deployment_model: DeploymentModel::Scheduled {
-                        scheduler: None,
+                        scheduler: Some(scheduler.to_string()),
                         job_template: "petri-executor-worker".to_string(),
                         resources: None,
                     },
@@ -206,14 +202,41 @@ async fn scheduled_automated_step_runs_through_nomad() {
             engine_url()
         );
     }
-    // Scheduled needs the Nomad layer; skip if not available.
-    if !net_running("scheduler-net").await || !net_running("executor-net").await {
-        println!("SKIPPING scheduled_automated_step_runs_through_nomad: scheduler-net / executor-net not deployed");
+    // Unified Scheduled needs the Nomad layer; skip if not available.
+    // (We probe 'executor-net' as a proxy for the Nomad worker registration).
+    if !net_running("executor-net").await {
+        println!("SKIPPING scheduled_automated_step_runs_through_nomad: executor-net not deployed");
         return;
     }
 
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
     let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+
+    // Seed a Nomad datacenter resource.
+    let resource_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO resources (id, workspace_id, path, resource_type, display_name, created_by) \
+         VALUES ($1, $2, 'local_nomad', 'datacenter', 'Local Nomad', $3)"
+    )
+    .bind(resource_id)
+    .bind(Uuid::nil())
+    .bind(Uuid::nil())
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO resource_versions (resource_id, version, vault_path, public_config, created_by) \
+         VALUES ($1, 1, 'secret/testing/nomad', $2, $3)"
+    )
+    .bind(resource_id)
+    .bind(json!({
+        "scheduler_flavor": "nomad",
+        "nomad_addr": std::env::var("TEST_NOMAD_URL").unwrap_or_else(|_| "http://localhost:4646".to_string()),
+    }))
+    .bind(Uuid::nil())
+    .execute(&db)
+    .await
+    .unwrap();
 
     let listener_nats = MekhanNats::connect(&engine_nats_url, None)
         .await
@@ -226,6 +249,42 @@ async fn scheduled_automated_step_runs_through_nomad() {
         kv,
         listener_nats.jetstream().clone(),
     ));
+
+    // Deploy the datacenter lease adapter net for our seeded resource.
+    // In production, mekhan-service deploys this automatically on resource create/publish.
+    let nomad_url = std::env::var("TEST_NOMAD_URL").unwrap_or_else(|_| "http://localhost:4646".to_string());
+    let conn = mekhan_service::petri::pool_net::DatacenterConnection {
+        resource_id,
+        resource_version: 1,
+        scheduler_flavor: "nomad".to_string(),
+        allocator_url: None,
+        token_secret_ref: None,
+        ssh_host: None,
+        ssh_port: None,
+        ssh_user: None,
+        ssh_known_hosts: None,
+        template_dir: None,
+        ssh_key_secret_ref: None,
+        nomad_addr: Some(nomad_url),
+        nomad_region: None,
+        nomad_token_secret_ref: None,
+    };
+    let adapter_air = mekhan_service::petri::pool_net::build_datacenter_lease_adapter_net(&conn);
+    let net_id = format!("pool-{resource_id}");
+    let deploy_resp = reqwest::Client::new()
+        .post(format!("{}/api/nets/{net_id}/scenario", engine_url()))
+        .json(&adapter_air)
+        .send()
+        .await
+        .expect("deploy lease adapter");
+    assert_eq!(deploy_resp.status(), StatusCode::OK, "deploy lease adapter failed");
+    let activate_resp = reqwest::Client::new()
+        .put(format!("{}/api/nets/{net_id}/run-mode", engine_url()))
+        .json(&serde_json::json!({"mode": "running"}))
+        .send()
+        .await
+        .expect("activate lease adapter");
+    assert_eq!(activate_resp.status(), StatusCode::OK, "activate lease adapter failed");
     let listener_db = db.clone();
     tokio::spawn(async move {
         start_lifecycle_listener(
@@ -250,7 +309,7 @@ async fn scheduled_automated_step_runs_through_nomad() {
                 .body(Body::from(
                     json!({
                         "name": "Scheduled AutomatedStep E2E",
-                        "graph": scheduled_graph("auto"),
+                        "graph": scheduled_graph("auto", "local_nomad"),
                         "files": { "auto": { "main.py": MAIN_PY } },
                         "author_id": Uuid::new_v4(),
                     })
@@ -289,7 +348,7 @@ async fn scheduled_automated_step_runs_through_nomad() {
 
     // Create an instance — deploys + Running. The Strict bridge gate here is
     // what the well_known.rs fix had to satisfy: the parent's bridge_out must
-    // target a *deployed* scheduler-net/job_inbox or this 422s.
+    // target a *deployed* pool-{resource_id}/claim_inbox or this 422s.
     let resp = app
         .clone()
         .oneshot(
@@ -319,11 +378,12 @@ async fn scheduled_automated_step_runs_through_nomad() {
     let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(instance["status"], "running");
 
-    // scheduler-net submits a Nomad job (petri-executor-worker), which spawns
-    // the executor; it pulls main.py from S3, runs python3, the result relays
-    // back through executor-net → scheduler-net → the parent's reply channel,
-    // and the parent net runs to End. Nomad dispatch + cold executor is
-    // slower than the inline path, so allow a generous deadline.
+    // The lease adapter acquires a Nomad allocation (petri-lease-executor),
+    // which spawns a persistent drain executor; it pulls main.py from S3,
+    // runs python3, the result relays back through the lease lifecycle to
+    // the parent's reply channel, and the parent net runs to End. Nomad
+    // dispatch + cold executor is slower than the inline path, so allow a
+    // generous deadline.
     let deadline = Duration::from_secs(180);
     let started = std::time::Instant::now();
     loop {
@@ -337,7 +397,7 @@ async fn scheduled_automated_step_runs_through_nomad() {
         }
         assert_ne!(
             st, "failed",
-            "instance failed — scheduler-net/Nomad/executor path did not succeed"
+            "instance failed — lease-adapter/Nomad/executor path did not succeed"
         );
         if started.elapsed() > deadline {
             panic!("instance did not complete within {deadline:?} (status: {st})");
@@ -345,14 +405,11 @@ async fn scheduled_automated_step_runs_through_nomad() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    // Regression guard against the write_node_config bug: "instance
-    // completes" is *also* true if the Scheduled step silently collapsed to
-    // Inline (the executor-lifecycle still runs and reaches End). So assert
-    // the deployed instance net actually carries the Scheduled lowering — the
-    // `p_<step>_sched_out` bridge_out to scheduler-net — and NOT the inline
-    // executor-lifecycle places (`<step>/submitted`, `<step>/inbox`). If
-    // deployment_model is ever dropped on the graph→Y.Doc→publish round-trip
-    // again, this fails even though the run "succeeds".
+    // Regression guard: "instance completes" is *also* true if the Scheduled
+    // step silently collapsed to Inline. So assert the deployed instance net
+    // actually carries the POOLED lowering — the `p_auto_claim_out` bridge_out
+    // to the datacenter adapter net — and NOT the inline executor-lifecycle
+    // places (`auto/submitted`, `auto/inbox`).
     let topo: Value = reqwest::get(format!(
         "{}/api/nets/mekhan-{instance_id}/topology",
         engine_url()
@@ -369,16 +426,9 @@ async fn scheduled_automated_step_runs_through_nomad() {
         .filter_map(|p| p["id"].as_str().map(str::to_string))
         .collect();
     assert!(
-        place_ids.iter().any(|p| p == "p_auto_sched_out"),
-        "instance net is missing the Scheduled bridge_out `p_auto_sched_out` — \
-         the step lowered Inline (deployment_model lost?). places={place_ids:?}"
-    );
-    assert!(
-        !place_ids
-            .iter()
-            .any(|p| p == "auto/submitted" || p == "auto/inbox"),
-        "instance net has inline executor-lifecycle places — the Scheduled \
-         step collapsed to Inline. places={place_ids:?}"
+        place_ids.iter().any(|p| p == "p_auto_claim_out"),
+        "instance net is missing the pooled bridge_out `p_auto_claim_out` — \
+         the step did not use the unified lease path. places={place_ids:?}"
     );
 
     // Nomad-side guard: a dispatched `petri-executor-worker` child submitted
@@ -391,7 +441,7 @@ async fn scheduled_automated_step_runs_through_nomad() {
     // genuine job processing.
     let nomad_url =
         std::env::var("TEST_NOMAD_URL").unwrap_or_else(|_| "http://127.0.0.1:4646".to_string());
-    let jobs: Value = reqwest::get(format!("{nomad_url}/v1/jobs?prefix=petri-executor-worker"))
+    let jobs: Value = reqwest::get(format!("{nomad_url}/v1/jobs?prefix=petri-lease-executor"))
         .await
         .expect("fetch Nomad jobs")
         .json()
@@ -401,13 +451,13 @@ async fn scheduled_automated_step_runs_through_nomad() {
         .as_array()
         .expect("jobs array")
         .iter()
-        .filter(|j| j["ParentID"].as_str() == Some("petri-executor-worker"))
+        .filter(|j| j["ParentID"].as_str() == Some("petri-lease-executor"))
         .filter(|j| j["SubmitTime"].as_i64().unwrap_or(0) > submit_after_nanos)
         .collect();
     assert!(
         !our_jobs.is_empty(),
-        "no petri-executor-worker child dispatched after test start — \
-         scheduler_submit did not fire (or Nomad backend not registered)"
+        "no petri-lease-executor child dispatched after test start — \
+         lease_acquire did not fire (or Nomad backend not registered)"
     );
     let job_id = our_jobs[0]["ID"].as_str().expect("job id").to_string();
     // The parent instance reaches `completed` the moment the result token
@@ -441,16 +491,16 @@ async fn scheduled_automated_step_runs_through_nomad() {
         Some("complete"),
         "Nomad alloc terminated non-complete: {alloc}"
     );
-    let task_failed = alloc["TaskStates"]["petri-worker"]["Failed"]
+    let task_failed = alloc["TaskStates"]["petri-lease-worker"]["Failed"]
         .as_bool()
         .unwrap_or(true);
     assert!(
         !task_failed,
-        "Nomad task petri-worker reported Failed=true: {alloc}"
+        "Nomad task petri-lease-worker reported Failed=true: {alloc}"
     );
     let alloc_id = alloc["ID"].as_str().expect("alloc id");
     let stdout = reqwest::get(format!(
-        "{nomad_url}/v1/client/fs/logs/{alloc_id}?task=petri-worker&type=stdout&plain=true"
+        "{nomad_url}/v1/client/fs/logs/{alloc_id}?task=petri-lease-worker&type=stdout&plain=true"
     ))
     .await
     .expect("fetch alloc stdout")

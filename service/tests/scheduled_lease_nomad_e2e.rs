@@ -353,9 +353,9 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         );
     }
     // The dispatched drain executor uses the executor lifecycle (it enqueues to
-    // the lease namespace), so this test does not require scheduler-net /
-    // executor-net — only the engine's NOMAD_ADDR allocator env and the
-    // registered `petri-lease-executor` parameterized job.
+    // the lease namespace), so this test does not require pre-deployed infra
+    // nets — only the engine's NOMAD_ADDR allocator env and the registered
+    // `petri-lease-executor` parameterized job.
     nomad_cli(&["job", "status", LEASE_JOB]); // loud if the lease job is not registered
 
     let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());

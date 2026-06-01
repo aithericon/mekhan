@@ -681,7 +681,7 @@ pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBin
             }
             // A `Scheduled { operation: Submit }` AutomatedStep nested in a lease
             // holder (a LeaseScope or a leased Loop) ENQUEUES to the lease
-            // namespace (it lowers via the EXECUTOR path, not scheduler-net).
+            // namespace (it lowers via the EXECUTOR path, not a separate cluster dispatch).
             // `lower_automated_step` injects
             // `d.executor_namespace = <holder_slug>.lease.executor_namespace;`
             // into the `t_<id>_prepare` logic; we synthesize the SAME dotted

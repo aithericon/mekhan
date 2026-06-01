@@ -201,7 +201,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     // Drain seam: a plain Scheduled Submit. Because the body's
                     // parent is the leased Loop (lease enclosure BY CONTAINMENT —
                     // no per-step flag), the compiler RE-ROUTES it off the
-                    // scheduler-net onto the executor lifecycle and stamps
+                    // lease adapter onto the executor lifecycle and stamps
                     // `d.executor_namespace = lp.lease.executor_namespace` into the
                     // body's `prepare`, with the matching Guard read-arc into the
                     // loop's parked `p_lp_data` envelope — so the iteration enqueues
@@ -365,8 +365,8 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     }
     // NOTE: the drain-model leased body uses the EXECUTOR LIFECYCLE (it enqueues
     // to the lease-scoped namespace drained by the executor srun'd onto the held
-    // alloc), NOT the scheduler-net. So unlike `scheduled_slurm_e2e.rs` this test
-    // needs neither scheduler-net nor executor-net — only the engine's SLURM_SSH_*
+    // alloc), NOT a separate cluster dispatch. So unlike `scheduled_slurm_e2e.rs`
+    // this test needs no pre-deployed infra nets — only the engine's SLURM_SSH_*
     // allocator env (so acquire can salloc + srun the drain executor) and the
     // `mekhan-lease-executor.sh` drain template installed in the container, both
     // set up by `just dev slurm-up`.
@@ -647,7 +647,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     assert!(
         !place_ids.iter().any(|p| p == "p_body_sched_out"),
         "instance net still has the scheduler bridge_out `p_body_sched_out` — the \
-         runOnLease body did not move off the scheduler-net. places={place_ids:?}"
+         runOnLease body did not move off the scheduler dispatch path. places={place_ids:?}"
     );
 
     // ── (6) WARM-REUSE witness: EXACTLY ONE new `/tmp/petri-lease-exec-*.out`

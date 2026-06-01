@@ -43,7 +43,7 @@ pub struct ExecutionSubmitRequest {
     pub event_routes: Option<HashMap<String, String>>,
 
     /// Caller-assigned execution id. When `Some`, the client uses this id
-    /// (instead of generating one) so upstream coordinators (e.g. scheduler-net's
+    /// (instead of generating one) so upstream coordinators (e.g. the upstream scheduler relay's
     /// SlurmClient that already stamped the same id into sbatch's
     /// `EXECUTOR_TARGET_EXEC_ID`) and downstream consumers agree on the value.
     /// Leave `None` for the legacy auto-generate behavior.

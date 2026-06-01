@@ -12,7 +12,7 @@
 //!     `in_use` never exceeds N. The other claims queue in `claim_inbox`
 //!     (visible backpressure).
 //!   * TWO-PHASE RELEASE — release is a *separate* fire-and-forget bridge round
-//!     trip (not the single request/reply scheduler-net does), correlated back
+//!     trip (not the single request/reply the scheduler relay net does), correlated back
 //!     to its hold by grant_id. Releasing frees the slot and the next queued
 //!     claim is granted.
 //!

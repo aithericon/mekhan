@@ -19,13 +19,9 @@
 //! — then read the already-resolved alias from the node data. A single
 //! resolution site means collection and lowering cannot drift.
 //!
-//! Back-compat for the env-global submit path: a `Scheduled { scheduler: None }`
-//! with no template/workspace default stays `None`
-//! (today's env-global scheduler-net) — it is framed as "the dev-bootstrap
-//! cluster", never truly unresolved while `SLURM_*`/`NOMAD_*` env is set, so
-//! `just dev scheduler-up` keeps working. A `LeaseScope` (and a
-//! `Loop.lease`) — which REQUIRE a concrete cluster — hard-error when the chain
-//! bottoms out.
+//! Every `Scheduled` step (standalone or inside a `LeaseScope` / `Loop.lease`)
+//! now REQUIRES a concrete cluster — the legacy env-global scheduler fallback
+//! fallback is retired.
 
 use crate::compiler::error::CompileError;
 use crate::models::template::{DeploymentModel, WorkflowGraph, WorkflowNodeData};
@@ -39,9 +35,8 @@ use crate::models::template::{DeploymentModel, WorkflowGraph, WorkflowNodeData};
 /// template default is read off `graph.default_scheduler`.
 ///
 /// Errors (one `CompileError::SchedulerUnresolved` per offending node) when a
-/// `Lease` step or a `Loop.lease` resolves to nothing through the chain. A
-/// `Submit` step with no resolution stays `scheduler: None` (the env-global /
-/// dev-bootstrap path) — see the module docs.
+/// `Scheduled` step (standalone or leased) or a `Loop.lease` resolves to
+/// nothing through the chain.
 pub fn resolve_scheduler_defaults(
     graph: &WorkflowGraph,
     workspace_default: Option<&str>,
@@ -57,7 +52,7 @@ pub fn resolve_scheduler_defaults(
 
     for node in &mut out.nodes {
         match &mut node.data {
-            // ── Per-step Scheduled (submit or lease) ──────────────────────
+            // ── Per-step Scheduled (unifying on the lease path) ───────────
             WorkflowNodeData::AutomatedStep {
                 deployment_model: DeploymentModel::Scheduled { scheduler, .. },
                 ..
@@ -75,8 +70,11 @@ pub fn resolve_scheduler_defaults(
                         *scheduler = Some(alias.to_string());
                     }
                     None => {
-                        // No default. A `Scheduled` step stays the env-global /
-                        // dev-bootstrap path (None) — never errors here.
+                        // A `Scheduled` step now REQUIRES a concrete cluster —
+                        // it can no longer fall back to a global scheduler.
+                        errors.push(CompileError::SchedulerUnresolved {
+                            node_id: node.id.clone(),
+                        });
                     }
                 }
             }
@@ -235,13 +233,14 @@ mod tests {
         assert_eq!(node_scheduler(&out, "a"), Some("ws_dc"));
     }
 
-    // Submit + all rungs absent → NOT an error; stays None (env-global /
-    // dev-bootstrap path) so `just dev scheduler-up` keeps working.
+    // Scheduled node + all rungs absent → SchedulerUnresolved (no longer stays None).
     #[test]
-    fn submit_all_absent_stays_env_global() {
+    fn scheduled_all_absent_is_scheduler_unresolved() {
         let g = graph(vec![scheduled_node("a", None)], None);
-        let out = resolve_scheduler_defaults(&g, None).unwrap();
-        assert_eq!(node_scheduler(&out, "a"), None);
+        let errs = resolve_scheduler_defaults(&g, None).expect_err("fully-unresolved must fail");
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].kind(), "scheduler_unresolved");
+        assert_eq!(errs[0].node_id(), Some("a"));
     }
 
     // Loop lease omits scheduler → inherits the template default; absent

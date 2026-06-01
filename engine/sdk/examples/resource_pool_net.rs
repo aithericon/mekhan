@@ -211,7 +211,7 @@ fn main() {
     aithericon_sdk::run(
         "resource-pool-net",
         "Shared capacity pool — claim/grant/release/reap on the event-sourced \
-         Petri-net substrate. Generalizes scheduler-net for contended resources.",
+         Petri-net substrate. Generalizes the scheduler relay pattern for contended resources.",
         definition,
     );
 }

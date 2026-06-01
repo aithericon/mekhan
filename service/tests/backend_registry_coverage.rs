@@ -127,7 +127,7 @@ fn default_editor_config_round_trips_through_validate() {
 /// Engine-effect backends (e.g. CatalogueQuery → `catalogue_lookup`) are
 /// inherently inline — they execute as a single Petri builtin-effect
 /// transition fired by the engine itself, with no executor job to dispatch
-/// to a scheduler-net. The decl MUST therefore declare
+/// to an external cluster. The decl MUST therefore declare
 /// `schedulable: false`; otherwise the editor would expose a Scheduled
 /// deployment toggle the compiler has no path to honour.
 ///
@@ -142,7 +142,7 @@ fn engine_effect_decls_are_non_schedulable() {
                 !decl.meta.schedulable,
                 "{:?} declares DispatchMode::EngineEffect {{ handler: \"{handler}\" }} \
                  but also schedulable: true — engine effects don't dispatch executor \
-                 jobs and have no scheduler-net path, so the Scheduled toggle would \
+                 jobs and have no external cluster dispatch path, so the Scheduled toggle would \
                  be unsupported at compile time",
                 decl.backend_type
             );

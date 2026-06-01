@@ -325,6 +325,9 @@ impl DatacenterConnection {
 ///
 /// ## Contract (lines up with R1 `DatacenterLease` + R2 + R4a)
 ///
+/// Every `Scheduled` step (standalone or inside a `LeaseScope`) bridges to
+/// this net's `well_known::pool_net_id(resource_id)` = `pool-<id>`, and:
+///
 /// - **claim** → `claim_inbox` carries `ClaimRequest { grant_id, request }`.
 ///   `t_request` fires `resource_lease_acquire` (effect_config = the resolved
 ///   connection `{ allocator_url, token }`). The effect POSTs the request to

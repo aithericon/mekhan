@@ -10,7 +10,9 @@
 //! ## Architecture
 //!
 //! `NomadClient` implements `SchedulerClient` from `petri-domain` — used by
-//! `SchedulerSubmitHandler` (Side 1: imperative commands).
+//! `SchedulerSubmitHandler` (Side 1: imperative commands). This is one of two
+//! dispatch patterns: the other is the resource-lease adapter (see
+//! `resource_lease_handlers`).
 //!
 //! `NomadWatcher` is a standalone async loop — publishes to NATS signals
 //! (Side 2: reactive observations).

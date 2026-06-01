@@ -19,7 +19,7 @@ pub(super) use crate::compiler::well_known;
 pub(super) use crate::models::template::ToolErrorPolicy;
 pub(super) use crate::models::template::{
     ContextStrategy, DeploymentModel, ExecutionBackendType, FieldMapping, JoinMode,
-    PhaseUpdateStatus, Port, ResourceConfig, WorkflowEdge, WorkflowGraph, WorkflowNode,
+    PhaseUpdateStatus, Port, WorkflowEdge, WorkflowGraph, WorkflowNode,
     WorkflowNodeData,
 };
 pub(super) use aithericon_executor_domain::InputSource;

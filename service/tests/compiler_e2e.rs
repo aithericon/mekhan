@@ -1279,7 +1279,7 @@ fn loop_without_lease_emits_no_lease_topology() {
 // ---------------------------------------------------------------------------
 // L4 — Scheduled `Submit` body inside a leased Loop runs ON the held alloc.
 // The body is lease-bound BY CONTAINMENT (its `parent_id` is the leased Loop —
-// no per-step flag); the compiler retargets it off the scheduler-net onto the
+// no per-step flag); the compiler retargets it to the
 // executor enqueue path and borrows the enclosing loop's
 // `<loop>.lease.executor_namespace` (the L3 parked grant) onto the job token,
 // so the held drain executor pulls the iteration's job from the lease-scoped
@@ -1321,10 +1321,10 @@ fn compile_leased_loop_scheduled_body(
 
 /// Keystone: a `Scheduled` body inside a `Loop { lease }`
 /// ENQUEUES to the lease namespace BY CONTAINMENT. It lowers via the
-/// EXECUTOR enqueue path (NOT the scheduler-net): the prepare transition stamps
-/// `d.executor_namespace` on the job-token top level, sourced FROM the enclosing
-/// loop's parked lease — via a read-arc into the loop's `p_aloop_data` and the
-/// word-boundary rewrite `aloop.lease.executor_namespace` →
+/// EXECUTOR enqueue path (NOT a separate cluster dispatch): the prepare transition
+/// stamps `d.executor_namespace` on the job-token top level, sourced FROM the
+/// enclosing loop's parked lease — via a read-arc into the loop's `p_aloop_data`
+/// and the word-boundary rewrite `aloop.lease.executor_namespace` →
 /// `d_aloop.lease.executor_namespace`. The body is an executor lifecycle (it has
 /// a `body/inbox` and NO scheduler `p_body_sched_out`), and the loop kept its
 /// full lease topology.
@@ -1350,15 +1350,15 @@ fn leased_loop_scheduled_body_runs_on_held_alloc() {
     }
 
     // (2) The body retargeted to the EXECUTOR enqueue path: it has the
-    //     scoped executor lifecycle inbox (`body/inbox`) and NO scheduler-net
-    //     bridge_out (`p_body_sched_out`).
+    //     scoped executor lifecycle inbox (`body/inbox`) and NO separate
+    //     cluster dispatch bridge_out (`p_body_sched_out`).
     assert!(
         has_place(&air, "body/inbox"),
         "lease-enclosed body must lower to the executor lifecycle inbox"
     );
     assert!(
         !has_place(&air, "p_body_sched_out"),
-        "lease-enclosed body must NOT bridge to the scheduler-net"
+        "lease-enclosed body must NOT bridge to a separate cluster dispatch"
     );
 
     // (3) The prepare transition stamps `d.executor_namespace`, sourced from the
@@ -1418,29 +1418,33 @@ fn scheduled_body_without_enclosing_lease_does_not_borrow_alloc() {
         if let WorkflowNodeData::Loop { lease, .. } = &mut node.data {
             *lease = None;
         }
+        if node.id == "body" {
+            if let WorkflowNodeData::AutomatedStep { deployment_model: mekhan_service::models::template::DeploymentModel::Scheduled { scheduler, .. }, .. } = &mut node.data {
+                *scheduler = Some("prod_dc".to_string());
+            }
+        }
     }
     let air = compile_leased_loop_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
         .expect("lease-less loop Scheduled body should compile");
 
-    // The body still bridges to the scheduler-net (it is still a Submit, and the
-    // loop holds no lease to retarget it onto).
+    // The body now bridges to the per-resource pool-net (standalone lease)
+    // because the enclosing loop holds no lease to retarget it onto.
     assert!(
-        has_place(&air, "p_body_sched_out"),
-        "Submit body still bridges to the scheduler-net"
+        has_place(&air, "p_body_claim_out"),
+        "Submit body now bridges to its own pool-net (single-node lease)"
     );
 
-    // ...but with NO lease borrow and NO read-arc into the loop data. A plain
-    // Submit keeps the unscoped `t_body_prepare` scheduler-net prepare.
-    let prepare = transitions(&air)
+    // ...but with NO lease borrow and NO read-arc into the loop data.
+    let claim = transitions(&air)
         .iter()
-        .find(|t| t["id"] == "t_body_prepare")
-        .expect("body prepare transition");
-    let prepare_logic = prepare["logic"]["source"].as_str().unwrap();
+        .find(|t| t["id"] == "t_body_claim")
+        .expect("body claim transition");
+    let claim_logic = claim["logic"]["source"].as_str().unwrap();
     assert!(
-        !prepare_logic.contains("alloc_id") && !prepare_logic.contains("executor_namespace"),
-        "lease-less body must not borrow a loop lease: {prepare_logic}"
+        !claim_logic.contains("alloc_id") && !claim_logic.contains("executor_namespace"),
+        "lease-less body must not borrow a loop lease: {claim_logic}"
     );
-    let borrows_loop = prepare["inputs"]
+    let borrows_loop = claim["inputs"]
         .as_array()
         .unwrap()
         .iter()
@@ -1448,7 +1452,7 @@ fn scheduled_body_without_enclosing_lease_does_not_borrow_alloc() {
     assert!(
         !borrows_loop,
         "lease-less body must not read-arc the loop's parked data place: {:?}",
-        prepare["inputs"]
+        claim["inputs"]
     );
 }
 
@@ -1559,10 +1563,10 @@ fn lease_scope_emits_lease_bridges_and_releases_on_exit() {
 
 /// The keystone: a `Scheduled { Submit }` body inside a LeaseScope ENQUEUES to
 /// the scope's lease namespace BY CONTAINMENT — no `run_on_lease` flag. It
-/// lowers via the EXECUTOR enqueue path (NOT the scheduler-net): the prepare
-/// transition stamps `d.executor_namespace` sourced from the scope's parked
-/// lease, via a read-arc into `p_ascope_data` and the word-boundary rewrite
-/// `ascope.lease.executor_namespace` → `d_ascope.lease.executor_namespace`.
+/// lowers via the EXECUTOR enqueue path (NOT a separate cluster dispatch): the
+/// prepare transition stamps `d.executor_namespace` sourced from the scope's
+/// parked lease, via a read-arc into `p_ascope_data` and the word-boundary
+/// rewrite `ascope.lease.executor_namespace` → `d_ascope.lease.executor_namespace`.
 #[test]
 fn scheduled_body_inside_lease_scope_enqueues_to_scope_namespace() {
     let graph = load_graph("lease-scope-scheduled-body.json");
@@ -1570,14 +1574,14 @@ fn scheduled_body_inside_lease_scope_enqueues_to_scope_namespace() {
         .expect("lease-scope body should compile");
 
     // (1) The body retargeted to the EXECUTOR enqueue path: it has the scoped
-    //     executor lifecycle inbox and NO scheduler-net bridge_out.
+    //     executor lifecycle inbox and NO separate cluster dispatch bridge_out.
     assert!(
         has_place(&air, "body/inbox"),
         "containment body must lower to the executor lifecycle inbox"
     );
     assert!(
         !has_place(&air, "p_body_sched_out"),
-        "containment body must NOT bridge to the scheduler-net"
+        "containment body must NOT bridge to a separate cluster dispatch"
     );
 
     // (2) The prepare transition stamps `d.executor_namespace` from the scope

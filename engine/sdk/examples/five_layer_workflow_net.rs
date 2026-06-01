@@ -51,7 +51,7 @@
 //! # As part of the five-layer campaign demo:
 //! just campaign-demo
 //!
-//! # Or manually (deploy executor-net, scheduler-net, and job-net first):
+//! # Or manually (deploy executor-net, scheduler relay net, and job-net first):
 //! cargo run -p aithericon-sdk --example five_layer_workflow_net -- --deploy --net-id workflow-net
 //! ```
 //!

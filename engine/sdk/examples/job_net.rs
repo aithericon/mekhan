@@ -16,7 +16,7 @@
 //! ## Data flow
 //!
 //! ```text
-//! [job_queue] ──(dispatch)──┬──► [to_scheduler: bridge_out_reply_channels → scheduler-net/job_inbox]
+//! [job_queue] ──(dispatch)──┬──► [to_scheduler: bridge_out_reply_channels → scheduler relay net/job_inbox]
 //!                           └──► [pending_result]     (channels: result→result_inbox, failure→failure_inbox)
 //!
 //! [result_inbox: bridge_reply] + [pending_result] → (join_result) → [completed]
@@ -100,7 +100,7 @@ fn definition(ctx: &mut Context, bridged: bool, upstream: &str) {
     let result_inbox = ctx.bridge_reply::<SchedulerJobResult>("result_inbox", "Result Inbox");
     let failure_inbox = ctx.bridge_reply::<SchedulerJobFailure>("failure_inbox", "Failure Inbox");
 
-    // Typed connector — wires up bridge_out to scheduler-net with named reply channels.
+    // Typed connector — wires up bridge_out to the scheduler relay net with named reply channels.
     // Compile error if you forget a channel or use the wrong type.
     let to_scheduler = connect_to_scheduler(
         ctx,
@@ -272,9 +272,9 @@ fn main() {
         .unwrap_or("workflow-net");
 
     let desc = if bridged {
-        "Job orchestration net (bridged) — receives from upstream, dispatches to scheduler-net, relays results back"
+        "Job orchestration net (bridged) — receives from upstream, dispatches to scheduler relay net, relays results back"
     } else {
-        "Job orchestration net — dispatches to scheduler-net, receives results/failures"
+        "Job orchestration net — dispatches to scheduler relay net, receives results/failures"
     };
     aithericon_sdk::run("job-lifecycle", desc, |ctx| {
         definition(ctx, bridged, upstream)

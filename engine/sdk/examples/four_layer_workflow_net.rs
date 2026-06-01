@@ -43,7 +43,7 @@
 //! # As part of the four-layer workflow demo:
 //! just workflow-demo
 //!
-//! # Or manually (deploy executor-net, scheduler-net, and job-net first):
+//! # Or manually (deploy executor-net, scheduler relay net, and job-net first):
 //! cargo run -p aithericon-sdk --example four_layer_workflow_net -- --deploy --net-id workflow-net
 //! ```
 //!

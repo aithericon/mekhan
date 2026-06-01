@@ -2,7 +2,8 @@
 //!
 //! These test the compiler as a pure function -- no database or network needed.
 
-use mekhan_service::compiler::compile_to_air;
+use mekhan_service::compiler::{compile_to_air, compile_to_air_with_options, CompileOptions};
+use mekhan_service::compiler::resource_refs::{KnownResource, KnownResources};
 use mekhan_service::models::template::{
     default_join_output_port, BranchCondition, ContextStrategy, DeploymentModel,
     ExecutionBackendType, ExecutionSpecConfig, JoinMode, MergeStrategy, ModelRef,
@@ -4957,14 +4958,29 @@ fn automated_step_executor_unchanged_emits_lifecycle_no_bridge() {
 }
 
 #[test]
-fn automated_step_scheduled_emits_scheduler_bridge() {
+fn automated_step_scheduled_emits_pooled_topology() {
+    let mut known = KnownResources::new();
+    let dc_id = uuid::Uuid::new_v4();
+    known.insert(
+        "prod_dc".to_string(),
+        KnownResource {
+            id: dc_id,
+            type_name: "datacenter".to_string(),
+            latest_version: 1,
+            public_config: serde_json::json!({
+                "scheduler_flavor": "nomad",
+                "nomad_addr": "http://nomad.test:4646",
+            }),
+        },
+    );
+
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
             automated_node_with_deployment(
                 "auto",
                 DeploymentModel::Scheduled {
-                    scheduler: None,
+                    scheduler: Some("prod_dc".to_string()),
                     job_template: "petri-mumax3-worker".to_string(),
                     resources: None,
                 },
@@ -4977,53 +4993,53 @@ fn automated_step_scheduled_emits_scheduler_bridge() {
         definitions: Default::default(),
         default_scheduler: None,
     };
-    let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
-        .expect("scheduled should compile");
+    let air = compile_to_air_with_options(
+        &graph,
+        "t",
+        "",
+        &std::collections::HashMap::new(),
+        CompileOptions {
+            known_resources: &known,
+            ..Default::default()
+        },
+    )
+    .expect("unified scheduled should compile")
+    .air;
 
-    // Scheduler bridge places.
+    // Standalone lease (pooled topology).
     assert!(
-        has_place(&air, "p_auto_sched_out"),
-        "expected scheduler bridge_out"
+        has_place(&air, "p_auto_claim_out"),
+        "expected pooled claim bridge_out"
     );
     assert!(
-        has_place(&air, "p_auto_sched_result"),
-        "expected result reply place"
+        has_place(&air, "p_auto_grant_inbox"),
+        "expected grant inbox"
     );
     assert!(
-        has_place(&air, "p_auto_sched_failure"),
-        "expected failure reply place"
-    );
-    assert!(
-        has_transition(&air, "t_auto_prepare"),
-        "expected scheduled prepare"
+        has_place(&air, "p_auto_release_out"),
+        "expected pooled release bridge_out"
     );
 
-    // bridge_out targets the canonical scheduler-net + its job_inbox place
-    // (must match engine/sdk/examples/common/scheduler_bridge.rs).
-    let sched_out = places(&air)
+    // bridge_out targets the resource-specific pool net.
+    let claim_out = places(&air)
         .iter()
-        .find(|p| p["id"] == "p_auto_sched_out")
-        .expect("sched_out place");
-    assert_eq!(sched_out["type"], "bridge_out");
-    let bo = &sched_out["bridge_out"];
-    assert_eq!(bo["target_net_id"], "scheduler-net");
-    assert_eq!(bo["target_place_name"], "job_inbox");
+        .find(|p| p["id"] == "p_auto_claim_out")
+        .expect("claim_out place");
+    assert_eq!(claim_out["type"], "bridge_out");
+    let bo = &claim_out["bridge_out"];
+    assert_eq!(bo["target_net_id"], format!("pool-{dc_id}"));
+    assert_eq!(bo["target_place_name"], "claim_inbox");
 
-    // The submit carries the pinned job template.
-    let prepare = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_auto_prepare")
-        .expect("prepare transition");
-    let logic = prepare["logic"].to_string();
+    // Definitions must carry Lease__datacenter.
     assert!(
-        logic.contains("job_template_id") && logic.contains("petri-mumax3-worker"),
-        "scheduled prepare must thread job_template_id: {logic}"
+        air["definitions"].get("Lease__datacenter").is_some(),
+        "expected Lease__datacenter definition"
     );
 
     // Scheduled path does NOT use the inline executor lifecycle.
     assert!(
         !has_transition(&air, "auto/prepare"),
-        "scheduled must not emit the inline lifecycle prepare"
+        "scheduled step must NOT emit inline lifecycle"
     );
 }
 

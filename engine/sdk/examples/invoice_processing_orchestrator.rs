@@ -11,7 +11,7 @@
 //! 8. **Text LLM (summary)** — generates approval recommendation with risk assessment
 //! 9. **Human UI (review)** — all block types: image, mdsvex, table, callout, download, divider, input, signature
 //! 10. **Timer (SLA escalation)** — 5-minute deadline for review
-//! 11. **Nomad scheduler** — all jobs dispatched through Nomad (via scheduler-net)
+//! 11. **Nomad scheduler** — all jobs dispatched through Nomad (via scheduler relay net)
 //!
 //! ## Architecture: 4-Layer Bridged Nets
 //!
@@ -20,7 +20,7 @@
 //!          | bridge_out → bridge_in
 //! Layer 1: job-net            (job_net --bridged --upstream orchestrator-net)
 //!          | bridge_out → bridge_in
-//! Layer 2: scheduler-net      (scheduler_net — Nomad dispatch)
+//! Layer 2: scheduler relay net (scheduler_net — Nomad dispatch)
 //!          | bridge_out → bridge_in
 //! Layer 3: executor-net       (executor_net --bridged — executor lifecycle)
 //! ```

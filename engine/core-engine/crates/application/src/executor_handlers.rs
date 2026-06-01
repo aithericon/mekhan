@@ -61,7 +61,7 @@ impl EffectHandler for ExecutorSubmitHandler {
 
         let signal_key = uuid::Uuid::new_v4().to_string();
 
-        // Honour an upstream-stamped execution_id (the scheduler-net submit
+        // Honour an upstream-stamped execution_id (the scheduler submit
         // handler authoritatively stamps this so the sbatch's
         // `EXECUTOR_TARGET_EXEC_ID` and this NATS publish target the same
         // PerJob consumer). Absent => the client falls back to auto-generation.

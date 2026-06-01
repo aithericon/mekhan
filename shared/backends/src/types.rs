@@ -105,7 +105,7 @@ pub enum ResourceChannel {
 pub enum DispatchMode {
     /// Standard executor dispatch. The compiler emits an executor job; the
     /// step's `DeploymentModel` decides whether it's inline via NATS or
-    /// submitted to a scheduler-net.
+    /// dispatched to an external cluster.
     ExecutorJob,
     /// Engine builtin effect (e.g. CatalogueQuery → `catalogue_lookup`). The
     /// compiler skips executor lowering entirely and emits an effect handler

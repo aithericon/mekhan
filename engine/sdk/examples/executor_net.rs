@@ -8,8 +8,8 @@
 //!
 //! - **Standalone** (default): `exec_queue` is a seeded state place with a sample job.
 //!   Results and failures land in local terminal places.
-//! - **Bridged** (`--bridged`): `exec_queue` is a `bridge_in` receiving from scheduler-net.
-//!   Results and failures are forwarded back to scheduler-net via `bridge_out`.
+//! - **Bridged** (`--bridged`): `exec_queue` is a `bridge_in` receiving from the scheduler relay net.
+//!   Results and failures are forwarded back to the scheduler relay net via `bridge_out`.
 //!
 //! ## Status lifecycle
 //!
@@ -59,8 +59,8 @@
 //!
 //! In `--bridged` mode, two additional forwarding transitions exist:
 //! ```text
-//! [completed]   → (forward_result)  → [result_outbox: bridge_out → scheduler-net]
-//! [dead_letter] → (forward_failure) → [failure_outbox: bridge_out → scheduler-net]
+//! [completed]   → (forward_result)  → [result_outbox: bridge_out → scheduler relay net]
+//! [dead_letter] → (forward_failure) → [failure_outbox: bridge_out → scheduler relay net]
 //! ```
 //!
 //! ## Scoped groups (Lab UI visualization)
@@ -100,7 +100,7 @@
 //!
 //! ```text
 //! LAYER 1: Job/Workflow Net (user-defined)
-//!   [job_queue] → bridge_out → scheduler-net/job_inbox
+//!   [job_queue] → bridge_out → scheduler relay net/job_inbox
 //!   Waits for allocation signal bridged back
 //!
 //! LAYER 2: Scheduler Net (nomad/slurm)
@@ -217,7 +217,7 @@ fn main() {
     let (name, desc) = if bridged {
         (
             "executor-lifecycle",
-            "Executor lifecycle net (bridged) — receives from scheduler-net, returns results/failures",
+            "Executor lifecycle net (bridged) — receives from scheduler relay net, returns results/failures",
         )
     } else {
         (

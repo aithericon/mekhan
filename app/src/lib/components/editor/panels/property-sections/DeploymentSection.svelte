@@ -25,7 +25,7 @@
 	let { value, schedulable = true, readonly = false, onchange }: Props = $props();
 
 	// Deployment model — executor (our executor daemon pool over the NATS work
-	// queue) vs scheduled (scheduler-net, Nomad/Slurm GPU). Optional-chained so
+	// queue) vs scheduled (external cluster — Nomad/Slurm). Optional-chained so
 	// legacy templates (no field) render as executor; Rust `#[serde(default)]`
 	// covers the wire side.
 	const deploymentMode = $derived(value?.mode ?? 'executor');
@@ -154,7 +154,7 @@
 		return found ? `${found.path} — ${found.display_name}` : poolAlias;
 	}
 	function schedulerLabel(): string {
-		if (!scheduler) return 'Environment default (no datacenter resource)';
+		if (!scheduler) return 'Select a datacenter resource…';
 		const found = schedulerResources.find((r) => r.path === scheduler);
 		return found ? `${found.path} — ${found.display_name}` : scheduler;
 	}
@@ -173,12 +173,12 @@
 		>
 			<Select.Trigger disabled={readonly} data-testid="select-deployment-model">
 				{deploymentMode === 'scheduled'
-					? 'Scheduled (Nomad/Slurm, GPU)'
+					? 'Scheduled (Nomad/Slurm cluster)'
 					: 'Executor (worker pool)'}
 			</Select.Trigger>
 			<Select.Content>
 				<Select.Item value="executor" label="Executor (worker pool)" />
-				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm, GPU)" />
+				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm cluster)" />
 			</Select.Content>
 		</Select.Root>
 		{#if deploymentMode === 'scheduled'}
@@ -193,17 +193,20 @@
 						<span class="truncate text-sm">{schedulerLabel()}</span>
 					</Select.Trigger>
 					<Select.Content>
-						<Select.Item value="" label="Environment default (no datacenter resource)" />
 						{#each schedulerResources as r (r.id)}
 							<Select.Item value={r.path} label={`${r.path} — ${r.display_name}`} />
 						{/each}
 					</Select.Content>
 				</Select.Root>
 			</FormField>
-			{#if schedulerResources.length === 0 && schedulerResourcesLoaded}
+			{#if !scheduler}
+				<p class="text-sm text-destructive">
+					Select a datacenter — a Scheduled step must lease an allocation from a specific cluster.
+				</p>
+			{:else if schedulerResources.length === 0 && schedulerResourcesLoaded}
 				<p class="text-sm italic text-muted-foreground">
 					No <code class="font-mono">datacenter</code> resources in this workspace. Add one under
-					<code class="font-mono">/resources</code> to schedule jobs on an external cluster.
+					<code class="font-mono">/resources</code> to lease allocations on an external cluster.
 				</p>
 			{/if}
 
@@ -229,7 +232,7 @@
 			</FormField>
 
 			<p class="text-sm text-muted-foreground">
-				Submitted through the scheduler-net, which owns queueing, resource allocation, and retry/backoff.
+				Leases a warm allocation from the datacenter for the step's duration; the granted lease is readable in the body as <code>lease.node</code> / <code>lease.alloc_id</code>.
 			</p>
 		{/if}
 	{:else}

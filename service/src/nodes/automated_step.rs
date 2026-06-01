@@ -110,7 +110,7 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
     // Y.Doc→graph reconstruction (`doc_to_graph`) silently reset them.
     // Without input/output the editor's "Output port — Fields" panel reads
     // back empty; without retry/deployment we'd lose authored retries and
-    // collapse a Scheduled step to Inline (never reaches scheduler-net).
+    // collapse a Scheduled step to Inline (never reaches external cluster dispatch).
     let in_val = serde_json::to_value(input).unwrap_or_default();
     config.insert(txn, "input", json_value_to_any(&in_val));
     let out_val = serde_json::to_value(output).unwrap_or_default();

@@ -202,7 +202,7 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
     // original executor process exits after one job, so pushing a retry token
     // back to `exec_queue` publishes a NATS message that no consumer picks up
     // — the loop hangs. Failures and timeouts now propagate directly to the
-    // upstream net via `failure_out`; the upstream (BO loop, scheduler-net)
+    // upstream net via `failure_out`; the upstream (BO loop, upstream scheduler relay)
     // decides whether to re-dispatch with a fresh sbatch.
     //
     // The `dead_letter` terminal place is kept (unreachable) so callers

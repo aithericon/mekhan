@@ -310,9 +310,8 @@ pub enum WorkflowNodeData {
         retry_policy: RetryPolicy,
         /// Where/how the job is dispatched. `Executor` (default) = our executor
         /// daemon pool over the NATS work queue, optionally under a `token_pool`
-        /// admission (`Executor.pool`). `Scheduled` = submit/lease through an
-        /// external cluster (a `datacenter` resource, docs/13; or today's
-        /// env-global scheduler-net when `scheduler` is `None`).
+        /// admission (`Executor.pool`). `Scheduled` = lease through an external
+        /// cluster (a `datacenter` resource, docs/13).
         /// `#[serde(default)]` + the `Executor` default ⇒ every existing
         /// template round-trips unchanged (same precedent as `retry_policy`).
         ///
@@ -1308,14 +1307,11 @@ pub enum DeploymentModel {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pool: Option<ResourcePoolBinding>,
     },
-    /// Submit/lease through an external cluster. `scheduler` names a
-    /// `datacenter` resource (docs/13); `None` = today's env-global
-    /// scheduler-net (byte-identical). `job_template` selects the scheduler's
-    /// parameterized job (e.g. `petri-mumax3-worker`). `operation` picks
-    /// `Submit` (today's queued dispatch) or `Lease` (R4: hold an allocation,
-    /// run on it).
+    /// Lease through an external cluster. `scheduler` names a `datacenter`
+    /// resource (docs/13). `job_template` selects the scheduler's parameterized
+    /// job (e.g. `petri-mumax3-worker`).
     Scheduled {
-        /// `datacenter` resource alias. `None` = env-global scheduler-net.
+        /// `datacenter` resource alias.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduler: Option<String>,
         #[serde(rename = "jobTemplate")]

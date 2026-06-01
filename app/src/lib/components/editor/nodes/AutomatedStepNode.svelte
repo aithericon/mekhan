@@ -24,13 +24,12 @@
 			if (dm.pool == null) return null;
 			return { text: `Pool: ${dm.pool.alias || '—'}`, title: `Holds a unit from the "${dm.pool.alias}" token pool while running` };
 		}
-		// scheduled
-		const op = dm.operation ?? 'submit';
-		if (op === 'lease') {
-			const sched = dm.scheduler ?? '';
-			return { text: `Lease: ${sched || '—'}`, title: `Leases an allocation from the "${sched}" datacenter for the step's duration` };
+		// scheduled — always lease pattern now
+		const sched = dm.scheduler ?? '';
+		if (sched) {
+			return { text: `Lease: ${sched}`, title: `Leases an allocation from the "${sched}" datacenter for the step's duration` };
 		}
-		return { text: 'Scheduled', title: 'Dispatched as a job through the scheduler-net' };
+		return { text: 'Scheduled', title: 'Dispatched as a job through an external cluster (Nomad/Slurm)' };
 	});
 
 	const kindBadge: Record<string, string> = {

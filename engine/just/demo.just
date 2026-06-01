@@ -452,7 +452,7 @@ three-layer:
     echo "=== Petri-Lab Three-Layer Bridged Net Demo ==="
     echo ""
     echo "  Layer 1: job-net        (job orchestration + retry)"
-    echo "  Layer 2: scheduler-net  (real Nomad via scheduler_submit)"
+    echo "  Layer 2: scheduler relay net  (real Nomad via scheduler_submit)"
     echo "  Layer 3: executor-net   (real executor via executor_submit)"
     echo "  Nomad starts the executor process per job (run_to_completion)"
     echo ""
@@ -495,7 +495,7 @@ three-layer:
     echo "5. Deploying three-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --deploy --net-id job-net > /dev/null
@@ -543,7 +543,7 @@ slurm-three-layer:
     echo "=== Petri-Lab Three-Layer Slurm Demo ==="
     echo ""
     echo "  Layer 1: job-net        (job orchestration + retry)"
-    echo "  Layer 2: scheduler-net  (real Slurm via scheduler_submit)"
+    echo "  Layer 2: scheduler relay net  (real Slurm via scheduler_submit)"
     echo "  Layer 3: executor-net   (real executor via executor_submit)"
     echo "  Slurm starts the executor process per job (run_to_completion)"
     echo ""
@@ -597,7 +597,7 @@ slurm-three-layer:
     echo "6. Deploying three-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --deploy --net-id job-net > /dev/null
@@ -646,7 +646,7 @@ workflow:
     echo ""
     echo "  Layer 0: workflow-net    (ML pipeline: fan-out, fan-in, chaining)"
     echo "  Layer 1: job-net         (job orchestration + retry)"
-    echo "  Layer 2: scheduler-net   (real Nomad via scheduler_submit)"
+    echo "  Layer 2: scheduler relay net   (real Nomad via scheduler_submit)"
     echo "  Layer 3: executor-net    (real executor via executor_submit)"
     echo ""
     echo "  Pipeline: preprocess-A + preprocess-B (parallel)"
@@ -692,7 +692,7 @@ workflow:
     echo "5. Deploying four-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --bridged --deploy --net-id job-net > /dev/null
@@ -745,7 +745,7 @@ slurm-workflow:
     echo ""
     echo "  Layer 0: workflow-net    (ML pipeline: fan-out, fan-in, chaining)"
     echo "  Layer 1: job-net         (job orchestration + retry)"
-    echo "  Layer 2: scheduler-net   (real Slurm via scheduler_submit)"
+    echo "  Layer 2: scheduler relay net   (real Slurm via scheduler_submit)"
     echo "  Layer 3: executor-net    (real executor via executor_submit)"
     echo ""
     echo "  Pipeline: preprocess-A + preprocess-B (parallel)"
@@ -802,7 +802,7 @@ slurm-workflow:
     echo "6. Deploying four-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --bridged --deploy --net-id job-net > /dev/null
@@ -856,7 +856,7 @@ campaign:
     echo "  Layer 0: campaign-net    (hyperparameter sweep: fan-out 2 configs, fan-in select)"
     echo "  Layer 1: workflow-net    (parameterized ML pipeline: fan-out, fan-in, chaining)"
     echo "  Layer 2: job-net         (job orchestration + retry)"
-    echo "  Layer 3: scheduler-net   (real Nomad via scheduler_submit)"
+    echo "  Layer 3: scheduler relay net   (real Nomad via scheduler_submit)"
     echo "  Layer 4: executor-net    (real executor via executor_submit)"
     echo ""
     echo "  Sweep: lr=0.01 (batch=32)  vs  lr=0.001 (batch=64)"
@@ -904,7 +904,7 @@ campaign:
     echo "5. Deploying five-layer nets..."
     echo "   Deploying executor-net (Layer 4)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 3)..."
+    echo "   Deploying scheduler relay net (Layer 3)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 2)..."
     deploy_scenario job_net -- --bridged --deploy --net-id job-net > /dev/null
@@ -964,7 +964,7 @@ slurm-campaign:
     echo "  Layer 0: campaign-net    (hyperparameter sweep: fan-out 2 configs, fan-in select)"
     echo "  Layer 1: workflow-net    (parameterized ML pipeline: fan-out, fan-in, chaining)"
     echo "  Layer 2: job-net         (job orchestration + retry)"
-    echo "  Layer 3: scheduler-net   (real Slurm via scheduler_submit)"
+    echo "  Layer 3: scheduler relay net   (real Slurm via scheduler_submit)"
     echo "  Layer 4: executor-net    (real executor via executor_submit)"
     echo ""
     echo "  Sweep: lr=0.01 (batch=32)  vs  lr=0.001 (batch=64)"
@@ -1023,7 +1023,7 @@ slurm-campaign:
     echo "6. Deploying five-layer nets..."
     echo "   Deploying executor-net (Layer 4)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 3)..."
+    echo "   Deploying scheduler relay net (Layer 3)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 2)..."
     deploy_scenario job_net -- --bridged --deploy --net-id job-net > /dev/null
@@ -1081,7 +1081,7 @@ python:
     echo "=== Petri-Lab Python IPC Demo ==="
     echo ""
     echo "  Layer 1: job-net        (seeds Python training job)"
-    echo "  Layer 2: scheduler-net  (Nomad relay via scheduler_submit)"
+    echo "  Layer 2: scheduler relay net  (Nomad relay via scheduler_submit)"
     echo "  Layer 3: executor-net   (full IPC: progress, artifact, metric, phase, output, log)"
     echo "  Python script exercises the entire aithericon IPC protocol"
     echo ""
@@ -1124,7 +1124,7 @@ python:
     echo "5. Deploying three-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --deploy --net-id job-net > /dev/null
@@ -1175,7 +1175,7 @@ slurm-python:
     echo "=== Petri-Lab Python IPC Demo (Slurm) ==="
     echo ""
     echo "  Layer 1: job-net        (seeds Python training job)"
-    echo "  Layer 2: scheduler-net  (Slurm relay via scheduler_submit)"
+    echo "  Layer 2: scheduler relay net  (Slurm relay via scheduler_submit)"
     echo "  Layer 3: executor-net   (full IPC: progress, artifact, metric, phase, output, log)"
     echo "  Python script exercises the entire aithericon IPC protocol"
     echo ""
@@ -1229,7 +1229,7 @@ slurm-python:
     echo "6. Deploying three-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --deploy --net-id job-net > /dev/null
@@ -1576,7 +1576,7 @@ research-brief:
     echo "=== Research Brief Generator Demo ==="
     echo ""
     echo "  Demonstrates ALL major Petri-Lab features in one workflow:"
-    echo "    1. Nomad scheduler        (job dispatch via scheduler-net)"
+    echo "    1. Nomad scheduler        (job dispatch via scheduler relay net)"
     echo "    2. Python executor         (data gathering with IPC)"
     echo "    3. Vault secret injection  (API keys wrapped + delivered)"
     echo "    4. File transfer + RustFS   (copy to S3-compatible object storage)"
@@ -1587,7 +1587,7 @@ research-brief:
     echo "  Architecture: 4-layer bridged nets"
     echo "    Layer 0: orchestrator-net  (human tasks + sequencing)"
     echo "    Layer 1: job-net           (retry + dead-letter)"
-    echo "    Layer 2: scheduler-net     (Nomad dispatch)"
+    echo "    Layer 2: scheduler relay net     (Nomad dispatch)"
     echo "    Layer 3: executor-net      (executor lifecycle)"
     echo ""
 
@@ -1752,7 +1752,7 @@ research-brief:
     echo "11. Deploying four-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --bridged --upstream orchestrator-net --deploy --net-id job-net > /dev/null
@@ -1844,7 +1844,7 @@ invoice-processing:
     echo "  Architecture: 4-layer bridged nets"
     echo "    Layer 0: orchestrator-net   (invoice pipeline + human + timer)"
     echo "    Layer 1: job-net            (retry + dead-letter)"
-    echo "    Layer 2: scheduler-net      (Nomad dispatch)"
+    echo "    Layer 2: scheduler relay net      (Nomad dispatch)"
     echo "    Layer 3: executor-net       (executor lifecycle)"
     echo ""
 
@@ -2123,7 +2123,7 @@ invoice-processing:
     echo "13. Deploying four-layer nets..."
     echo "   Deploying executor-net (Layer 3)..."
     deploy_scenario executor_net -- --bridged --deploy --net-id executor-net > /dev/null
-    echo "   Deploying scheduler-net (Layer 2)..."
+    echo "   Deploying scheduler relay net (Layer 2)..."
     deploy_scenario scheduler_net -- --deploy --net-id scheduler-net > /dev/null
     echo "   Deploying job-net (Layer 1)..."
     deploy_scenario job_net -- --bridged --upstream orchestrator-net --deploy --net-id job-net > /dev/null

@@ -1,11 +1,10 @@
-//! `WorkflowNodeData::AutomatedStep` lowering. Three dispatch arms:
+//! `WorkflowNodeData::AutomatedStep` lowering. Two dispatch arms:
 //!
 //! - `lower_automated_step` (the public entry) — executor-pool lifecycle
 //!   for the normal `DeploymentModel::Executor` path; offloads the static
 //!   config to the per-node side-channel and emits a slim `config_ref`
-//!   Rhai literal.
-//! - `lower_automated_step_scheduled` — `DeploymentModel::Scheduled` jobs
-//!   that submit through the long-lived scheduler-net.
+//!   Rhai literal. Standalone `Scheduled` nodes also route through the
+//!   single-node lease lifecycle (reusing the pooled machinery).
 //! - `lower_engine_effect` — backends whose `DispatchMode::EngineEffect`
 //!   maps to a registered engine builtin (e.g. `catalogue_lookup`).
 
@@ -16,16 +15,14 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // into it). `matches!` drops the borrow immediately so each delegate can
     // take `cx` mutably.
     //
-    //   - Scheduled                → lower_automated_step_scheduled (today's
-    //                                scheduler-net path, byte-identical).
+    //   - Scheduled                → standalone lease lifecycle (lower_pooled_body).
     //   - Executor { pool: Some }  → lower_automated_step_pooled (token_pool
     //                                admission, R2/R3 machinery — same wrapping).
     //   - Executor { pool: None }  → falls through to the plain executor lowering
-    //                                below (BYTE-IDENTICAL — guarded by
-    //                                `automated_step_executor_unchanged`).
+    //                                below (BYTE-IDENTICAL).
 
     // A `Scheduled` body that runs ON a held lease is NO
-    // LONGER a scheduler-net submit. The rework retargets it to the EXECUTOR
+    // LONGER a separate cluster dispatch. The rework retargets it to the EXECUTOR
     // enqueue path with a per-job `executor_namespace` borrowed from the
     // enclosing lease holder — the held alloc runs ONE persistent drain executor
     // on the lease namespace, and the body just enqueues to it.
@@ -35,23 +32,34 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // `enclosing_leased_scope_slug` walking the `parent_id` chain. There is no
     // per-step flag — the enclosure is the only signal.
     //
-    // A `Scheduled` node with NO enclosing lease holder still bridges to the
-    // scheduler-net via `lower_automated_step_scheduled`.
-    let scheduled_submit = matches!(
-        &cx.node.data,
-        WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Scheduled { .. },
-            ..
-        }
-    );
-    if scheduled_submit {
-        // `enclosing_leased_scope_slug` walks the `parent_id` chain to the
-        // nearest lease holder (a LeaseScope or a leased Loop). `Some` ⇒ the
-        // Submit is lease-bound by containment: fall through to the plain
-        // executor lowering below, which stamps `d.executor_namespace` from the
-        // holder's parked lease. `None` ⇒ ordinary scheduler-net submit.
+    // A `Scheduled` node with NO enclosing lease holder now performs a
+    // single-step lease lifecycle (acquire -> run -> release) targeting its
+    // resolved datacenter resource.
+    if let WorkflowNodeData::AutomatedStep {
+        deployment_model: DeploymentModel::Scheduled { scheduler, .. },
+        ..
+    } = &cx.node.data
+    {
         if enclosing_leased_scope_slug(cx.node, cx.graph).is_none() {
-            return lower_automated_step_scheduled(cx);
+            // Standalone Scheduled step: perform single-node lease lifecycle.
+            let alias = scheduler.as_deref().filter(|a| !a.is_empty()).ok_or_else(|| {
+                // Every Scheduled step REQUIRES a concrete cluster — the selection
+                // pass (scheduler_select.rs) enforces this, so absence here is a
+                // hard unresolved error.
+                CompileError::SchedulerUnresolved {
+                    node_id: cx.node.id.clone(),
+                }
+            })?;
+
+            // Resolve the datacenter binding and delegate to the pooled body wrapping.
+            let binding = resolve_binding(
+                &cx.node.id,
+                alias,
+                None, // Scheduled steps don't have a 'request' field
+                "datacenter",
+                cx.known_resources,
+            )?;
+            return lower_pooled_body(cx, binding);
         }
     }
 
@@ -144,7 +152,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
 
     // ── Lease retarget seam ─────────────────────────────────────────────────
     // A `Scheduled { Submit }` body that runs on a held lease lowers HERE (the
-    // plain executor lifecycle), NOT through the scheduler-net. "Runs on a lease"
+    // plain executor lifecycle), NOT through a separate cluster dispatch. "Runs on a lease"
     // is IMPLICIT BY CONTAINMENT — `enclosing_leased_scope_slug` walks the
     // `parent_id` chain to the nearest LeaseScope / leased Loop and returns its
     // slug. We stamp a per-job `executor_namespace` onto the TOP of the job token
@@ -396,182 +404,6 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     Ok(())
 }
 
-/// `Scheduled` AutomatedStep: submit a `SchedulerSubmitInput` to the
-/// long-lived scheduler-net (`well_known::SCHEDULER_NET_ID`) and take the
-/// result / failure back on its named reply channels. The scheduler-net owns
-/// queueing, the Nomad/Slurm job template (`job_template_id`), resource
-/// allocation, and **retry/backoff** for queued execution — so the workflow
-/// net does not re-run a scheduled job itself; a scheduler failure routes
-/// straight to the node's error output. No `scoped_prefix` (the topology is
-/// small and `p_{id}_*` / `t_{id}_*` ids are already node-unique), so the
-/// reply-channel place names line up with `bridge_out_reply_channels`.
-fn lower_automated_step_scheduled(cx: &mut LoweringCtx) -> Result<(), CompileError> {
-    let id = cx.node.id.clone();
-    let WorkflowNodeData::AutomatedStep {
-        label,
-        execution_spec,
-        deployment_model,
-        output,
-        ..
-    } = &cx.node.data
-    else {
-        unreachable!("lower_automated_step_scheduled on non-AutomatedStep node")
-    };
-    let label = label.clone();
-    let DeploymentModel::Scheduled {
-        scheduler,
-        job_template,
-        resources,
-        ..
-    } = deployment_model
-    else {
-        unreachable!("lower_automated_step_scheduled on non-Scheduled step")
-    };
-    // This entry handles all `Scheduled` steps that aren't enclosed by a `LeaseScope`.
-
-    // `scheduler` binds a `datacenter` resource (docs/13).
-    // Bound to acknowledge the field without changing AIR.
-    let _scheduler = scheduler.clone();
-    let job_template = job_template.clone();
-    let resources: Option<ResourceConfig> = resources.clone();
-    let backend_type = execution_spec.backend_type;
-
-    let (mut validated_config, staged_inputs) =
-        crate::compiler::backend_configs::validate_and_transform(
-            &backend_type,
-            &execution_spec.config,
-            cx.node_files,
-            &id,
-        )?;
-    crate::compiler::schema_refs::inline_refs(&mut validated_config, cx.definitions).map_err(
-        |e| CompileError::SchemaRefUnresolved {
-            node_id: id.clone(),
-            path: String::new(),
-            message: e.to_string(),
-        },
-    )?;
-    // Side-channel the static config to the publish layer — see the
-    // parallel offload in `lower_automated_step` for the rationale.
-    let storage_key = cx.config_storage.key(&id);
-    cx.node_configs.insert(id.clone(), validated_config);
-    let config_ref_rhai = format!(
-        "#{{ \"storage_path\": \"{}\" }}",
-        rhai_str_escape(&storage_key)
-    );
-    let inputs_rhai =
-        json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
-    let resources_rhai =
-        json_to_rhai_literal(&serde_json::to_value(&resources).unwrap_or(serde_json::Value::Null));
-    let outputs_rhai = declared_outputs_rhai(backend_type, output);
-    let backend_wire = backend_type.as_wire_str();
-    let job_template_lit = rhai_str_escape(&job_template);
-    let id_lit = rhai_str_escape(&id);
-
-    // NOTE: a lease-enclosed body no longer reaches this scheduler-net path. A
-    // `Scheduled { Submit }` body inside a LeaseScope / leased Loop now lowers
-    // via the EXECUTOR enqueue path (`lower_automated_step`), where it stamps a
-    // per-job `d.executor_namespace` borrowed from the enclosing lease and the
-    // held alloc's persistent drain executor pulls it. The old `spec.alloc_id`
-    // srun-onto-the-alloc seam (and the engine's `SlurmClient::submit_into_alloc`
-    // branch) are gone. This function only services a plain, non-lease Submit.
-    //
-    // Rust panic/Result model (see lower_automated_step). Read outgoing edges
-    // BEFORE the `&mut *cx.ctx` reborrow.
-    // is_agent_tool: see lower_automated_step — a tool child forces p_error so
-    // its failure feeds the agent's on_tool_error wiring, never a crash.
-    let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
-
-    let ctx = &mut *cx.ctx;
-
-    let p_input: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
-    let p_output: PlaceHandle<DynamicToken> =
-        ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
-        Some(ctx.state(format!("p_{id}_error"), format!("{label} - Error")))
-    } else {
-        None
-    };
-
-    // Named reply-channel places the scheduler routes back to.
-    let result_place = format!("p_{id}_sched_result");
-    let failure_place = format!("p_{id}_sched_failure");
-    let sched_result: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
-        result_place.clone(),
-        format!("{label} - Scheduler Result"),
-        "result",
-    );
-    let sched_failure: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
-        failure_place.clone(),
-        format!("{label} - Scheduler Failure"),
-        "failure",
-    );
-    let sched_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
-        format!("p_{id}_sched_out"),
-        format!("{label} - Submit to Scheduler"),
-        well_known::SCHEDULER_NET_ID,
-        well_known::SCHEDULER_JOB_QUEUE,
-        &[
-            ("result", result_place.as_str()),
-            ("failure", failure_place.as_str()),
-        ],
-    );
-
-    // prepare: snapshot the upstream token into `input.json` and wrap it as a
-    // SchedulerSubmitInput { job_id, model_name, run, retries, max_retries,
-    // job_template_id, spec{ backend, inputs, outputs, config, resources } }.
-    // See `lower_automated_step` for the `/*__BORROWED_INPUTS__*/` marker —
-    // same Python-slug staging story for the scheduled lifecycle.
-    let prepare_logic = format!(
-        r#"let d = #{{}}; d.job_id = "{id_lit}"; d.model_name = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = 0; d.job_template_id = "{job_template_lit}"; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "resources": {resources_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d }}"#
-    );
-    // No borrowed refs in the literal (run_on_lease no longer routes here), so
-    // `logic()` can fail-fast on build-time variable-binding validation.
-    ctx.transition(format!("t_{id}_prepare"), format!("{label} - Prepare"))
-        .auto_input("input", &p_input)
-        .auto_output("job", &sched_out)
-        .logic(prepare_logic);
-
-    ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
-        .auto_input("res", &sched_result)
-        .auto_output("output", &p_output)
-        .logic(r#"#{ output: res }"#);
-
-    // Scheduler failure → node error when wired; crash the net when unwired.
-    if let Some(p_error) = &p_error {
-        ctx.transition(format!("t_{id}_to_error"), format!("{label} - To Error"))
-            .auto_input("fail", &sched_failure)
-            .auto_output("error", p_error)
-            .logic(r#"#{ error: fail }"#);
-    } else {
-        let msg = format!("scheduled step '{label}' failed and no error handler is wired");
-        ctx.transition(
-            format!("t_{id}_to_error_deadend"),
-            format!("{label} - On Failure (no handler — crash net)"),
-        )
-        .auto_input("fail", &sched_failure)
-        .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
-        .done();
-    }
-
-    // Same data/control split + port registration tail as the inline path.
-    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
-    let mut output_places = vec![(None, p_ctrl)];
-    if let Some(p_error) = p_error {
-        output_places.push((Some("error".to_string()), p_error));
-    }
-    cx.ports.insert(
-        id.clone(),
-        NodePorts {
-            input_place: p_input,
-            output_places,
-            input_places: HashMap::new(),
-            input_handles: HashMap::new(),
-        },
-    );
-    cx.publish_interface().data_port = Some(data_place_id);
-    Ok(())
-}
 
 /// Everything the pooled lowering needs once `Inline.pool.alias` has been
 /// resolved to a `token_pool` resource.
@@ -1086,7 +918,13 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // `p_held` so `t_to_output` can merge it into the parked data envelope.
     // `grant` still carries `grant_id` (the correlation key), so the
     // release-by-grant_id path is unchanged.
+    //
+    // If the lease carries an `executor_namespace` (emitted by datacenter
+    // allocators), we stamp it onto the job token so the engine's submit
+    // handler targets the warm executor.
     let lease_stage_push = r#"job_inputs.push(#{ "name": "lease.json", "source": #{ "type": "inline", "value": grant } }); "#;
+    let ns_stamp = r#" if grant.executor_namespace != () { d.executor_namespace = grant.executor_namespace; } "#;
+
     // Carry the full lease so the hold echo + held parking both keep every
     // lease field; `grant.grant_id` is the correlation key the pool keys
     // register/release on.
@@ -1100,7 +938,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .auto_output("reg", &p_register_out)
         .auto_output("held", &p_held)
         .logic(format!(
-            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
+            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
         ));
 
     // ── Terminal exits: BOTH consume p_held and BOTH arc to p_release_out.
@@ -1299,8 +1137,8 @@ fn lower_engine_effect(cx: &mut LoweringCtx, handler: &str) -> Result<(), Compil
 /// is transparent: keep climbing past it.
 ///
 /// `None` when the body has no parent, no ancestor is a lease holder, or every
-/// enclosing Loop is lease-less — in which case a `Scheduled { Submit }` body
-/// stays an ordinary scheduler-net submit.
+/// enclosing Loop is lease-less — in which case a `Scheduled` body
+/// performs its own standalone single-step lease lifecycle.
 pub(crate) fn enclosing_leased_scope_slug(
     node: &WorkflowNode,
     graph: &WorkflowGraph,

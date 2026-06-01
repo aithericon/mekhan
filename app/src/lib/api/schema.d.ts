@@ -2724,7 +2724,7 @@ export interface components {
             /** @enum {string} */
             mode: "scheduled";
             resources?: null | components["schemas"]["ResourceConfig"];
-            /** @description `datacenter` resource alias. `None` = env-global scheduler-net. */
+            /** @description `datacenter` resource alias. */
             scheduler?: string | null;
         };
         /**
@@ -5553,9 +5553,8 @@ export interface components {
             /**
              * @description Where/how the job is dispatched. `Executor` (default) = our executor
              *     daemon pool over the NATS work queue, optionally under a `token_pool`
-             *     admission (`Executor.pool`). `Scheduled` = submit/lease through an
-             *     external cluster (a `datacenter` resource, docs/13; or today's
-             *     env-global scheduler-net when `scheduler` is `None`).
+             *     admission (`Executor.pool`). `Scheduled` = lease through an external
+             *     cluster (a `datacenter` resource, docs/13).
              *     `#[serde(default)]` + the `Executor` default ⇒ every existing
              *     template round-trips unchanged (same precedent as `retry_policy`).
              *
