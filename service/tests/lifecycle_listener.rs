@@ -133,9 +133,16 @@ async fn wait_for_status(db: &sqlx::PgPool, instance_id: Uuid, target: &str, tim
 async fn net_completed_updates_instance_status() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
+    // Unique consumer prefix so this test's lifecycle consumer is isolated from
+    // any other client on the shared NATS — notably the real mekhan-service
+    // daemon that runs in the CI integration lane and binds the SAME
+    // `mekhan-lifecycle` durable when connected with `None`. Without a prefix
+    // the two share one pull consumer and race for each event (flaky timeouts);
+    // a prefix gives this test its own durable + DeliverPolicy::New.
     let nats = MekhanNats::connect(&nats_url, None)
         .await
-        .expect("connect to NATS");
+        .expect("connect to NATS")
+        .with_consumer_prefix(format!("test_{}", Uuid::new_v4().simple()));
 
     // Ensure stream exists
     ensure_petri_global_stream(nats.jetstream()).await;
@@ -176,9 +183,16 @@ async fn net_completed_updates_instance_status() {
 async fn net_cancelled_updates_instance_status() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
+    // Unique consumer prefix so this test's lifecycle consumer is isolated from
+    // any other client on the shared NATS — notably the real mekhan-service
+    // daemon that runs in the CI integration lane and binds the SAME
+    // `mekhan-lifecycle` durable when connected with `None`. Without a prefix
+    // the two share one pull consumer and race for each event (flaky timeouts);
+    // a prefix gives this test its own durable + DeliverPolicy::New.
     let nats = MekhanNats::connect(&nats_url, None)
         .await
-        .expect("connect to NATS");
+        .expect("connect to NATS")
+        .with_consumer_prefix(format!("test_{}", Uuid::new_v4().simple()));
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
@@ -204,9 +218,16 @@ async fn net_cancelled_updates_instance_status() {
 async fn completed_event_is_idempotent() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
+    // Unique consumer prefix so this test's lifecycle consumer is isolated from
+    // any other client on the shared NATS — notably the real mekhan-service
+    // daemon that runs in the CI integration lane and binds the SAME
+    // `mekhan-lifecycle` durable when connected with `None`. Without a prefix
+    // the two share one pull consumer and race for each event (flaky timeouts);
+    // a prefix gives this test its own durable + DeliverPolicy::New.
     let nats = MekhanNats::connect(&nats_url, None)
         .await
-        .expect("connect to NATS");
+        .expect("connect to NATS")
+        .with_consumer_prefix(format!("test_{}", Uuid::new_v4().simple()));
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
@@ -239,9 +260,16 @@ async fn completed_event_is_idempotent() {
 async fn already_completed_instance_ignores_cancel() {
     let db = common::create_test_db().await;
     let nats_url = common::nats_url();
+    // Unique consumer prefix so this test's lifecycle consumer is isolated from
+    // any other client on the shared NATS — notably the real mekhan-service
+    // daemon that runs in the CI integration lane and binds the SAME
+    // `mekhan-lifecycle` durable when connected with `None`. Without a prefix
+    // the two share one pull consumer and race for each event (flaky timeouts);
+    // a prefix gives this test its own durable + DeliverPolicy::New.
     let nats = MekhanNats::connect(&nats_url, None)
         .await
-        .expect("connect to NATS");
+        .expect("connect to NATS")
+        .with_consumer_prefix(format!("test_{}", Uuid::new_v4().simple()));
 
     ensure_petri_global_stream(nats.jetstream()).await;
 
