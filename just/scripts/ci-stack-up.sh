@@ -38,8 +38,13 @@
 export COMPOSE_PROJECT_NAME
 _ci_net="${COMPOSE_PROJECT_NAME}_default"
 
+# Defensive: clear any leftover stack with this project name (e.g. a prior
+# hard-killed run, or the integration lane's stack before e2e reuses the same
+# project sequentially). Cheap no-op when nothing is there.
+docker compose -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans >/dev/null 2>&1 || true
+
 echo "▶ infra up (postgres + nats + vault + rustfs) — project ${COMPOSE_PROJECT_NAME}…"
-docker compose -p "$COMPOSE_PROJECT_NAME" up -d postgres nats vault rustfs
+docker compose -p "$COMPOSE_PROJECT_NAME" up -d --remove-orphans postgres nats vault rustfs
 
 # Attach the running step container to the compose network for DNS access.
 # The step's container id is the 64-hex string in its own mountinfo (overlay
