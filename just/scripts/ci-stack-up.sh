@@ -101,10 +101,15 @@ export TEST_S3_ENDPOINT="$MEKHAN_S3_ENDPOINT"
 export TEST_ENGINE_URL="$MEKHAN_ENGINE_URL"
 export TEST_PETRI_URL="$MEKHAN_ENGINE_URL"
 
-_wait() { # name url
+_wait() { # name url [mode]
+  # mode=ok (default): require a 2xx/3xx (curl -f). mode=connect: ready as soon
+  # as the port answers HTTP at all — used for the S3 API, which returns 403 on
+  # `/` without auth (a 403 still means rustfs is up and serving).
+  local mode="${3:-ok}" flag="-sf"
+  [ "$mode" = "connect" ] && flag="-s"
   echo "▶ waiting for $1…"
   for _ in $(seq 1 60); do
-    if curl -sf "$2" >/dev/null 2>&1; then return 0; fi
+    if curl $flag -o /dev/null "$2" 2>/dev/null; then return 0; fi
     sleep 1
   done
   echo "✗ $1 not ready at $2 after 60s" >&2
@@ -119,5 +124,5 @@ for _ in $(seq 1 60); do
 done
 _wait nats   "$MEKHAN_NATS_MON_URL/healthz"
 _wait vault  "$MEKHAN_VAULT_ADDR/v1/sys/health?standbyok=true"
-_wait rustfs "$MEKHAN_S3_ENDPOINT/"
+_wait rustfs "$MEKHAN_S3_ENDPOINT/" connect
 echo "✓ infra ready (DNS: postgres / nats / vault / rustfs)"
