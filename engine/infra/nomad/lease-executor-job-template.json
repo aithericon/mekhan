@@ -18,7 +18,8 @@
         "petri_net_id",
         "petri_place",
         "petri_signal_key",
-        "petri_signal_failed"
+        "petri_signal_failed",
+        "petri_signal_completed"
       ]
     },
     "TaskGroups": [
