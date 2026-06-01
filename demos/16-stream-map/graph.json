@@ -38,7 +38,9 @@
     {
       "id": "mapper",
       "type": "map",
-      "position": { "x": 560, "y": 160 },
+      "position": { "x": 560, "y": 120 },
+      "width": 520,
+      "height": 240,
       "data": {
         "type": "map",
         "label": "Uppercase Map",
@@ -52,7 +54,7 @@
       "id": "upper",
       "type": "automated_step",
       "parentId": "mapper",
-      "position": { "x": 560, "y": 320 },
+      "position": { "x": 40, "y": 70 },
       "data": {
         "type": "automated_step",
         "label": "Uppercase Chunk",
@@ -79,7 +81,7 @@
     {
       "id": "joiner",
       "type": "automated_step",
-      "position": { "x": 840, "y": 160 },
+      "position": { "x": 1180, "y": 160 },
       "data": {
         "type": "automated_step",
         "label": "Joiner",
@@ -106,7 +108,7 @@
     {
       "id": "end",
       "type": "end",
-      "position": { "x": 1120, "y": 160 },
+      "position": { "x": 1460, "y": 160 },
       "data": {
         "type": "end",
         "label": "Done",
