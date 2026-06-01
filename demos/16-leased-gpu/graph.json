@@ -96,7 +96,7 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "scene", "expression": "input.job_name" }
+          { "targetField": "shots_rendered", "expression": "lp.iteration" }
         ]
       }
     }
