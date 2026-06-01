@@ -1280,7 +1280,6 @@ pub(crate) fn enclosing_leased_scope_slug(
         let parent = graph.nodes.iter().find(|n| n.id == pid)?;
         match &parent.data {
             WorkflowNodeData::LeaseScope { .. } => return Some(parent.slug()),
-            WorkflowNodeData::Loop { lease: Some(_), .. } => return Some(parent.slug()),
             _ => {
                 current = parent.parent_id.as_deref();
             }

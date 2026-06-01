@@ -14280,17 +14280,6 @@
               "label": {
                 "type": "string"
               },
-              "lease": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/LeaseBinding",
-                    "description": "Optional datacenter lease held for the WHOLE loop (acquire once at\nenter, reuse across every iteration, release once on exit). Declared,\nnot inferred — a Loop holds a lease only when the author explicitly\nbinds one. When set, `lower_loop` hoists the\nclaim/grant/register/release handshake to loop scope (the same\nmachinery `lower_pooled_body` uses per-step) so ONE allocation backs\nall iterations; the held lease (incl. `alloc_id`) is parked into the\nloop's `p_<id>_data` envelope under a `lease` key, so body iterations\nand downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.\n`<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline."
-                  }
-                ]
-              },
               "loopCondition": {
                 "type": "string"
               },
@@ -14332,7 +14321,7 @@
           },
           {
             "type": "object",
-            "description": "Container that holds ONE datacenter allocation for the duration of its\nbody. Decouples \"hold an allocation\" from \"loop\": any AutomatedStep\n(deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly\nor through intervening containers like a plain Loop — runs ON the held\nallocation by containment (no per-step `run_on_lease` flag). The lease is\nacquired once on enter and released once on exit; the held lease (incl.\n`executor_namespace` / `alloc_id`) is parked into the scope's\n`p_<id>_data` envelope under a `lease` key, so body steps and downstream\nblocks borrow `<scope_slug>.lease.<field>` through the standard read-arc\npipeline. Children attach via the same `body_in`/`body_out` interior\nhandles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`\nhandles connect to the outer flow.\n\nA leased Loop is exactly `LeaseScope { Loop { … } }`; Loop's `lease`\nremains as back-compat sugar.",
+            "description": "Container that holds ONE datacenter allocation for the duration of its\nbody. Decouples \"hold an allocation\" from \"loop\": any AutomatedStep\n(deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly\nor through intervening containers like a plain Loop — runs ON the held\nallocation by containment (no per-step `run_on_lease` flag). The lease is\nacquired once on enter and released once on exit; the held lease (incl.\n`executor_namespace` / `alloc_id`) is parked into the scope's\n`p_<id>_data` envelope under a `lease` key, so body steps and downstream\nblocks borrow `<scope_slug>.lease.<field>` through the standard read-arc\npipeline. Children attach via the same `body_in`/`body_out` interior\nhandles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`\nhandles connect to the outer flow.\n\nTo hold ONE cluster allocation across loop iterations, compose\n`LeaseScope { Loop { … } }` — the scope acquires before the loop starts\nand releases after it exits.",
             "required": [
               "label",
               "lease",

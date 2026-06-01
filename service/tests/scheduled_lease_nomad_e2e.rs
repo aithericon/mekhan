@@ -131,9 +131,27 @@ fn end(id: &str) -> WorkflowNode {
 /// graph — the lease binding is backend-agnostic; only the datacenter resource's
 /// `scheduler_flavor` decides Slurm vs Nomad.
 fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
+    let scope_id = format!("{loop_id}_scope");
     WorkflowGraph {
         nodes: vec![
             start("s"),
+            WorkflowNode {
+                id: scope_id.clone(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::LeaseScope {
+                    label: "Lease Scope".to_string(),
+                    description: None,
+                    lease: LeaseBinding {
+                        scheduler: DC_ALIAS.to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
             WorkflowNode {
                 id: loop_id.to_string(),
                 node_type: "loop".to_string(),
@@ -145,12 +163,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     max_iterations: MAX_ITERATIONS,
                     loop_condition: "true".to_string(),
                     accumulators: Vec::<LoopAccumulator>::new(),
-                    lease: Some(LeaseBinding {
-                        scheduler: DC_ALIAS.to_string(),
-                        request: None,
-                    }),
                 },
-                parent_id: None,
+                parent_id: Some(scope_id.clone()),
                 width: None,
                 height: None,
             },
@@ -195,8 +209,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
             WorkflowEdge {
                 id: "e_in".to_string(),
                 source: "s".to_string(),
-                target: loop_id.to_string(),
+                target: scope_id.clone(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_scope_body_in".to_string(),
+                source: scope_id.clone(),
+                target: loop_id.to_string(),
+                source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
@@ -220,8 +243,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
-                id: "e_out".to_string(),
+                id: "e_loop_body_out".to_string(),
                 source: loop_id.to_string(),
+                target: scope_id.clone(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_out".to_string(),
+                source: scope_id.clone(),
                 target: "e".to_string(),
                 source_handle: None,
                 target_handle: Some("in".to_string()),
@@ -547,7 +579,7 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
     // ── (6) That alloc drained all N iterations, warm — its logs carry the
     //    Pool/drain config for THIS instance's lease namespace plus
     //    >= MAX_ITERATIONS `handling execution job` lines.
-    let expected_ns = format!("lease-{instance_id}-lp");
+    let expected_ns = format!("lease-{instance_id}-lp_scope");
     let out_deadline = Instant::now() + Duration::from_secs(120);
     let (alloc, logs) = loop {
         if let Some(alloc) = child_alloc_id(&drain_child) {
@@ -587,8 +619,10 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         logs.lines().rev().take(30).collect::<Vec<_>>().join("\n")
     );
 
-    // ── (7) Topology guard: loop lease places present AND the body retargeted
-    //    to the executor lifecycle (`body/inbox`, NOT `p_body_sched_out`).
+    // ── (7) Topology guard: lease-scope lease places present AND the body
+    //    retargeted to the executor lifecycle (`body/inbox`, NOT `p_body_sched_out`).
+    //    The lease now lives on the enclosing `LeaseScope` (`lp_scope`), so the
+    //    handshake places are scope-namespaced `p_lp_scope_*`.
     let topo: Value = reqwest::get(format!(
         "{}/api/nets/mekhan-{instance_id}/topology",
         engine_url()
@@ -605,15 +639,15 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         .filter_map(|p| p["id"].as_str().map(str::to_string))
         .collect();
     for required in [
-        "p_lp_claim_out",
-        "p_lp_grant_inbox",
-        "p_lp_register_out",
-        "p_lp_release_out",
-        "p_lp_held",
+        "p_lp_scope_claim_out",
+        "p_lp_scope_grant_inbox",
+        "p_lp_scope_register_out",
+        "p_lp_scope_release_out",
+        "p_lp_scope_held",
     ] {
         assert!(
             place_ids.iter().any(|p| p == required),
-            "instance net is missing the loop-lease place `{required}`. places={place_ids:?}"
+            "instance net is missing the lease-scope place `{required}`. places={place_ids:?}"
         );
     }
     assert!(

@@ -954,277 +954,18 @@ fn leased_loop_files() -> HashMap<String, HashMap<String, InputSource>> {
     files
 }
 
-fn compile_leased_loop(known: &KnownResources) -> Result<Value, CompileError> {
-    let graph = load_graph("leased-loop.json");
-    let files = leased_loop_files();
-    compile_to_air_with_options(
-        &graph,
-        "t",
-        "",
-        &files,
-        CompileOptions {
-            known_resources: known,
-            ..Default::default()
-        },
-    )
-    .map(|a| a.air)
-}
-
-/// The keystone for L3: a `Loop { lease: { scheduler: <datacenter> } }` lowers to
-/// the SAME claim/grant/register/release wrapping as the per-step lease — but
-/// HOISTED to loop scope (acquire once at enter, release once at exit). The held
-/// lease (incl. `alloc_id`) is parked into the loop's `p_<id>_data` envelope so a
-/// downstream `<loop>.lease.alloc_id` borrow read-arcs.
-#[test]
-fn leased_loop_hoists_claim_to_loop_scope_and_releases_on_exit() {
-    let air =
-        compile_leased_loop(&known_with_prod_dc("datacenter")).expect("leased loop should compile");
-
-    assert_all_transitions_wired(&air);
-    assert_arcs_reference_existing_places(&air);
-
-    let expected_net = format!("pool-{}", prod_gpu_id());
-
-    // (1) The three handshake bridges live at LOOP scope (`p_aloop_*`) and target
-    //     the resolved datacenter backing net `pool-<id>`.
-    for (pid, inbox) in [
-        ("p_aloop_claim_out", "claim_inbox"),
-        ("p_aloop_register_out", "register_inbox"),
-        ("p_aloop_release_out", "release_inbox"),
-    ] {
-        let p = places(&air)
-            .iter()
-            .find(|p| p["id"] == pid)
-            .unwrap_or_else(|| panic!("missing loop-scoped bridge place {pid}"));
-        assert_eq!(
-            p["bridge_out"]["target_net_id"], expected_net,
-            "{pid} must bridge to the resolved datacenter backing net"
-        );
-        assert_eq!(p["bridge_out"]["target_place_name"], inbox);
-    }
-
-    // (2) `Lease__datacenter` is in definitions and types the LOOP's grant inbox.
-    let lease = &air["definitions"]["Lease__datacenter"];
-    assert!(
-        lease.is_object(),
-        "Lease__datacenter must be registered, got: {:?}",
-        air["definitions"]
-    );
-    for f in ["node", "gpu_uuid", "alloc_id", "expiry"] {
-        assert!(
-            lease["properties"][f].is_object(),
-            "datacenter lease must declare `{f}`"
-        );
-    }
-    let grant_inbox = places(&air)
-        .iter()
-        .find(|p| p["id"] == "p_aloop_grant_inbox")
-        .expect("loop grant inbox");
-    assert_eq!(
-        grant_inbox["token_schema"], "#/definitions/Lease__datacenter",
-        "loop grant inbox must be typed as the datacenter lease"
-    );
-
-    // (3) ACQUIRE-AT-ENTER: t_aloop_claim mints the loop-scoped grant_id and the
-    //     enter transition correlates {pending, grant}, registers the hold, parks
-    //     the lease on p_aloop_held, AND seeds the parked counter with `lease: grant`.
-    let claim_logic = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_aloop_claim")
-        .expect("loop claim transition")["logic"]["source"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        claim_logic.contains(":aloop") && claim_logic.contains("_instance_id"),
-        "grant_id must be loop-scoped (instance_id:loop_id): {claim_logic}"
-    );
-    assert!(
-        claim_logic.contains("request:") && claim_logic.contains("gpu_count"),
-        "claim must carry the validated datacenter request params: {claim_logic}"
-    );
-    let enter_logic = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_aloop_enter")
-        .expect("loop enter (acquire) transition")["logic"]["source"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        enter_logic.contains("lease: grant"),
-        "enter must seed the parked envelope with the held lease: {enter_logic}"
-    );
-    assert!(
-        enter_logic.contains("iteration: 0"),
-        "enter must still initialize the iteration counter: {enter_logic}"
-    );
-
-    // (4) RELEASE-ON-EXIT: the loop's terminal exit consumes p_aloop_held AND arcs
-    //     to release_out — the every-terminal-releases invariant at loop scope.
-    let exit = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_aloop_exit")
-        .expect("loop exit transition");
-    let exit_inputs: Vec<&str> = exit["inputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|a| a["place"].as_str())
-        .collect();
-    let exit_outputs: Vec<&str> = exit["outputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|a| a["place"].as_str())
-        .collect();
-    assert!(
-        exit_inputs.contains(&"p_aloop_held"),
-        "exit must consume the held lease: {exit_inputs:?}"
-    );
-    assert!(
-        exit_outputs.contains(&"p_aloop_output") && exit_outputs.contains(&"p_aloop_release_out"),
-        "exit must arc to BOTH output and release_out: {exit_outputs:?}"
-    );
-    let exit_logic = exit["logic"]["source"].as_str().unwrap();
-    assert!(
-        exit_logic.contains("grant_id: held.grant_id"),
-        "release must key on the held grant_id: {exit_logic}"
-    );
-
-    // (5) REUSE-ACROSS-ITERATIONS: continue re-folds the held lease forward so the
-    //     SAME allocation backs every iteration (no per-iteration re-claim).
-    let cont_logic = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_aloop_continue")
-        .expect("loop continue transition")["logic"]["source"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        cont_logic.contains("lease:") && cont_logic.contains("aloop.lease"),
-        "continue must carry the held lease forward each iteration: {cont_logic}"
-    );
-    // The loop must NOT re-claim per iteration — exactly one claim transition.
-    let claim_count = transitions(&air)
-        .iter()
-        .filter(|t| {
-            t["id"]
-                .as_str()
-                .is_some_and(|s| s.starts_with("t_aloop_claim"))
-        })
-        .count();
-    assert_eq!(claim_count, 1, "exactly one (loop-scoped) claim transition");
-
-    // (6) BODY DISPATCH CARRIES alloc_id: the downstream `aloop.lease.alloc_id`
-    //     guard synthesizes a read-arc into the loop's parked data place — the
-    //     same pipeline that lets a body iteration read `aloop.lease.alloc_id`.
-    let read_arc = transitions(&air).iter().any(|t| {
-        t["inputs"]
-            .as_array()
-            .map(|arr| {
-                arr.iter().any(|a| {
-                    a["place"] == "p_aloop_data" && a["read"] == serde_json::Value::Bool(true)
-                })
-            })
-            .unwrap_or(false)
-    });
-    assert!(
-        read_arc,
-        "a downstream `<loop>.lease.alloc_id` borrow must synthesize a read-arc into p_aloop_data"
-    );
-
-    // (7) FAIL-FAST on held-allocation death (docs/16 §7). The leased loop wires:
-    //   - a `p_aloop_lease_failed` reply inbox on the "fail" channel, routed back
-    //     from the lease-adapter net's `t_lease_died` (the claim_out carries BOTH
-    //     a "grant" and a "fail" reply channel),
-    //   - a `t_aloop_lease_failed_register` that parks the death write-once into
-    //     `p_aloop_lease_failed_parked`,
-    //   - a `t_aloop_lease_abort` that CONSUMES the parked counter `p_aloop_data`
-    //     (which continue AND exit both require → structural short-circuit, §7.3)
-    //     + read-arcs the parked failure flag, then `throw`s (→ ErrorOccurred /
-    //     NetFailed, carrying the failure to the caller).
-    let claim_out = places(&air)
-        .iter()
-        .find(|p| p["id"] == "p_aloop_claim_out")
-        .expect("claim_out")
-        .clone();
-    assert_eq!(
-        claim_out["bridge_out"]["reply_channels"]["fail"], "p_aloop_lease_failed",
-        "claim_out must carry the `fail` reply channel routing held-alloc death to the loop"
-    );
-    assert!(
-        has_place(&air, "p_aloop_lease_failed"),
-        "lease-failed reply inbox place must exist"
-    );
-    assert!(
-        has_place(&air, "p_aloop_lease_failed_parked"),
-        "parked lease-failure flag place must exist"
-    );
-
-    let register = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_aloop_lease_failed_register")
-        .expect("lease-failed register transition")
-        .clone();
-    let reg_out: Vec<&str> = register["outputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|o| o["place"].as_str())
-        .collect();
-    assert!(
-        reg_out.contains(&"p_aloop_lease_failed_parked"),
-        "register must park the failure flag: {reg_out:?}"
-    );
-
-    let abort = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "t_aloop_lease_abort")
-        .expect("lease-abort transition")
-        .clone();
-    // Consumes the parked counter (NON-read) so continue/exit are structurally
-    // disabled once failure parks.
-    let consumes_counter = abort["inputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|a| a["place"] == "p_aloop_data" && a["read"] != serde_json::Value::Bool(true));
-    assert!(
-        consumes_counter,
-        "abort must CONSUME p_aloop_data (the §7.3 structural short-circuit): {}",
-        abort["inputs"]
-    );
-    // Read-arcs the parked failure flag (non-consuming).
-    let reads_failure = abort["inputs"].as_array().unwrap().iter().any(|a| {
-        a["place"] == "p_aloop_lease_failed_parked" && a["read"] == serde_json::Value::Bool(true)
-    });
-    assert!(
-        reads_failure,
-        "abort must read-arc the parked failure flag: {}",
-        abort["inputs"]
-    );
-    let abort_logic = abort["logic"]["source"].as_str().unwrap_or_default();
-    assert!(
-        abort_logic.contains("throw"),
-        "abort must throw a permanent error to drive NetFailed: {abort_logic}"
-    );
-}
-
 /// A NO-lease loop is byte-identical to the pre-L3 topology: the plain
 /// enter/continue/exit transitions, the parked counter, and NONE of the lease
 /// bridges. Guards the leased path from leaking into ordinary loops.
 #[test]
 fn loop_without_lease_emits_no_lease_topology() {
     let graph = load_graph("leased-loop.json");
-    // Strip the lease binding AND the lease-dependent guard (an ordinary loop
-    // exposes no `lease` field — referencing it would be a legitimate
-    // GuardUnresolved, which is the point: a no-lease loop ≠ a lease loop).
+    // Loop no longer has a lease field — this test now verifies that a plain
+    // loop (loaded from a fixture that previously had a lease) emits no lease
+    // topology. The fixture's lease field is ignored by serde (unknown field).
     let mut graph = graph;
     for node in &mut graph.nodes {
         match &mut node.data {
-            mekhan_service::models::template::WorkflowNodeData::Loop { lease, .. } => {
-                *lease = None;
-            }
             mekhan_service::models::template::WorkflowNodeData::Decision { conditions, .. } => {
                 for c in conditions.iter_mut() {
                     c.guard = "input.status == \"ok\"".to_string();
@@ -1319,89 +1060,6 @@ fn compile_leased_loop_scheduled_body(
     .map(|a| a.air)
 }
 
-/// Keystone: a `Scheduled` body inside a `Loop { lease }`
-/// ENQUEUES to the lease namespace BY CONTAINMENT. It lowers via the
-/// EXECUTOR enqueue path (NOT a separate cluster dispatch): the prepare transition
-/// stamps `d.executor_namespace` on the job-token top level, sourced FROM the
-/// enclosing loop's parked lease — via a read-arc into the loop's `p_aloop_data`
-/// and the word-boundary rewrite `aloop.lease.executor_namespace` →
-/// `d_aloop.lease.executor_namespace`. The body is an executor lifecycle (it has
-/// a `body/inbox` and NO scheduler `p_body_sched_out`), and the loop kept its
-/// full lease topology.
-#[test]
-fn leased_loop_scheduled_body_runs_on_held_alloc() {
-    let graph = load_graph("leased-loop-scheduled-body.json");
-    let air = compile_leased_loop_scheduled_body(&graph, &known_with_prod_dc("datacenter"))
-        .expect("lease-enclosed body should compile");
-
-    assert_all_transitions_wired(&air);
-    assert_arcs_reference_existing_places(&air);
-
-    // (1) The loop kept its lease topology — acquire-once / hold / release.
-    for pid in [
-        "p_aloop_claim_out",
-        "p_aloop_grant_inbox",
-        "p_aloop_register_out",
-        "p_aloop_release_out",
-        "p_aloop_held",
-        "p_aloop_data",
-    ] {
-        assert!(has_place(&air, pid), "loop lease topology must keep {pid}");
-    }
-
-    // (2) The body retargeted to the EXECUTOR enqueue path: it has the
-    //     scoped executor lifecycle inbox (`body/inbox`) and NO separate
-    //     cluster dispatch bridge_out (`p_body_sched_out`).
-    assert!(
-        has_place(&air, "body/inbox"),
-        "lease-enclosed body must lower to the executor lifecycle inbox"
-    );
-    assert!(
-        !has_place(&air, "p_body_sched_out"),
-        "lease-enclosed body must NOT bridge to a separate cluster dispatch"
-    );
-
-    // (3) The prepare transition stamps `d.executor_namespace`, sourced from the
-    //     enclosing loop's lease. After the read-arc rewrite the raw dotted
-    //     `aloop.lease.executor_namespace` becomes the bound scope var
-    //     `d_aloop.lease.executor_namespace`. The scoped prepare id is
-    //     `body/prepare`.
-    let prepare = transitions(&air)
-        .iter()
-        .find(|t| t["id"] == "body/prepare")
-        .expect("body prepare transition")
-        .clone();
-    let prepare_logic = prepare["logic"]["source"].as_str().unwrap().to_string();
-    assert!(
-        prepare_logic.contains("d.executor_namespace = d_aloop.lease.executor_namespace"),
-        "prepare must stamp executor_namespace from the loop lease (rewritten ref): {prepare_logic}"
-    );
-    // No scheduler `spec.alloc_id` srun seam survives — the body enqueues now.
-    assert!(
-        !prepare_logic.contains("alloc_id"),
-        "the leased body must no longer carry the alloc_id srun seam: {prepare_logic}"
-    );
-    // The raw, pre-rewrite dotted form must NOT survive (proves the read-arc
-    // pipeline actually bound it rather than leaving a dangling ref).
-    assert!(
-        !prepare_logic.contains(" aloop.lease.executor_namespace"),
-        "the raw `aloop.lease.executor_namespace` must have been rewritten to the bound var: {prepare_logic}"
-    );
-
-    // (4) The read-arc that binds `d_aloop` is wired onto the prepare transition
-    //     as a non-consuming read into the loop's parked `p_aloop_data`.
-    let has_loop_read_arc = prepare["inputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|a| a["place"] == "p_aloop_data" && a["read"] == serde_json::Value::Bool(true));
-    assert!(
-        has_loop_read_arc,
-        "prepare must read-arc the loop's parked lease place p_aloop_data: {:?}",
-        prepare["inputs"]
-    );
-}
-
 /// Negative control: the SAME graph with the enclosing loop's `lease` REMOVED
 /// (a plain, lease-less Loop) borrows NO lease and synthesizes NO read-arc from
 /// the body into a parked data place — the body submits as an ordinary
@@ -1415,9 +1073,6 @@ fn scheduled_body_without_enclosing_lease_does_not_borrow_alloc() {
 
     let mut graph = load_graph("leased-loop-scheduled-body.json");
     for node in &mut graph.nodes {
-        if let WorkflowNodeData::Loop { lease, .. } = &mut node.data {
-            *lease = None;
-        }
         if node.id == "body" {
             if let WorkflowNodeData::AutomatedStep { deployment_model: mekhan_service::models::template::DeploymentModel::Scheduled { scheduler, .. }, .. } = &mut node.data {
                 *scheduler = Some("prod_dc".to_string());
@@ -1631,5 +1286,163 @@ fn empty_lease_scope_is_rejected() {
     assert!(
         matches!(err, CompileError::LeaseScopeEmpty { .. }),
         "expected LeaseScopeEmpty, got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Loop-body control-token scoping (the demo-16 footgun). A node inside a loop
+// body that reads an upstream/Start business field OFF THE CONTROL TOKEN
+// (`input.<field>` / `token.<field>`) only sees it on the first iteration —
+// `t_continue` rebuilds the token each pass and an envelope-stripping body
+// drops it. The safe form is the parked borrow `<producer>.<field>` (a
+// read-arc that survives every iteration). The compiler rejects the unsafe
+// form at publish so the author never hits the runtime `AttributeError`.
+// ---------------------------------------------------------------------------
+
+/// Compile the plain `Start{job_name} → Loop{lp} → render(python) → End` loop
+/// fixture, staging `render/main.py` with the given body source.
+fn compile_loop_with_body(body_src: &str) -> Result<Value, CompileError> {
+    let graph = load_graph("loop-start-field-body.json");
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut render = HashMap::new();
+    render.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: body_src.to_string(),
+        },
+    );
+    files.insert("render".to_string(), render);
+    compile_to_air(&graph, "t", "", &files)
+}
+
+#[test]
+fn loop_body_reading_start_field_off_control_token_is_rejected() {
+    // `input.job_name` is a Start field — it rides the control token only on
+    // iteration 0; the loop's continue path strips it. Must be rejected.
+    let err = compile_loop_with_body("frame = input.job_name\n")
+        .expect_err("reading a Start field off the control token in a loop body must be rejected");
+    let CompileError::LoopBodyStaleControlRef {
+        node_id,
+        referenced,
+        suggested,
+        ..
+    } = err
+    else {
+        panic!("expected LoopBodyStaleControlRef, got {err:?}");
+    };
+    assert_eq!(node_id, "render");
+    assert_eq!(referenced, "input.job_name");
+    // The fix points at the parked-producer borrow (Start's slug).
+    assert_eq!(suggested, "start.job_name");
+}
+
+#[test]
+fn loop_body_reading_start_field_via_token_alias_is_rejected() {
+    // `token` is the other runner alias for the inbound control token — same
+    // footgun, same rejection.
+    let err = compile_loop_with_body("frame = token.job_name\n")
+        .expect_err("`token.<startfield>` in a loop body must be rejected too");
+    assert!(
+        matches!(err, CompileError::LoopBodyStaleControlRef { ref referenced, .. } if referenced == "token.job_name"),
+        "expected LoopBodyStaleControlRef for token.job_name, got {err:?}"
+    );
+}
+
+#[test]
+fn loop_body_reading_start_field_via_parked_slug_compiles() {
+    // The CORRECT form: borrow the Start field as `start.job_name` (Start is a
+    // parked producer; the read-arc into `p_start-1_data` survives every
+    // iteration). Must compile cleanly — proving the suggested fix is valid.
+    let air = compile_loop_with_body("frame = start.job_name\n")
+        .expect("parked-borrow `start.job_name` in a loop body must compile");
+    // And the read-arc into Start's parked place is actually synthesized.
+    let reads_start = transitions(&air).iter().any(|t| {
+        t["id"].as_str().map(|s| s.starts_with("render")).unwrap_or(false)
+            && t["inputs"]
+                .as_array()
+                .map(|ins| {
+                    ins.iter().any(|a| {
+                        a["place"] == "p_start-1_data"
+                            && a["read"] == serde_json::Value::Bool(true)
+                    })
+                })
+                .unwrap_or(false)
+    });
+    assert!(
+        reads_start,
+        "expected a read-arc into p_start-1_data for the `start.job_name` borrow"
+    );
+}
+
+#[test]
+fn loop_body_reading_loop_counter_compiles() {
+    // Negative control — the canonical loop-body pattern (demo 04 / 16): the
+    // loop's own `lp.iteration` is a parked borrow, NOT a control-token field,
+    // so it must NOT be flagged. Guards against over-rejection.
+    compile_loop_with_body("shot = lp.iteration\n")
+        .expect("reading the loop counter `lp.iteration` must compile");
+}
+
+#[test]
+fn loop_body_reading_genuine_control_leaf_compiles() {
+    // Genuine control/identity leaves (`_*` / `task_id` / `status`) survive
+    // every iteration — they ride the slim control token the loop forwards.
+    // `input._instance_id` must NOT be flagged.
+    compile_loop_with_body("rid = input._instance_id\n")
+        .expect("a genuine control-leaf `input._instance_id` read must compile");
+}
+
+/// #4 — the loop counter is in scope at an End that sits OUTSIDE the enclosing
+/// LeaseScope. `lp.iteration` resolves to a non-consuming read-arc into the
+/// loop's parked `p_lp_data` place, synthesized into the End's result-mapping
+/// transition — the read-arc crosses the LeaseScope boundary, so the mapping is
+/// NOT null. Pins the `LeaseScope { Loop { … } } → End(lp.iteration)` shape.
+#[test]
+fn lease_scope_loop_counter_is_in_scope_at_end() {
+    let graph = load_graph("lease-scope-loop-end-counter.json");
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut render = HashMap::new();
+    render.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "shot = lp.iteration\n".to_string(),
+        },
+    );
+    files.insert("render".to_string(), render);
+
+    let air = compile_to_air_with_options(
+        &graph,
+        "t",
+        "",
+        &files,
+        CompileOptions {
+            known_resources: &known_with_prod_dc("datacenter"),
+            ..Default::default()
+        },
+    )
+    .map(|a| a.air)
+    .expect("LeaseScope{Loop} → End(lp.iteration) must compile");
+
+    // The End's result-mapping transition read-arcs the loop's parked counter
+    // place — `lp.iteration` is borrow-reachable across the LeaseScope boundary.
+    let end_reads_counter = transitions(&air).iter().any(|t| {
+        t["id"].as_str().map(|s| s.starts_with("t_end-1")).unwrap_or(false)
+            && t["inputs"]
+                .as_array()
+                .map(|ins| {
+                    ins.iter().any(|a| {
+                        a["place"] == "p_lp_data" && a["read"] == serde_json::Value::Bool(true)
+                    })
+                })
+                .unwrap_or(false)
+    });
+    assert!(
+        end_reads_counter,
+        "End must read-arc p_lp_data so `lp.iteration` resolves (not null) across the \
+         LeaseScope boundary; transitions = {:#?}",
+        transitions(&air)
+            .iter()
+            .map(|t| t["id"].clone())
+            .collect::<Vec<_>>()
     );
 }

@@ -110,9 +110,27 @@ fn end(id: &str) -> WorkflowNode {
     }
 }
 
-/// A leased loop with a `Scheduled{runOnLease}` Python body, leasing `dc_alias`.
+/// A LeaseScope wrapping a Loop with a `Scheduled` Python body, leasing `dc_alias`.
 fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode> {
+    let scope_id = format!("{loop_id}_scope");
     vec![
+        WorkflowNode {
+            id: scope_id,
+            node_type: "lease_scope".to_string(),
+            slug: None,
+            position: pos(),
+            data: WorkflowNodeData::LeaseScope {
+                label: format!("Lease Scope ({dc_alias})"),
+                description: None,
+                lease: LeaseBinding {
+                    scheduler: dc_alias.to_string(),
+                    request: None,
+                },
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        },
         WorkflowNode {
             id: loop_id.to_string(),
             node_type: "loop".to_string(),
@@ -124,12 +142,8 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                 max_iterations: MAX_ITERATIONS,
                 loop_condition: "true".to_string(),
                 accumulators: Vec::<LoopAccumulator>::new(),
-                lease: Some(LeaseBinding {
-                    scheduler: dc_alias.to_string(),
-                    request: None,
-                }),
             },
-            parent_id: None,
+            parent_id: Some(format!("{loop_id}_scope")),
             width: None,
             height: None,
         },

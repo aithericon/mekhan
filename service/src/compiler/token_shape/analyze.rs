@@ -473,7 +473,6 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
 pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
     let WorkflowNodeData::Loop {
         accumulators,
-        lease,
         ..
     } = &node.data
     else {
@@ -493,17 +492,6 @@ pub(crate) fn out_shape_loop(node: &WorkflowNode, in_shape: &TokenShape) -> Toke
             &acc.var,
             TokenShape::Any,
             Provenance::new(node, "loop accumulator (declared producer field)"),
-        );
-    }
-    // L3: a loop-scoped lease parks the held grant under `lease` (incl.
-    // `alloc_id`/`gpu_uuid`/…) in the same parked envelope. Declared `Any` so
-    // body iterations + downstream blocks borrow `<slug>.lease.<field>` (e.g.
-    // `<slug>.lease.alloc_id`) through the standard read-arc pipeline.
-    if lease.is_some() {
-        ns.insert(
-            "lease",
-            TokenShape::Any,
-            Provenance::new(node, "loop-scoped held lease (`<slug>.lease.<field>`)"),
         );
     }
     o.insert(

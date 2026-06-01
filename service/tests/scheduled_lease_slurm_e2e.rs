@@ -147,9 +147,27 @@ fn end(id: &str) -> WorkflowNode {
 ///   - `Loop -> End` on the loop's default (None) source handle (`p_output`,
 ///     the post-exit outer `out`).
 fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
+    let scope_id = format!("{loop_id}_scope");
     WorkflowGraph {
         nodes: vec![
             start("s"),
+            WorkflowNode {
+                id: scope_id.clone(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::LeaseScope {
+                    label: "Lease Scope".to_string(),
+                    description: None,
+                    lease: LeaseBinding {
+                        scheduler: DC_ALIAS.to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
             WorkflowNode {
                 id: loop_id.to_string(),
                 node_type: "loop".to_string(),
@@ -161,16 +179,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     max_iterations: MAX_ITERATIONS,
                     loop_condition: "true".to_string(),
                     accumulators: Vec::<LoopAccumulator>::new(),
-                    // L3: hold ONE datacenter lease for the whole loop. `request:
-                    // None` ⇒ the allocator's default placement (the single-node
-                    // dev Slurm cluster). `scheduler` is the datacenter resource's
-                    // workspace alias, resolved at publish to its `pool-<id>` net.
-                    lease: Some(LeaseBinding {
-                        scheduler: DC_ALIAS.to_string(),
-                        request: None,
-                    }),
                 },
-                parent_id: None,
+                parent_id: Some(scope_id.clone()),
                 width: None,
                 height: None,
             },
@@ -199,22 +209,12 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     retry_policy: Default::default(),
                     stream_output: false,
                     stream_input: false,
-                    // Drain seam: a plain Scheduled Submit. Because the body's
-                    // parent is the leased Loop (lease enclosure BY CONTAINMENT —
-                    // no per-step flag), the compiler RE-ROUTES it off the
-                    // lease adapter onto the executor lifecycle and stamps
-                    // `d.executor_namespace = lp.lease.executor_namespace` into the
-                    // body's `prepare`, with the matching Guard read-arc into the
-                    // loop's parked `p_lp_data` envelope — so the iteration enqueues
-                    // to the lease-scoped namespace the held drain executor pulls.
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: None,
                         job_template: "mekhan-executor-worker".to_string(),
                         resources: None,
                     },
                 },
-                // The body ALWAYS sits inside the leasing loop — this parentage
-                // is what `enclosing_leased_scope_slug` walks to find `lp`.
                 parent_id: Some(loop_id.to_string()),
                 width: None,
                 height: None,
@@ -225,8 +225,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
             WorkflowEdge {
                 id: "e_in".to_string(),
                 source: "s".to_string(),
-                target: loop_id.to_string(),
+                target: scope_id.clone(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_scope_body_in".to_string(),
+                source: scope_id.clone(),
+                target: loop_id.to_string(),
+                source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
@@ -250,8 +259,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
-                id: "e_out".to_string(),
+                id: "e_loop_body_out".to_string(),
                 source: loop_id.to_string(),
+                target: scope_id.clone(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_out".to_string(),
+                source: scope_id.clone(),
                 target: "e".to_string(),
                 source_handle: None,
                 target_handle: Some("in".to_string()),
@@ -577,7 +595,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         }
         // Runtime witness of the held allocation. Tolerate transient SSH hiccups
         // by only recording successful probes.
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         concurrent_max = concurrent_max.max(ids.len());
         for id in ids {
             seen_alloc_ids.insert(id);
@@ -626,16 +644,16 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         .collect();
 
     for required in [
-        "p_lp_claim_out",
-        "p_lp_grant_inbox",
-        "p_lp_register_out",
-        "p_lp_release_out",
-        "p_lp_held",
+        "p_lp_scope_claim_out",
+        "p_lp_scope_grant_inbox",
+        "p_lp_scope_register_out",
+        "p_lp_scope_release_out",
+        "p_lp_scope_held",
     ] {
         assert!(
             place_ids.iter().any(|p| p == required),
-            "instance net is missing the loop-lease place `{required}` — the \
-             loop-scoped lease was not hoisted (the `lease` binding was dropped?). \
+            "instance net is missing the lease-scope place `{required}` — the \
+             LeaseScope lease was not emitted (the `lease` binding was dropped?). \
              places={place_ids:?}"
         );
     }
@@ -722,7 +740,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     //    grant name goes empty within a deadline.
     let release_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if ids.is_empty() {
             break;
         }
@@ -949,7 +967,7 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     // Wait for the held alloc to appear (acquire → salloc).
     let alloc_deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if !ids.is_empty() {
             break;
         }
@@ -1003,7 +1021,7 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     // assert it stays gone, i.e. the abort path didn't re-salloc).
     let drain_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if squeue_lease_ids(instance_id, "lp").is_empty() {
+        if squeue_lease_ids(instance_id, "lp_scope").is_empty() {
             break;
         }
         if Instant::now() > drain_deadline {
@@ -1135,7 +1153,7 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
     // Wait for the held alloc to appear.
     let alloc_deadline = Instant::now() + Duration::from_secs(120);
     let held_id = loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if let Some(first) = ids.first() {
             break first.clone();
         }
@@ -1174,7 +1192,7 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
     // within a deadline. (The drain executor srun'd onto it dies with the alloc.)
     let release_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if ids.is_empty() {
             break;
         }

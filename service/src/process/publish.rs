@@ -354,30 +354,10 @@ async fn discover_known_resources(
     let mut heads: BTreeSet<String> = BTreeSet::new();
     let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
     for node in &graph.nodes {
-        // A loop-scoped datacenter lease (`Loop.lease.scheduler`, L3) is a
-        // declared resource binding on the node *data* — and a Loop node hits
-        // the `_ => continue` arm of the backend-config match below, so it MUST
-        // be collected up front (before the continue skips it). `lower_loop`'s
-        // `resolve_binding(.., "datacenter")` needs it in `known_resources`; a
-        // missing alias hard-fails at publish instead of silently lowering a
-        // plain loop. (`Executor.pool` / `Scheduled.scheduler` live on
-        // AutomatedStep nodes, which don't `continue` — collected after the scan.)
-        if let WorkflowNodeData::Loop {
-            lease: Some(binding),
-            ..
-        } = &node.data
-        {
-            let alias = binding.scheduler.trim();
-            if !alias.is_empty() {
-                heads.insert(alias.to_string());
-                declared.push((node.id.clone(), alias.to_string()));
-            }
-        }
-
         // A `LeaseScope` holds a datacenter lease for its whole child region
-        // (docs/17). Like `Loop.lease` it's a declared binding on the node data,
-        // and a LeaseScope node hits the `_ => continue` arm below — so collect
-        // its `lease.scheduler` here too, or `lower_lease_scope`'s
+        // (docs/17). It's a declared binding on the node data, and a LeaseScope
+        // node hits the `_ => continue` arm below — so collect its
+        // `lease.scheduler` here, or `lower_lease_scope`'s
         // `resolve_binding(.., "datacenter")` hard-fails at publish.
         if let WorkflowNodeData::LeaseScope { lease, .. } = &node.data {
             let alias = lease.scheduler.trim();

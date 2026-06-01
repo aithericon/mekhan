@@ -589,6 +589,49 @@ mod tests {
         }
     }
 
+    /// A `LeaseScope`'s `lease.scheduler` (the held datacenter alias) MUST
+    /// survive graph→Y.Doc→graph: the editor renders its datacenter picker off
+    /// the Y.Doc, and a drop shows "no datacenter selected" against a seeded
+    /// demo whose disk fixture set it (same class as the loop-lease Yjs drop).
+    #[test]
+    fn lease_scope_lease_survives_ydoc_roundtrip() {
+        let graph = WorkflowGraph {
+            nodes: vec![WorkflowNode {
+                id: "lease".to_string(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: Position { x: 0.0, y: 0.0 },
+                data: WorkflowNodeData::LeaseScope {
+                    label: "GPU Lease".to_string(),
+                    description: None,
+                    lease: crate::models::template::LeaseBinding {
+                        scheduler: "nomad_dc".to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: Some(640.0),
+                height: Some(340.0),
+            }],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        match &rt.nodes[0].data {
+            WorkflowNodeData::LeaseScope { lease, .. } => {
+                assert_eq!(
+                    lease.scheduler, "nomad_dc",
+                    "lease.scheduler must survive the Y.Doc round-trip (editor picker reads it)"
+                );
+            }
+            other => panic!("expected LeaseScope, got {other:?}"),
+        }
+    }
+
     /// Locks in that AutomatedStep `output` (and `input`) survive a Y.Doc
     /// round-trip. Pre-fix the seeder wrote a graph with output ports but
     /// the Y.Doc init dropped them, so the editor's port panel rendered
@@ -675,117 +718,6 @@ mod tests {
             }
             other => panic!("expected AutomatedStep, got {other:?}"),
         }
-    }
-
-    /// L3/L4 regression: the loop-scoped `lease` MUST survive the Y.Doc
-    /// round-trip publish runs (`reconstruct_graph_from_ydoc` → `doc_to_graph`).
-    /// The loop's `yjs_encode` previously `..`-dropped `lease`, so the live
-    /// published instance lowered as a PLAIN loop (no salloc; body sbatch'd) even
-    /// though offline `compile_to_air` kept it. Same silent-default-drop class as
-    /// `automated_step_input_output_survive_ydoc_roundtrip`. The body is a
-    /// `Scheduled { Submit }` nested in the leased loop (`parent_id == "lp"`), so
-    /// it runs on the lease BY CONTAINMENT — there is no per-step flag to survive.
-    #[test]
-    fn loop_lease_survives_ydoc_roundtrip() {
-        use crate::models::template::{
-            DeploymentModel, ExecutionBackendType, ExecutionSpecConfig, LeaseBinding, Port,
-            RetryPolicy, WorkflowEdge, WorkflowNode,
-        };
-
-        let graph = WorkflowGraph {
-            nodes: vec![
-                WorkflowNode {
-                    id: "lp".to_string(),
-                    node_type: "loop".to_string(),
-                    slug: None,
-                    position: Position { x: 0.0, y: 0.0 },
-                    data: WorkflowNodeData::Loop {
-                        label: "Leased Loop".to_string(),
-                        description: None,
-                        max_iterations: 3,
-                        loop_condition: "true".to_string(),
-                        accumulators: vec![],
-                        lease: Some(LeaseBinding {
-                            scheduler: "slurm_dc".to_string(),
-                            request: None,
-                        }),
-                    },
-                    parent_id: None,
-                    width: None,
-                    height: None,
-                },
-                WorkflowNode {
-                    id: "body".to_string(),
-                    node_type: "automated_step".to_string(),
-                    slug: None,
-                    position: Position { x: 0.0, y: 0.0 },
-                    data: WorkflowNodeData::AutomatedStep {
-                        label: "Body".to_string(),
-                        description: None,
-                        execution_spec: ExecutionSpecConfig {
-                            backend_type: ExecutionBackendType::Python,
-                            entrypoint: Some("main.py".to_string()),
-                            config: serde_json::json!({"python": "python3"}),
-                        },
-                        input: Port::empty_input(),
-                        output: Port::empty_input(),
-                        retry_policy: RetryPolicy::default(),
-                        stream_output: false,
-                        stream_input: false,
-                        deployment_model: DeploymentModel::Scheduled {
-                            scheduler: None,
-                            job_template: "mekhan-executor-worker".to_string(),
-                            resources: None,
-                        },
-                    },
-                    parent_id: Some("lp".to_string()),
-                    width: None,
-                    height: None,
-                },
-            ],
-            edges: Vec::<WorkflowEdge>::new(),
-            viewport: None,
-            instance_concurrency: Default::default(),
-            definitions: Default::default(),
-            default_scheduler: None,
-        };
-
-        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
-        // Y.Doc nodes round-trip via a Y.Map, so order is not preserved — look up by id.
-        let find = |id: &str| {
-            &rt.nodes
-                .iter()
-                .find(|n| n.id == id)
-                .expect("node present")
-                .data
-        };
-        match find("lp") {
-            WorkflowNodeData::Loop { lease, .. } => {
-                let lease = lease
-                    .as_ref()
-                    .expect("loop lease must survive Y.Doc round-trip");
-                assert_eq!(lease.scheduler, "slurm_dc");
-            }
-            other => panic!("expected Loop, got {other:?}"),
-        }
-        match find("body") {
-            WorkflowNodeData::AutomatedStep {
-                deployment_model: DeploymentModel::Scheduled { .. },
-                ..
-            } => {}
-            other => panic!("expected Scheduled AutomatedStep, got {other:?}"),
-        }
-        // Lease enclosure is now purely structural: the body's `parent_id` ties
-        // it to the leased loop (asserted above), so it runs on the lease BY
-        // CONTAINMENT — there is no per-step flag to round-trip.
-        assert_eq!(
-            rt.nodes
-                .iter()
-                .find(|n| n.id == "body")
-                .and_then(|n| n.parent_id.as_deref()),
-            Some("lp"),
-            "body must remain parented to the leased loop"
-        );
     }
 
     /// Pre-fix the slug write side was missing, so `new_version` (and any

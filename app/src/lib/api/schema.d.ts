@@ -5765,7 +5765,6 @@ export interface components {
             accumulators?: components["schemas"]["LoopAccumulator"][];
             description?: string | null;
             label: string;
-            lease?: null | components["schemas"]["LeaseBinding"];
             loopCondition: string;
             /** Format: int32 */
             maxIterations: number;

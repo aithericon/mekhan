@@ -411,18 +411,6 @@ pub enum WorkflowNodeData {
         /// Downstream blocks read them via `<loop_slug>.<var>` borrows.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         accumulators: Vec<LoopAccumulator>,
-        /// Optional datacenter lease held for the WHOLE loop (acquire once at
-        /// enter, reuse across every iteration, release once on exit). Declared,
-        /// not inferred — a Loop holds a lease only when the author explicitly
-        /// binds one. When set, `lower_loop` hoists the
-        /// claim/grant/register/release handshake to loop scope (the same
-        /// machinery `lower_pooled_body` uses per-step) so ONE allocation backs
-        /// all iterations; the held lease (incl. `alloc_id`) is parked into the
-        /// loop's `p_<id>_data` envelope under a `lease` key, so body iterations
-        /// and downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.
-        /// `<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        lease: Option<LeaseBinding>,
     },
     #[serde(rename = "scope")]
     Scope {
@@ -443,8 +431,9 @@ pub enum WorkflowNodeData {
     /// handles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`
     /// handles connect to the outer flow.
     ///
-    /// A leased Loop is exactly `LeaseScope { Loop { … } }`; Loop's `lease`
-    /// remains as back-compat sugar.
+    /// To hold ONE cluster allocation across loop iterations, compose
+    /// `LeaseScope { Loop { … } }` — the scope acquires before the loop starts
+    /// and releases after it exits.
     #[serde(rename = "lease_scope")]
     LeaseScope {
         label: String,
@@ -2525,7 +2514,7 @@ pub mod dsl {
     use super::{
         default_join_output_port, default_max_turns, default_output_port, default_terminal_port,
         BranchCondition, ContextStrategy, DeploymentModel, ExecutionBackendType,
-        ExecutionSpecConfig, JoinMode, LeaseBinding, LoopAccumulator, MergeStrategy, ModelRef,
+        ExecutionSpecConfig, JoinMode, LoopAccumulator, MergeStrategy, ModelRef,
         Port, RetryPolicy, TaskBlockConfig, TaskStepConfig, ToolErrorPolicy, WorkflowNode,
         WorkflowNodeData,
     };
@@ -2597,9 +2586,6 @@ pub mod dsl {
 
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub accumulators: Vec<LoopAccumulator>,
-
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub lease: Option<LeaseBinding>,
 
         // scope
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2909,7 +2895,6 @@ pub mod dsl {
                         max_iterations: max_iter,
                         loop_condition: condition,
                         accumulators: step.accumulators.clone(),
-                        lease: step.lease.clone(),
                     })
                 }
                 "scope" => Ok(WorkflowNodeData::Scope {
@@ -2954,7 +2939,6 @@ pub mod dsl {
                 max_iterations: None,
                 loop_condition: None,
                 accumulators: Vec::new(),
-                lease: None,
                 children: Vec::new(),
                 width: node.width,
                 height: node.height,
@@ -3076,23 +3060,20 @@ pub mod dsl {
                     // children are populated by the CLI envelope after the
                     // step map is built
                 }
-                WorkflowNodeData::LeaseScope { lease, .. } => {
+                WorkflowNodeData::LeaseScope { .. } => {
                     // children are populated by the CLI envelope after the
-                    // step map is built; the held lease binding round-trips
-                    // through the shared `lease` DSL field.
-                    step.lease = Some(lease.clone());
+                    // step map is built; LeaseScope is GUI-authored for now
+                    // (DSL doesn't model container nodes with lease bindings).
                 }
                 WorkflowNodeData::Loop {
                     max_iterations,
                     loop_condition,
                     accumulators,
-                    lease,
                     ..
                 } => {
                     step.max_iterations = Some(*max_iterations);
                     step.loop_condition = Some(loop_condition.clone());
                     step.accumulators = accumulators.clone();
-                    step.lease = lease.clone();
                 }
                 WorkflowNodeData::PhaseUpdate { .. }
                 | WorkflowNodeData::ProgressUpdate { .. }
