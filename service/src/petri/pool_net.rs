@@ -537,6 +537,27 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
                 r#"#{ done: #{ grant_id: held.grant_id, alloc_id: held.alloc_id, outcome: "reaped" } }"#,
             );
 
+        // t_lease_done — drain a CLEAN drain-executor terminal whose hold was
+        // ALREADY released. The completion route (resource_lease handler) sends
+        // the executor's clean `completed` status here as a `lease_expired`
+        // signal so it never falls back to `lease_failed` (the false-failure fix).
+        // But on a normal release `t_release_prep` consumes `in_use` BEFORE that
+        // completion signal arrives, so `t_reap` (which correlates an `in_use`
+        // hold) has no binding and the token would otherwise sit in
+        // `lease_expired` forever. This 1-input transition drains that orphan
+        // (records it in `done`). It can NEVER steal a real TTL reap: `t_reap`
+        // (2 inputs) binds the same — newest — `lease_expired` token, so both
+        // share an enabling time and the engine's specificity rule (more input
+        // arcs wins at equal time, evaluation.rs select_next_transition) makes
+        // `t_reap` win whenever a hold exists; `t_lease_done` only fires when
+        // `t_reap` is disabled (hold gone).
+        ctx.transition("t_lease_done", "Lease Terminal Drain (released)")
+            .auto_input("exp", &lease_expired)
+            .auto_output("done", &done)
+            .logic(
+                r#"#{ done: #{ grant_id: exp.grant_id, outcome: "lease_done" } }"#,
+            );
+
         // t_lease_died — held-allocation death (docs/16 §7). The watcher routed
         // the held alloc's terminal signal to `lease_failed`; consume it + the
         // matching `in_use` hold (correlate grant_id), DROP the hold (the alloc
@@ -1024,6 +1045,44 @@ mod tests {
             .iter()
             .any(|o| o["place"] == "fail_outbox");
         assert!(to_fail, "t_lease_died must route to fail_outbox: {died}");
+    }
+
+    /// A clean drain-executor terminal that arrives AFTER the lease was released
+    /// must not pile up in `lease_expired`. `t_lease_done` (1 input) drains the
+    /// orphan token; `t_reap` (2 inputs) stays more specific so a real TTL reap
+    /// with a live hold still reclaims the hold first (engine specificity rule).
+    #[test]
+    fn lease_done_drains_orphan_terminal_without_stealing_reap() {
+        let a = dc_air(Uuid::nil());
+
+        let done = transition(&a, "t_lease_done").expect("t_lease_done");
+        assert_eq!(done["logic"]["type"], "rhai");
+        let in_places: Vec<&str> = done["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["place"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            in_places,
+            vec!["lease_expired"],
+            "t_lease_done must consume ONLY lease_expired (1 input): {in_places:?}"
+        );
+        let to_done = done["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["place"] == "done");
+        assert!(to_done, "t_lease_done must record in done: {done}");
+
+        // t_reap must stay 2-input so it out-specifies t_lease_done when a hold
+        // exists (so a real TTL reap is never drained as an orphan).
+        let reap = transition(&a, "t_reap").expect("t_reap");
+        assert_eq!(
+            reap["inputs"].as_array().unwrap().len(),
+            2,
+            "t_reap must keep 2 inputs (lease_expired + in_use) to out-specify t_lease_done"
+        );
     }
 
     /// On an acquire-effect FAILURE the adapter SURVIVES (no NetFailed) and
