@@ -58,6 +58,11 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "13-dynamic-form",
     "14-streaming-output",
     "15-stream-python-body",
+    // 16-leased-gpu: a LeaseScope bound to the `nomad_dc` datacenter. Like
+    // 06/09 it needs publish-time resource resolution — the bare `compile_to_air`
+    // entry-point here has no KnownResources, so the LeaseScope can't resolve its
+    // datacenter backing net. Its compiled shape is pinned by `compiler_e2e`'s
+    // lease-scope tests instead; the live seed (publish path) proves it compiles.
 ];
 
 fn repo_root() -> PathBuf {
