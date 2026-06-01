@@ -429,6 +429,63 @@ pub(crate) fn validate_stream_consumer(
     Ok(())
 }
 
+/// Structural validation for a `StreamFold`: exactly one inbound `stream`
+/// handle edge + exactly one inbound `control` handle edge (the producer's data
+/// Signal place + its EOS/completion token). A `Custom` reduce expression must
+/// parse as a Rhai expression. StreamFold has no body — there is nothing more
+/// to wire.
+pub(crate) fn validate_stream_fold(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    _wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    let WorkflowNodeData::StreamFold { reduce, .. } = &node.data else {
+        unreachable!("validate_stream_fold on non-StreamFold variant");
+    };
+
+    // Count inbound edges per target handle — exactly one `stream` and one
+    // `control` are required (a missing/duplicated handle is a wiring bug).
+    let mut stream_edges = 0usize;
+    let mut control_edges = 0usize;
+    for edge in &graph.edges {
+        if edge.target != node.id {
+            continue;
+        }
+        match edge.target_handle.as_deref() {
+            Some("stream") => stream_edges += 1,
+            Some("control") => control_edges += 1,
+            _ => {}
+        }
+    }
+    if stream_edges != 1 {
+        return Err(CompileError::StreamFoldMissingHandle {
+            node_id: node.id.clone(),
+            handle: "stream",
+        });
+    }
+    if control_edges != 1 {
+        return Err(CompileError::StreamFoldMissingHandle {
+            node_id: node.id.clone(),
+            handle: "control",
+        });
+    }
+
+    // A `Custom` reduce expr is embedded verbatim into the gather transition's
+    // logic — syntax-check it here so a typo fails at publish, not at runtime.
+    if let StreamReduce::Custom { expr } = reduce {
+        let engine = rhai::Engine::new();
+        if let Err(err) = engine.compile_expression(expr) {
+            return Err(CompileError::StreamFoldInvalidReduce {
+                node_id: node.id.clone(),
+                expr: expr.clone(),
+                detail: format!("{err}"),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn validate_map(
     node: &WorkflowNode,
     graph: &WorkflowGraph,

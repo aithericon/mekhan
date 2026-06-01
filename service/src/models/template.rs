@@ -516,6 +516,30 @@ pub enum WorkflowNodeData {
         #[serde(default)]
         dispatch: StreamDispatch,
     },
+    /// Stream fold — drains a streaming producer's per-call `set_output` chunks
+    /// and folds them into ONE output token via a declarative `reduce` strategy,
+    /// gating completion behind an end-of-stream counted barrier sized by the
+    /// producer's `stream_count`. No body, no executor: the fold is pure Rhai in
+    /// the net. This is the clean extraction of the old `StreamConsumer`'s
+    /// default `Rhai` dispatch; the body-dispatch streaming patterns live
+    /// elsewhere now — per-chunk parallel map → a streaming-source `Map`;
+    /// stateful in-process reduce → an `AutomatedStep` with `streamInput`. Parks
+    /// the reduced output write-once at `p_<id>_data` like Map.
+    #[serde(rename = "stream_fold")]
+    StreamFold {
+        label: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Name of the output field that holds the reduced result; borrowable
+        /// downstream as `<slug>.<resultVar>`.
+        #[serde(rename = "resultVar", default = "default_stream_result_var")]
+        result_var: String,
+        /// How the drained chunks are folded into the single output token.
+        /// Defaults to an ordered `Array` (sort by stream sequence, project
+        /// `.value`).
+        #[serde(default)]
+        reduce: StreamReduce,
+    },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token
     /// unchanged + emits an `executor-phase`-shaped breadcrumb) followed by a
@@ -832,6 +856,7 @@ impl WorkflowNodeData {
             | Self::LeaseScope { label, .. }
             | Self::Map { label, .. }
             | Self::StreamConsumer { label, .. }
+            | Self::StreamFold { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
@@ -866,6 +891,7 @@ impl WorkflowNodeData {
             | Self::LeaseScope { description, .. }
             | Self::Map { description, .. }
             | Self::StreamConsumer { description, .. }
+            | Self::StreamFold { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
@@ -3118,11 +3144,13 @@ pub mod dsl {
                 | WorkflowNodeData::Delay { .. }
                 | WorkflowNodeData::Timeout { .. }
                 | WorkflowNodeData::Map { .. }
-                | WorkflowNodeData::StreamConsumer { .. } => {
+                | WorkflowNodeData::StreamConsumer { .. }
+                | WorkflowNodeData::StreamFold { .. } => {
                     // DSL doesn't model the process-control / container nodes —
                     // GUI-authored for now. Same lossy-drop behaviour as
                     // triggers. (Map's body sub-graph + itemsRef/resultVar, and
-                    // StreamConsumer's resultVar/reduce, have no DSL schema yet.)
+                    // StreamConsumer/StreamFold's resultVar/reduce, have no DSL
+                    // schema yet.)
                 }
                 WorkflowNodeData::Agent {
                     model,

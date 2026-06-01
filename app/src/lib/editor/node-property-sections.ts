@@ -15,6 +15,7 @@ import TriggerNodeSection from '$lib/components/editor/panels/property-sections/
 import SubWorkflowSection from '$lib/components/editor/panels/property-sections/SubWorkflowSection.svelte';
 import AgentNodeSection from '$lib/components/editor/panels/property-sections/AgentNodeSection.svelte';
 import StreamConsumerSection from '$lib/components/editor/panels/property-sections/StreamConsumerSection.svelte';
+import StreamFoldSection from '$lib/components/editor/panels/property-sections/StreamFoldSection.svelte';
 // Config-spec layer migrations: start, end, map, phase_update, progress_update,
 // failure, delay, timeout are driven by spec wrappers. Their bespoke section
 // files still exist; these wrappers replace the registry entries so the
@@ -48,7 +49,8 @@ const SECTIONS = {
 	trigger: TriggerNodeSection,
 	sub_workflow: SubWorkflowSection,
 	agent: AgentNodeSection,
-	stream_consumer: StreamConsumerSection
+	stream_consumer: StreamConsumerSection,
+	stream_fold: StreamFoldSection
 } satisfies Record<NodeKind, Component<any>>;
 
 /**

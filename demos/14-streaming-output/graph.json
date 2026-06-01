@@ -45,10 +45,10 @@
     },
     {
       "id": "consumer",
-      "type": "stream_consumer",
+      "type": "stream_fold",
       "position": { "x": 620, "y": 160 },
       "data": {
-        "type": "stream_consumer",
+        "type": "stream_fold",
         "label": "Consumer",
         "description": "Drains the producer's stream, concatenates the chunk values in stream order, and gates net completion on the end-of-stream count.",
         "resultVar": "item",

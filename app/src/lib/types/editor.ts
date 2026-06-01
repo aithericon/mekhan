@@ -65,6 +65,7 @@ export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' 
 export type SubWorkflowNodeData = Extract<SchemaWorkflowNodeData, { type: 'sub_workflow' }>;
 export type AgentNodeData = Extract<SchemaWorkflowNodeData, { type: 'agent' }>;
 export type StreamConsumerNodeData = Extract<SchemaWorkflowNodeData, { type: 'stream_consumer' }>;
+export type StreamFoldNodeData = Extract<SchemaWorkflowNodeData, { type: 'stream_fold' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
 export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
@@ -225,6 +226,13 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 			return {
 				type: 'stream_consumer',
 				label: 'Stream Consumer',
+				resultVar: 'item',
+				reduce: { kind: 'array' }
+			};
+		case 'stream_fold':
+			return {
+				type: 'stream_fold',
+				label: 'Stream Fold',
 				resultVar: 'item',
 				reduce: { kind: 'array' }
 			};

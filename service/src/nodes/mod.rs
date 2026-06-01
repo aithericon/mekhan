@@ -42,6 +42,7 @@ pub mod progress_update;
 pub mod scope;
 pub mod start;
 pub mod stream_consumer;
+pub mod stream_fold;
 pub mod sub_workflow;
 pub mod timeout;
 pub mod trigger;
@@ -173,6 +174,7 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &scope::SCOPE_DECL,
     &start::START_DECL,
     &stream_consumer::STREAM_CONSUMER_DECL,
+    &stream_fold::STREAM_FOLD_DECL,
     &sub_workflow::SUB_WORKFLOW_DECL,
     &timeout::TIMEOUT_DECL,
     &trigger::TRIGGER_DECL,
@@ -200,6 +202,7 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::LeaseScope { .. } => "lease_scope",
         WorkflowNodeData::Map { .. } => "map",
         WorkflowNodeData::StreamConsumer { .. } => "stream_consumer",
+        WorkflowNodeData::StreamFold { .. } => "stream_fold",
         WorkflowNodeData::PhaseUpdate { .. } => "phase_update",
         WorkflowNodeData::ProgressUpdate { .. } => "progress_update",
         WorkflowNodeData::Failure { .. } => "failure",
@@ -256,10 +259,12 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
         | WorkflowNodeData::Scope { .. }
         | WorkflowNodeData::LeaseScope { .. }
         | WorkflowNodeData::Map { .. }
-        // StreamConsumer's `reduce` Custom expr is Rhai but operates over the
-        // gathered `__r` array (not `input.<path>`-resolved like guards), so it
-        // is syntax-checked in `validate_stream_consumer`, not here.
+        // StreamConsumer/StreamFold's `reduce` Custom expr is Rhai but operates
+        // over the gathered `__r` array (not `input.<path>`-resolved like
+        // guards), so it is syntax-checked in `validate_stream_{consumer,fold}`,
+        // not here.
         | WorkflowNodeData::StreamConsumer { .. }
+        | WorkflowNodeData::StreamFold { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
         | WorkflowNodeData::Trigger { .. }

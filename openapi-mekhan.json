@@ -14506,6 +14506,39 @@
           },
           {
             "type": "object",
+            "description": "Stream fold — drains a streaming producer's per-call `set_output` chunks\nand folds them into ONE output token via a declarative `reduce` strategy,\ngating completion behind an end-of-stream counted barrier sized by the\nproducer's `stream_count`. No body, no executor: the fold is pure Rhai in\nthe net. This is the clean extraction of the old `StreamConsumer`'s\ndefault `Rhai` dispatch; the body-dispatch streaming patterns live\nelsewhere now — per-chunk parallel map → a streaming-source `Map`;\nstateful in-process reduce → an `AutomatedStep` with `streamInput`. Parks\nthe reduced output write-once at `p_<id>_data` like Map.",
+            "required": [
+              "label",
+              "type"
+            ],
+            "properties": {
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "reduce": {
+                "$ref": "#/components/schemas/StreamReduce",
+                "description": "How the drained chunks are folded into the single output token.\nDefaults to an ordered `Array` (sort by stream sequence, project\n`.value`)."
+              },
+              "resultVar": {
+                "type": "string",
+                "description": "Name of the output field that holds the reduced result; borrowable\ndownstream as `<slug>.<resultVar>`."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stream_fold"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Pass-through control node that marks a named phase on the owning HPI\nprocess. Compiles to a shape transition (forwards the workflow token\nunchanged + emits an `executor-phase`-shaped breadcrumb) followed by a\n`process_log_message` effect. The causality consumer projects it into\n`hpi_processes.config.progress.phases`. Effective only when an upstream\nStart registered a process (`processName`); otherwise a silent no-op.",
             "required": [
               "label",

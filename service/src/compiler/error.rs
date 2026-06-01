@@ -231,6 +231,24 @@ pub enum CompileError {
         detail: String,
     },
 
+    /// A `StreamFold` is missing exactly one inbound `stream` or `control`
+    /// handle edge. It needs the producer's data Signal place (`stream`) and
+    /// its EOS/completion token (`control`) — one of each.
+    #[error("node {node_id}: stream fold is missing exactly one inbound `{handle}` handle edge")]
+    StreamFoldMissingHandle {
+        node_id: String,
+        handle: &'static str,
+    },
+
+    /// A `StreamFold`'s `Custom` reduce expression is not a parseable Rhai
+    /// expression (it is embedded verbatim into the gather transition's logic).
+    #[error("node {node_id}: invalid stream-fold reduce expression `{expr}`: {detail}")]
+    StreamFoldInvalidReduce {
+        node_id: String,
+        expr: String,
+        detail: String,
+    },
+
     /// A Map body terminal is a node kind that cannot produce the
     /// `detail.outputs.<resultVar>` envelope the gather requires (engine-effect
     /// backends like CatalogueQuery, Scheduled AutomatedSteps whose scheduler
@@ -760,6 +778,8 @@ impl CompileError {
             Self::MapNested { .. } => "map_nested",
             Self::StreamConsumerMissingHandle { .. } => "stream_consumer_missing_handle",
             Self::StreamConsumerInvalidReduce { .. } => "stream_consumer_invalid_reduce",
+            Self::StreamFoldMissingHandle { .. } => "stream_fold_missing_handle",
+            Self::StreamFoldInvalidReduce { .. } => "stream_fold_invalid_reduce",
             Self::StreamConsumerRhaiHasBody { .. } => "stream_consumer_rhai_has_body",
             Self::StreamConsumerBodyEmpty { .. } => "stream_consumer_body_empty",
             Self::StreamConsumerBodyUnsupported { .. } => "stream_consumer_body_unsupported",
@@ -840,6 +860,8 @@ impl CompileError {
             | Self::MapNested { node_id, .. }
             | Self::StreamConsumerMissingHandle { node_id, .. }
             | Self::StreamConsumerInvalidReduce { node_id, .. }
+            | Self::StreamFoldMissingHandle { node_id, .. }
+            | Self::StreamFoldInvalidReduce { node_id, .. }
             | Self::StreamConsumerRhaiHasBody { node_id }
             | Self::StreamConsumerBodyEmpty { node_id }
             | Self::StreamConsumerBodyUnsupported { node_id, .. }

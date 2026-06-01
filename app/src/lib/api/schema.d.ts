@@ -5855,6 +5855,22 @@ export interface components {
         } | {
             description?: string | null;
             label: string;
+            /**
+             * @description How the drained chunks are folded into the single output token.
+             *     Defaults to an ordered `Array` (sort by stream sequence, project
+             *     `.value`).
+             */
+            reduce?: components["schemas"]["StreamReduce"];
+            /**
+             * @description Name of the output field that holds the reduced result; borrowable
+             *     downstream as `<slug>.<resultVar>`.
+             */
+            resultVar?: string;
+            /** @enum {string} */
+            type: "stream_fold";
+        } | {
+            description?: string | null;
+            label: string;
             /** @description Optional phase message. Supports `{{ field }}` placeholders. */
             message?: string | null;
             /**
