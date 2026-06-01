@@ -142,6 +142,12 @@ where
     pub eval_notify: Arc<Notify>,
     /// Broadcast sender for SSE: each mutation broadcasts to all connected SSE clients.
     pub event_tx: Arc<broadcast::Sender<SseSignal>>,
+    /// Sub-phase 2.5e-γ.mekhan per-run dispatch options. Mutated by
+    /// `load_scenario`; consulted by the firing path at evaluate/fire time.
+    /// Per-NetInstance scope — the Arc is cloned from
+    /// `NetInstance::dispatch_options` via `as_app_state`, so distinct nets
+    /// carry independent dispatch options.
+    pub dispatch_options: Arc<RwLock<petri_domain::DispatchOptions>>,
 }
 
 // Manual Clone implementation - Arc and RwLock are Clone regardless of inner types
@@ -158,6 +164,7 @@ where
             run_mode: self.run_mode.clone(),
             eval_notify: self.eval_notify.clone(),
             event_tx: self.event_tx.clone(),
+            dispatch_options: self.dispatch_options.clone(),
         }
     }
 }

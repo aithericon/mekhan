@@ -1,5 +1,5 @@
 {
-  "name": "per-chunk body uppercases + Concat-joins in stream order → 'THE QUICK BROWN FOX'",
+  "name": "LiveReduce: reducer receives chunks via IPC, uppercases + concatenates → 'THE QUICK BROWN FOX'",
   "enabled": true,
   "start_tokens": [
     {

@@ -97,6 +97,25 @@ pub const SCHEDULER_CANCEL: EffectDescriptor = EffectDescriptor {
 };
 
 /// Submit an execution to the executor service.
+///
+/// ## Sub-phase 2.5d-tools: agent_loop config keys (carried in `config`)
+///
+/// When the target executor runs an LLM Agent stage with tool use, the
+/// transition's `logic.config` carries two additional keys alongside the
+/// standard `task_kind`, `required_capabilities`, etc.:
+///
+/// - `tool_names: Vec<String>` — names of tools the LLM may invoke, resolved
+///   by name against the submission's `tool_catalogue`. The executor's
+///   `run_agent_loop` passes only the named tools to the LLM.
+///
+/// - `max_tool_iterations: usize` (optional; default 16) — hard cap on the
+///   number of LLM ↔ tool turns before the loop terminates with an error.
+///   Prevents runaway tool loops from consuming unbounded tokens.
+///
+/// Both keys are absent from `ExecutorSubmitInput` schema validation today
+/// (the executor reads them from raw `config` JSON). Schema reference will
+/// be updated in 2.5e when the clinic-side pipeline engine deletes its own
+/// tool-loop and defers fully to mekhan.
 pub const EXECUTOR_SUBMIT: EffectDescriptor = EffectDescriptor {
     handler_id: "executor_submit",
     default_input_port: "job",

@@ -195,7 +195,15 @@ pub async fn ensure_token_pool_net_deployed(
         }
     };
 
-    if let Err(e) = crate::petri::instance::deploy_instance(petri, &net_id, &air).await {
+    if let Err(e) = crate::petri::instance::deploy_instance(
+        petri,
+        &net_id,
+        &air,
+        petri_api_types::DispatchOptions::default(),
+        None,
+    )
+    .await
+    {
         tracing::warn!(
             net_id,
             capacity,
@@ -555,7 +563,15 @@ pub async fn ensure_datacenter_adapter_deployed(
         }
     };
 
-    if let Err(e) = crate::petri::instance::deploy_instance(petri, &net_id, &air).await {
+    if let Err(e) = crate::petri::instance::deploy_instance(
+        petri,
+        &net_id,
+        &air,
+        petri_api_types::DispatchOptions::default(),
+        None,
+    )
+    .await
+    {
         tracing::warn!(
             net_id,
             scheduler_flavor,

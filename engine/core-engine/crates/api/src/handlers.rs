@@ -20,8 +20,8 @@ use crate::dto::{
     AnalysisReport, AnalysisSummary, CommandResponse, CreateTokenRequest, ErrorResponse,
     EvaluateFinalState, EvaluateRequest, EvaluateResponse, EventsResponse, FiredTransition,
     IssueLevel, LoadScenarioRequest, LoadScenarioResponse, RunMode, RunModeResponse,
-    SetRunModeRequest, StateResponse, TopologyResponse, TransitionStatus, UpdateTransitionRequest,
-    ValidationIssue,
+    ScenarioDefinition, SetRunModeRequest, StateResponse, TopologyResponse, TransitionStatus,
+    UpdateTransitionRequest, ValidationIssue,
 };
 use crate::router::{AppState, SseSignal};
 use crate::scenario_bridge::ScenarioBridge;
@@ -384,17 +384,37 @@ where
 )]
 pub async fn load_scenario<E, T, S>(
     State(app_state): State<AppState<E, T, S>>,
-    Json(request): Json<LoadScenarioRequest>,
+    Json(envelope): Json<LoadScenarioRequest>,
 ) -> impl IntoResponse
 where
     E: EventRepository + 'static,
     T: TopologyRepository + 'static,
     S: StateProjection + 'static,
 {
+    // Sub-phase 2.5e-γ.mekhan: unwrap envelope, then validate the per-run
+    // dispatch options against the scenario's declared transitions. Failures
+    // here MUST fail-closed BEFORE any service mutation (no half-loaded
+    // state on bad input).
+    let LoadScenarioRequest {
+        scenario,
+        skip_mask,
+        stage_overrides,
+        net_parameters,
+    } = envelope;
+
+    if let Err((status, message)) = validate_dispatch_options(&scenario, &skip_mask, &stage_overrides) {
+        tracing::error!(reason = %message, "Dispatch options validation failed");
+        return Err(status);
+    }
+    let dispatch_options = petri_domain::DispatchOptions {
+        skip_mask,
+        stage_overrides,
+    };
+
     // Validate infrastructure requirements before loading
-    if !request.requirements.is_empty() {
+    if !scenario.requirements.is_empty() {
         let registered = app_state.service.registered_handler_ids();
-        for req in &request.requirements {
+        for req in &scenario.requirements {
             for handler_id in &req.handler_ids {
                 if !registered.contains(handler_id) {
                     tracing::error!(
@@ -410,9 +430,9 @@ where
 
     // Parse scenario using the bridge
     let parsed = match ScenarioBridge::parse(
-        &request.places,
-        &request.transitions,
-        request.definitions.clone(),
+        &scenario.places,
+        &scenario.transitions,
+        scenario.definitions.clone(),
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -427,7 +447,7 @@ where
     let tokens_count = parsed.initial_tokens.len();
 
     // Attach groups to the topology so they survive event-sourced hydration
-    net.groups = request.groups.clone();
+    net.groups = scenario.groups.clone();
 
     // Clear any existing events/state before initializing
     app_state.service.clear().await;
@@ -438,6 +458,15 @@ where
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     app_state.service.set_initial_tokens(initial_tokens.clone());
+
+    // Store the submitter-supplied net parameter bag on the service so the
+    // firing path can consult it for `$params.` resolution and pre-dispatch
+    // metadata (e.g. `tenant_id`). Opaque, generic infra — no domain semantics
+    // ascribed here. Mirrors the NATS create-net path's `set_net_parameters`
+    // call in the engine binary; absent parameters leave the prior `None`.
+    if let Some(params) = net_parameters {
+        app_state.service.set_net_parameters(params);
+    }
 
     // Build and register schema registry if definitions are present
     if !parsed.definitions.is_empty() {
@@ -457,7 +486,19 @@ where
     // so adapter notifications fire for initial seed tokens.
     app_state
         .adapter_scheduler
-        .register_adapters(&request.mock_adapters, &place_ids);
+        .register_adapters(&scenario.mock_adapters, &place_ids);
+
+    // Sub-phase 2.5e-γ.mekhan: install the per-run dispatch options BEFORE
+    // initial-token creation so an eval-running net picks them up
+    // immediately. Mirror to both AppState (for ergonomic admin-read
+    // surface) and PetriNetService (the canonical source consulted by the
+    // firing path). Lock is short-held (writing one assignment); no .await
+    // inside the critical section.
+    {
+        let mut guard = app_state.dispatch_options.write();
+        *guard = dispatch_options.clone();
+    }
+    app_state.service.set_dispatch_options(dispatch_options);
 
     // Create initial tokens and notify adapters for each
     for (place_id, color) in initial_tokens {
@@ -484,11 +525,91 @@ where
 
     Ok(Json(LoadScenarioResponse {
         success: true,
-        places_count: request.places.len(),
-        transitions_count: request.transitions.len(),
+        places_count: scenario.places.len(),
+        transitions_count: scenario.transitions.len(),
         tokens_count,
         error: None,
     }))
+}
+
+/// Sub-phase 2.5e-γ.mekhan: validate per-run dispatch options against the
+/// scenario's declared transitions BEFORE any engine mutation.
+///
+/// Returns `Err((StatusCode::BAD_REQUEST, message))` on:
+/// - `skip_mask` entry that doesn't reference a declared transition_id
+/// - `stage_overrides` key that doesn't reference a declared transition_id
+/// - `stage_overrides` value that carries a non-null `model` key when the
+///   target transition's original `effect_config.model` is unset / empty /
+///   whitespace-only (per `feedback_no_default_model`).
+fn validate_dispatch_options(
+    scenario: &ScenarioDefinition,
+    skip_mask: &[String],
+    stage_overrides: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<(), (StatusCode, String)> {
+    use petri_api_types::TransitionLogic;
+
+    if skip_mask.is_empty() && stage_overrides.is_empty() {
+        return Ok(());
+    }
+    let declared: std::collections::HashSet<&str> = scenario
+        .transitions
+        .iter()
+        .map(|t| t.id.as_str())
+        .collect();
+
+    for skip_id in skip_mask {
+        if !declared.contains(skip_id.as_str()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("skip_mask references unknown transition_id: {}", skip_id),
+            ));
+        }
+    }
+
+    for (override_id, patch_value) in stage_overrides {
+        if !declared.contains(override_id.as_str()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "stage_overrides references unknown transition_id: {}",
+                    override_id
+                ),
+            ));
+        }
+        // Per feedback_no_default_model: reject model-injection where the
+        // target transition has no declared model.
+        if let Some(patch_obj) = patch_value.as_object() {
+            if let Some(model_patch) = patch_obj.get("model") {
+                if !model_patch.is_null() {
+                    let transition = scenario
+                        .transitions
+                        .iter()
+                        .find(|t| t.id == *override_id)
+                        .expect("transition existence verified above");
+                    let original_model = match &transition.logic {
+                        TransitionLogic::Effect { config, .. } => config
+                            .as_ref()
+                            .and_then(|c| c.get("model"))
+                            .and_then(|m| m.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty()),
+                        _ => None,
+                    };
+                    if original_model.is_none() {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            format!(
+                                "stage_overrides for transition '{}' injects a 'model' key but the transition has no declared model (per feedback_no_default_model)",
+                                override_id
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// GET /api/analyze
@@ -1438,6 +1559,9 @@ mod tests {
             run_mode: Arc::new(RwLock::new(RunMode::default())),
             eval_notify: Arc::new(Notify::new()),
             event_tx: Arc::new(event_tx),
+            dispatch_options: Arc::new(RwLock::new(
+                petri_domain::DispatchOptions::default(),
+            )),
         }
     }
 
@@ -1520,72 +1644,83 @@ mod tests {
         (status, json)
     }
 
-    /// Load a simple scenario for testing
+    /// Load a simple scenario for testing.
+    ///
+    /// Sub-phase 2.5e-γ.mekhan-S2: wraps the bare-ScenarioDefinition shape
+    /// in the `LoadScenarioRequest` envelope so `POST /api/scenario`
+    /// deserialises (the handler now takes `Json<LoadScenarioRequest>`,
+    /// not `Json<ScenarioDefinition>`). Without the envelope keys the
+    /// scenario load 422s on missing `scenario` field.
     fn simple_scenario_json() -> Value {
         json!({
-            "name": "Test Scenario",
-            "places": [
-                {
-                    "id": "place_a",
-                    "name": "Place A",
-                    "place_type": "state",
-                    "initial_tokens": [null]
-                },
-                {
-                    "id": "place_b",
-                    "name": "Place B",
-                    "place_type": "state",
-                    "initial_tokens": []
-                }
-            ],
-            "transitions": [
-                {
-                    "id": "trans_1",
-                    "name": "Transition 1",
-                    "input_ports": [{"name": "input", "cardinality": "single"}],
-                    "output_ports": [{"name": "output", "cardinality": "single"}],
-                    "inputs": [{"place": "place_a", "port": "input", "weight": 1}],
-                    "outputs": [{"place": "place_b", "port": "output", "weight": 1}],
-                    "logic": {"type": "rhai", "source": "#{output: input}"}
-                }
-            ],
-            "groups": [],
-            "mock_adapters": []
+            "scenario": {
+                "name": "Test Scenario",
+                "places": [
+                    {
+                        "id": "place_a",
+                        "name": "Place A",
+                        "place_type": "state",
+                        "initial_tokens": [null]
+                    },
+                    {
+                        "id": "place_b",
+                        "name": "Place B",
+                        "place_type": "state",
+                        "initial_tokens": []
+                    }
+                ],
+                "transitions": [
+                    {
+                        "id": "trans_1",
+                        "name": "Transition 1",
+                        "input_ports": [{"name": "input", "cardinality": "single"}],
+                        "output_ports": [{"name": "output", "cardinality": "single"}],
+                        "inputs": [{"place": "place_a", "port": "input", "weight": 1}],
+                        "outputs": [{"place": "place_b", "port": "output", "weight": 1}],
+                        "logic": {"type": "rhai", "source": "#{output: input}"}
+                    }
+                ],
+                "groups": [],
+                "mock_adapters": []
+            }
         })
     }
 
-    /// Scenario with a guard condition
+    /// Scenario with a guard condition. Envelope-wrapped per
+    /// sub-phase 2.5e-γ.mekhan-S2 (see `simple_scenario_json` rationale).
     fn guarded_scenario_json() -> Value {
         json!({
-            "name": "Guarded Scenario",
-            "places": [
-                {
-                    "id": "input",
-                    "name": "Input",
-                    "place_type": "state",
-                    "initial_tokens": [{"value": 50}]
-                },
-                {
-                    "id": "output",
-                    "name": "Output",
-                    "place_type": "state",
-                    "initial_tokens": []
-                }
-            ],
-            "transitions": [
-                {
-                    "id": "check",
-                    "name": "Check Value",
-                    "input_ports": [{"name": "data", "cardinality": "single"}],
-                    "output_ports": [{"name": "result", "cardinality": "single"}],
-                    "inputs": [{"place": "input", "port": "data", "weight": 1}],
-                    "outputs": [{"place": "output", "port": "result", "weight": 1}],
-                    "logic": {"type": "rhai", "source": "#{result: data}"},
-                    "guard": {"type": "rhai", "source": "data.value >= 100"}
-                }
-            ],
-            "groups": [],
-            "mock_adapters": []
+            "scenario": {
+                "name": "Guarded Scenario",
+                "places": [
+                    {
+                        "id": "input",
+                        "name": "Input",
+                        "place_type": "state",
+                        "initial_tokens": [{"value": 50}]
+                    },
+                    {
+                        "id": "output",
+                        "name": "Output",
+                        "place_type": "state",
+                        "initial_tokens": []
+                    }
+                ],
+                "transitions": [
+                    {
+                        "id": "check",
+                        "name": "Check Value",
+                        "input_ports": [{"name": "data", "cardinality": "single"}],
+                        "output_ports": [{"name": "result", "cardinality": "single"}],
+                        "inputs": [{"place": "input", "port": "data", "weight": 1}],
+                        "outputs": [{"place": "output", "port": "result", "weight": 1}],
+                        "logic": {"type": "rhai", "source": "#{result: data}"},
+                        "guard": {"type": "rhai", "source": "data.value >= 100"}
+                    }
+                ],
+                "groups": [],
+                "mock_adapters": []
+            }
         })
     }
 

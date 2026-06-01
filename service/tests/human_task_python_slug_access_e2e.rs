@@ -24,8 +24,8 @@
 //! decision branches, scope group, parallel join, and Python source
 //! drift are all caught too.
 //!
-//! Requires `just dev::up` (engine :13030, executor, rustfs S3 :9005,
-//! NATS :14333). Set `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:15439/mekhan`
+//! Requires `just dev::up` (engine :3030, executor, rustfs S3 :9005,
+//! NATS :4333). Set `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:5439/mekhan`
 //! and `TEST_S3_{ENDPOINT,BUCKET,ACCESS_KEY,SECRET_KEY}` per
 //! `reference_executor_e2e_s3_bucket`. Single-threaded
 //! (`--test-threads=1`) — shares the live engine + executor.
@@ -49,7 +49,7 @@ use mekhan_service::lifecycle::start_lifecycle_listener;
 use mekhan_service::nats::MekhanNats;
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 fn engine_nats_url() -> String {

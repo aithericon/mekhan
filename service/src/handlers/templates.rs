@@ -19,8 +19,9 @@ use crate::handlers::template_tests::{run_test, RunContext};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
-    ApplyTemplateRequest, CompileRequest, CreateTemplateRequest, ExecutionBackendType, Port,
-    TemplateListExtras, UpdateTemplateRequest, WorkflowGraph, WorkflowNodeData, WorkflowTemplate,
+    ApplyAirTemplateRequest, ApplyTemplateRequest, CompileRequest, CreateTemplateRequest,
+    ExecutionBackendType, Port, Position, TemplateListExtras, UpdateTemplateRequest, WorkflowGraph,
+    WorkflowNode, WorkflowNodeData, WorkflowTemplate,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{resolve_subworkflow_air, CompiledArtifacts, PublishService};
@@ -1291,6 +1292,246 @@ pub async fn apply_template(
     let registered = publisher.register_triggers(&applied).await;
     if registered > 0 {
         tracing::info!(template_id = %applied.id, registered, "registered triggers on apply");
+    }
+
+    Ok(Json(applied))
+}
+
+/// POST /api/v1/templates/apply-air
+///
+/// Clinic-style headless template upload: accepts pre-compiled AIR
+/// (`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,
+/// bypassing the editor's `WorkflowGraph` → AIR compile pass entirely.
+/// The supplied `air_json` is stored verbatim into the `air_json` column;
+/// a synthetic stub graph containing just the `Trigger` node is stored
+/// into the `graph` column so the trigger dispatcher's `register_triggers`
+/// finds it post-commit.
+///
+/// Idempotency: name-based, scoped per workspace. A first apply with a
+/// given `name` in the caller's workspace Seeds a fresh v1 chain
+/// (`is_latest = true`); subsequent applies with the same `(name,
+/// workspace_id)` pair Bump the chain. Cross-workspace name collisions
+/// are independent chains.
+///
+/// Distinct from `POST /api/v1/templates/{id}/apply` (the GitOps path for
+/// graph-authored templates): that one demands an existing `{id}` and a
+/// `WorkflowGraph`, then runs the compile pass. This endpoint takes
+/// neither.
+#[utoipa::path(
+    post,
+    path = "/api/v1/templates/apply-air",
+    request_body = ApplyAirTemplateRequest,
+    responses(
+        (status = 200, description = "Applied: seeded v1 or a new born-published version", body = WorkflowTemplate),
+        (status = 400, description = "Invalid AIR or trigger spec", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn apply_air_template(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Json(req): Json<ApplyAirTemplateRequest>,
+) -> Result<Json<WorkflowTemplate>, ApiError> {
+    // Validate inputs before touching state. The endpoint is born-published
+    // and pre-AIR; the AIR is opaque to mekhan-service so we only assert
+    // shape-level invariants (places exist, named trigger target exists).
+    if !req.air_json.is_object() {
+        return Err(ApiError::bad_request("air_json must be a JSON object"));
+    }
+    let places_array = req
+        .air_json
+        .get("places")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| ApiError::bad_request("air_json.places must be an array"))?;
+    let target_place_exists = places_array.iter().any(|p| {
+        p.get("id").and_then(|v| v.as_str()) == Some(req.trigger.air_target_place_id.as_str())
+    });
+    if !target_place_exists {
+        return Err(ApiError::bad_request(format!(
+            "trigger.air_target_place_id '{}' not found in air_json.places",
+            req.trigger.air_target_place_id
+        )));
+    }
+    if req.trigger.node_id.trim().is_empty() {
+        return Err(ApiError::bad_request("trigger.node_id must be non-empty"));
+    }
+
+    // Synthesize the stub graph: one Trigger node, no edges. `register_triggers`
+    // walks this; the dispatcher's pre-AIR branch reads
+    // `air_target_place_id` directly from the node data.
+    let stub_node = WorkflowNode {
+        id: req.trigger.node_id.clone(),
+        node_type: "trigger".to_string(),
+        slug: None,
+        position: Position { x: 0.0, y: 0.0 },
+        data: WorkflowNodeData::Trigger {
+            label: req.trigger.label.clone(),
+            description: None,
+            source: req.trigger.source.clone(),
+            concurrency: Default::default(),
+            payload_mapping: req.trigger.payload_mapping.clone(),
+            reply_default: req.trigger.reply_default,
+            enabled: req.trigger.enabled,
+            air_target_place_id: Some(req.trigger.air_target_place_id.clone()),
+        },
+        parent_id: None,
+        width: None,
+        height: None,
+    };
+    let stub_graph = WorkflowGraph {
+        nodes: vec![stub_node],
+        edges: vec![],
+        viewport: None,
+        // Pre-AIR templates have no graph-level resource declarations or
+        // template-level concurrency policy — both default-empty.
+        definitions: Default::default(),
+        instance_concurrency: Default::default(),
+        default_scheduler: None,
+    };
+    let stub_graph_json = serde_json::to_value(&stub_graph)
+        .map_err(|e| ApiError::internal(format!("synthesize stub graph: {e}")))?;
+    let source_ref_json = req
+        .source_ref
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| ApiError::internal(format!("serialize source_ref: {e}")))?;
+    let description = req.description.clone().unwrap_or_default();
+    let author_id = user.subject_as_uuid();
+    // Multi-tenant scoping per upstream's workspaces+visibility migration
+    // (`5ac9e72` + 9 commits). Pre-AIR apply is workspace-private by
+    // construction; `public` visibility is admin-only via
+    // `PATCH /api/v1/templates/{id}/visibility` (`38642db`).
+    let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let visibility = "workspace";
+
+    // Name-based chain lookup, scoped per workspace. The pre-AIR endpoint
+    // uses `(name, workspace_id)` as the stable chain key so the deploy
+    // recipe can re-apply idempotently from git without owning a UUID,
+    // and cross-tenant name collisions don't Bump the wrong chain.
+    let latest: Option<WorkflowTemplate> = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates \
+            WHERE name = $1 AND workspace_id = $2 AND is_latest = TRUE",
+    )
+    .bind(&req.name)
+    .bind(workspace_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let applied = match latest {
+        Some(latest) => {
+            // Bump: mark prior latest as not-latest, insert new born-published
+            // version. The pre-AIR endpoint diverges from `insert_published_version`
+            // by binding `published_by` (apply-air's caller is always an
+            // authenticated service user; `apply_template` doesn't bind it
+            // for historical reasons).
+            mark_not_latest(&mut *tx, latest.id).await?;
+            let base_id = latest.base_template_id.unwrap_or(latest.id);
+            let new_id = Uuid::new_v4();
+            let new_version = latest.version + 1;
+            sqlx::query_as::<_, WorkflowTemplate>(
+                r#"
+                INSERT INTO workflow_templates
+                    (id, name, description, base_template_id, parent_id, version,
+                     is_latest, published, published_at, published_by,
+                     graph, air_json, source_ref, author_id, workspace_id, visibility)
+                VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13)
+                RETURNING *
+                "#,
+            )
+            .bind(new_id)
+            .bind(&req.name)
+            .bind(&description)
+            .bind(base_id)
+            .bind(latest.id)
+            .bind(new_version)
+            .bind(author_id)
+            .bind(&stub_graph_json)
+            .bind(&req.air_json)
+            .bind(source_ref_json.as_ref())
+            .bind(author_id)
+            .bind(workspace_id)
+            .bind(visibility)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| {
+                tracing::error!("failed to insert pre-AIR bump version: {e}");
+                ApiError::internal(e.to_string())
+            })?
+        }
+        None => {
+            // Seed: fresh chain at v1, born-published. `base_template_id = id`
+            // matches `create_template`'s convention.
+            let new_id = Uuid::new_v4();
+            sqlx::query_as::<_, WorkflowTemplate>(
+                r#"
+                INSERT INTO workflow_templates
+                    (id, name, description, base_template_id, version,
+                     is_latest, published, published_at, published_by,
+                     graph, air_json, source_ref, author_id, workspace_id, visibility)
+                VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10)
+                RETURNING *
+                "#,
+            )
+            .bind(new_id)
+            .bind(&req.name)
+            .bind(&description)
+            .bind(author_id)
+            .bind(&stub_graph_json)
+            .bind(&req.air_json)
+            .bind(source_ref_json.as_ref())
+            .bind(author_id)
+            .bind(workspace_id)
+            .bind(visibility)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| {
+                tracing::error!("failed to seed pre-AIR template: {e}");
+                ApiError::internal(e.to_string())
+            })?
+        }
+    };
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    tracing::info!(
+        template_id = %applied.id,
+        version = applied.version,
+        name = %applied.name,
+        actor = %user.subject,
+        "applied pre-AIR template"
+    );
+
+    // Post-commit: in-memory trigger registry. On Bump, the prior version's
+    // triggers stay registered under the old template id until we forget
+    // them — do that explicitly. Belt-and-suspenders per Q4 disposition: we
+    // also defensively call `forget_template` for the applied id in case a
+    // re-apply against a stale dispatcher leaked a record (operationally
+    // unreachable post-Q3 collision check, but cheap).
+    let publisher = PublishService::new(&state);
+    if applied.version > 1 {
+        if let Some(parent_id) = applied.parent_id {
+            state.triggers.forget_template(parent_id);
+        }
+    }
+    state.triggers.forget_template(applied.id);
+    let registered = publisher.register_triggers(&applied).await;
+    if registered > 0 {
+        tracing::info!(
+            template_id = %applied.id,
+            registered,
+            "registered triggers on apply-air"
+        );
     }
 
     Ok(Json(applied))

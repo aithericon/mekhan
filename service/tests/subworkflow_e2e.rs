@@ -4,7 +4,7 @@
 //! and the real spawn/reply round-trip against the live engine.
 //!
 //! Requires Postgres + NATS (both tests) and, for the engine-backed test, the
-//! full `just dev up` stack (engine on :13030 sharing the dev NATS broker).
+//! full `just dev up` stack (engine on :3030 sharing the dev NATS broker).
 //! Run the engine-backed test serially with `--test-threads=1` (shared engine).
 
 mod common;
@@ -609,7 +609,7 @@ async fn subworkflow_borrow_of_undeclared_child_field_rejected() {
 // ---------------------------------------------------------------------------
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {

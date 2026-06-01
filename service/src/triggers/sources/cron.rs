@@ -178,7 +178,15 @@ async fn fire_once(
         "fire_time": fire_time.to_rfc3339(),
         "scheduled_time": scheduled_time.to_rfc3339(),
     });
-    match dispatcher.fire(node_id, payload).await {
+    match dispatcher
+        .fire(
+            node_id,
+            payload,
+            petri_api_types::DispatchOptions::default(),
+            None,
+        )
+        .await
+    {
         Ok(result) => {
             tracing::info!(
                 node_id = %node_id,

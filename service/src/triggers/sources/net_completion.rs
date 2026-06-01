@@ -99,7 +99,15 @@ pub async fn evaluate(
             "completion_time": chrono::Utc::now().to_rfc3339(),
         });
 
-        match dispatcher.fire(&rec.node_id, payload).await {
+        match dispatcher
+            .fire(
+                &rec.node_id,
+                payload,
+                petri_api_types::DispatchOptions::default(),
+                None,
+            )
+            .await
+        {
             Ok(result) => {
                 tracing::info!(
                     node_id = %rec.node_id,

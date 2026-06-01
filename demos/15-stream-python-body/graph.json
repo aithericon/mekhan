@@ -50,21 +50,20 @@
       "data": {
         "type": "stream_consumer",
         "label": "Consumer",
-        "description": "Drains the producer's stream and runs a per-chunk Python body (uppercase) one at a time in stream order, then Concat-joins the body results. Gates net completion on the end-of-stream count.",
-        "resultVar": "item",
-        "reduce": { "kind": "concat", "sep": " " },
-        "dispatch": { "mode": "sequentialBody" }
+        "description": "Thin router: forwards chunks to the reducer via IPC and sends EOF. The reducer owns the reduction logic.",
+        "resultVar": "transcript",
+        "dispatch": { "mode": "liveReduce" }
       }
     },
     {
-      "id": "uppercase",
+      "id": "reducer",
       "type": "automated_step",
       "parentId": "consumer",
       "position": { "x": 620, "y": 320 },
       "data": {
         "type": "automated_step",
-        "label": "Uppercase Chunk",
-        "description": "Per-chunk body: reads the chunk via the consumer's resultVar (item) and set_output's its uppercase under the same name.",
+        "label": "Reducer",
+        "description": "Long-lived Python process that receives chunks via aithericon.chunks(), uppercases and concatenates them, then emits the final transcript.",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -79,9 +78,9 @@
         },
         "output": {
           "id": "out",
-          "label": "Uppercased",
+          "label": "Reduced",
           "fields": [
-            { "name": "item", "label": "Uppercased Chunk", "kind": "text" }
+            { "name": "transcript", "label": "Transcript", "kind": "text" }
           ]
         }
       }
@@ -103,8 +102,8 @@
     { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
     { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "consumer", "targetHandle": "stream", "type": "sequence" },
     { "id": "e_producer_control", "source": "producer", "target": "consumer", "targetHandle": "control", "type": "sequence" },
-    { "id": "e_consumer_body_in", "source": "consumer", "sourceHandle": "body_in", "target": "uppercase", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_body_out_consumer", "source": "uppercase", "target": "consumer", "targetHandle": "body_out", "type": "sequence" },
+    { "id": "e_consumer_body_in", "source": "consumer", "sourceHandle": "body_in", "target": "reducer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_body_out_consumer", "source": "reducer", "target": "consumer", "targetHandle": "body_out", "type": "sequence" },
     { "id": "e_consumer_end", "source": "consumer", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

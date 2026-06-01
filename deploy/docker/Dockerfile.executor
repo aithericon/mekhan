@@ -100,7 +100,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cd /build/executor; \
     CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --release \
         --bin aithericon-executor-service \
-        --features "opendal-s3 opendal-gcs opendal-azblob url-inputs docker python http http-cancel llm vault file-ops kreuzberg smtp"; \
+        --features "opendal-s3 opendal-gcs opendal-azblob url-inputs docker python http http-cancel llm vault file-ops kreuzberg surya smtp"; \
     mkdir -p /out; \
     cp target/release/aithericon-executor-service /out/aithericon-executor-service; \
     strip /out/aithericon-executor-service || true

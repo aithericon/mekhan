@@ -31,8 +31,9 @@ use crate::hardware_probe::{probe_hardware, HardwareAdvertisement};
 use crate::heartbeat::{heartbeat_loop, probe_loaded_models, HeartbeatConfig};
 use crate::ollama_subprocess::OllamaSubprocess;
 use crate::register::{
-    build_register_request, default_pool_name, default_pool_tenant_id, default_requester_role,
-    engine_caps_for_hardware, mint_register_jwt, register_on_boot,
+    build_register_request, default_kreuzberg_ocr_enabled, default_pool_name,
+    default_pool_tenant_id, default_requester_role, engine_caps_for_hardware, mint_register_jwt,
+    register_on_boot,
 };
 
 /// Explicit configuration for register-on-boot. Constructors:
@@ -64,6 +65,20 @@ pub struct PoolBootConfig {
     /// Override for [`probe_hardware`]'s `force` parameter. Read from
     /// `AITHERICON_FORCE_HARDWARE` at env-load time.
     pub force_hardware: Option<String>,
+    /// Phase-1a OCR-framing gate (env-driven via
+    /// `AITHERICON_EXECUTOR_KREUZBERG_ENABLED`). When `true`, the
+    /// executor's register payload AND every heartbeat tick advertise a
+    /// `services.kreuzberg = { healthy: true }` block — cap-routing's
+    /// resolver then grants `Capability::Ocr` on this pool's row. When
+    /// `false` (the default), the wire shape stays byte-identical to
+    /// the pre-OCR baseline.
+    ///
+    /// Single source of truth: both `register_as_pool`'s call to
+    /// [`build_register_request`] AND the spawned [`HeartbeatConfig`]
+    /// derive their kreuzberg flag from this one field — they MUST
+    /// stay aligned (see [`crate::heartbeat::HeartbeatConfig::kreuzberg_enabled`]
+    /// doc on why heartbeat parity matters).
+    pub kreuzberg_enabled: bool,
 }
 
 impl PoolBootConfig {
@@ -99,6 +114,7 @@ impl PoolBootConfig {
         let pool_url = std::env::var("AITHERICON_EXECUTOR_POOL_URL")
             .unwrap_or_else(|_| format!("http://127.0.0.1:{pool_port}"));
         let force_hardware = std::env::var("AITHERICON_FORCE_HARDWARE").ok();
+        let kreuzberg_enabled = default_kreuzberg_ocr_enabled();
 
         Ok(Some(Self {
             capability_routing_url,
@@ -108,6 +124,7 @@ impl PoolBootConfig {
             pool_name,
             pool_url,
             force_hardware,
+            kreuzberg_enabled,
         }))
     }
 }
@@ -151,6 +168,7 @@ pub async fn register_as_pool(
         &engine_capabilities,
         ollama_url,
         initial_loaded_models,
+        config.kreuzberg_enabled,
     );
     tracing::info!(
         pool_name = %config.pool_name,
@@ -180,6 +198,7 @@ pub async fn register_as_pool(
         hardware: hardware.clone(),
         engine_capabilities,
         heartbeat_token,
+        kreuzberg_enabled: config.kreuzberg_enabled,
     };
     let cancel_hb = cancel.clone();
     let ollama_hb = Arc::clone(&ollama);
@@ -197,12 +216,28 @@ pub async fn register_as_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Module-local serialisation for tests that mutate process env. Both
+    /// `from_env_short_circuits_when_disabled` and
+    /// `from_env_round_trips_kreuzberg_enabled_flag` touch the same env
+    /// vars (`AITHERICON_EXECUTOR_REGISTER_AS_POOL`, `CLOUD_LAYER_JWT_SECRET`,
+    /// `AITHERICON_EXECUTOR_KREUZBERG_ENABLED`). cargo test runs tests in
+    /// parallel by default, so without a lock the set/restore windows of
+    /// one test land inside the other and both flake. Holding this lock
+    /// for the entire test body makes them effectively sequential — no
+    /// new dep needed.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// `AITHERICON_EXECUTOR_REGISTER_AS_POOL=false` short-circuits boot —
     /// the executor service can opt out (useful for compute-agent-style
     /// deployments that should NOT register as an inference pool).
     #[test]
     fn from_env_short_circuits_when_disabled() {
+        // Poison-safe: if another env-mutating test panicked while
+        // holding the lock, recover the inner () and continue.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let prior = std::env::var("AITHERICON_EXECUTOR_REGISTER_AS_POOL").ok();
         std::env::set_var("AITHERICON_EXECUTOR_REGISTER_AS_POOL", "false");
         let cfg = PoolBootConfig::from_env().expect("env read succeeds");
@@ -213,6 +248,61 @@ mod tests {
         match prior {
             Some(p) => std::env::set_var("AITHERICON_EXECUTOR_REGISTER_AS_POOL", p),
             None => std::env::remove_var("AITHERICON_EXECUTOR_REGISTER_AS_POOL"),
+        }
+    }
+
+    /// `AITHERICON_EXECUTOR_KREUZBERG_ENABLED` round-trips through
+    /// `PoolBootConfig::from_env` to the `kreuzberg_enabled` field, so
+    /// `register_as_pool` then propagates that value into BOTH the
+    /// `build_register_request` call AND the spawned `HeartbeatConfig`.
+    /// Both env-paths (set + unset) asserted in one body to keep the
+    /// `ENV_LOCK` window contiguous.
+    #[test]
+    fn from_env_round_trips_kreuzberg_enabled_flag() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // Capture + restore the full env touched by this test so it stays
+        // hermetic against the rest of the suite.
+        let prior_kreuzberg = std::env::var("AITHERICON_EXECUTOR_KREUZBERG_ENABLED").ok();
+        let prior_register = std::env::var("AITHERICON_EXECUTOR_REGISTER_AS_POOL").ok();
+        let prior_secret = std::env::var("CLOUD_LAYER_JWT_SECRET").ok();
+
+        // Ensure required env is satisfied so from_env can return Ok(Some).
+        std::env::set_var("CLOUD_LAYER_JWT_SECRET", "test-secret-kreuzberg-round-trip");
+        std::env::remove_var("AITHERICON_EXECUTOR_REGISTER_AS_POOL");
+
+        // 1. enabled path.
+        std::env::set_var("AITHERICON_EXECUTOR_KREUZBERG_ENABLED", "true");
+        let cfg_on = PoolBootConfig::from_env()
+            .expect("env read succeeds")
+            .expect("register-as-pool not disabled");
+        assert!(
+            cfg_on.kreuzberg_enabled,
+            "kreuzberg_enabled=true round-trips from env=true"
+        );
+
+        // 2. disabled (unset) path — the production default.
+        std::env::remove_var("AITHERICON_EXECUTOR_KREUZBERG_ENABLED");
+        let cfg_off = PoolBootConfig::from_env()
+            .expect("env read succeeds")
+            .expect("register-as-pool not disabled");
+        assert!(
+            !cfg_off.kreuzberg_enabled,
+            "kreuzberg_enabled defaults false when env unset"
+        );
+
+        // Restore prior env (cross-test isolation).
+        match prior_kreuzberg {
+            Some(p) => std::env::set_var("AITHERICON_EXECUTOR_KREUZBERG_ENABLED", p),
+            None => std::env::remove_var("AITHERICON_EXECUTOR_KREUZBERG_ENABLED"),
+        }
+        match prior_register {
+            Some(p) => std::env::set_var("AITHERICON_EXECUTOR_REGISTER_AS_POOL", p),
+            None => std::env::remove_var("AITHERICON_EXECUTOR_REGISTER_AS_POOL"),
+        }
+        match prior_secret {
+            Some(p) => std::env::set_var("CLOUD_LAYER_JWT_SECRET", p),
+            None => std::env::remove_var("CLOUD_LAYER_JWT_SECRET"),
         }
     }
 }

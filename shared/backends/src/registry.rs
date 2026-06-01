@@ -146,6 +146,17 @@ pub const KREUZBERG_META: BackendMeta = BackendMeta {
     user_authorable: true,
 };
 
+pub const SURYA_META: BackendMeta = BackendMeta {
+    backend_type: ExecutionBackendType::Surya,
+    wire_name: "surya",
+    display_name: "Surya OCR",
+    icon: "scan-text",
+    dispatch_mode: DispatchMode::ExecutorJob,
+    schedulable: true,
+    resource_channel: ResourceChannel::None,
+    user_authorable: true,
+};
+
 pub const SMTP_META: BackendMeta = BackendMeta {
     backend_type: ExecutionBackendType::Smtp,
     wire_name: "smtp",
@@ -180,6 +191,7 @@ pub static BACKENDS: &[&BackendMeta] = &[
     &LLM_META,
     &FILE_OPS_META,
     &KREUZBERG_META,
+    &SURYA_META,
     &SMTP_META,
     &CATALOGUE_QUERY_META,
 ];
@@ -208,6 +220,7 @@ mod tests {
             ExecutionBackendType::Llm,
             ExecutionBackendType::FileOps,
             ExecutionBackendType::Kreuzberg,
+            ExecutionBackendType::Surya,
             ExecutionBackendType::Smtp,
             ExecutionBackendType::CatalogueQuery,
         ] {

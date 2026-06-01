@@ -289,17 +289,17 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     numbered.sort();
 
     let covered: std::collections::HashSet<&str> = SNAPSHOT_DEMOS.iter().copied().collect();
-    // Both skipped for the same reason: they reference a child template by id
-    // that the bare `compile_to_air` entry-point can't resolve (the publish
-    // handler runs the resolver). 09's `lookup_order` tool is a SubWorkflow
-    // (the 08a-order-lookup child), so it joins 06 here.
-    // 06/09 reference a child template by id the bare entry-point can't
-    // resolve. 12a-bo-catalog-trigger carries a Trigger node whose catalogue
-    // wiring is resolved at publish time, not by `compile_to_air` — same class
-    // of "needs the publish handler" exclusion.
+    // Skipped for the same reason: each references a child template or resource
+    // by id that the bare `compile_to_air` entry-point can't resolve (the
+    // publish handler runs the resolver). 09's `lookup_order` tool is a
+    // SubWorkflow (the 08a-order-lookup child), so it joins 06; 11-http-call's
+    // `http` backend references an http resource the resolver would supply;
+    // 12a-bo-catalog-trigger carries a Trigger node whose catalogue wiring is
+    // resolved at publish time — same class of "needs the publish handler".
     let documented_skip: std::collections::HashSet<&str> = [
         "06-subworkflow",
         "09-agent-tool-loop",
+        "11-http-call",
         "12a-bo-catalog-trigger",
     ]
     .into_iter()
