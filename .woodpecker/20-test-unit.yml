@@ -1,0 +1,44 @@
+# =============================================================================
+# Test · Tier 1 — UNIT (manual only)
+# =============================================================================
+# Fast, no external deps: in-crate Rust `#[cfg(test)]` modules + frontend
+# vitest. No Postgres / NATS / S3 / engine required.
+#
+# MANUAL ONLY — `event: manual` and nothing else. This pipeline never runs on
+# push and is not wired into build/deploy (no cross-pipeline depends_on), so
+# triggering it from the Woodpecker UI cannot disturb any other pipeline.
+#
+# Recipes live in just/ci.just (single source of truth):
+#   - test-unit-rust       cargo test --workspace --lib --bins
+#   - test-frontend-unit   pnpm vitest
+# =============================================================================
+
+when:
+  - event: manual
+
+labels:
+  role: test
+
+steps:
+  - name: test-unit-rust
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
+    volumes:
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+    commands:
+      - just ci::test-unit-rust
+    depends_on: []
+
+  - name: test-frontend-unit
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+    volumes:
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+    commands:
+      - just ci::test-frontend-unit
+    depends_on: []

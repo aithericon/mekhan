@@ -1,0 +1,44 @@
+# =============================================================================
+# Test · Tier 3 — E2E (manual only)
+# =============================================================================
+# Brings up the same infra + executor + engine + mekhan as 22-test-integration
+# (shared just/scripts/ci-stack-up.sh), plus the SvelteKit app, and runs the
+# Playwright browser specs under app/tests/e2e/ against the served app. The
+# recipe always tears the stack down (EXIT trap).
+#
+# MANUAL ONLY — `event: manual` and nothing else. Never runs on push, no
+# cross-pipeline depends_on, so it cannot disturb build/deploy.
+#
+# Runner requirements (same Docker + compose-network wiring as
+# 22-test-integration — see its header for the worker details; additionally
+# pulls Playwright's chromium via `playwright install --with-deps`, which needs
+# apt/root in the builder image). Still UNPROVEN on the CI runner — validate
+# with one manual run before relying on it.
+#
+# The heavier real-Zitadel auth e2e is a SEPARATE manual lane —
+# see 60-e2e-zitadel.yml.disabled / just ci::test-e2e-zitadel.
+#
+# All logic is in just/ci.just::test-e2e — keep changes there.
+# =============================================================================
+
+when:
+  - event: manual
+
+labels:
+  role: test
+  host: worker-hetzner
+
+steps:
+  - name: test-e2e
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
+      NPM_CONFIG_CACHE: /var/lib/ci-jobs/cache/npm
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+    commands:
+      - just ci::test-e2e
+    depends_on: []
