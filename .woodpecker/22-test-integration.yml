@@ -1,0 +1,47 @@
+# =============================================================================
+# Test · Tier 2 — INTEGRATION (manual only)
+# =============================================================================
+# Brings up the infra subset (Postgres + NATS + vault + rustfs) from the proven
+# docker-compose.yml, wires this step onto the compose network for DNS access,
+# starts the executor + engine + mekhan daemons in-step pointed at it, and runs
+# `cargo test --workspace` — so the service/tests/*_e2e.rs integration tests
+# connect instead of panicking. The recipe always tears the stack down (EXIT
+# trap). All logic is in just/ci.just::test-integration + ci-stack-up.sh.
+#
+# MANUAL ONLY — `event: manual` and nothing else. Never runs on push, no
+# cross-pipeline depends_on, so it cannot disturb build/deploy.
+#
+# Why no host-networking hack: the worker uses the Woodpecker DOCKER backend
+# (confirmed in HetznerCluster/layers/06c1_woodpecker_worker — agent v3.13.0,
+# WOODPECKER_BACKEND=docker, host /var/run/docker.sock mounted, label
+# host=worker-hetzner). The docker backend doesn't expose host networking to
+# pipeline YAML, and a Woodpecker `services:` block can't pass the nats
+# `--jetstream` / vault `-dev` args. So we reuse compose + `docker network
+# connect` instead (see ci-stack-up.sh).
+#
+# STILL UNPROVEN on the runner — one manual run is needed to confirm the
+# `docker network connect <step-container>` step works under this agent and
+# that the stateless node has headroom to compile the three Rust daemons.
+# Requirement that survives: docker.sock must be mounted (below).
+# =============================================================================
+
+when:
+  - event: manual
+
+labels:
+  role: test
+  host: worker-hetzner
+
+steps:
+  - name: test-integration
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      CARGO_HOME: /var/lib/ci-jobs/cache/cargo
+      CARGO_TARGET_DIR: /var/lib/ci-jobs/cache/target/mekhan
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/ci-jobs/cache:/var/lib/ci-jobs/cache
+    commands:
+      - just ci::test-integration
+    depends_on: []

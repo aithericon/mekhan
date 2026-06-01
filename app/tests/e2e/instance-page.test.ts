@@ -114,14 +114,14 @@ function setupRoutes(
 	stateResponse: unknown
 ) {
 	return Promise.all([
-		page.route(`**/api/instances/${INSTANCE_ID}`, (route) => {
+		page.route(`**/api/v1/instances/${INSTANCE_ID}`, (route) => {
 			if (route.request().method() === 'GET') {
 				route.fulfill({ json: mockInstance });
 			} else {
 				route.continue();
 			}
 		}),
-		page.route(`**/api/instances/${INSTANCE_ID}/state`, (route) => {
+		page.route(`**/api/v1/instances/${INSTANCE_ID}/state`, (route) => {
 			route.fulfill({ json: stateResponse });
 		})
 	]);
@@ -218,14 +218,14 @@ test.describe('Instance Page', () => {
 		const createdInstance = { ...mockInstance, status: 'created', started_at: null, completed_at: null };
 		let stateFetched = false;
 
-		await page.route(`**/api/instances/${INSTANCE_ID}`, (route) => {
+		await page.route(`**/api/v1/instances/${INSTANCE_ID}`, (route) => {
 			if (route.request().method() === 'GET') {
 				route.fulfill({ json: createdInstance });
 			} else {
 				route.continue();
 			}
 		});
-		await page.route(`**/api/instances/${INSTANCE_ID}/state`, (route) => {
+		await page.route(`**/api/v1/instances/${INSTANCE_ID}/state`, (route) => {
 			stateFetched = true;
 			route.fulfill({ json: {} });
 		});
