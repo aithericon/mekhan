@@ -589,6 +589,49 @@ mod tests {
         }
     }
 
+    /// A `LeaseScope`'s `lease.scheduler` (the held datacenter alias) MUST
+    /// survive graph→Y.Doc→graph: the editor renders its datacenter picker off
+    /// the Y.Doc, and a drop shows "no datacenter selected" against a seeded
+    /// demo whose disk fixture set it (same class as the loop-lease Yjs drop).
+    #[test]
+    fn lease_scope_lease_survives_ydoc_roundtrip() {
+        let graph = WorkflowGraph {
+            nodes: vec![WorkflowNode {
+                id: "lease".to_string(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: Position { x: 0.0, y: 0.0 },
+                data: WorkflowNodeData::LeaseScope {
+                    label: "GPU Lease".to_string(),
+                    description: None,
+                    lease: crate::models::template::LeaseBinding {
+                        scheduler: "nomad_dc".to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: Some(640.0),
+                height: Some(340.0),
+            }],
+            edges: vec![],
+            viewport: None,
+            instance_concurrency: Default::default(),
+            definitions: Default::default(),
+            default_scheduler: None,
+        };
+
+        let rt = doc_to_graph(&graph_to_doc(&graph)).expect("parse Y.Doc");
+        match &rt.nodes[0].data {
+            WorkflowNodeData::LeaseScope { lease, .. } => {
+                assert_eq!(
+                    lease.scheduler, "nomad_dc",
+                    "lease.scheduler must survive the Y.Doc round-trip (editor picker reads it)"
+                );
+            }
+            other => panic!("expected LeaseScope, got {other:?}"),
+        }
+    }
+
     /// Locks in that AutomatedStep `output` (and `input`) survive a Y.Doc
     /// round-trip. Pre-fix the seeder wrote a graph with output ports but
     /// the Y.Doc init dropped them, so the editor's port panel rendered
