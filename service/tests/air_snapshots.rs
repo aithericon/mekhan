@@ -58,7 +58,7 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "13-dynamic-form",
     "14-streaming-output",
     "15-stream-python-body",
-    "16-stream-map",
+    "17-stream-map",
 ];
 
 fn repo_root() -> PathBuf {
@@ -259,8 +259,8 @@ fn snapshot_15_stream_python_body() {
 }
 
 #[test]
-fn snapshot_16_stream_map() {
-    run("16-stream-map");
+fn snapshot_17_stream_map() {
+    run("17-stream-map");
 }
 
 /// Catch-all: if a demo is added to the repo and someone forgets to wire
