@@ -2906,7 +2906,7 @@ export interface components {
          *     Both the mekhan compiler and the executor registry key off it.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query" | "postgres";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -3968,6 +3968,18 @@ export interface components {
             /** @description Passwords for encrypted PDFs (tried in order). */
             passwords?: string[] | null;
         };
+        /**
+         * @description Whether the step reads or writes.
+         *
+         *     `Read` (the default) runs the statement in a read-only transaction
+         *     (`SET LOCAL transaction_read_only = on`) and requires a non-empty
+         *     `projection`. `Write` runs read-write and surfaces `rows_affected` from
+         *     the command tag; `projection` is optional and only validates `RETURNING`
+         *     columns when present. This — not the legacy `read_only` flag — is the
+         *     source of truth for runtime read-only behaviour.
+         * @enum {string}
+         */
+        PgOperation: "read" | "write";
         /** @description A named phase within an execution. */
         Phase: {
             /**
@@ -4064,45 +4076,57 @@ export interface components {
          *
          *     Deserialised from `ExecutionSpec.config` at runtime by the executor;
          *     validated against this shape at compile-time by the mekhan compiler.
-         *
-         *     See `docs/proposals/postgres-backend.md` (A1 spec § 2) for the full field
-         *     reference.
          */
         PostgresConfig: {
             /**
+             * @description Read vs write. Defaults to `Read`. The source of truth for the
+             *     runtime read-only transaction mode (supersedes `read_only`).
+             */
+            operation?: components["schemas"]["PgOperation"];
+            /**
              * @description Ordered values bound to `$1`, `$2`, ...
              *
-             *     Each entry is a JSON scalar (string / number / bool / null).
-             *     Arrays / objects are intentionally **not** supported by the initial
-             *     scope — they require explicit JSON-typed parameters and complicate the
-             *     type coercion path. A1 spec § 2 lists this as a follow-up.
+             *     Each entry is a literal JSON value (scalar / array / object) OR a
+             *     whole-placeholder `"{{slug.field}}"` reference the backend resolves
+             *     against the staged producer envelopes.
              */
             params?: unknown[];
             /**
-             * @description Which named connection pool to draw from. Resolved by the executor's
-             *     per-process `PostgresBackendsConfig.pools` map; when absent, the
-             *     `default_pool` from that map is used.
+             * @description Deprecated named-pool selector retained for back-compat with older
+             *     configs. The backend now keys its `PgPool` cache by connection
+             *     identity, not by a named pool.
              */
             pool?: string | null;
             /**
              * @description Ordered list of column names expected in the result rows.
              *
-             *     The backend verifies each column exists in the row description; an
-             *     unexpected or missing column is a `BackendError`.
+             *     Required for `read` (validation enforced in the executor/decl, not the
+             *     DTO); optional for `write`, where it validates `RETURNING` columns when
+             *     present. The DTO just carries the list (default empty).
              */
-            projection: string[];
+            projection?: string[];
             /**
-             * @description The parametrised SQL statement (use `$1`, `$2`, ... placeholders —
-             *     **never** string-interpolated values).
+             * @description The parametrised SQL statement.
+             *
+             *     Uses `$1`, `$2`, ... placeholders for values (bound from `params` —
+             *     **never** string-interpolated). May carry `{{ident:slug.field}}`
+             *     identifier references, which the backend resolves and emits as
+             *     double-quoted identifiers.
              */
             query: string;
             /**
-             * @description Whether the transaction is read-only.
-             *
-             *     Initial scope hard-locks this to `true`; the backend rejects
-             *     `read_only = false` until an allow-list arrives in a later iteration.
+             * @description **Deprecated** — kept for back-compat default. No longer the source of
+             *     truth for read-only behaviour; use `operation` instead.
              */
             read_only?: boolean;
+            /**
+             * @description Which workspace `postgres` resource binds the connection. Required —
+             *     this is the connection binding; the compiler errors if absent. The
+             *     resolved resource (host/port/database/username/password/sslmode) is
+             *     overlaid into the config before execution.
+             */
+            resource_alias: string;
+            rls_context?: null | components["schemas"]["RlsContext"];
             /**
              * Format: int64
              * @description Maximum number of rows materialised.
@@ -4547,6 +4571,27 @@ export interface components {
              *     retries (a single failure routes straight to the error output).
              */
             maxRetries?: number;
+        };
+        /**
+         * @description Optional opt-in row-level-security context applied via
+         *     `SELECT set_config(<setting>, <value>, true)` (SET LOCAL scope) before the
+         *     statement runs. Only injected when present.
+         *
+         *     `setting` is validated as a Postgres identifier by the backend/decl;
+         *     `value` may be a literal or a `{{slug.field}}` reference resolved at
+         *     runtime. Validation lives in the executor/decl, not the DTO.
+         */
+        RlsContext: {
+            /**
+             * @description The GUC setting name to apply (e.g. `app.current_tenant`). Validated as
+             *     an identifier.
+             */
+            setting: string;
+            /**
+             * @description The value to set. Literal, or a `{{slug.field}}` reference resolved at
+             *     runtime against the staged producer envelopes.
+             */
+            value: string;
         };
         /**
          * @description Message role.
@@ -5782,7 +5827,6 @@ export interface components {
             accumulators?: components["schemas"]["LoopAccumulator"][];
             description?: string | null;
             label: string;
-            lease?: null | components["schemas"]["LeaseBinding"];
             loopCondition: string;
             /** Format: int32 */
             maxIterations: number;

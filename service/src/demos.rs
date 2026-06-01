@@ -2097,6 +2097,87 @@ mod tests {
         );
     }
 
+    /// The Postgres-backend demo (`19-postgres-node`) must parse + compile
+    /// through the same AIR pipeline `/api/v1/templates/{id}/publish` uses.
+    /// Pins the resource-bound topology: a READ step and a WRITE step both
+    /// binding the `demo_pg` postgres resource (ConfigOverlay), each borrowing
+    /// a `{{ start.* }}` param. The compiler must stage the Start producer
+    /// envelope + the resource envelope and carry the `postgres` discriminator.
+    #[test]
+    fn postgres_node_demo_loads_and_compiles_with_resource() {
+        use crate::compiler::node_files_inline;
+        use crate::compiler::resource_refs::{KnownResource, KnownResources};
+        use crate::compiler::{compile_to_air_with_options, CompileArtifacts, CompileOptions};
+        use std::collections::HashMap;
+        use uuid::Uuid;
+
+        let root = repo_root().join("demos");
+        let demo = load_demo(&root.join("19-postgres-node")).expect("19-postgres-node must load");
+        assert_eq!(demo.metadata.name, "19 · Postgres Node");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000170"
+        );
+
+        let files = node_files_inline(&demo.files);
+        // Both steps declare `resource_alias: "demo_pg"`; pre-populate the
+        // workspace-resolved map the publish path would pass.
+        let mut known = KnownResources::new();
+        known.insert(
+            "demo_pg".to_string(),
+            KnownResource {
+                id: Uuid::new_v4(),
+                type_name: "postgres".to_string(),
+                latest_version: 1,
+                public_config: serde_json::Value::Null,
+            },
+        );
+        let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let CompileArtifacts { air, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &inline,
+                known_resources: &known,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("19-postgres-node must compile to AIR: {e:?}"));
+
+        let transitions = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions");
+        let prepare = transitions
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("read_widgets/prepare"))
+            .expect("read_widgets/prepare exists");
+        let logic_node = prepare.get("logic").expect("read_widgets/prepare logic");
+        let source = logic_node
+            .get("Rhai")
+            .and_then(|l| l.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| logic_node.get("source").and_then(|s| s.as_str()))
+            .expect("Rhai source");
+
+        // The `{{ start.min_id }}` param borrow stages the Start producer
+        // envelope; the bound `demo_pg` resource stages its envelope.
+        assert!(
+            source.contains("start.json"),
+            "compiled AIR must stage start.json for the postgres param borrow; source:\n{source}"
+        );
+        assert!(
+            source.contains("demo_pg.json"),
+            "compiled AIR must stage demo_pg.json (resource envelope); source:\n{source}"
+        );
+        assert!(
+            source.contains("\"postgres\""),
+            "compiled AIR must carry the postgres backend discriminator"
+        );
+    }
+
     /// The Bayesian-optimization loop demo (`12-bo-loop`) must parse through
     /// the same types `/api/v1/templates` accepts. Pins the BO topology: a
     /// Loop carrying four accumulators (observations / f_best / best_a /

@@ -73,6 +73,8 @@ use utoipa::OpenApi;
             aithericon_executor_backend_configs::process::ProcessConfig,
             aithericon_executor_backend_configs::python::PythonConfig,
             aithericon_executor_backend_configs::postgres::PostgresConfig,
+            aithericon_executor_backend_configs::postgres::PgOperation,
+            aithericon_executor_backend_configs::postgres::RlsContext,
             aithericon_executor_backend_configs::kreuzberg::KreuzbergConfig,
             aithericon_executor_backend_configs::kreuzberg::ExtractionMode,
             aithericon_executor_backend_configs::kreuzberg::OcrSettings,

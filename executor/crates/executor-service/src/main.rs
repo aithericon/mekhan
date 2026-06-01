@@ -31,6 +31,8 @@ use aithericon_executor_python::cache::{BuildRequest, VenvCache};
 use aithericon_executor_python::PythonBackend;
 #[cfg(feature = "smtp")]
 use aithericon_executor_smtp::SmtpBackend;
+#[cfg(feature = "postgres")]
+use aithericon_executor_postgres::PostgresBackend;
 #[cfg(feature = "opendal")]
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
@@ -617,6 +619,11 @@ fn register_executor_backend(
         "smtp" => {
             info!("smtp backend registered");
             registry.register(SmtpBackend::new())
+        }
+        #[cfg(feature = "postgres")]
+        "postgres" => {
+            info!("postgres backend registered");
+            registry.register(PostgresBackend::new())
         }
         other => {
             info!(

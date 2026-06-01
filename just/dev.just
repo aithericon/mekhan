@@ -34,7 +34,7 @@ work_dir  := ".dev/work"
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,vault"
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,postgres,vault"
 
 # Local infra + daemon endpoints. These read the per-worktree env exported by
 # just/scripts/dev-ports.sh (via direnv / .envrc), falling back to the historical
@@ -488,6 +488,25 @@ httpbin-down:
     else
       echo "  · httpbin not running"
     fi
+
+# ── Postgres demo fixture (19-postgres-node) ─────────────────────────────────
+#
+# The `19-postgres-node` demo reads/writes a DEDICATED `demo_pg.widgets` fixture
+# table (NEVER mekhan's own application tables). This applies the demo's
+# idempotent seed against the dev Postgres so the demo + its `mekhan test`
+# fixtures have a stable baseline (schema `demo_pg`, three rows: alpha/bravo/
+# charlie). Re-run any time to reset to baseline.
+#
+# Uses the same {{database_url}} the rest of dev points at (slot-aware via env).
+# The `demo_pg` resource the demo binds hardcodes the slot-0 port (15439); on a
+# slotted worktree edit demos/resources/demo_pg.json to match before going live.
+pg-demo-seed:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    echo "▶ seeding demo_pg.widgets fixture into {{database_url}}"
+    psql "{{database_url}}" -v ON_ERROR_STOP=1 -f demos/19-postgres-node/seed.sql
+    echo "  ✓ demo_pg.widgets seeded (schema demo_pg, 3 baseline rows)"
 
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
 

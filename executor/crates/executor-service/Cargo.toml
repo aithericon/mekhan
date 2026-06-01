@@ -35,6 +35,7 @@ aithericon-executor-file-ops = { workspace = true, optional = true }
 aithericon-executor-kreuzberg = { workspace = true, optional = true }
 aithericon-executor-surya = { workspace = true, optional = true }
 aithericon-executor-smtp = { workspace = true, optional = true }
+aithericon-executor-postgres = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
 # Shared backend metadata — drives `build_executor`'s registration loop.
 aithericon-backends = { workspace = true }
@@ -56,6 +57,7 @@ file-ops = ["dep:aithericon-executor-file-ops", "opendal", "aithericon-executor-
 kreuzberg = ["dep:aithericon-executor-kreuzberg", "aithericon-executor-kreuzberg/full"]
 surya = ["dep:aithericon-executor-surya"]
 smtp = ["dep:aithericon-executor-smtp"]
+postgres = ["dep:aithericon-executor-postgres"]
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }

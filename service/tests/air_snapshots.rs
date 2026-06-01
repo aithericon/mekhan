@@ -295,12 +295,17 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     // backing net the bare `compile_to_air` has no KnownResources to resolve; its
     // compiled shape is pinned by `compiler_e2e`'s lease-scope tests and the live
     // seed (publish path) proves it compiles.
+    // 19-postgres-node binds the `demo_pg` postgres resource via ConfigOverlay —
+    // bare `compile_to_air` has no KnownResources to resolve it; its compile is
+    // pinned by `demos::tests::postgres_node_demo_loads_and_compiles_with_resource`
+    // (which passes a known `demo_pg`) and the live seed proves the publish path.
     let documented_skip: std::collections::HashSet<&str> = [
         "06-subworkflow",
         "09-agent-tool-loop",
         "11-http-call",
         "12a-bo-catalog-trigger",
         "16-leased-gpu",
+        "19-postgres-node",
     ]
     .into_iter()
     .collect();

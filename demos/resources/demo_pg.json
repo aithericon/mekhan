@@ -1,0 +1,13 @@
+{
+  "path": "demo_pg",
+  "resource_type": "postgres",
+  "display_name": "Demo Postgres (dev)",
+  "config": {
+    "host": "localhost",
+    "port": 15439,
+    "database": "mekhan",
+    "username": "mekhan",
+    "password": "mekhan",
+    "sslmode": "disable"
+  }
+}

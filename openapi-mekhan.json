@@ -8005,7 +8005,8 @@
           "kreuzberg",
           "surya",
           "smtp",
-          "catalogue_query"
+          "catalogue_query",
+          "postgres"
         ]
       },
       "ExecutionSpecConfig": {
@@ -10711,6 +10712,14 @@
           }
         }
       },
+      "PgOperation": {
+        "type": "string",
+        "description": "Whether the step reads or writes.\n\n`Read` (the default) runs the statement in a read-only transaction\n(`SET LOCAL transaction_read_only = on`) and requires a non-empty\n`projection`. `Write` runs read-write and surfaces `rows_affected` from\nthe command tag; `projection` is optional and only validates `RETURNING`\ncolumns when present. This — not the legacy `read_only` flag — is the\nsource of truth for runtime read-only behaviour.",
+        "enum": [
+          "read",
+          "write"
+        ]
+      },
       "Phase": {
         "type": "object",
         "description": "A named phase within an execution.",
@@ -10864,38 +10873,57 @@
       },
       "PostgresConfig": {
         "type": "object",
-        "description": "Configuration for a single Postgres job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.\n\nSee `docs/proposals/postgres-backend.md` (A1 spec § 2) for the full field\nreference.",
+        "description": "Configuration for a single Postgres job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.",
         "required": [
-          "query",
-          "projection"
+          "resource_alias",
+          "query"
         ],
         "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/PgOperation",
+            "description": "Read vs write. Defaults to `Read`. The source of truth for the\nruntime read-only transaction mode (supersedes `read_only`)."
+          },
           "params": {
             "type": "array",
             "items": {},
-            "description": "Ordered values bound to `$1`, `$2`, ...\n\nEach entry is a JSON scalar (string / number / bool / null).\nArrays / objects are intentionally **not** supported by the initial\nscope — they require explicit JSON-typed parameters and complicate the\ntype coercion path. A1 spec § 2 lists this as a follow-up."
+            "description": "Ordered values bound to `$1`, `$2`, ...\n\nEach entry is a literal JSON value (scalar / array / object) OR a\nwhole-placeholder `\"{{slug.field}}\"` reference the backend resolves\nagainst the staged producer envelopes."
           },
           "pool": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Which named connection pool to draw from. Resolved by the executor's\nper-process `PostgresBackendsConfig.pools` map; when absent, the\n`default_pool` from that map is used."
+            "description": "Deprecated named-pool selector retained for back-compat with older\nconfigs. The backend now keys its `PgPool` cache by connection\nidentity, not by a named pool."
           },
           "projection": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Ordered list of column names expected in the result rows.\n\nThe backend verifies each column exists in the row description; an\nunexpected or missing column is a `BackendError`."
+            "description": "Ordered list of column names expected in the result rows.\n\nRequired for `read` (validation enforced in the executor/decl, not the\nDTO); optional for `write`, where it validates `RETURNING` columns when\npresent. The DTO just carries the list (default empty)."
           },
           "query": {
             "type": "string",
-            "description": "The parametrised SQL statement (use `$1`, `$2`, ... placeholders —\n**never** string-interpolated values)."
+            "description": "The parametrised SQL statement.\n\nUses `$1`, `$2`, ... placeholders for values (bound from `params` —\n**never** string-interpolated). May carry `{{ident:slug.field}}`\nidentifier references, which the backend resolves and emits as\ndouble-quoted identifiers."
           },
           "read_only": {
             "type": "boolean",
-            "description": "Whether the transaction is read-only.\n\nInitial scope hard-locks this to `true`; the backend rejects\n`read_only = false` until an allow-list arrives in a later iteration."
+            "description": "**Deprecated** — kept for back-compat default. No longer the source of\ntruth for read-only behaviour; use `operation` instead."
+          },
+          "resource_alias": {
+            "type": "string",
+            "description": "Which workspace `postgres` resource binds the connection. Required —\nthis is the connection binding; the compiler errors if absent. The\nresolved resource (host/port/database/username/password/sslmode) is\noverlaid into the config before execution."
+          },
+          "rls_context": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RlsContext",
+                "description": "Optional opt-in row-level-security context. Injected via\n`set_config(..., true)` (SET LOCAL) only when present."
+              }
+            ]
           },
           "row_limit": {
             "type": "integer",
@@ -11724,6 +11752,24 @@
             "format": "int32",
             "description": "Maximum number of retry attempts after the initial run. `0` disables\nretries (a single failure routes straight to the error output).",
             "minimum": 0
+          }
+        }
+      },
+      "RlsContext": {
+        "type": "object",
+        "description": "Optional opt-in row-level-security context applied via\n`SELECT set_config(<setting>, <value>, true)` (SET LOCAL scope) before the\nstatement runs. Only injected when present.\n\n`setting` is validated as a Postgres identifier by the backend/decl;\n`value` may be a literal or a `{{slug.field}}` reference resolved at\nruntime. Validation lives in the executor/decl, not the DTO.",
+        "required": [
+          "setting",
+          "value"
+        ],
+        "properties": {
+          "setting": {
+            "type": "string",
+            "description": "The GUC setting name to apply (e.g. `app.current_tenant`). Validated as\nan identifier."
+          },
+          "value": {
+            "type": "string",
+            "description": "The value to set. Literal, or a `{{slug.field}}` reference resolved at\nruntime against the staged producer envelopes."
           }
         }
       },
@@ -14337,17 +14383,6 @@
               "label": {
                 "type": "string"
               },
-              "lease": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/LeaseBinding",
-                    "description": "Optional datacenter lease held for the WHOLE loop (acquire once at\nenter, reuse across every iteration, release once on exit). Declared,\nnot inferred — a Loop holds a lease only when the author explicitly\nbinds one. When set, `lower_loop` hoists the\nclaim/grant/register/release handshake to loop scope (the same\nmachinery `lower_pooled_body` uses per-step) so ONE allocation backs\nall iterations; the held lease (incl. `alloc_id`) is parked into the\nloop's `p_<id>_data` envelope under a `lease` key, so body iterations\nand downstream blocks borrow `<loop_slug>.lease.<field>` (e.g.\n`<loop_slug>.lease.alloc_id`) through the standard read-arc pipeline."
-                  }
-                ]
-              },
               "loopCondition": {
                 "type": "string"
               },
@@ -14389,7 +14424,7 @@
           },
           {
             "type": "object",
-            "description": "Container that holds ONE datacenter allocation for the duration of its\nbody. Decouples \"hold an allocation\" from \"loop\": any AutomatedStep\n(deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly\nor through intervening containers like a plain Loop — runs ON the held\nallocation by containment (no per-step `run_on_lease` flag). The lease is\nacquired once on enter and released once on exit; the held lease (incl.\n`executor_namespace` / `alloc_id`) is parked into the scope's\n`p_<id>_data` envelope under a `lease` key, so body steps and downstream\nblocks borrow `<scope_slug>.lease.<field>` through the standard read-arc\npipeline. Children attach via the same `body_in`/`body_out` interior\nhandles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`\nhandles connect to the outer flow.\n\nA leased Loop is exactly `LeaseScope { Loop { … } }`; Loop's `lease`\nremains as back-compat sugar.",
+            "description": "Container that holds ONE datacenter allocation for the duration of its\nbody. Decouples \"hold an allocation\" from \"loop\": any AutomatedStep\n(deployment `Scheduled { Submit }`) nested inside a LeaseScope — directly\nor through intervening containers like a plain Loop — runs ON the held\nallocation by containment (no per-step `run_on_lease` flag). The lease is\nacquired once on enter and released once on exit; the held lease (incl.\n`executor_namespace` / `alloc_id`) is parked into the scope's\n`p_<id>_data` envelope under a `lease` key, so body steps and downstream\nblocks borrow `<scope_slug>.lease.<field>` through the standard read-arc\npipeline. Children attach via the same `body_in`/`body_out` interior\nhandles as Loop (`parent_id == lease_scope.id`); the perimeter `in`/`out`\nhandles connect to the outer flow.\n\nTo hold ONE cluster allocation across loop iterations, compose\n`LeaseScope { Loop { … } }` — the scope acquires before the loop starts\nand releases after it exits.",
             "required": [
               "label",
               "lease",

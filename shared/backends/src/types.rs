@@ -39,6 +39,12 @@ pub enum ExecutionBackendType {
     /// job — the compiler lowers it to the engine's registered
     /// `catalogue_lookup` effect (input port `query`, output `results`).
     CatalogueQuery,
+    /// Resource-bound SQL against a workspace `postgres` resource. The bound
+    /// connection is overlaid into the resolved config (`ConfigOverlay`); the
+    /// backend builds/caches a `PgPool` keyed by connection identity. Inline-only
+    /// (not schedulable). Produces structured `rows` / `row_count` /
+    /// `rows_affected` output.
+    Postgres,
 }
 
 impl ExecutionBackendType {
@@ -57,6 +63,7 @@ impl ExecutionBackendType {
             Self::Surya => "surya",
             Self::Smtp => "smtp",
             Self::CatalogueQuery => "catalogue_query",
+            Self::Postgres => "postgres",
         }
     }
 
@@ -75,6 +82,7 @@ impl ExecutionBackendType {
             "surya" => Some(Self::Surya),
             "smtp" => Some(Self::Smtp),
             "catalogue_query" => Some(Self::CatalogueQuery),
+            "postgres" => Some(Self::Postgres),
             _ => None,
         }
     }
