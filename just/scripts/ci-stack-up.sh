@@ -32,24 +32,24 @@
 # If it ever fails, the readiness loops below time out with a clear message.
 # =============================================================================
 
-# ── Linker memory budget ─────────────────────────────────────────────────────
+# ── Linker memory + speed budget ─────────────────────────────────────────────
 # The CI node is a small autoscaled `stateless` box. `cargo test --workspace`
 # links DOZENS of integration-test binaries (each service/tests/*.rs is its own
 # crate that statically links the whole mekhan-service + deps — 257+ object
 # files), and running several `ld` invocations at once OOM-killed the linker
-# (`ld terminated with signal 9`). Two knobs keep peak RSS in budget:
+# (`ld terminated with signal 9`). Knobs that keep peak RSS in budget:
 #   • debuginfo=0 on the dev+test profiles — debug object files dominate link
 #     memory; dropping them shrinks every link (we don't need gdb in CI).
-#   • CARGO_BUILD_JOBS=1 — one rustc/link at a time, so peak memory is a single
-#     link (the daemon builds, which link one-at-a-time, already proved that
-#     fits). Override by exporting CARGO_BUILD_JOBS before the recipe if the
-#     node is bigger.
-# These are exported into the caller's shell, so the daemon builds (up-engine /
-# up-mekhan / up-executor) AND `cargo test` all see them — one consistent set of
-# flags keeps the shared CARGO_TARGET_DIR cache coherent (no rebuild thrash).
+#   • CARGO_BUILD_JOBS=2 — run two compiles/links at once (≈2× faster than the
+#     serial jobs=1 that first tamed the OOM). Safe now because debuginfo=0
+#     shrank each link. If it OOMs again, set CARGO_BUILD_JOBS=1 in the step
+#     env (.woodpecker/22-test-integration.yml) — it overrides this default.
+# Exported into the caller's shell, so the daemon builds (up-engine / up-mekhan
+# / up-executor) AND `cargo test` all see them — one consistent set of flags
+# keeps the shared CARGO_TARGET_DIR cache coherent (no rebuild thrash).
 export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
 export CARGO_PROFILE_TEST_DEBUG="${CARGO_PROFILE_TEST_DEBUG:-0}"
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 
 # Deterministic, per-pipeline project name → predictable network name and
 # clean teardown. CI_PIPELINE_NUMBER is set by Woodpecker; falls back for local.

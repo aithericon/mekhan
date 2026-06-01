@@ -128,8 +128,29 @@ test-integration:
     just dev::up-engine
     just dev::_wait-engine-stream
     just dev::up-mekhan
-    echo "▶ cargo test --workspace (against live stack)…"
-    cargo test --workspace --no-fail-fast
+    # Skip the integration tests that need capabilities this lane doesn't
+    # provide: a live LLM (ollama), a scheduler (Nomad/Slurm), or the executor
+    # actually running Python task bodies (needs python/uv + network). These
+    # belong in a separate capability-gated lane; running them here only
+    # produces noise. Everything else (control plane, compiler, persistence,
+    # collaboration, auth) runs against the live stack. Edit DENY to (un)gate.
+    #
+    # `cargo test --workspace` here == `-p mekhan-service` (the umbrella's only
+    # member), so we drive mekhan-service's lib unit tests + an allowlist of
+    # integration test targets (= all of service/tests/ minus DENY). Not
+    # building the skipped binaries also cuts compile time.
+    DENY="agent_loop_live air_snapshots automated_step_e2e causality_e2e \
+          http_borrow_e2e human_task_python_slug_access_e2e llm_smoke_demo_e2e \
+          scheduled_e2e scheduled_slurm_e2e showcase_demo_e2e step_executions_e2e"
+    args=(); skipped=()
+    for f in service/tests/*.rs; do
+      name="$(basename "$f" .rs)"
+      if printf '%s\n' $DENY | grep -qxF "$name"; then skipped+=("$name"); continue; fi
+      args+=(--test "$name")
+    done
+    echo "▶ skipping ${#skipped[@]} capability-gated tests: ${skipped[*]}"
+    echo "▶ cargo test -p mekhan-service --lib + ${#args[@]} integration targets (live stack)…"
+    cargo test -p mekhan-service --lib "${args[@]}" --no-fail-fast
 
 # Layer-2 real-Zitadel e2e: bring up the full stack, bootstrap Zitadel
 # (provisions the introspection API app + writes mekhan.local.toml), then
