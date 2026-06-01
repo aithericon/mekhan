@@ -173,6 +173,17 @@
 		const checked = (e.target as HTMLInputElement).checked;
 		onchange({ ...data, streamOutput: checked });
 	}
+
+	// Streaming input (reducer): make this step a long-lived in-process reducer
+	// fed the upstream producer's chunks over IPC (`aithericon.chunks()`). Bound
+	// to the node's `streamInput` flag; the compiler seeds the job at net entry,
+	// exposes a "stream" INPUT handle, and routes the control `in` edge as EOF.
+	const streamInput = $derived(data.streamInput ?? false);
+
+	function toggleStreamInput(e: Event) {
+		const checked = (e.target as HTMLInputElement).checked;
+		onchange({ ...data, streamInput: checked });
+	}
 </script>
 
 <div class="space-y-1.5">
@@ -234,6 +245,29 @@
 	<p class="text-sm text-muted-foreground">
 		Emits a <code class="font-mono">stream</code> handle that fires once per
 		<code class="font-mono">set_output(…)</code> call during execution.
+	</p>
+</div>
+
+<!--
+	Streaming input (reducer). Opts this step into being a long-lived stateful
+	reducer fed the producer's chunks over IPC. Wire producer.stream →
+	this.stream and producer.out → this.in.
+-->
+<div class="space-y-1 pt-3 border-t border-border/40">
+	<label class="flex items-center gap-2 text-sm">
+		<input
+			type="checkbox"
+			checked={streamInput}
+			disabled={readonly}
+			onchange={toggleStreamInput}
+		/>
+		<span>Stream input (reducer)</span>
+	</label>
+	<p class="text-sm text-muted-foreground">
+		Exposes a <code class="font-mono">stream</code> input handle; the step is seeded
+		at net entry and reads chunks via <code class="font-mono">aithericon.chunks()</code>.
+		Wire the producer's <code class="font-mono">stream</code> handle here and its
+		<code class="font-mono">out</code> to this node's <code class="font-mono">in</code> (the EOF trigger).
 	</p>
 </div>
 

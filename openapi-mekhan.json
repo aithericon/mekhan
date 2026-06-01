@@ -12329,67 +12329,6 @@
           }
         }
       },
-      "StreamDispatch": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "rhai"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "sequentialBody"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "parallelBody"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "mode"
-            ],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "liveReduce"
-                ]
-              }
-            }
-          }
-        ],
-        "description": "How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.\nTagged on `mode` (camelCase), mirroring the other config enums.\n\n- `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of\n  `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer\n  template omits `dispatch` and decodes to this — anything else would force a\n  body and break those templates at publish.\n- `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at\n  a time in strict stream-sequence order (a single-permit lock + a\n  next-expected-sequence guard), then the N results are reduced.\n- `ParallelBody`: same per-chunk body, dispatched map-style concurrently;\n  results are re-ordered + reduced at the gather barrier.\n- `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not\n  implemented in this phase — the lowering rejects it cleanly."
-      },
       "StreamReduce": {
         "oneOf": [
           {
@@ -12463,7 +12402,7 @@
             }
           }
         ],
-        "description": "How a `StreamConsumer` folds the drained chunks into its single output\ntoken. Tagged on `kind` (camelCase), mirroring the serde conventions of the\nother config enums. Each variant selects the gather barrier's reduce Rhai in\n`compiler/lower/stream_consumer.rs`."
+        "description": "How a `StreamFold` folds the drained chunks into its single output token.\nTagged on `kind` (camelCase), mirroring the serde conventions of the other\nconfig enums. Each variant selects the gather barrier's reduce Rhai in\n`compiler/lower/stream_fold.rs`."
       },
       "TaskBlockConfig": {
         "oneOf": [
@@ -14240,6 +14179,10 @@
                 "$ref": "#/components/schemas/RetryPolicy",
                 "description": "Retry behaviour on execution failure/timeout. Defaults to 3\nimmediate retries (the historical hardcoded value), so existing\ntemplates keep their prior semantics without re-authoring."
               },
+              "streamInput": {
+                "type": "boolean",
+                "description": "Opt-in streaming CONSUMER. When `true`, the node exposes a second\nINPUT port \"stream\" and becomes a long-lived stateful reducer: it is\nseeded at net entry, receives the upstream producer's chunks over IPC\n(`aithericon.chunks()`), and folds them in-process. Wire the\nproducer's `stream` handle to this node's `stream` input and its\ncontrol `out` to this node's `in` (the control token's arrival is the\nend-of-stream / EOF trigger, carrying `stream_count`). The compiler\nderives the executor `feed_chunks` flag from this. Plain `bool` +\n`#[serde(default)]` ⇒ existing templates round-trip unchanged."
+              },
               "streamOutput": {
                 "type": "boolean",
                 "description": "PROTOTYPE — opt-in streaming side-channel. When `true`, the node\nexposes a second output port \"stream\" and the compiler synthesizes a\nSignal place `p_{id}_stream` that receives ONE token per executor\n`EventCategory::Log` event (Python `log_info()/log_debug()/…`). An\nedge from the \"stream\" handle fires the downstream node once per log\ntoken; the normal \"out\" control token still governs termination.\nPlain `bool` + `#[serde(default)]` ⇒ existing templates (field\nabsent → `false`) round-trip unchanged (same precedent as\n`retry_policy`/`deployment_model`)."
@@ -14457,7 +14400,6 @@
             "description": "Dynamic data-parallel map-reduce. Scatters the collection at `itemsRef`\ninto N item tokens (one per element), runs a BODY sub-graph of child\nnodes (`parent_id == map.id`, attached via the same `body_in`/`body_out`\nhandle mechanism as Loop) once per element, gathers the N results, and\nreduces them to one collection token parked at `p_<id>_data`. Downstream\nblocks borrow the gathered collection as `<map_slug>[*].<field>` (the\nRepeater `[*]` machinery generalized to any Array-typed parked producer;\n`<map_slug>.<field>` without `[*]` is a hard `MapRefMissingStar` error).\nThe scatter writes the item namespace ONTO each body token (namespace-\non-token, v1) so body guards / Python read `item.<field>` directly.",
             "required": [
               "label",
-              "itemsRef",
               "resultVar",
               "type"
             ],
@@ -14474,7 +14416,7 @@
               },
               "itemsRef": {
                 "type": "string",
-                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`."
+                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`. IGNORED when\n`stream_source` is set (a streaming Map sources elements from its\n`stream`/`control` edges, not a static array)."
               },
               "label": {
                 "type": "string"
@@ -14494,6 +14436,10 @@
                 "type": "string",
                 "description": "Field on each body output token whose value becomes the gathered\nelement (the per-iteration result the reduce collects)."
               },
+              "streamSource": {
+                "type": "boolean",
+                "description": "When `true`, this Map is a STREAMING map: instead of scattering the\nstatic `items_ref` array, it ingests a streaming producer's chunks\n(one element per chunk over the `stream` handle) and sizes its gather\nbarrier on the runtime `stream_count` (from the `control` handle).\nParallel-only — bodies fan out concurrently exactly like the array\npath; `__map_idx` (the producer sequence) restores order at the\ngather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps\nround-trip unchanged."
+              },
               "type": {
                 "type": "string",
                 "enum": [
@@ -14504,7 +14450,7 @@
           },
           {
             "type": "object",
-            "description": "Drains a streaming producer AutomatedStep's per-call structured output\n(`set_output(name, value)` events landing on the producer's Signal\nplace), reduces (folds) them, and gates completion behind an\nend-of-stream counted barrier sized by `completed.detail.stream_count`.\n\nTwo named inbound handles: `\"stream\"` carries the data chunks (one\ntoken per `output_set` event); `\"control\"` carries the producer's\nterminal completion token whose `detail.stream_count` is the expected\nchunk count. The gather can't fire until all `N` chunks AND the count\ntoken are present, so the net stays alive until the stream fully drains\n— mirroring Map's counted-barrier gather, but counting on a runtime\n`stream_count` instead of a scattered collection length. NO engine\nchange: the engine's two-pass binding already admits the count\ncoordinator arriving after results, and each stream-token injection\nre-kicks the eval loop.",
+            "description": "Stream fold — drains a streaming producer's per-call `set_output` chunks\nand folds them into ONE output token via a declarative `reduce` strategy,\ngating completion behind an end-of-stream counted barrier sized by the\nproducer's `stream_count`. No body, no executor: the fold is pure Rhai in\nthe net. This is the clean extraction of the old `StreamConsumer`'s\ndefault `Rhai` dispatch; the body-dispatch streaming patterns live\nelsewhere now — per-chunk parallel map → a streaming-source `Map`;\nstateful in-process reduce → an `AutomatedStep` with `streamInput`. Parks\nthe reduced output write-once at `p_<id>_data` like Map.",
             "required": [
               "label",
               "type"
@@ -14516,10 +14462,6 @@
                   "null"
                 ]
               },
-              "dispatch": {
-                "$ref": "#/components/schemas/StreamDispatch",
-                "description": "How each drained chunk is dispatched BEFORE the reduce. Defaults to\n`Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every\nshipped consumer template omits this field and MUST decode to `Rhai`;\nany other default would make them demand a body and break at publish."
-              },
               "label": {
                 "type": "string"
               },
@@ -14529,12 +14471,12 @@
               },
               "resultVar": {
                 "type": "string",
-                "description": "Name of the field each chunk's value is read as. Documentary for\nv1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);\na body-per-chunk variant would bind it as the process input."
+                "description": "Name of the output field that holds the reduced result; borrowable\ndownstream as `<slug>.<resultVar>`."
               },
               "type": {
                 "type": "string",
                 "enum": [
-                  "stream_consumer"
+                  "stream_fold"
                 ]
               }
             }

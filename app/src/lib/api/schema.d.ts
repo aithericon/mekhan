@@ -4966,39 +4966,10 @@ export interface components {
             secret_key?: string;
         };
         /**
-         * @description How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.
-         *     Tagged on `mode` (camelCase), mirroring the other config enums.
-         *
-         *     - `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of
-         *       `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer
-         *       template omits `dispatch` and decodes to this — anything else would force a
-         *       body and break those templates at publish.
-         *     - `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at
-         *       a time in strict stream-sequence order (a single-permit lock + a
-         *       next-expected-sequence guard), then the N results are reduced.
-         *     - `ParallelBody`: same per-chunk body, dispatched map-style concurrently;
-         *       results are re-ordered + reduced at the gather barrier.
-         *     - `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not
-         *       implemented in this phase — the lowering rejects it cleanly.
-         */
-        StreamDispatch: {
-            /** @enum {string} */
-            mode: "rhai";
-        } | {
-            /** @enum {string} */
-            mode: "sequentialBody";
-        } | {
-            /** @enum {string} */
-            mode: "parallelBody";
-        } | {
-            /** @enum {string} */
-            mode: "liveReduce";
-        };
-        /**
-         * @description How a `StreamConsumer` folds the drained chunks into its single output
-         *     token. Tagged on `kind` (camelCase), mirroring the serde conventions of the
-         *     other config enums. Each variant selects the gather barrier's reduce Rhai in
-         *     `compiler/lower/stream_consumer.rs`.
+         * @description How a `StreamFold` folds the drained chunks into its single output token.
+         *     Tagged on `kind` (camelCase), mirroring the serde conventions of the other
+         *     config enums. Each variant selects the gather barrier's reduce Rhai in
+         *     `compiler/lower/stream_fold.rs`.
          */
         StreamReduce: {
             /** @enum {string} */
@@ -5765,6 +5736,18 @@ export interface components {
              */
             retryPolicy?: components["schemas"]["RetryPolicy"];
             /**
+             * @description Opt-in streaming CONSUMER. When `true`, the node exposes a second
+             *     INPUT port "stream" and becomes a long-lived stateful reducer: it is
+             *     seeded at net entry, receives the upstream producer's chunks over IPC
+             *     (`aithericon.chunks()`), and folds them in-process. Wire the
+             *     producer's `stream` handle to this node's `stream` input and its
+             *     control `out` to this node's `in` (the control token's arrival is the
+             *     end-of-stream / EOF trigger, carrying `stream_count`). The compiler
+             *     derives the executor `feed_chunks` flag from this. Plain `bool` +
+             *     `#[serde(default)]` ⇒ existing templates round-trip unchanged.
+             */
+            streamInput?: boolean;
+            /**
              * @description PROTOTYPE — opt-in streaming side-channel. When `true`, the node
              *     exposes a second output port "stream" and the compiler synthesizes a
              *     Signal place `p_{id}_stream` that receives ONE token per executor
@@ -5860,9 +5843,11 @@ export interface components {
             /**
              * @description Producer-namespaced reference to the array to scatter, carrying
              *     exactly one `[*]` boundary at iteration time (resolved through the
-             *     Repeater items-ref machinery), e.g. `extract.tasks`.
+             *     Repeater items-ref machinery), e.g. `extract.tasks`. IGNORED when
+             *     `stream_source` is set (a streaming Map sources elements from its
+             *     `stream`/`control` edges, not a static array).
              */
-            itemsRef: string;
+            itemsRef?: string;
             label: string;
             output?: null | components["schemas"]["Port"];
             /**
@@ -5870,17 +5855,21 @@ export interface components {
              *     element (the per-iteration result the reduce collects).
              */
             resultVar: string;
+            /**
+             * @description When `true`, this Map is a STREAMING map: instead of scattering the
+             *     static `items_ref` array, it ingests a streaming producer's chunks
+             *     (one element per chunk over the `stream` handle) and sizes its gather
+             *     barrier on the runtime `stream_count` (from the `control` handle).
+             *     Parallel-only — bodies fan out concurrently exactly like the array
+             *     path; `__map_idx` (the producer sequence) restores order at the
+             *     gather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps
+             *     round-trip unchanged.
+             */
+            streamSource?: boolean;
             /** @enum {string} */
             type: "map";
         } | {
             description?: string | null;
-            /**
-             * @description How each drained chunk is dispatched BEFORE the reduce. Defaults to
-             *     `Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every
-             *     shipped consumer template omits this field and MUST decode to `Rhai`;
-             *     any other default would make them demand a body and break at publish.
-             */
-            dispatch?: components["schemas"]["StreamDispatch"];
             label: string;
             /**
              * @description How the drained chunks are folded into the single output token.
@@ -5889,13 +5878,12 @@ export interface components {
              */
             reduce?: components["schemas"]["StreamReduce"];
             /**
-             * @description Name of the field each chunk's value is read as. Documentary for
-             *     v1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);
-             *     a body-per-chunk variant would bind it as the process input.
+             * @description Name of the output field that holds the reduced result; borrowable
+             *     downstream as `<slug>.<resultVar>`.
              */
             resultVar?: string;
             /** @enum {string} */
-            type: "stream_consumer";
+            type: "stream_fold";
         } | {
             description?: string | null;
             label: string;

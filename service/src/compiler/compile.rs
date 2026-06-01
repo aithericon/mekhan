@@ -457,7 +457,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     // 2. Pre-lowering validations (edges, guards, triggers, resources,
     //    schema refs, repeaters). See `run_validations` for the per-phase
     //    rationale.
-    run_validations(graph, &wg, known_resources)?;
+    run_validations(graph, &wg, inline_sources, known_resources)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
@@ -625,6 +625,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
 fn run_validations(
     graph: &WorkflowGraph,
     wg: &WorkflowDiGraph<'_>,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
     known_resources: &KnownResources,
 ) -> Result<(), CompileError> {
     validate(graph, wg)?;
@@ -646,6 +647,12 @@ fn run_validations(
     // silent-degrade-to-empty-form gap) and a concrete non-array producer shape.
     // Unresolved producers fall through to `validate_guards` above.
     validate_human_task_steps_refs(graph)?;
+    // Loop-body control-token footgun: a node inside a loop reading an
+    // upstream/Start business field off the control token (`input.<field>`)
+    // that only survives the first iteration. Runs last — needs the per-node
+    // enter shapes (`analyze`) and the inline Python sources, and its precise
+    // error should win only after the structural/guard passes are clean.
+    crate::compiler::validate::validate_loop_body_control_refs(graph, inline_sources)?;
     Ok(())
 }
 
@@ -2249,6 +2256,7 @@ mod tests {
                 },
                 deployment_model: Default::default(),
                 stream_output: false,
+                stream_input: false,
             },
             parent_id: None,
             width: None,
@@ -2380,6 +2388,7 @@ mod tests {
                 },
                 deployment_model: Default::default(),
                 stream_output: false,
+                stream_input: false,
             },
             parent_id: None,
             width: None,
@@ -2445,6 +2454,7 @@ mod tests {
                 retry_policy: policy,
                 deployment_model: Default::default(),
                 stream_output: false,
+                stream_input: false,
             },
             parent_id: None,
             width: None,
@@ -3398,6 +3408,7 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: Default::default(),
                 stream_output: false,
+                stream_input: false,
             },
             parent_id: None,
             width: None,
@@ -4668,6 +4679,7 @@ mod tests {
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
                         stream_output: false,
+                        stream_input: false,
                     },
                     parent_id: None,
                     width: None,
@@ -4734,6 +4746,7 @@ mod tests {
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
                         stream_output: false,
+                        stream_input: false,
                     },
                     parent_id: None,
                     width: None,
@@ -4852,6 +4865,7 @@ mod tests {
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
                         stream_output: false,
+                        stream_input: false,
                     },
                     parent_id: None,
                     width: None,

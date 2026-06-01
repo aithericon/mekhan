@@ -1,9 +1,5 @@
 {
   "definitions": {
-    "Ctrl__consumer": {
-      "additionalProperties": true,
-      "type": "object"
-    },
     "Ctrl__producer": {
       "additionalProperties": true,
       "type": "object"
@@ -14,13 +10,6 @@
     },
     "Ctrl__start": {
       "additionalProperties": true,
-      "type": "object"
-    },
-    "Data__consumer": {
-      "additionalProperties": true,
-      "properties": {
-        "output": {}
-      },
       "type": "object"
     },
     "Data__producer": {
@@ -1245,104 +1234,10 @@
       "id": "group_9",
       "name": "Submission",
       "parent_id": "group_8"
-    },
-    {
-      "id": "grp_consumer",
-      "name": "Consumer"
     }
   ],
   "name": "15 · Stream Python Body",
   "places": [
-    {
-      "id": "p_consumer_body_in",
-      "initial_tokens": [
-        {
-          "__map_id": "consumer",
-          "__map_idx": 0,
-          "transcript": null
-        }
-      ],
-      "name": "Consumer - Body In",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_body_out",
-      "name": "Consumer - Body Out",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_control_in",
-      "name": "Consumer - Control In",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_count",
-      "name": "Consumer - Gather Coordinator",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_ctrl",
-      "name": "Consumer - Control Token",
-      "token_schema": "#/definitions/Ctrl__consumer",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_data",
-      "name": "Consumer - Parked Data (write-once)",
-      "token_schema": "#/definitions/Data__consumer",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_dense_seq",
-      "initial_tokens": [
-        {
-          "n": 0
-        }
-      ],
-      "name": "Consumer - Dense Sequence Counter",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_exec_id",
-      "name": "Consumer - Reducer Execution ID",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_feed_inbox",
-      "name": "Consumer - Feed Inbox",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_gathered",
-      "name": "Consumer - Gathered Output",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_output",
-      "name": "Consumer - Output",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_results",
-      "name": "Consumer - Results",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_consumer_stream_in",
-      "name": "Consumer - Stream In",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
     {
       "id": "p_end_completed",
       "name": "Done - Completed",
@@ -1380,6 +1275,12 @@
       "type": "signal"
     },
     {
+      "id": "p_reducer_control_in",
+      "name": "Reducer - Control In",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_reducer_ctrl",
       "name": "Reducer - Control Token",
       "token_schema": "#/definitions/Ctrl__reducer",
@@ -1392,8 +1293,55 @@
       "type": "state"
     },
     {
+      "id": "p_reducer_dense_seq",
+      "initial_tokens": [
+        {
+          "n": 0
+        }
+      ],
+      "name": "Reducer - Dense Sequence Counter",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_reducer_exec_gate",
+      "initial_tokens": [
+        {}
+      ],
+      "name": "Reducer - Exec-ID Capture Gate",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_reducer_exec_id",
+      "name": "Reducer - Reducer Execution ID",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_reducer_feed_inbox",
+      "name": "Reducer - Feed Inbox",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_reducer_input",
+      "initial_tokens": [
+        {}
+      ],
+      "name": "Reducer - Input",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_reducer_output",
       "name": "Reducer - Output",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
+      "id": "p_reducer_stream_in",
+      "name": "Reducer - Stream In",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -2640,7 +2588,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Producer — Python-body streaming demo (demo 15).\\n#\\n# `streamOutput: true` (graph.json) makes every `set_output(name, value)` call\\n# emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this\\n# node's stream side-channel (the `p_producer_stream` Signal place). The\\n# downstream StreamConsumer (dispatch=SequentialBody) drains each chunk as it\\n# arrives and runs a per-chunk Python BODY on it.\\n#\\n# We emit one DISTINCT-named chunk per word, each value a plain string (distinct\\n# names matter: the stream token dedup id is content-addressable per output\\n# name). The consumer's body uppercases each chunk and the Concat reduce joins\\n# the body results in stream order into \\\"THE QUICK BROWN FOX\\\".\\n#\\n# IMPORTANT: a streaming producer must emit ONLY stream chunks — every\\n# `set_output` becomes a stream token and is counted into `stream_count` (the\\n# end-of-stream N). Do NOT also set a `produced`/`count` control output here, or\\n# it inflates N and pollutes the consumer's reduction.\\n#\\n# At job end the executor stamps `stream_count` (= 4 here) on the terminal\\n# Completed detail; it rides the producer's control token to the consumer's\\n# \\\"control\\\" handle, where it sizes the end-of-stream gather barrier. The sleeps\\n# space the chunks out so they stream over time.\\n\\nimport time\\n\\nfrom aithericon import set_output\\n\\nwords = [\\\"the\\\", \\\"quick\\\", \\\"brown\\\", \\\"fox\\\"]\\nfor i, w in enumerate(words):\\n    set_output(f\\\"chunk_{i}\\\", w)\\n    time.sleep(1.0)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\", \"output\"] }; d.feed_chunks = false; #{ job: d }",
+        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Producer — Python-body streaming demo (demo 15).\\n#\\n# `streamOutput: true` (graph.json) makes every `set_output(name, value)` call\\n# emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this\\n# node's stream side-channel (the `p_producer_stream` Signal place). The\\n# downstream reducer (an AutomatedStep with streamInput=true) receives each chunk\\n# via `aithericon.chunks()` over IPC and folds them in-process.\\n#\\n# We emit one DISTINCT-named chunk per word, each value a plain string (distinct\\n# names matter: the stream token dedup id is content-addressable per output\\n# name). The reducer uppercases each chunk and concatenates them in stream order\\n# into \\\"THE QUICK BROWN FOX\\\".\\n#\\n# IMPORTANT: a streaming producer must emit ONLY stream chunks — every\\n# `set_output` becomes a stream token and is counted into `stream_count` (the\\n# end-of-stream N). Do NOT also set a `produced`/`count` control output here, or\\n# it inflates N and pollutes the consumer's reduction.\\n#\\n# At job end the executor stamps `stream_count` (= 4 here) on the terminal\\n# Completed detail; it rides the producer's control token to the consumer's\\n# \\\"control\\\" handle, where it sizes the end-of-stream gather barrier. The sleeps\\n# space the chunks out so they stream over time.\\n\\nimport time\\n\\nfrom aithericon import set_output\\n\\nwords = [\\\"the\\\", \\\"quick\\\", \\\"brown\\\", \\\"fox\\\"]\\nfor i, w in enumerate(words):\\n    set_output(f\\\"chunk_{i}\\\", w)\\n    time.sleep(1.0)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\", \"output\"] }; d.feed_chunks = false; #{ job: d }",
         "type": "rhai"
       },
       "name": "Producer - Prepare",
@@ -4145,13 +4093,13 @@
       },
       "inputs": [
         {
-          "place": "p_consumer_body_in",
+          "place": "p_reducer_input",
           "port": "input",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"reducer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Reducer — demo 15 (StreamConsumer dispatch=LiveReduce).\\n#\\n# LiveReduce: the StreamConsumer is a thin router that forwards chunks to this\\n# long-lived Python process via IPC. We receive chunks via `aithericon.chunks()`,\\n# do our own reduction (uppercase + concatenate), and emit the final result.\\n#\\n# The StreamConsumer owns the stream_count barrier and EOF sentinel; we own the\\n# reduction logic. No Petri-net gather barrier — the Python script is the reducer.\\n#\\n# `aithericon.chunks()` is a generator that yields chunk values as they arrive\\n# over the IPC sidecar. It terminates when the producer's stream ends (EOF).\\n\\nfrom aithericon import chunks, set_output\\n\\nacc = []\\nfor chunk in chunks():\\n    acc.append(str(chunk).upper())\\n\\ntranscript = \\\" \\\".join(acc)\\nset_output(\\\"transcript\\\", transcript)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"transcript\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/reducer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; d.feed_chunks = true; #{ job: d }",
+        "source": "let d = input; d.job_id = \"reducer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Reducer — demo 15 (AutomatedStep with streamInput=true).\\n#\\n# A streamInput AutomatedStep IS the reducer: it is seeded at net entry (starts\\n# immediately), receives the upstream producer's chunks via `aithericon.chunks()`\\n# over the IPC sidecar, does its own reduction (uppercase + concatenate), and\\n# emits the final result. No container node, no Petri-net gather barrier — this\\n# single step owns the reduction.\\n#\\n# `aithericon.chunks()` is a generator that yields chunk values as they arrive.\\n# It terminates when the producer's stream ends (the EOF sentinel, sent when the\\n# producer's control token reaches this node's `in`).\\n\\nfrom aithericon import chunks, set_output\\n\\nacc = []\\nfor chunk in chunks():\\n    acc.append(str(chunk).upper())\\n\\ntranscript = \\\" \\\".join(acc)\\nset_output(\\\"transcript\\\", transcript)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"transcript\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/reducer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; d.feed_chunks = true; #{ job: d }",
         "type": "rhai"
       },
       "name": "Reducer - Prepare",
@@ -4962,453 +4910,6 @@
       ]
     },
     {
-      "id": "t_consumer_capture_exec_id",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "submitted",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_reducer_submitted",
-          "port": "submitted",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ exec_id: #{ id: submitted.execution_id } }",
-        "type": "rhai"
-      },
-      "name": "Consumer - Capture Exec ID",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "exec_id",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_consumer_exec_id",
-          "port": "exec_id",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_consumer_collect",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "body",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_consumer_body_out",
-          "port": "body",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ result: #{ output: body.detail.outputs.transcript } }",
-        "type": "rhai"
-      },
-      "name": "Consumer - Collect",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "result",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_consumer_gathered",
-          "port": "result",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_consumer_emit",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "ctrl",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_consumer_ctrl",
-          "port": "ctrl",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ output: ctrl }",
-        "type": "rhai"
-      },
-      "name": "Consumer - Emit Control",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "output",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_consumer_output",
-          "port": "output",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_consumer_eof",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "ctrl",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "exec",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_consumer_control_in",
-          "port": "ctrl",
-          "weight": 1
-        },
-        {
-          "place": "p_consumer_exec_id",
-          "port": "exec",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }",
-        "type": "rhai"
-      },
-      "name": "Consumer - Feed EOF",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "feed",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_consumer_feed_inbox",
-          "port": "feed",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_consumer_feed",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "chunk",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "seq",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "exec",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_consumer_stream_in",
-          "port": "chunk",
-          "weight": 1
-        },
-        {
-          "place": "p_consumer_dense_seq",
-          "port": "seq",
-          "weight": 1
-        },
-        {
-          "place": "p_consumer_exec_id",
-          "port": "exec",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: seq.n }, seq: #{ n: seq.n + 1 } }",
-        "type": "rhai"
-      },
-      "name": "Consumer - Feed Chunk",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "feed",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "seq",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_consumer_feed_inbox",
-          "port": "feed",
-          "weight": 1
-        },
-        {
-          "place": "p_consumer_dense_seq",
-          "port": "seq",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_consumer_feed_effect",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "feed",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_consumer_feed_inbox",
-          "port": "feed",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "handler_id": "executor_stream_feed",
-        "type": "effect"
-      },
-      "name": "Consumer - Stream Feed Effect"
-    },
-    {
-      "id": "t_consumer_yield",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "tok",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_consumer_gathered",
-          "port": "tok",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
-        "type": "rhai"
-      },
-      "name": "Consumer - Yield (park data, forward control)",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "data",
-          "schema_ref": "#/definitions/Data__consumer"
-        },
-        {
-          "cardinality": "single",
-          "name": "ctrl",
-          "schema_ref": "#/definitions/Ctrl__consumer"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_consumer_data",
-          "port": "data",
-          "weight": 1
-        },
-        {
-          "place": "p_consumer_ctrl",
-          "port": "ctrl",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_edge_e_body_out_consumer",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "input",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_reducer_ctrl",
-          "port": "input",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ output: input }",
-        "type": "rhai"
-      },
-      "name": "Reducer -> Consumer",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "output",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_consumer_body_out",
-          "port": "output",
-          "weight": 1
-        }
-      ]
-    },
-    {
       "id": "t_edge_e_producer_control",
       "input_ports": [
         {
@@ -5436,7 +4937,7 @@
         "source": "#{ output: input }",
         "type": "rhai"
       },
-      "name": "Producer -> Consumer",
+      "name": "Producer -> Reducer",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5454,7 +4955,7 @@
       },
       "outputs": [
         {
-          "place": "p_consumer_control_in",
+          "place": "p_reducer_control_in",
           "port": "output",
           "weight": 1
         }
@@ -5488,7 +4989,7 @@
         "source": "#{ output: input }",
         "type": "rhai"
       },
-      "name": "Producer -> Consumer",
+      "name": "Producer -> Reducer",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5506,7 +5007,7 @@
       },
       "outputs": [
         {
-          "place": "p_consumer_stream_in",
+          "place": "p_reducer_stream_in",
           "port": "output",
           "weight": 1
         }
@@ -5585,8 +5086,8 @@
         },
         {
           "cardinality": "single",
-          "name": "d_consumer",
-          "schema_ref": "#/definitions/Data__consumer"
+          "name": "d_reducer",
+          "schema_ref": "#/definitions/Data__reducer"
         }
       ],
       "input_schema": {
@@ -5599,19 +5100,19 @@
       },
       "inputs": [
         {
-          "place": "p_consumer_output",
+          "place": "p_reducer_ctrl",
           "port": "input",
           "weight": 1
         },
         {
-          "place": "p_consumer_data",
-          "port": "d_consumer",
+          "place": "p_reducer_data",
+          "port": "d_reducer",
           "read": true,
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let __rv0 = (d_consumer.output); let __rv = #{ \"transcript\": __rv0 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
+        "source": "let __rv0 = (d_reducer.detail.outputs.transcript); let __rv = #{ \"transcript\": __rv0 }; let __out = input; if \"exit_code\" in __out { } else { __out.exit_code = #{ ok: true, value: __rv }; } #{ result: __out }",
         "type": "rhai"
       },
       "name": "Done - Result",
@@ -5781,6 +5282,245 @@
           "weight": 1
         }
       ]
+    },
+    {
+      "id": "t_reducer_capture_exec_id",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "gate",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "submitted",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_reducer_exec_gate",
+          "port": "gate",
+          "weight": 1
+        },
+        {
+          "place": "reducer/submitted",
+          "port": "submitted",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ exec_id: #{ id: submitted.execution_id } }",
+        "type": "rhai"
+      },
+      "name": "Reducer - Capture Exec ID",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "exec_id",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_reducer_exec_id",
+          "port": "exec_id",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_reducer_eof",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "ctrl",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "exec",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_reducer_control_in",
+          "port": "ctrl",
+          "weight": 1
+        },
+        {
+          "place": "p_reducer_exec_id",
+          "port": "exec",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }",
+        "type": "rhai"
+      },
+      "name": "Reducer - Feed EOF",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "feed",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_reducer_feed_inbox",
+          "port": "feed",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_reducer_feed",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "chunk",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "seq",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "exec",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_reducer_stream_in",
+          "port": "chunk",
+          "weight": 1
+        },
+        {
+          "place": "p_reducer_dense_seq",
+          "port": "seq",
+          "weight": 1
+        },
+        {
+          "place": "p_reducer_exec_id",
+          "port": "exec",
+          "read": true,
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "source": "#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: seq.n }, seq: #{ n: seq.n + 1 } }",
+        "type": "rhai"
+      },
+      "name": "Reducer - Feed Chunk",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "feed",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
+          "name": "seq",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_reducer_feed_inbox",
+          "port": "feed",
+          "weight": 1
+        },
+        {
+          "place": "p_reducer_dense_seq",
+          "port": "seq",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "id": "t_reducer_feed_effect",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "feed",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_reducer_feed_inbox",
+          "port": "feed",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "handler_id": "executor_stream_feed",
+        "type": "effect"
+      },
+      "name": "Reducer - Stream Feed Effect"
     },
     {
       "id": "t_reducer_to_error_deadend",

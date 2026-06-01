@@ -1,0 +1,130 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Stream Map Demo",
+        "initial": { "id": "in", "label": "Stream Map Input", "fields": [] }
+      }
+    },
+    {
+      "id": "producer",
+      "type": "automated_step",
+      "position": { "x": 300, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Producer",
+        "description": "Emits one distinct-named chunk per word on its streaming side-channel (set_output per call, mid-execution).",
+        "streamOutput": true,
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": { "id": "out", "label": "Produced", "fields": [] }
+      }
+    },
+    {
+      "id": "mapper",
+      "type": "map",
+      "position": { "x": 560, "y": 120 },
+      "width": 520,
+      "height": 240,
+      "data": {
+        "type": "map",
+        "label": "Uppercase Map",
+        "description": "Streaming-source Map: ingests the producer's chunks (one element per chunk) and dispatches the uppercase body concurrently, sizing its gather barrier on the runtime stream_count.",
+        "streamSource": true,
+        "itemVar": "chunk",
+        "resultVar": "upper"
+      }
+    },
+    {
+      "id": "upper",
+      "type": "automated_step",
+      "parentId": "mapper",
+      "position": { "x": 40, "y": 70 },
+      "data": {
+        "type": "automated_step",
+        "label": "Uppercase Chunk",
+        "description": "Per-chunk body: uppercases the chunk value (the itemVar `chunk`) and emits it under the Map's resultVar `upper`.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Uppercased",
+          "fields": [ { "name": "upper", "label": "Uppercased Chunk", "kind": "text" } ]
+        }
+      }
+    },
+    {
+      "id": "joiner",
+      "type": "automated_step",
+      "position": { "x": 1180, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Joiner",
+        "description": "Reads the gathered Map collection (mapper.output) and concatenates the uppercased words in stream order into the final transcript.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Joined",
+          "fields": [ { "name": "transcript", "label": "Transcript", "kind": "text" } ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 1460, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "transcript", "expression": "joiner.transcript" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "mapper", "targetHandle": "stream", "type": "sequence" },
+    { "id": "e_producer_control", "source": "producer", "target": "mapper", "targetHandle": "control", "type": "sequence" },
+    { "id": "e_mapper_body_in", "source": "mapper", "sourceHandle": "body_in", "target": "upper", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_body_out_mapper", "source": "upper", "target": "mapper", "targetHandle": "body_out", "type": "sequence" },
+    { "id": "e_mapper_joiner", "source": "mapper", "target": "joiner", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_joiner_end", "source": "joiner", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

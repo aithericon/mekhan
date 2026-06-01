@@ -177,6 +177,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // Agent's degenerate single-shot LLM body does not expose the
             // prototype streaming side-channel.
             stream_output: false,
+            stream_input: false,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,

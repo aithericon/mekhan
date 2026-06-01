@@ -207,31 +207,6 @@ pub(crate) fn resolve_ref(
                 }) {
                     return RefResolution::Control;
                 }
-                // Body-mode StreamConsumer chunk namespace (`<resultVar>.<field>`).
-                // A node whose `parent_id` is a body-mode StreamConsumer runs once
-                // per drained chunk; the dispatch stamps `#{ <resultVar>: <value>,
-                // .. }` ONTO each body token (namespace-on-token, same as Map's
-                // `<itemVar>`). So `<resultVar>.<field>` is token-resident inside
-                // the body — resolve as Control (no read-arc). Checked here for the
-                // same reason as the Map arm: `<resultVar>` is intentionally NOT a
-                // node slug. Only the body-dispatch modes stamp the namespace; the
-                // `Rhai`/`LiveReduce` modes have no body, so the match is gated to
-                // `SequentialBody`/`ParallelBody`.
-                if graph.nodes.iter().any(|n| {
-                    n.id == parent
-                        && matches!(
-                            &n.data,
-                            WorkflowNodeData::StreamConsumer { result_var, dispatch, .. }
-                                if result_var == root
-                                    && matches!(
-                                        dispatch,
-                                        crate::models::template::StreamDispatch::SequentialBody
-                                            | crate::models::template::StreamDispatch::ParallelBody
-                                    )
-                        )
-                }) {
-                    return RefResolution::Control;
-                }
             }
             let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
                 return RefResolution::Unresolved;
@@ -670,7 +645,14 @@ pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBin
             // exactly like a Loop condition borrows its counter. Without this
             // arm no read-arc into the producer's parked place is synthesized
             // and the scatter resolves `__src` to `()` → zero items.
-            WorkflowNodeData::Map { items_ref, .. } if !items_ref.trim().is_empty() => {
+            // A STREAMING Map (`stream_source`) has no `itemsRef` — its elements
+            // arrive on the `stream` edge as live tokens, not via a read-arc into
+            // a producer's parked place — so it must NOT synthesize one.
+            WorkflowNodeData::Map {
+                items_ref,
+                stream_source,
+                ..
+            } if !stream_source && !items_ref.trim().is_empty() => {
                 vec![items_ref.clone()]
             }
             // A `Scheduled { operation: Submit }` AutomatedStep nested in a lease

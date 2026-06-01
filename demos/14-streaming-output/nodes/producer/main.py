@@ -3,7 +3,7 @@
 # `streamOutput: true` (graph.json) makes every `set_output(name, value)` call
 # emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this
 # node's stream side-channel (the `p_producer_stream` Signal place). A downstream
-# StreamConsumer wired from the "stream" handle drains each chunk as it arrives.
+# StreamFold wired from the "stream" handle drains each chunk as it arrives.
 #
 # We emit one DISTINCT-named chunk per word, each value a plain string (distinct
 # names matter: the stream token dedup id is content-addressable per output

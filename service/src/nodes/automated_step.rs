@@ -32,7 +32,7 @@ pub(crate) static AUTOMATED_STEP_DECL: NodeDecl = NodeDecl {
     wiring_logic: None,
     yjs_encode: yjs_encode as YjsEncodeFn,
     // The unmerged-fan-in warning (shared with HumanTask) — never errors.
-    validate: Some(crate::compiler::validate::warn_unmerged_fan_in),
+    validate: Some(crate::compiler::validate::validate_automated_step),
     token_shape: Some(crate::compiler::token_shape::analyze::out_shape_automated_step),
 };
 
@@ -41,10 +41,24 @@ fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // serde defaults give an empty pass-through for templates that never
     // authored an input shape. Matches the central
     // `WorkflowNodeData::input_ports` arm.
-    let WorkflowNodeData::AutomatedStep { input, .. } = data else {
+    let WorkflowNodeData::AutomatedStep {
+        input, stream_input, ..
+    } = data
+    else {
         unreachable!("automated_step::input_ports on non-AutomatedStep variant");
     };
-    vec![input.clone()]
+    let mut ports = vec![input.clone()];
+    // streamInput reducer exposes a SECOND input handle "stream" alongside the
+    // implicit control "in". The compiler routes it to `p_{id}_stream_in` (the
+    // producer's per-chunk Signal tokens) via `input_handles`.
+    if *stream_input {
+        ports.push(Port {
+            id: "stream".to_string(),
+            label: "Stream".to_string(),
+            fields: vec![],
+        });
+    }
+    ports
 }
 
 fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
@@ -92,6 +106,7 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         retry_policy,
         deployment_model,
         stream_output,
+        stream_input,
         ..
     } = data
     else {
@@ -126,5 +141,11 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         txn,
         "streamOutput",
         json_value_to_any(&serde_json::Value::Bool(*stream_output)),
+    );
+    // `stream_input` — same round-trip rationale as `stream_output`.
+    config.insert(
+        txn,
+        "streamInput",
+        json_value_to_any(&serde_json::Value::Bool(*stream_input)),
     );
 }

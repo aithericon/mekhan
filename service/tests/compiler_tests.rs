@@ -143,6 +143,7 @@ fn automated_step_node_streaming(id: &str, label: &str, stream_output: bool) -> 
             retry_policy: Default::default(),
             deployment_model: Default::default(),
             stream_output,
+            stream_input: false,
         },
         parent_id: None,
         width: None,
@@ -565,6 +566,7 @@ fn automated_step_produces_executor_lifecycle() {
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
                     stream_output: false,
+                    stream_input: false,
                 },
                 parent_id: None,
                 width: None,
@@ -690,6 +692,7 @@ fn automated_step_wired_error_routes_to_handler() {
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
                     stream_output: false,
+                    stream_input: false,
                 },
                 parent_id: None,
                 width: None,
@@ -1707,6 +1710,7 @@ fn automated_step_has_scoped_effect_errors() {
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
                     stream_output: false,
+                    stream_input: false,
                 },
                 parent_id: None,
                 width: None,
@@ -1756,6 +1760,7 @@ fn auto_node(id: &str, label: &str) -> WorkflowNode {
             retry_policy: Default::default(),
             deployment_model: Default::default(),
             stream_output: false,
+            stream_input: false,
         },
         parent_id: None,
         width: None,
@@ -2725,6 +2730,7 @@ fn guard_multi_hop_scope_walk() {
             retry_policy: Default::default(),
             deployment_model: Default::default(),
             stream_output: false,
+            stream_input: false,
         },
         parent_id: None,
         width: None,
@@ -2958,6 +2964,7 @@ fn loop_with_accumulators_graph(
             retry_policy: Default::default(),
             deployment_model: Default::default(),
             stream_output: false,
+            stream_input: false,
         },
         parent_id: Some("lp".to_string()),
         width: None,
@@ -4916,6 +4923,7 @@ fn automated_node_with_deployment(id: &str, dm: DeploymentModel) -> WorkflowNode
             retry_policy: Default::default(),
             deployment_model: dm,
             stream_output: false,
+            stream_input: false,
         },
         parent_id: None,
         width: None,
@@ -5066,6 +5074,7 @@ fn catalogue_query_emits_lookup_effect_no_executor() {
                     retry_policy: Default::default(),
                     deployment_model: Default::default(),
                     stream_output: false,
+                    stream_input: false,
                 },
                 parent_id: None,
                 width: None,
@@ -5539,6 +5548,7 @@ fn map_node(id: &str, slug: &str, items_ref: &str, result_var: &str) -> Workflow
             label: "Map".to_string(),
             description: None,
             items_ref: items_ref.to_string(),
+            stream_source: false,
             item_var: "item".to_string(),
             result_var: result_var.to_string(),
             output: Some(Port {
@@ -6225,6 +6235,7 @@ fn map_body_auto(id: &str, parent: &str) -> WorkflowNode {
             retry_policy: Default::default(),
             deployment_model: Default::default(),
             stream_output: false,
+            stream_input: false,
         },
         parent_id: Some(parent.to_string()),
         width: None,
@@ -6603,568 +6614,4 @@ fn pool_resource_kinds_and_pool_registry() {
     );
     // A non-pool kind is not in the pool registry.
     assert!(pool_kind("postgres").is_none());
-}
-
-// ---------------------------------------------------------------------------
-// StreamConsumer: `<slug>.output` borrow resolution (parked-producer namespace)
-// ---------------------------------------------------------------------------
-
-/// A `WorkflowEdge` with explicit source AND target handles (the StreamConsumer
-/// wiring needs distinct `stream` / `control` TARGET handles, which the shared
-/// `edge_with_handle` helper can't express — it hard-codes `target_handle:
-/// "in"`).
-fn edge_src_tgt(
-    id: &str,
-    source: &str,
-    source_handle: Option<&str>,
-    target: &str,
-    target_handle: &str,
-) -> WorkflowEdge {
-    WorkflowEdge {
-        id: id.to_string(),
-        source: source.to_string(),
-        target: target.to_string(),
-        source_handle: source_handle.map(str::to_string),
-        target_handle: Some(target_handle.to_string()),
-        label: None,
-        edge_type: "sequence".to_string(),
-    }
-}
-
-/// Regression for the `input.output` borrow bug: a `StreamConsumer` parks its
-/// reduced value at `p_<id>_data` and must expose it as the qualified
-/// `<slug>.output` (NOT collapse into the generic `input` control-token scope).
-/// Mirrors demo 14: start → producer(stream_output) ==stream==> consumer
-/// (StreamConsumer, Concat), producer ==control==> consumer, consumer → End
-/// whose `resultMapping` borrows `consumer.output`. The fix is two-fold —
-/// `is_parked_producer` recognizes StreamConsumer, and `out_shape_stream_consumer`
-/// returns a FLAT `{ output }` so the slug namespacing applies externally.
-#[test]
-fn stream_consumer_output_is_borrowable_as_slug_output() {
-    let consumer = WorkflowNode {
-        id: "consumer".to_string(),
-        node_type: "stream_consumer".to_string(),
-        slug: None,
-        position: pos(),
-        data: WorkflowNodeData::StreamConsumer {
-            label: "Consumer".to_string(),
-            description: None,
-            result_var: "item".to_string(),
-            reduce: mekhan_service::models::template::StreamReduce::Concat {
-                sep: Some(" ".to_string()),
-            },
-            dispatch: Default::default(),
-        },
-        parent_id: None,
-        width: None,
-        height: None,
-    };
-    let end = WorkflowNode {
-        id: "end".to_string(),
-        node_type: "end".to_string(),
-        slug: None,
-        position: pos(),
-        data: WorkflowNodeData::End {
-            label: "Done".to_string(),
-            description: None,
-            terminal: mekhan_service::models::template::default_terminal_port(),
-            result_mapping: vec![mekhan_service::models::template::FieldMapping {
-                target_field: "transcript".to_string(),
-                expression: "consumer.output".to_string(),
-            }],
-        },
-        parent_id: None,
-        width: None,
-        height: None,
-    };
-
-    let graph = WorkflowGraph {
-        nodes: vec![
-            start_node("s"),
-            automated_step_node_streaming("producer", "Producer", true),
-            consumer,
-            end,
-        ],
-        edges: vec![
-            edge("e_s", "s", "producer"),
-            // producer's `stream` source handle → consumer's `stream` target.
-            edge_src_tgt("e_stream", "producer", Some("stream"), "consumer", "stream"),
-            // producer's default `out` → consumer's `control` target.
-            edge_src_tgt("e_control", "producer", None, "consumer", "control"),
-            // consumer → End.
-            edge("e_ce", "consumer", "end"),
-        ],
-        viewport: None,
-        instance_concurrency: Default::default(),
-        definitions: Default::default(),
-        default_scheduler: None,
-    };
-
-    let air = compile_to_air(
-        &graph,
-        "stream_borrow_test",
-        "",
-        &std::collections::HashMap::new(),
-    );
-    assert!(
-        air.is_ok(),
-        "End mapping `transcript <- consumer.output` must resolve the StreamConsumer's \
-         parked `<slug>.output` (regression for the `input.output` bug): {:?}",
-        air.err()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// StreamConsumer dispatch modes (Phase 1): SequentialBody / ParallelBody body
-// lowering, Rhai-default backcompat, and the validation gates.
-//
-// These assert the LOWERED AIR shape (places + transitions) for the per-chunk
-// Python body modes, prove a no-`dispatch` consumer (demo-14's exact JSON
-// shape) deserializes to `StreamDispatch::Rhai` AND lowers byte-identically to
-// an explicit-Rhai consumer, and exercise the publish-time validation arms
-// (RhaiHasBody / BodyEmpty / LiveReduce placeholder).
-// ---------------------------------------------------------------------------
-
-use mekhan_service::models::template::{StreamDispatch, StreamReduce};
-
-/// A non-streaming AutomatedStep body child parented under `parent` — the
-/// per-chunk body terminal for a body-mode StreamConsumer (mirrors a Map body
-/// terminal: an AutomatedStep that `set_output`s the consumer's `resultVar`).
-fn sc_body_node(id: &str, label: &str, parent: &str) -> WorkflowNode {
-    let mut n = automated_step_node_streaming(id, label, false);
-    n.parent_id = Some(parent.to_string());
-    n
-}
-
-/// Build a StreamConsumer graph: start → producer(stream_output) ==stream==>
-/// consumer, producer ==control==> consumer, consumer → End. When `with_body`
-/// is set, also add an AutomatedStep body child wired
-/// consumer.body_in → body.in and body.out → consumer.body_out.
-fn sc_graph(dispatch: StreamDispatch, with_body: bool) -> WorkflowGraph {
-    let consumer = WorkflowNode {
-        id: "consumer".to_string(),
-        node_type: "stream_consumer".to_string(),
-        slug: None,
-        position: pos(),
-        data: WorkflowNodeData::StreamConsumer {
-            label: "Consumer".to_string(),
-            description: None,
-            result_var: "item".to_string(),
-            reduce: StreamReduce::Concat {
-                sep: Some(" ".to_string()),
-            },
-            dispatch,
-        },
-        parent_id: None,
-        width: None,
-        height: None,
-    };
-    let end = WorkflowNode {
-        id: "end".to_string(),
-        node_type: "end".to_string(),
-        slug: None,
-        position: pos(),
-        data: WorkflowNodeData::End {
-            label: "Done".to_string(),
-            description: None,
-            terminal: mekhan_service::models::template::default_terminal_port(),
-            result_mapping: vec![mekhan_service::models::template::FieldMapping {
-                target_field: "transcript".to_string(),
-                expression: "consumer.output".to_string(),
-            }],
-        },
-        parent_id: None,
-        width: None,
-        height: None,
-    };
-
-    let mut nodes = vec![
-        start_node("s"),
-        automated_step_node_streaming("producer", "Producer", true),
-        consumer,
-        end,
-    ];
-    let mut edges = vec![
-        edge("e_s", "s", "producer"),
-        edge_src_tgt("e_stream", "producer", Some("stream"), "consumer", "stream"),
-        edge_src_tgt("e_control", "producer", None, "consumer", "control"),
-        edge("e_ce", "consumer", "end"),
-    ];
-    if with_body {
-        nodes.push(sc_body_node("body", "Uppercase", "consumer"));
-        // consumer.body_in (source handle) → body.in (target handle)
-        edges.push(edge_src_tgt(
-            "e_body_in",
-            "consumer",
-            Some("body_in"),
-            "body",
-            "in",
-        ));
-        // body.out (default source) → consumer.body_out (target handle)
-        edges.push(edge_src_tgt(
-            "e_body_out",
-            "body",
-            None,
-            "consumer",
-            "body_out",
-        ));
-    }
-
-    WorkflowGraph {
-        nodes,
-        edges,
-        viewport: None,
-        instance_concurrency: Default::default(),
-        definitions: Default::default(),
-        default_scheduler: None,
-    }
-}
-
-#[test]
-fn stream_consumer_sequential_body_lowers_permit_seq_gate_and_collect() {
-    let graph = sc_graph(StreamDispatch::SequentialBody, true);
-    let air = compile_to_air(&graph, "sc_seq", "", &std::collections::HashMap::new())
-        .expect("SequentialBody with a wired body must compile");
-
-    // Sequential structural gate: a single-permit lock place + a parked
-    // next-expected-sequence counter place.
-    assert!(has_place(&air, "p_consumer_lock"), "permit lock place");
-    assert!(
-        has_place(&air, "p_consumer_seq"),
-        "next-expected-sequence counter place"
-    );
-    assert!(
-        has_place(&air, "p_consumer_pending"),
-        "pending-chunk buffer place"
-    );
-
-    // The body-attach places.
-    assert!(has_place(&air, "p_consumer_body_in"), "body entry place");
-    assert!(
-        has_place(&air, "p_consumer_body_out"),
-        "body terminal place"
-    );
-
-    // The dispatch transition consumes the permit + counter + pending chunk and
-    // is guarded on `__map_idx == seq.next` (in-stream-order dispatch).
-    let dispatch =
-        get_transition(&air, "t_consumer_dispatch_seq").expect("sequential dispatch transition");
-    assert!(
-        transition_consumes_place(dispatch, "p_consumer_lock"),
-        "dispatch_seq must consume the permit (one-at-a-time gate)"
-    );
-    assert!(
-        transition_consumes_place(dispatch, "p_consumer_seq"),
-        "dispatch_seq must consume the sequence counter"
-    );
-    assert!(
-        transition_produces_place(dispatch, "p_consumer_body_in"),
-        "dispatch_seq must emit to the body entry"
-    );
-    // The dispatch guard references the in-order key. Scan the whole transition
-    // JSON for the guard substrings — tolerant of the exact field name the AIR
-    // serializes the guard expression under.
-    let dispatch_json = serde_json::to_string(dispatch).unwrap();
-    // The in-order gate MUST key on the DENSE arrival index `__dispatch_idx`,
-    // NOT the producer's `sequence`/`__map_idx`. `sequence` is a single shared
-    // executor atomic bumped on EVERY emitted event (log/progress too), so it is
-    // sparse; a `== seq.next` guard against a sparse index wedges on the first
-    // gap. Regression guard for that fix.
-    assert!(
-        dispatch_json.contains("__dispatch_idx") && dispatch_json.contains("seq.next"),
-        "dispatch_seq must gate on the dense `__dispatch_idx == seq.next`, got: {dispatch_json}"
-    );
-
-    // The dense arrival index comes from a dedicated, seeded `p_ingest` counter;
-    // `t_ingest` assigns `__dispatch_idx` from it AND carries the chunk's true
-    // `sequence` as `__map_idx` so the gather still reduces in stream order.
-    assert!(
-        has_place(&air, "p_consumer_ingest"),
-        "arrival-counter place"
-    );
-    let ingest = get_transition(&air, "t_consumer_ingest").expect("sequential ingest transition");
-    let ingest_json = serde_json::to_string(ingest).unwrap();
-    assert!(
-        ingest_json.contains("__dispatch_idx") && ingest_json.contains("__map_idx"),
-        "ingest must stamp both the dense __dispatch_idx and the true __map_idx, got: {ingest_json}"
-    );
-
-    // The seed: the permit lock starts with a seeded initial token. Scan the
-    // whole place JSON for the permit marker — tolerant of the initial-marking
-    // field name.
-    let lock = places(&air)
-        .iter()
-        .find(|p| p["id"] == "p_consumer_lock")
-        .unwrap();
-    let lock_json = serde_json::to_string(lock).unwrap();
-    assert!(
-        lock_json.contains("permit"),
-        "permit lock must carry a seeded initial token tagged `permit`, got: {lock_json}"
-    );
-
-    // The collect transition lifts `body.detail.outputs.item` and returns the
-    // permit so the next chunk can dispatch.
-    let collect = get_transition(&air, "t_consumer_collect").expect("collect transition");
-    assert!(
-        transition_consumes_place(collect, "p_consumer_body_out"),
-        "collect consumes the body terminal"
-    );
-    assert!(
-        transition_produces_place(collect, "p_consumer_lock"),
-        "collect returns the permit (sequential release)"
-    );
-    let collect_json = serde_json::to_string(collect).unwrap();
-    assert!(
-        collect_json.contains("body.detail.outputs.item"),
-        "collect must lift the body's `detail.outputs.<resultVar>`, got: {collect_json}"
-    );
-
-    // Shared tail: counted-barrier gather sized by stream_count via the close
-    // coordinator, plus the parked-output emit.
-    assert!(
-        has_transition(&air, "t_consumer_close"),
-        "EOS close coordinator"
-    );
-    assert!(
-        has_transition(&air, "t_consumer_gather"),
-        "counted-barrier gather"
-    );
-    let gather = get_transition(&air, "t_consumer_gather").unwrap();
-    assert!(
-        transition_consumes_place(gather, "p_consumer_count"),
-        "gather reads the count coordinator (counted barrier)"
-    );
-    assert!(has_transition(&air, "t_consumer_emit"), "control emit tail");
-}
-
-#[test]
-fn stream_consumer_parallel_body_lowers_map_style_dispatch_no_seq_gate() {
-    let graph = sc_graph(StreamDispatch::ParallelBody, true);
-    let air = compile_to_air(&graph, "sc_par", "", &std::collections::HashMap::new())
-        .expect("ParallelBody with a wired body must compile");
-
-    // Body-attach places exist...
-    assert!(has_place(&air, "p_consumer_body_in"), "body entry place");
-    assert!(
-        has_place(&air, "p_consumer_body_out"),
-        "body terminal place"
-    );
-
-    // ...but the sequential one-at-a-time machinery does NOT (map-style concurrency).
-    assert!(
-        !has_place(&air, "p_consumer_lock"),
-        "parallel mode has NO permit lock"
-    );
-    assert!(
-        !has_place(&air, "p_consumer_seq"),
-        "parallel mode has NO sequence counter"
-    );
-    assert!(
-        !has_place(&air, "p_consumer_pending"),
-        "parallel mode has NO pending buffer"
-    );
-    assert!(
-        !has_transition(&air, "t_consumer_dispatch_seq"),
-        "parallel mode has NO sequential dispatch transition"
-    );
-
-    // The ingest transition dispatches each chunk straight to the body entry
-    // (map-style scatter), and collect lifts the body output.
-    let ingest = get_transition(&air, "t_consumer_ingest").expect("ingest transition");
-    assert!(
-        transition_consumes_place(ingest, "p_consumer_stream_in"),
-        "ingest consumes a stream chunk"
-    );
-    assert!(
-        transition_produces_place(ingest, "p_consumer_body_in"),
-        "ingest dispatches the chunk to the body entry"
-    );
-    let collect = get_transition(&air, "t_consumer_collect").expect("collect transition");
-    let collect_json = serde_json::to_string(collect).unwrap();
-    assert!(
-        collect_json.contains("body.detail.outputs.item"),
-        "collect must lift the body's `detail.outputs.<resultVar>`, got: {collect_json}"
-    );
-
-    // Gather still counts on the EOS stream_count coordinator.
-    let gather = get_transition(&air, "t_consumer_gather").expect("gather");
-    assert!(
-        transition_consumes_place(gather, "p_consumer_count"),
-        "gather counts on the EOS coordinator"
-    );
-    assert!(
-        has_transition(&air, "t_consumer_close"),
-        "EOS close coordinator"
-    );
-    assert!(has_transition(&air, "t_consumer_emit"), "control emit tail");
-}
-
-/// CRITICAL backcompat: a StreamConsumer JSON with NO `dispatch` key (exactly
-/// demo-14's shape) must deserialize to `StreamDispatch::Rhai` AND lower
-/// byte-identically to an explicit-Rhai consumer.
-#[test]
-fn stream_consumer_no_dispatch_key_deserializes_to_rhai() {
-    // Demo-14's exact consumer node JSON (no `dispatch` field).
-    let demo14_consumer = json!({
-        "id": "consumer",
-        "type": "stream_consumer",
-        "position": { "x": 0.0, "y": 0.0 },
-        "data": {
-            "type": "stream_consumer",
-            "label": "Consumer",
-            "resultVar": "item",
-            "reduce": { "kind": "concat", "sep": " " }
-        }
-    });
-    let node: WorkflowNode =
-        serde_json::from_value(demo14_consumer).expect("demo-14 consumer JSON must deserialize");
-    let WorkflowNodeData::StreamConsumer { dispatch, .. } = &node.data else {
-        panic!("expected a StreamConsumer variant");
-    };
-    assert_eq!(
-        *dispatch,
-        StreamDispatch::Rhai,
-        "a missing `dispatch` key must default to Rhai (else every shipped consumer breaks)"
-    );
-}
-
-#[test]
-fn stream_consumer_default_dispatch_lowers_byte_identically_to_explicit_rhai() {
-    // Implicit (Default::default() == Rhai, the deserialized no-key shape) vs.
-    // an explicitly-Rhai consumer: the emitted AIR must be identical.
-    let implicit = sc_graph(StreamDispatch::default(), false);
-    let explicit = sc_graph(StreamDispatch::Rhai, false);
-
-    let air_implicit = compile_to_air(&implicit, "sc_bc", "", &std::collections::HashMap::new())
-        .expect("default-dispatch consumer must compile (Rhai path)");
-    let air_explicit = compile_to_air(&explicit, "sc_bc", "", &std::collections::HashMap::new())
-        .expect("explicit-Rhai consumer must compile");
-
-    assert_eq!(
-        air_implicit, air_explicit,
-        "the default `dispatch` must lower byte-identically to explicit Rhai (backcompat)"
-    );
-
-    // And the Rhai path must NOT mint any body machinery.
-    assert!(
-        !has_place(&air_implicit, "p_consumer_body_in"),
-        "Rhai mode mints no body entry"
-    );
-    assert!(
-        !has_place(&air_implicit, "p_consumer_lock"),
-        "Rhai mode mints no permit lock"
-    );
-    assert!(
-        !has_transition(&air_implicit, "t_consumer_collect"),
-        "Rhai mode has no collect"
-    );
-    assert!(
-        has_transition(&air_implicit, "t_consumer_ingest"),
-        "Rhai mode keeps the passthrough ingest"
-    );
-}
-
-#[test]
-fn stream_consumer_rhai_with_body_edges_is_rejected() {
-    // Rhai dispatch + body wiring → StreamConsumerRhaiHasBody.
-    let graph = sc_graph(StreamDispatch::Rhai, true);
-    let err = compile_to_air(
-        &graph,
-        "sc_rhai_body",
-        "",
-        &std::collections::HashMap::new(),
-    )
-    .expect_err("Rhai consumer with body edges must be rejected");
-    assert_eq!(
-        err.kind(),
-        "stream_consumer_rhai_has_body",
-        "expected StreamConsumerRhaiHasBody, got: {err:?}"
-    );
-}
-
-#[test]
-fn stream_consumer_body_mode_without_body_is_rejected() {
-    // SequentialBody but NO body child / body edges → StreamConsumerBodyEmpty.
-    let graph = sc_graph(StreamDispatch::SequentialBody, false);
-    let err = compile_to_air(
-        &graph,
-        "sc_seq_empty",
-        "",
-        &std::collections::HashMap::new(),
-    )
-    .expect_err("body-mode consumer with no body must be rejected");
-    assert_eq!(
-        err.kind(),
-        "stream_consumer_body_empty",
-        "expected StreamConsumerBodyEmpty, got: {err:?}"
-    );
-}
-
-#[test]
-fn stream_consumer_live_reduce_without_body_is_rejected() {
-    let graph = sc_graph(StreamDispatch::LiveReduce, false);
-    let err = compile_to_air(&graph, "sc_live", "", &std::collections::HashMap::new())
-        .expect_err("LiveReduce without body must be rejected");
-    assert_eq!(
-        err.kind(),
-        "stream_consumer_body_empty",
-        "expected StreamConsumerBodyEmpty, got: {err:?}"
-    );
-}
-
-#[test]
-fn stream_consumer_live_reduce_lowers_dense_seq_and_immediate_bootstrap() {
-    let graph = sc_graph(StreamDispatch::LiveReduce, true);
-    let air = compile_to_air(&graph, "sc_live", "", &std::collections::HashMap::new())
-        .expect("LiveReduce with body must compile");
-
-    assert!(has_place(&air, "p_consumer_dense_seq"), "dense sequence counter place");
-    assert!(has_place(&air, "p_consumer_exec_id"), "reducer execution ID place");
-    assert!(has_place(&air, "p_consumer_feed_inbox"), "feed inbox place");
-    assert!(has_place(&air, "p_consumer_body_in"), "body entry place");
-    assert!(has_place(&air, "p_consumer_body_out"), "body terminal place");
-
-    get_transition(&air, "t_consumer_feed").expect("per-chunk feed transition");
-    get_transition(&air, "t_consumer_feed_effect").expect("feed effect transition");
-    get_transition(&air, "t_consumer_eof").expect("EOF sentinel transition");
-    get_transition(&air, "t_consumer_capture_exec_id").expect("exec ID capture");
-    get_transition(&air, "t_consumer_collect").expect("collect transition");
-
-    assert!(
-        get_transition(&air, "t_consumer_start_reducer").is_none(),
-        "no start_reducer gate (immediate bootstrap)"
-    );
-    assert!(
-        get_transition(&air, "t_consumer_close").is_none(),
-        "no t_close (LiveReduce bypasses gather)"
-    );
-    assert!(
-        get_transition(&air, "t_consumer_gather").is_none(),
-        "no t_gather (LiveReduce bypasses gather)"
-    );
-
-    let feed = get_transition(&air, "t_consumer_feed").unwrap();
-    let feed_json = serde_json::to_string(feed).unwrap();
-    assert!(
-        feed_json.contains("seq.n"),
-        "feed uses dense seq.n, not chunk.sequence, got: {feed_json}"
-    );
-    assert!(
-        feed_json.contains("seq.n + 1"),
-        "feed increments dense counter, got: {feed_json}"
-    );
-    assert!(
-        !feed_json.contains("chunk.sequence"),
-        "feed must NOT use raw chunk.sequence (sparse), got: {feed_json}"
-    );
-
-    let body_in = places(&air)
-        .iter()
-        .find(|p| p["id"] == "p_consumer_body_in")
-        .unwrap();
-    let body_in_json = serde_json::to_string(body_in).unwrap();
-    assert!(
-        body_in_json.contains("initial") || body_in_json.contains("marking"),
-        "p_body_in must be seeded (immediate bootstrap), got: {body_in_json}"
-    );
 }

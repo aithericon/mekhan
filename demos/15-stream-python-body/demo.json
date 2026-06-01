@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f15",
   "name": "15 · Stream Python Body",
-  "description": "LiveReduce: a long-lived Python reducer receives chunks via IPC (aithericon.chunks()) from a streaming producer. The producer (streamOutput=true) emits 4 word chunks (the/quick/brown/fox); the StreamConsumer is a thin router that forwards chunks via EXECUTOR_STREAM_FEED and sends EOF; the reducer uppercases and concatenates them into 'THE QUICK BROWN FOX'. The Python script owns the reduction logic — no Petri-net gather barrier.",
+  "description": "streamInput reducer: a single AutomatedStep with streamInput=true is a long-lived Python process that receives chunks via IPC (aithericon.chunks()) from a streaming producer. The producer (streamOutput=true) emits 4 word chunks (the/quick/brown/fox); the reducer (seeded at net entry) uppercases and concatenates them into 'THE QUICK BROWN FOX'. The Python script owns the reduction logic — no container node, no Petri-net gather barrier. Wire producer.stream → reducer.stream and producer.out → reducer.in (the EOF trigger).",
   "visibility": "public"
 }

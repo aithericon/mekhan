@@ -1,0 +1,11 @@
+{
+  "name": "Stream Map: per-chunk uppercase (parallel), gathered + joined in stream order → 'THE QUICK BROWN FOX'",
+  "enabled": true,
+  "start_tokens": [
+    { "start_block_id": "start", "token": {} }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.transcript", "op": "eq", "value": "THE QUICK BROWN FOX" }
+  ]
+}

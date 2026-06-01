@@ -41,7 +41,7 @@ pub mod phase_update;
 pub mod progress_update;
 pub mod scope;
 pub mod start;
-pub mod stream_consumer;
+pub mod stream_fold;
 pub mod sub_workflow;
 pub mod timeout;
 pub mod trigger;
@@ -172,7 +172,7 @@ pub(crate) static NODES: &[&NodeDecl] = &[
     &progress_update::PROGRESS_UPDATE_DECL,
     &scope::SCOPE_DECL,
     &start::START_DECL,
-    &stream_consumer::STREAM_CONSUMER_DECL,
+    &stream_fold::STREAM_FOLD_DECL,
     &sub_workflow::SUB_WORKFLOW_DECL,
     &timeout::TIMEOUT_DECL,
     &trigger::TRIGGER_DECL,
@@ -199,7 +199,7 @@ pub(crate) fn lookup_by_variant(data: &WorkflowNodeData) -> Option<&'static Node
         WorkflowNodeData::Scope { .. } => "scope",
         WorkflowNodeData::LeaseScope { .. } => "lease_scope",
         WorkflowNodeData::Map { .. } => "map",
-        WorkflowNodeData::StreamConsumer { .. } => "stream_consumer",
+        WorkflowNodeData::StreamFold { .. } => "stream_fold",
         WorkflowNodeData::PhaseUpdate { .. } => "phase_update",
         WorkflowNodeData::ProgressUpdate { .. } => "progress_update",
         WorkflowNodeData::Failure { .. } => "failure",
@@ -256,10 +256,10 @@ pub(crate) fn guard_rhai_sources(data: &WorkflowNodeData) -> Vec<&str> {
         | WorkflowNodeData::Scope { .. }
         | WorkflowNodeData::LeaseScope { .. }
         | WorkflowNodeData::Map { .. }
-        // StreamConsumer's `reduce` Custom expr is Rhai but operates over the
+        // StreamFold's `reduce` Custom expr is Rhai but operates over the
         // gathered `__r` array (not `input.<path>`-resolved like guards), so it
-        // is syntax-checked in `validate_stream_consumer`, not here.
-        | WorkflowNodeData::StreamConsumer { .. }
+        // is syntax-checked in `validate_stream_fold`, not here.
+        | WorkflowNodeData::StreamFold { .. }
         | WorkflowNodeData::PhaseUpdate { .. }
         | WorkflowNodeData::ProgressUpdate { .. }
         | WorkflowNodeData::Trigger { .. }
@@ -543,6 +543,7 @@ mod tests {
             label: "m".to_string(),
             description: None,
             items_ref: "extract.tasks".to_string(),
+            stream_source: false,
             item_var: "item".to_string(),
             result_var: "result".to_string(),
             output: None,
@@ -565,17 +566,16 @@ mod tests {
     }
 
     #[test]
-    fn lookup_by_variant_finds_stream_consumer() {
-        let data = WorkflowNodeData::StreamConsumer {
-            label: "sc".to_string(),
+    fn lookup_by_variant_finds_stream_fold() {
+        let data = WorkflowNodeData::StreamFold {
+            label: "sf".to_string(),
             description: None,
             result_var: "item".to_string(),
             reduce: Default::default(),
-            dispatch: Default::default(),
         };
-        let decl = lookup_by_variant(&data).expect("stream_consumer registered");
-        assert_eq!(decl.wire_name, "stream_consumer");
-        assert_eq!(decl.kind, NodeKind::StreamConsumer);
+        let decl = lookup_by_variant(&data).expect("stream_fold registered");
+        assert_eq!(decl.wire_name, "stream_fold");
+        assert_eq!(decl.kind, NodeKind::StreamFold);
         assert!(decl.lowers_to_air);
         // Parks the reduced output at p_<id>_data, like Map.
         assert!(decl.parks_data_envelope);
@@ -642,6 +642,7 @@ mod tests {
             retry_policy: RetryPolicy::default(),
             deployment_model: Default::default(),
             stream_output: false,
+            stream_input: false,
         };
         let decl = lookup_by_variant(&data).expect("automated_step registered");
         assert_eq!(decl.wire_name, "automated_step");
@@ -866,6 +867,7 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: Default::default(),
                 stream_output: false,
+                stream_input: false,
             },
             // Rhai-bearing only (no structural validate hook — covered by
             // guard_rhai_sources / validate_guards):
@@ -923,7 +925,7 @@ mod tests {
             "progress_update",
             "scope",
             "start",
-            "stream_consumer",
+            "stream_fold",
             "sub_workflow",
             "timeout",
             "trigger",

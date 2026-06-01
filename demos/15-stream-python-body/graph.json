@@ -44,26 +44,14 @@
       }
     },
     {
-      "id": "consumer",
-      "type": "stream_consumer",
-      "position": { "x": 620, "y": 160 },
-      "data": {
-        "type": "stream_consumer",
-        "label": "Consumer",
-        "description": "Thin router: forwards chunks to the reducer via IPC and sends EOF. The reducer owns the reduction logic.",
-        "resultVar": "transcript",
-        "dispatch": { "mode": "liveReduce" }
-      }
-    },
-    {
       "id": "reducer",
       "type": "automated_step",
-      "parentId": "consumer",
-      "position": { "x": 620, "y": 320 },
+      "position": { "x": 620, "y": 160 },
       "data": {
         "type": "automated_step",
         "label": "Reducer",
-        "description": "Long-lived Python process that receives chunks via aithericon.chunks(), uppercases and concatenates them, then emits the final transcript.",
+        "description": "streamInput reducer: a long-lived Python process seeded at net entry that receives the producer's chunks via aithericon.chunks() over IPC, uppercases and concatenates them, then emits the final transcript. No container — this single step owns its reduction.",
+        "streamInput": true,
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -93,17 +81,15 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "transcript", "expression": "consumer.output" }
+          { "targetField": "transcript", "expression": "reducer.transcript" }
         ]
       }
     }
   ],
   "edges": [
     { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "consumer", "targetHandle": "stream", "type": "sequence" },
-    { "id": "e_producer_control", "source": "producer", "target": "consumer", "targetHandle": "control", "type": "sequence" },
-    { "id": "e_consumer_body_in", "source": "consumer", "sourceHandle": "body_in", "target": "reducer", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_body_out_consumer", "source": "reducer", "target": "consumer", "targetHandle": "body_out", "type": "sequence" },
-    { "id": "e_consumer_end", "source": "consumer", "target": "end", "targetHandle": "in", "type": "sequence" }
+    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "reducer", "targetHandle": "stream", "type": "sequence" },
+    { "id": "e_producer_control", "source": "producer", "target": "reducer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_reducer_end", "source": "reducer", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

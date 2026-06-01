@@ -228,6 +228,126 @@ pub(crate) fn validate_lease_scope(
     Ok(())
 }
 
+/// The nearest `Loop` ancestor of `node` (walk the `parent_id` chain), or
+/// `None` if no enclosing Loop. Mirrors
+/// `lower::automated_step::enclosing_leased_scope_slug` but stops at the first
+/// `Loop` (a plain LeaseScope/Scope/Map between the node and the loop is walked
+/// through — the relevant boundary for control-token survival is the loop's
+/// continue cycle). Returns the loop node's id.
+fn enclosing_loop<'g>(graph: &'g WorkflowGraph, node: &WorkflowNode) -> Option<&'g WorkflowNode> {
+    let mut current = node.parent_id.as_deref();
+    while let Some(pid) = current {
+        let parent = graph.nodes.iter().find(|n| n.id == pid)?;
+        if matches!(parent.data, WorkflowNodeData::Loop { .. }) {
+            return Some(parent);
+        }
+        current = parent.parent_id.as_deref();
+    }
+    None
+}
+
+/// Reject a control-token read (`input.<field>` / `token.<field>`) of an
+/// upstream business field made by a node INSIDE a loop body.
+///
+/// Such a field rides the control token only on the loop's FIRST iteration:
+/// `lower_loop`'s `t_continue` rebuilds the token each pass (`#{ body:
+/// <body_out>, data: … }`), and any envelope-stripping body step (every
+/// AutomatedStep) drops it — so the read returns `undefined` (Rhai) /
+/// `AttributeError` (Python runner `_AccessibleDict`) on iteration 1+. The
+/// safe form is always the parked borrow `<producer_slug>.<field>` (a
+/// non-consuming read-arc into the producer's write-once `p_<id>_data`, which
+/// survives every iteration — exactly how `lp.iteration` / `bo.observations`
+/// are read in the loop demos). See docs/10 + docs/17.
+///
+/// SOUNDNESS: we flag a reference ONLY when its head segment is a leaf present
+/// on the loop's *enter* shape (`node_in[loop]`) and is NOT a genuine control
+/// leaf (`_*` / `task_id` / `status`) nor the loop's own `<slug>` namespace.
+/// A field produced *within* the body (intra-iteration) is not on the enter
+/// shape, so it is never mis-flagged; only the iteration-0-only fields are.
+/// On a structurally-unanalyzable draft we skip (other passes report first).
+pub(crate) fn validate_loop_body_control_refs(
+    graph: &WorkflowGraph,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), CompileError> {
+    use crate::compiler::borrow::planners::guard::{guard_refs, RefRoot};
+    use crate::compiler::python_refs::extract_python_refs;
+    use crate::compiler::token_shape::analyze;
+    use crate::compiler::token_shape::surface::is_control_leaf;
+
+    let Ok(report) = analyze(graph) else {
+        return Ok(());
+    };
+
+    for node in &graph.nodes {
+        let Some(loop_node) = enclosing_loop(graph, node) else {
+            continue;
+        };
+        let loop_slug = loop_node.slug();
+        let Some(enter) = report.node_in.get(&loop_node.id) else {
+            continue;
+        };
+
+        // (head_segment, exact-source-text) candidates that root on the
+        // control token. Rhai surfaces (Decision guards, nested-Loop conditions,
+        // End/Failure result mappings, Delay/Timeout durations) + Python source.
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        for src in crate::nodes::guard_rhai_sources(&node.data) {
+            for gref in guard_refs(src) {
+                if matches!(gref.root, RefRoot::Input) {
+                    if let Some(head) = gref.segs.first() {
+                        candidates.push((head.clone(), gref.referenced.clone()));
+                    }
+                }
+            }
+        }
+        if let Some(files) = inline_sources.get(&node.id) {
+            for src in files.values() {
+                for r in extract_python_refs(src) {
+                    if r.head == "input" || r.head == "token" {
+                        candidates.push((r.attr.clone(), format!("{}.{}", r.head, r.attr)));
+                    }
+                }
+            }
+        }
+
+        for (head, referenced) in candidates {
+            // Genuine control/identity leaves survive every iteration.
+            if is_control_leaf(&format!("input.{head}")) {
+                continue;
+            }
+            // The loop's own parked namespace (`input.<slug>.iteration`, or a
+            // Python `input.<slug>` access) is loop-stable by construction.
+            if head == loop_slug {
+                continue;
+            }
+            // Only flag a field that DEMONSTRABLY rode the loop's enter token as
+            // business data (present on `node_in[loop]`, not a control leaf).
+            if enter.resolve(std::slice::from_ref(&head)).is_none() {
+                continue;
+            }
+            // Resolve the owning parked producer for a precise suggestion.
+            let suggested = enter
+                .find_by_leaf(&head)
+                .and_then(|(_phys, _ty, prov)| {
+                    graph.nodes.iter().find(|n| n.id == prov.node_id).map(|p| {
+                        let pslug = p.slug();
+                        format!("{pslug}.{head}")
+                    })
+                })
+                .unwrap_or_else(|| format!("<producer>.{head}"));
+
+            return Err(CompileError::LoopBodyStaleControlRef {
+                node_id: node.id.clone(),
+                node_label: node.data.label().to_string(),
+                loop_label: loop_node.data.label().to_string(),
+                referenced,
+                suggested,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Delay: non-empty `durationMsExpr` (parse + ref-resolution happens in
 /// `validate_guards` alongside other Rhai surfaces).
 pub(crate) fn validate_delay(
@@ -288,32 +408,19 @@ pub(crate) fn validate_timeout(
     Ok(())
 }
 
-/// Map: non-empty `itemsRef` + `resultVar`, plus a body — at least one
-/// outgoing edge with `sourceHandle="body_in"` AND at least one incoming edge
-/// with `targetHandle="body_out"` (same body-attach shape as Loop/Timeout).
-/// The structural body-presence check here is the publish-time mirror of the
-/// `MapEmpty` lowering gate (which counts `parent_id == map.id` children).
-/// Structural validation for a `StreamConsumer`: exactly one inbound `stream`
+
+/// Structural validation for a `StreamFold`: exactly one inbound `stream`
 /// handle edge + exactly one inbound `control` handle edge (the producer's data
 /// Signal place + its EOS/completion token). A `Custom` reduce expression must
-/// parse as a Rhai expression. Per `dispatch` mode: `Rhai` must have NO body
-/// edges; `SequentialBody`/`ParallelBody` require a body (body_in+body_out edges,
-/// a valid `resultVar`, a supported body terminal kind, and no enclosing Map);
-/// `LiveReduce` requires a body (same structural gate as Sequential/Parallel).
-pub(crate) fn validate_stream_consumer(
+/// parse as a Rhai expression. StreamFold has no body — there is nothing more
+/// to wire.
+pub(crate) fn validate_stream_fold(
     node: &WorkflowNode,
     graph: &WorkflowGraph,
     _wg: &WorkflowDiGraph<'_>,
 ) -> Result<(), CompileError> {
-    use crate::models::template::StreamDispatch;
-    let WorkflowNodeData::StreamConsumer {
-        reduce,
-        result_var,
-        dispatch,
-        ..
-    } = &node.data
-    else {
-        unreachable!("validate_stream_consumer on non-StreamConsumer variant");
+    let WorkflowNodeData::StreamFold { reduce, .. } = &node.data else {
+        unreachable!("validate_stream_fold on non-StreamFold variant");
     };
 
     // Count inbound edges per target handle — exactly one `stream` and one
@@ -331,13 +438,13 @@ pub(crate) fn validate_stream_consumer(
         }
     }
     if stream_edges != 1 {
-        return Err(CompileError::StreamConsumerMissingHandle {
+        return Err(CompileError::StreamFoldMissingHandle {
             node_id: node.id.clone(),
             handle: "stream",
         });
     }
     if control_edges != 1 {
-        return Err(CompileError::StreamConsumerMissingHandle {
+        return Err(CompileError::StreamFoldMissingHandle {
             node_id: node.id.clone(),
             handle: "control",
         });
@@ -348,81 +455,11 @@ pub(crate) fn validate_stream_consumer(
     if let StreamReduce::Custom { expr } = reduce {
         let engine = rhai::Engine::new();
         if let Err(err) = engine.compile_expression(expr) {
-            return Err(CompileError::StreamConsumerInvalidReduce {
+            return Err(CompileError::StreamFoldInvalidReduce {
                 node_id: node.id.clone(),
                 expr: expr.clone(),
                 detail: format!("{err}"),
             });
-        }
-    }
-
-    // ── Per-dispatch body wiring ────────────────────────────────────────────
-    let has_body_in = graph
-        .edges
-        .iter()
-        .any(|e| e.source == node.id && e.source_handle.as_deref() == Some("body_in"));
-    let has_body_out = graph
-        .edges
-        .iter()
-        .any(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"));
-
-    match dispatch {
-        // `Rhai`: pure fold, no body. Any body wiring is a config error.
-        StreamDispatch::Rhai => {
-            if has_body_in || has_body_out {
-                return Err(CompileError::StreamConsumerRhaiHasBody {
-                    node_id: node.id.clone(),
-                });
-            }
-        }
-        // Body modes: require the body, a valid resultVar, a supported terminal,
-        // and no enclosing Map. Mirrors `validate_map`.
-        StreamDispatch::SequentialBody
-        | StreamDispatch::ParallelBody
-        | StreamDispatch::LiveReduce => {
-            if result_var.trim().is_empty() || !is_rhai_ident(result_var.trim()) {
-                return Err(CompileError::MapResultVarInvalid {
-                    node_id: node.id.clone(),
-                    result_var: result_var.clone(),
-                });
-            }
-            // Nested inside a Map is unsupported (single scatter scope only).
-            if let Some(outer_id) = enclosing_map(graph, node) {
-                return Err(CompileError::StreamConsumerNestedInMap {
-                    node_id: node.id.clone(),
-                    outer_id,
-                });
-            }
-            if !has_body_in || !has_body_out {
-                return Err(CompileError::StreamConsumerBodyEmpty {
-                    node_id: node.id.clone(),
-                });
-            }
-            // Body-terminal kind gate: the node that SOURCES the `body_out` edge
-            // must be a parked-producer kind that emits a
-            // `detail.outputs.<resultVar>` envelope the gather can lift +
-            // correlate — same constraint as a Map body terminal.
-            let by_id: HashMap<&str, &WorkflowNode> =
-                graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-            for e in graph
-                .edges
-                .iter()
-                .filter(|e| e.target == node.id && e.target_handle.as_deref() == Some("body_out"))
-            {
-                let Some(term) = by_id.get(e.source.as_str()) else {
-                    continue; // dangling source — reachability error surfaces elsewhere
-                };
-                if matches!(term.data, WorkflowNodeData::Map { .. }) {
-                    continue; // nested Map: deferred to that Map's own MapNested check
-                }
-                if !map_body_terminal_supported(&term.data) {
-                    return Err(CompileError::StreamConsumerBodyUnsupported {
-                        node_id: node.id.clone(),
-                        child_id: term.id.clone(),
-                        kind: term.data.type_name().to_string(),
-                    });
-                }
-            }
         }
     }
 
@@ -437,12 +474,42 @@ pub(crate) fn validate_map(
     let WorkflowNodeData::Map {
         items_ref,
         result_var,
+        stream_source,
         ..
     } = &node.data
     else {
         unreachable!("validate_map on non-Map variant");
     };
-    if items_ref.trim().is_empty() {
+    if *stream_source {
+        // Streaming Map: no itemsRef; instead require exactly one inbound
+        // `stream` edge + one `control` edge (the producer's chunk Signal place
+        // + its EOS/count token), mirroring StreamFold. The shared body /
+        // nested / terminal gates below still apply.
+        let mut stream_edges = 0usize;
+        let mut control_edges = 0usize;
+        for e in &graph.edges {
+            if e.target != node.id {
+                continue;
+            }
+            match e.target_handle.as_deref() {
+                Some("stream") => stream_edges += 1,
+                Some("control") => control_edges += 1,
+                _ => {}
+            }
+        }
+        if stream_edges != 1 {
+            return Err(CompileError::Validation(format!(
+                "streaming map '{}' requires exactly one inbound `stream` edge, found {stream_edges}",
+                node.id
+            )));
+        }
+        if control_edges != 1 {
+            return Err(CompileError::Validation(format!(
+                "streaming map '{}' requires exactly one inbound `control` edge, found {control_edges}",
+                node.id
+            )));
+        }
+    } else if items_ref.trim().is_empty() {
         return Err(CompileError::Validation(format!(
             "map '{}' must have a non-empty itemsRef",
             node.id
@@ -634,6 +701,116 @@ pub(crate) fn validate_parallel_split(
 /// only that token's data, not a merge. Legal Petri, rarely the intent. Warn
 /// (don't fail — existing graphs rely on it); the editor surfaces the same
 /// caveat per-node in the step reference panel.
+/// Structural validation for an `AutomatedStep`. Runs the streamInput reducer
+/// checks when `stream_input` is set, otherwise falls through to the
+/// unmerged-fan-in warning. A `streamInput` step legitimately has two inbound
+/// edges (`stream` + control `in`), so the fan-in warning is skipped for it.
+pub(crate) fn validate_automated_step(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    use crate::models::template::DeploymentModel;
+    let WorkflowNodeData::AutomatedStep {
+        stream_input,
+        deployment_model,
+        ..
+    } = &node.data
+    else {
+        unreachable!("validate_automated_step on non-AutomatedStep variant");
+    };
+
+    if !*stream_input {
+        return warn_unmerged_fan_in(node, graph, wg);
+    }
+
+    let err = |detail: String| CompileError::StreamInputInvalid {
+        node_id: node.id.clone(),
+        detail,
+    };
+
+    // Inline executor only — pooled/leased/scheduled bypass the inline lifecycle
+    // that plumbs the IPC chunk feed, so a streamInput flag there would silently
+    // produce a broken net.
+    match deployment_model {
+        DeploymentModel::Executor { pool: None } => {}
+        DeploymentModel::Executor { pool: Some(_) } => {
+            return Err(err(
+                "streamInput is unsupported on a pooled (token_pool) deployment — \
+                 use a plain inline Executor step"
+                    .to_string(),
+            ));
+        }
+        DeploymentModel::Scheduled { .. } => {
+            return Err(err(
+                "streamInput is unsupported on a Scheduled (cluster) deployment — \
+                 use a plain inline Executor step"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Exactly one inbound `stream` edge + one control `in` edge.
+    let mut stream_src: Option<&str> = None;
+    let mut stream_edges = 0usize;
+    let mut control_src: Option<&str> = None;
+    let mut control_edges = 0usize;
+    for e in &graph.edges {
+        if e.target != node.id {
+            continue;
+        }
+        match e.target_handle.as_deref() {
+            Some("stream") => {
+                stream_edges += 1;
+                stream_src = Some(e.source.as_str());
+                if e.source_handle.as_deref() != Some("stream") {
+                    return Err(err(
+                        "the `stream` edge must come from a producer's `stream` output handle"
+                            .to_string(),
+                    ));
+                }
+            }
+            Some("in") => {
+                control_edges += 1;
+                control_src = Some(e.source.as_str());
+            }
+            _ => {}
+        }
+    }
+    if stream_edges != 1 {
+        return Err(err(format!(
+            "expected exactly one inbound `stream` edge, found {stream_edges}"
+        )));
+    }
+    if control_edges != 1 {
+        return Err(err(format!(
+            "expected exactly one inbound control `in` edge (the EOF trigger), found {control_edges}"
+        )));
+    }
+    // The stream + control edges must originate from the SAME producer, and that
+    // producer must be a `streamOutput` AutomatedStep.
+    if stream_src != control_src {
+        return Err(err(
+            "the `stream` and control `in` edges must come from the same streaming producer"
+                .to_string(),
+        ));
+    }
+    let producer = graph.nodes.iter().find(|n| Some(n.id.as_str()) == stream_src);
+    match producer.map(|n| &n.data) {
+        Some(WorkflowNodeData::AutomatedStep {
+            stream_output: true,
+            ..
+        }) => {}
+        _ => {
+            return Err(err(
+                "the upstream producer must be an AutomatedStep with streamOutput=true".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn warn_unmerged_fan_in(
     node: &WorkflowNode,
     _graph: &WorkflowGraph,
@@ -1025,6 +1202,7 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: DeploymentModel::default(),
                 stream_output: false,
+                stream_input: false,
             },
             parent_id: None,
             width: None,

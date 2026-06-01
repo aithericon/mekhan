@@ -93,16 +93,6 @@ impl JobExecutor {
         let timeout = job.timeout.unwrap_or(self.registry.default_timeout());
         let cancel = self.cancel_registry.register(execution_id);
 
-        // Inbound live chunk feed (the "live IPC reducer"): only when the job
-        // opted in. `Some(rx)` is threaded into the IPC sidecar's `StreamChunks`
-        // stream; `None` means non-reducer jobs spin up nothing. Deregistered on
-        // every exit path alongside the cancel token.
-        let chunk_rx = if job.feed_chunks {
-            Some(self.chunk_registry.register(execution_id))
-        } else {
-            None
-        };
-
         // Build initial RunContext
         let run_dir = RunDirectory::new(&self.base_dir, execution_id);
 
@@ -114,7 +104,6 @@ impl JobExecutor {
         if let Err(e) = tokio::fs::create_dir_all(&run_dir.root).await {
             error!(%execution_id, error = %e, "failed to create run directory for lock");
             self.cancel_registry.deregister(execution_id);
-            self.chunk_registry.deregister(execution_id);
             return ExecutionStatus::Failed;
         }
         let lock_path = run_dir.root.join(".lock");
@@ -131,11 +120,26 @@ impl JobExecutor {
                     "execution already in progress (lock file exists), skipping duplicate"
                 );
                 self.cancel_registry.deregister(execution_id);
-                self.chunk_registry.deregister(execution_id);
-                // Return Failed so apalis nacks and the message is redelivered
-                // after the primary executor finishes and cleans up.
+                // NOTE: do NOT touch the chunk_registry here. The chunk feed is
+                // registered ONLY after winning the lock (below), so a duplicate
+                // delivery must not deregister (or, via a pre-lock re-register,
+                // drop the sender of) the PRIMARY executor's still-live channel —
+                // doing so closes the running reducer's `aithericon.chunks()`
+                // stream mid-flight, yielding an empty reduction.
                 return ExecutionStatus::Failed;
             }
+        };
+
+        // Inbound live chunk feed (the "live IPC reducer"): registered ONLY after
+        // winning the run-directory lock, so a duplicate/redelivered job (which
+        // fails the lock above and returns early) can never disturb the primary
+        // executor's live channel. `Some(rx)` is threaded into the IPC sidecar's
+        // `StreamChunks` stream; `None` means non-reducer jobs spin up nothing.
+        // Deregistered on every exit path below alongside the cancel token.
+        let chunk_rx = if job.feed_chunks {
+            Some(self.chunk_registry.register(execution_id))
+        } else {
+            None
         };
 
         let initial_ctx = RunContext {

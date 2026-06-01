@@ -170,6 +170,32 @@ pub enum CompileError {
     #[error("lease scope '{node_id}' has no body — add at least one node inside the lease-scope container")]
     LeaseScopeEmpty { node_id: String },
 
+    /// A node INSIDE a loop body reads an upstream business field off the
+    /// *control token* (`input.<field>` / `token.<field>`), but that field only
+    /// rides the token on the FIRST iteration. The loop's `t_continue` rebuilds
+    /// the token every pass (`#{ body: <body_out>, data: … }`) — an
+    /// envelope-stripping body (any AutomatedStep) drops the field, so the read
+    /// returns `undefined`/`AttributeError` on iteration 1+. The fix is always
+    /// the parked-borrow form `<producer_slug>.<field>`: a non-consuming read-arc
+    /// into the producer's write-once `p_<id>_data` place, which survives every
+    /// iteration (this is how `lp.iteration`, `bo.observations`, etc. work). See
+    /// docs/10 (control-data token model) and docs/17 (lease scope).
+    #[error(
+        "node '{node_label}' inside loop '{loop_label}' reads `{referenced}` off the control \
+         token, but that field only rides the token on the FIRST iteration — the loop rebuilds \
+         the token each pass and drops it. Use the parked-borrow form `{suggested}` instead (a \
+         non-consuming read-arc that survives every iteration)."
+    )]
+    LoopBodyStaleControlRef {
+        node_id: String,
+        node_label: String,
+        loop_label: String,
+        /// The exact reference text the author wrote (`input.job_name`).
+        referenced: String,
+        /// The suggested parked-borrow replacement (`start.job_name`).
+        suggested: String,
+    },
+
     /// Map has no body — no child node has `parent_id == map.id`. A Map with
     /// nothing to run per element is a config error; wire at least one node
     /// inside the map container.
@@ -211,25 +237,32 @@ pub enum CompileError {
     )]
     MapNested { node_id: String, outer_id: String },
 
-    /// A `StreamConsumer` is missing exactly one inbound `stream` or `control`
+    /// A `StreamFold` is missing exactly one inbound `stream` or `control`
     /// handle edge. It needs the producer's data Signal place (`stream`) and
     /// its EOS/completion token (`control`) — one of each.
-    #[error(
-        "node {node_id}: stream consumer is missing exactly one inbound `{handle}` handle edge"
-    )]
-    StreamConsumerMissingHandle {
+    #[error("node {node_id}: stream fold is missing exactly one inbound `{handle}` handle edge")]
+    StreamFoldMissingHandle {
         node_id: String,
         handle: &'static str,
     },
 
-    /// A `StreamConsumer`'s `Custom` reduce expression is not a parseable Rhai
+    /// A `StreamFold`'s `Custom` reduce expression is not a parseable Rhai
     /// expression (it is embedded verbatim into the gather transition's logic).
-    #[error("node {node_id}: invalid stream-consumer reduce expression `{expr}`: {detail}")]
-    StreamConsumerInvalidReduce {
+    #[error("node {node_id}: invalid stream-fold reduce expression `{expr}`: {detail}")]
+    StreamFoldInvalidReduce {
         node_id: String,
         expr: String,
         detail: String,
     },
+
+    /// A `streamInput` AutomatedStep (streaming reducer) is mis-wired or
+    /// mis-configured: it must have exactly one inbound `stream` edge from a
+    /// `streamOutput` producer's `stream` handle plus exactly one control `in`
+    /// edge from that same producer, and it cannot run under a pooled/leased or
+    /// scheduled deployment model (the inline executor lifecycle is the only
+    /// path that plumbs the IPC chunk feed).
+    #[error("node {node_id}: invalid streamInput reducer: {detail}")]
+    StreamInputInvalid { node_id: String, detail: String },
 
     /// A Map body terminal is a node kind that cannot produce the
     /// `detail.outputs.<resultVar>` envelope the gather requires (engine-effect
@@ -248,63 +281,6 @@ pub enum CompileError {
         node_id: String,
         kind: String,
     },
-
-    /// A `StreamConsumer` in the default `Rhai` dispatch mode has body edges
-    /// (a `body_in` source edge or a `body_out` target edge). `Rhai` folds
-    /// chunks with no per-chunk body — body edges are only valid in the
-    /// `SequentialBody`/`ParallelBody` modes. Either switch the dispatch mode or
-    /// remove the body wiring.
-    #[error(
-        "stream consumer '{node_id}': dispatch mode `rhai` has no per-chunk body, \
-         but a `body_in`/`body_out` edge is wired — switch to `sequentialBody`/\
-         `parallelBody` or remove the body wiring"
-    )]
-    StreamConsumerRhaiHasBody { node_id: String },
-
-    /// A body-mode `StreamConsumer` (`SequentialBody`/`ParallelBody`) is missing
-    /// its body — no child node with `parent_id == consumer.id`, or no
-    /// `body_in`+`body_out` edge pair. A body mode with nothing to run per chunk
-    /// is a config error. Mirrors `MapEmpty`.
-    #[error(
-        "stream consumer '{node_id}': dispatch mode requires a per-chunk body — \
-         add at least one node inside the consumer and wire its `body_in` output \
-         plus a body completion back to `body_out`"
-    )]
-    StreamConsumerBodyEmpty { node_id: String },
-
-    /// A body-mode `StreamConsumer`'s body terminal is a node kind that cannot
-    /// produce the `detail.outputs.<resultVar>` envelope the gather requires.
-    /// Same constraint as `MapBodyUnsupported`: the terminal must be a
-    /// parked-producer kind (inline AutomatedStep, Agent, or SubWorkflow).
-    #[error(
-        "stream consumer '{node_id}': body terminal '{child_id}' ({kind}) cannot \
-         be a body terminal — it produces no `detail.outputs` envelope for the \
-         gather. Use an inline AutomatedStep, Agent, or SubWorkflow."
-    )]
-    StreamConsumerBodyUnsupported {
-        node_id: String,
-        child_id: String,
-        kind: String,
-    },
-
-    /// A body-mode `StreamConsumer` is nested inside a Map (its `parent_id`
-    /// chain reaches a Map ancestor). v1 forbids this: the gather barrier's
-    /// `__map_id` correlation and namespace-on-token item injection assume a
-    /// single scatter scope. Mirrors `MapNested`.
-    #[error(
-        "stream consumer '{node_id}' is nested inside map '{outer_id}' — a \
-         body-mode stream consumer inside a map is not supported in v1"
-    )]
-    StreamConsumerNestedInMap { node_id: String, outer_id: String },
-
-    /// A `StreamConsumer` declares the `LiveReduce` dispatch mode, which is not
-    /// implemented in this phase (it needs the executor IPC feed + engine feed
-    /// effect — Phases 2/3). Reject cleanly at publish.
-    #[error(
-        "stream consumer '{node_id}': dispatch mode `liveReduce` is not yet \
-         supported — use `rhai`, `sequentialBody`, or `parallelBody`"
-    )]
-    StreamConsumerLiveReduceUnsupported { node_id: String },
 
     /// A Map's `itemsRef` parses + resolves to a known producer field, but
     /// that field's declared shape is not an array — the scatter can only
@@ -754,19 +730,14 @@ impl CompileError {
             Self::SubWorkflowDepthExceeded { .. } => "subworkflow_depth_exceeded",
             Self::LoopEmpty { .. } => "loop_empty",
             Self::LeaseScopeEmpty { .. } => "lease_scope_empty",
+            Self::LoopBodyStaleControlRef { .. } => "loop_body_stale_control_ref",
             Self::MapEmpty { .. } => "map_empty",
             Self::MapRefMissingStar { .. } => "map_ref_missing_star",
             Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
             Self::MapNested { .. } => "map_nested",
-            Self::StreamConsumerMissingHandle { .. } => "stream_consumer_missing_handle",
-            Self::StreamConsumerInvalidReduce { .. } => "stream_consumer_invalid_reduce",
-            Self::StreamConsumerRhaiHasBody { .. } => "stream_consumer_rhai_has_body",
-            Self::StreamConsumerBodyEmpty { .. } => "stream_consumer_body_empty",
-            Self::StreamConsumerBodyUnsupported { .. } => "stream_consumer_body_unsupported",
-            Self::StreamConsumerNestedInMap { .. } => "stream_consumer_nested_in_map",
-            Self::StreamConsumerLiveReduceUnsupported { .. } => {
-                "stream_consumer_live_reduce_unsupported"
-            }
+            Self::StreamFoldMissingHandle { .. } => "stream_fold_missing_handle",
+            Self::StreamFoldInvalidReduce { .. } => "stream_fold_invalid_reduce",
+            Self::StreamInputInvalid { .. } => "stream_input_invalid",
             Self::MapBodyUnsupported { .. } => "map_body_unsupported",
             Self::MapItemsRefNotArray { .. } => "map_items_ref_not_array",
             Self::MapItemsRefUnresolved { .. } => "map_items_ref_unresolved",
@@ -834,17 +805,14 @@ impl CompileError {
             | Self::SubWorkflowDepthExceeded { node_id, .. }
             | Self::LoopEmpty { node_id }
             | Self::LeaseScopeEmpty { node_id }
+            | Self::LoopBodyStaleControlRef { node_id, .. }
             | Self::MapEmpty { node_id }
             | Self::MapRefMissingStar { node_id, .. }
             | Self::MapResultVarInvalid { node_id, .. }
             | Self::MapNested { node_id, .. }
-            | Self::StreamConsumerMissingHandle { node_id, .. }
-            | Self::StreamConsumerInvalidReduce { node_id, .. }
-            | Self::StreamConsumerRhaiHasBody { node_id }
-            | Self::StreamConsumerBodyEmpty { node_id }
-            | Self::StreamConsumerBodyUnsupported { node_id, .. }
-            | Self::StreamConsumerNestedInMap { node_id, .. }
-            | Self::StreamConsumerLiveReduceUnsupported { node_id }
+            | Self::StreamFoldMissingHandle { node_id, .. }
+            | Self::StreamFoldInvalidReduce { node_id, .. }
+            | Self::StreamInputInvalid { node_id, .. }
             | Self::MapBodyUnsupported { node_id, .. }
             | Self::MapItemsRefNotArray { node_id, .. }
             | Self::MapItemsRefUnresolved { node_id, .. }
