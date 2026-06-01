@@ -1175,7 +1175,6 @@ fn loop_produces_enter_continue_exit() {
                     // (pre-wired by `lower_loop`).
                     loop_condition: "lp.iteration < 5".to_string(),
                     accumulators: vec![],
-                    lease: None,
                 },
                 parent_id: None,
                 width: None,
@@ -1341,7 +1340,6 @@ fn loop_with_zero_iterations_fails() {
                     max_iterations: 0,
                     loop_condition: "true".to_string(),
                     accumulators: vec![],
-                    lease: None,
                 },
                 parent_id: None,
                 width: None,
@@ -1381,7 +1379,6 @@ fn loop_with_empty_condition_fails() {
                     max_iterations: 3,
                     loop_condition: "  ".to_string(),
                     accumulators: vec![],
-                    lease: None,
                 },
                 parent_id: None,
                 width: None,
@@ -2794,7 +2791,6 @@ fn loop_condition_can_reference_iteration_local() {
             max_iterations: 5,
             loop_condition: "lp.iteration < 3".to_string(),
             accumulators: vec![],
-            lease: None,
         },
         parent_id: None,
         width: None,
@@ -2924,7 +2920,6 @@ fn loop_with_accumulators_graph(
             max_iterations: 5,
             loop_condition: "lp.iteration < 5".to_string(),
             accumulators,
-            lease: None,
         },
         parent_id: None,
         width: None,
@@ -3417,7 +3412,6 @@ fn loop_exposes_outer_out_and_body_in_handles() {
         max_iterations: 5,
         loop_condition: "true".into(),
         accumulators: vec![],
-        lease: None,
     };
     let out_ports = lp.output_ports();
     let outs: Vec<&str> = out_ports.iter().map(|p| p.id.as_str()).collect();
@@ -3451,7 +3445,6 @@ fn empty_loop_fails_with_loop_empty_error() {
                     max_iterations: 3,
                     loop_condition: "true".to_string(),
                     accumulators: vec![],
-                    lease: None,
                 },
                 parent_id: None,
                 width: None,

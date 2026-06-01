@@ -147,9 +147,27 @@ fn end(id: &str) -> WorkflowNode {
 ///   - `Loop -> End` on the loop's default (None) source handle (`p_output`,
 ///     the post-exit outer `out`).
 fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
+    let scope_id = format!("{loop_id}_scope");
     WorkflowGraph {
         nodes: vec![
             start("s"),
+            WorkflowNode {
+                id: scope_id.clone(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::LeaseScope {
+                    label: "Lease Scope".to_string(),
+                    description: None,
+                    lease: LeaseBinding {
+                        scheduler: DC_ALIAS.to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
             WorkflowNode {
                 id: loop_id.to_string(),
                 node_type: "loop".to_string(),
@@ -161,16 +179,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     max_iterations: MAX_ITERATIONS,
                     loop_condition: "true".to_string(),
                     accumulators: Vec::<LoopAccumulator>::new(),
-                    // L3: hold ONE datacenter lease for the whole loop. `request:
-                    // None` ⇒ the allocator's default placement (the single-node
-                    // dev Slurm cluster). `scheduler` is the datacenter resource's
-                    // workspace alias, resolved at publish to its `pool-<id>` net.
-                    lease: Some(LeaseBinding {
-                        scheduler: DC_ALIAS.to_string(),
-                        request: None,
-                    }),
                 },
-                parent_id: None,
+                parent_id: Some(scope_id.clone()),
                 width: None,
                 height: None,
             },
@@ -198,22 +208,12 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
                     stream_output: false,
-                    // Drain seam: a plain Scheduled Submit. Because the body's
-                    // parent is the leased Loop (lease enclosure BY CONTAINMENT —
-                    // no per-step flag), the compiler RE-ROUTES it off the
-                    // lease adapter onto the executor lifecycle and stamps
-                    // `d.executor_namespace = lp.lease.executor_namespace` into the
-                    // body's `prepare`, with the matching Guard read-arc into the
-                    // loop's parked `p_lp_data` envelope — so the iteration enqueues
-                    // to the lease-scoped namespace the held drain executor pulls.
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: None,
                         job_template: "mekhan-executor-worker".to_string(),
                         resources: None,
                     },
                 },
-                // The body ALWAYS sits inside the leasing loop — this parentage
-                // is what `enclosing_leased_scope_slug` walks to find `lp`.
                 parent_id: Some(loop_id.to_string()),
                 width: None,
                 height: None,
@@ -224,8 +224,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
             WorkflowEdge {
                 id: "e_in".to_string(),
                 source: "s".to_string(),
-                target: loop_id.to_string(),
+                target: scope_id.clone(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_scope_body_in".to_string(),
+                source: scope_id.clone(),
+                target: loop_id.to_string(),
+                source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
@@ -249,8 +258,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
-                id: "e_out".to_string(),
+                id: "e_loop_body_out".to_string(),
                 source: loop_id.to_string(),
+                target: scope_id.clone(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_out".to_string(),
+                source: scope_id.clone(),
                 target: "e".to_string(),
                 source_handle: None,
                 target_handle: Some("in".to_string()),

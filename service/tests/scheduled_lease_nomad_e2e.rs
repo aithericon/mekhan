@@ -131,9 +131,27 @@ fn end(id: &str) -> WorkflowNode {
 /// graph — the lease binding is backend-agnostic; only the datacenter resource's
 /// `scheduler_flavor` decides Slurm vs Nomad.
 fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
+    let scope_id = format!("{loop_id}_scope");
     WorkflowGraph {
         nodes: vec![
             start("s"),
+            WorkflowNode {
+                id: scope_id.clone(),
+                node_type: "lease_scope".to_string(),
+                slug: None,
+                position: pos(),
+                data: WorkflowNodeData::LeaseScope {
+                    label: "Lease Scope".to_string(),
+                    description: None,
+                    lease: LeaseBinding {
+                        scheduler: DC_ALIAS.to_string(),
+                        request: None,
+                    },
+                },
+                parent_id: None,
+                width: None,
+                height: None,
+            },
             WorkflowNode {
                 id: loop_id.to_string(),
                 node_type: "loop".to_string(),
@@ -145,12 +163,8 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     max_iterations: MAX_ITERATIONS,
                     loop_condition: "true".to_string(),
                     accumulators: Vec::<LoopAccumulator>::new(),
-                    lease: Some(LeaseBinding {
-                        scheduler: DC_ALIAS.to_string(),
-                        request: None,
-                    }),
                 },
-                parent_id: None,
+                parent_id: Some(scope_id.clone()),
                 width: None,
                 height: None,
             },
@@ -194,8 +208,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
             WorkflowEdge {
                 id: "e_in".to_string(),
                 source: "s".to_string(),
-                target: loop_id.to_string(),
+                target: scope_id.clone(),
                 source_handle: None,
+                target_handle: Some("in".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_scope_body_in".to_string(),
+                source: scope_id.clone(),
+                target: loop_id.to_string(),
+                source_handle: Some("body_in".to_string()),
                 target_handle: Some("in".to_string()),
                 label: None,
                 edge_type: "sequence".to_string(),
@@ -219,8 +242,17 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
-                id: "e_out".to_string(),
+                id: "e_loop_body_out".to_string(),
                 source: loop_id.to_string(),
+                target: scope_id.clone(),
+                source_handle: None,
+                target_handle: Some("body_out".to_string()),
+                label: None,
+                edge_type: "sequence".to_string(),
+            },
+            WorkflowEdge {
+                id: "e_out".to_string(),
+                source: scope_id.clone(),
                 target: "e".to_string(),
                 source_handle: None,
                 target_handle: Some("in".to_string()),

@@ -601,7 +601,6 @@ pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBin
             WorkflowNodeData::Loop {
                 loop_condition,
                 accumulators,
-                lease,
                 ..
             } => {
                 // loop_condition borrows resolve into the loop's own parked
@@ -626,11 +625,6 @@ pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBin
                 // un-evaluable and the loop wedged after iteration 0.
                 let slug = node.slug();
                 srcs.push(format!("{slug}.iteration"));
-                // A leased loop's `t_continue` re-folds `lease: {slug}.lease`
-                // forward — rewrite that ref onto the parked envelope too.
-                if lease.is_some() {
-                    srcs.push(format!("{slug}.lease"));
-                }
                 if !loop_condition.trim().is_empty() {
                     srcs.push(loop_condition.clone());
                 }

@@ -1216,15 +1216,12 @@ fn leased_loop_hoists_claim_to_loop_scope_and_releases_on_exit() {
 #[test]
 fn loop_without_lease_emits_no_lease_topology() {
     let graph = load_graph("leased-loop.json");
-    // Strip the lease binding AND the lease-dependent guard (an ordinary loop
-    // exposes no `lease` field — referencing it would be a legitimate
-    // GuardUnresolved, which is the point: a no-lease loop ≠ a lease loop).
+    // Loop no longer has a lease field — this test now verifies that a plain
+    // loop (loaded from a fixture that previously had a lease) emits no lease
+    // topology. The fixture's lease field is ignored by serde (unknown field).
     let mut graph = graph;
     for node in &mut graph.nodes {
         match &mut node.data {
-            mekhan_service::models::template::WorkflowNodeData::Loop { lease, .. } => {
-                *lease = None;
-            }
             mekhan_service::models::template::WorkflowNodeData::Decision { conditions, .. } => {
                 for c in conditions.iter_mut() {
                     c.guard = "input.status == \"ok\"".to_string();
@@ -1415,9 +1412,6 @@ fn scheduled_body_without_enclosing_lease_does_not_borrow_alloc() {
 
     let mut graph = load_graph("leased-loop-scheduled-body.json");
     for node in &mut graph.nodes {
-        if let WorkflowNodeData::Loop { lease, .. } = &mut node.data {
-            *lease = None;
-        }
         if node.id == "body" {
             if let WorkflowNodeData::AutomatedStep { deployment_model: mekhan_service::models::template::DeploymentModel::Scheduled { scheduler, .. }, .. } = &mut node.data {
                 *scheduler = Some("prod_dc".to_string());

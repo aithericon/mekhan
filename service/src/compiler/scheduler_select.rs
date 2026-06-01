@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! effective_cluster(step) =
-//!       node.scheduler                  // DeploymentModel::Scheduled.scheduler / Loop.lease.scheduler
+//!       node.scheduler                  // DeploymentModel::Scheduled.scheduler
 //!    ?? template.default_scheduler       // WorkflowGraph.default_scheduler
 //!    ?? workspace.default_datacenter     // workspaces.default_datacenter_resource_id → alias
 //!    ?? CompileError::SchedulerUnresolved // hard error, no implicit fallback
@@ -19,7 +19,7 @@
 //! — then read the already-resolved alias from the node data. A single
 //! resolution site means collection and lowering cannot drift.
 //!
-//! Every `Scheduled` step (standalone or inside a `LeaseScope` / `Loop.lease`)
+//! Every `Scheduled` step (standalone or inside a `LeaseScope`)
 //! now REQUIRES a concrete cluster — the legacy env-global scheduler fallback
 //! fallback is retired.
 
@@ -35,7 +35,7 @@ use crate::models::template::{DeploymentModel, WorkflowGraph, WorkflowNodeData};
 /// template default is read off `graph.default_scheduler`.
 ///
 /// Errors (one `CompileError::SchedulerUnresolved` per offending node) when a
-/// `Scheduled` step (standalone or leased) or a `Loop.lease` resolves to
+/// `Scheduled` step (standalone or leased) resolves to
 /// nothing through the chain.
 pub fn resolve_scheduler_defaults(
     graph: &WorkflowGraph,
@@ -78,26 +78,7 @@ pub fn resolve_scheduler_defaults(
                     }
                 }
             }
-            // ── Loop-scoped lease ─────────────────────────────────────────
-            WorkflowNodeData::Loop {
-                lease: Some(binding),
-                ..
-            } => {
-                let node_scheduler = non_blank(&binding.scheduler);
-                if let Some(scheduler) = node_scheduler {
-                    binding.scheduler = scheduler.to_string();
-                    continue;
-                }
-                // A loop lease REQUIRES a concrete cluster — inherit the default
-                // or hard-error.
-                match default_alias {
-                    Some(alias) => binding.scheduler = alias.to_string(),
-                    None => errors.push(CompileError::SchedulerUnresolved {
-                        node_id: node.id.clone(),
-                    }),
-                }
-            }
-            // ── LeaseScope (docs/17) — same resolution as a loop lease ────────
+            // ── LeaseScope (docs/17) ──────────────────────────────────────────
             WorkflowNodeData::LeaseScope { lease, .. } => {
                 let node_scheduler = non_blank(&lease.scheduler);
                 if let Some(alias) = node_scheduler {
@@ -162,28 +143,6 @@ mod tests {
         .expect("scheduled node fixture")
     }
 
-    /// A leased Loop. `lease_scheduler == None` => a `LeaseBinding` with a
-    /// BLANK `scheduler` (i.e. a leased loop that names no cluster — the rung
-    /// that should inherit a default or hard-error), distinct from a loop with
-    /// no lease at all.
-    fn loop_node(id: &str, lease_scheduler: Option<&str>) -> WorkflowNode {
-        let data = serde_json::json!({
-            "type": "loop",
-            "label": "Loop",
-            "maxIterations": 3,
-            "loopCondition": "true",
-            "lease": { "scheduler": lease_scheduler.unwrap_or("") },
-        });
-        serde_json::from_value(serde_json::json!({
-            "id": id,
-            "type": "loop",
-            "slug": id,
-            "position": { "x": 0.0, "y": 0.0 },
-            "data": data,
-        }))
-        .expect("loop node fixture")
-    }
-
     fn graph(nodes: Vec<WorkflowNode>, template_default: Option<&str>) -> WorkflowGraph {
         WorkflowGraph {
             nodes,
@@ -204,7 +163,7 @@ mod tests {
                     deployment_model: DeploymentModel::Scheduled { scheduler, .. },
                     ..
                 } => scheduler.as_deref(),
-                WorkflowNodeData::Loop { lease: Some(b), .. } => Some(b.scheduler.as_str()),
+                WorkflowNodeData::LeaseScope { lease, .. } => Some(lease.scheduler.as_str()),
                 _ => None,
             })
     }
@@ -241,20 +200,6 @@ mod tests {
         assert_eq!(errs.len(), 1);
         assert_eq!(errs[0].kind(), "scheduler_unresolved");
         assert_eq!(errs[0].node_id(), Some("a"));
-    }
-
-    // Loop lease omits scheduler → inherits the template default; absent
-    // everywhere → unresolved.
-    #[test]
-    fn loop_lease_inherits_default_else_unresolved() {
-        let inherit = graph(vec![loop_node("lp", None)], Some("tmpl_dc"));
-        let out = resolve_scheduler_defaults(&inherit, None).unwrap();
-        assert_eq!(node_scheduler(&out, "lp"), Some("tmpl_dc"));
-
-        let bare = graph(vec![loop_node("lp", None)], None);
-        let errs = resolve_scheduler_defaults(&bare, None).unwrap_err();
-        assert_eq!(errs.len(), 1);
-        assert_eq!(errs[0].node_id(), Some("lp"));
     }
 
     // Template default beats the workspace default when both present.
