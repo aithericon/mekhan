@@ -5,10 +5,12 @@ pub mod bridge_validation;
 pub mod catalogue_handlers;
 pub mod effect;
 pub mod errors;
+pub mod execute_contract;
 pub(crate) mod evaluation;
 pub mod executor;
 pub mod executor_handlers;
 pub(crate) mod firing;
+pub mod http_executor_client;
 pub mod human_handlers;
 pub(crate) mod idempotency_index;
 pub mod ports;
@@ -36,6 +38,7 @@ pub use bridge_validation::{
 pub use catalogue_handlers::*;
 pub use effect::*;
 pub use errors::*;
+pub use execute_contract::{ExecuteRequest, ExecuteResponse};
 pub use evaluation::{
     check_terminal_state, EvaluateFinalState, EvaluateResult, TerminalReachedInfo,
     TransitionStatusDetail,

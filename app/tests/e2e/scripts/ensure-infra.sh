@@ -29,8 +29,8 @@ EXECUTOR_REPO="$(cd "$MEKHAN_ROOT/../aithericon-executor" && pwd)"
 
 HPI_DIR="$(cd "$MEKHAN_ROOT/../aithericon-human-ui" && pwd)"
 
-BACKEND_URL="http://localhost:13100"
-PETRI_URL="http://localhost:13030"
+BACKEND_URL="http://localhost:3100"
+PETRI_URL="http://localhost:3030"
 HPI_URL="http://localhost:5188"
 
 # PID files for background processes
@@ -115,7 +115,7 @@ if ! curl -sf http://localhost:18333/healthz > /dev/null 2>&1; then
     docker_healthy=false
 fi
 # Check Postgres
-if ! pg_isready -h localhost -p 15439 -U mekhan -d mekhan > /dev/null 2>&1; then
+if ! pg_isready -h localhost -p 5439 -U mekhan -d mekhan > /dev/null 2>&1; then
     docker_healthy=false
 fi
 
@@ -136,10 +136,10 @@ log "Checking petri-lab engine..."
 if curl -sf "$PETRI_URL/api/nets" > /dev/null 2>&1; then
     log "petri-lab already running"
 else
-    # Kill stale process on port 13030 if any
-    if is_port_open 13030; then
-        log "Killing stale process on port 13030..."
-        kill $(lsof -ti :13030) 2>/dev/null || true
+    # Kill stale process on port 3030 if any
+    if is_port_open 3030; then
+        log "Killing stale process on port 3030..."
+        kill $(lsof -ti :3030) 2>/dev/null || true
         sleep 1
     fi
     kill_pid_file "$PID_DIR/petri-lab.pid" "stale petri-lab"
@@ -223,7 +223,7 @@ else
         cd "$HPI_DIR"
         HPI_NATS_SOURCES=true \
         HPI_DEFAULT_ORG=default \
-        NATS_URL="nats://localhost:14333" \
+        NATS_URL="nats://localhost:4333" \
         DB_BACKEND=sqlite \
         AUTH_DB_PATH="/tmp/hpi-e2e.db" \
         ADMIN_EMAIL="system@hpi.dev" \
@@ -245,10 +245,10 @@ log "Checking mekhan-service..."
 if curl -sf "$BACKEND_URL/api/v1/templates?page=1&per_page=1" > /dev/null 2>&1; then
     log "mekhan-service already running"
 else
-    # Kill stale process on port 13100 if any
-    if is_port_open 13100; then
-        log "Killing stale process on port 13100..."
-        kill $(lsof -ti :13100) 2>/dev/null || true
+    # Kill stale process on port 3100 if any
+    if is_port_open 3100; then
+        log "Killing stale process on port 3100..."
+        kill $(lsof -ti :3100) 2>/dev/null || true
         sleep 1
     fi
     kill_pid_file "$PID_DIR/mekhan-service.pid" "stale mekhan-service"
@@ -273,9 +273,9 @@ else
     log "Starting mekhan-service..."
     (
         cd "$MEKHAN_SERVICE_DIR"
-        MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:15439/mekhan" \
-        MEKHAN_PETRI_LAB_URL="http://localhost:13030" \
-        MEKHAN_NATS_URL="nats://localhost:14333" \
+        MEKHAN_DATABASE_URL="postgres://mekhan:mekhan@localhost:5439/mekhan" \
+        MEKHAN_PETRI_LAB_URL="http://localhost:3030" \
+        MEKHAN_NATS_URL="nats://localhost:4333" \
         MEKHAN_HPI__URL="http://localhost:5188" \
         MEKHAN_HPI__API_TOKEN="$MEKHAN_HPI_TOKEN" \
         RUST_LOG=info \

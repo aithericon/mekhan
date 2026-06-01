@@ -1190,6 +1190,8 @@ up-mekhan auth_mode="dev_noop":
         MEKHAN__DEMOS__DIR="$PWD/demos" \
         VAULT_ADDR="{{vault_addr}}" \
         VAULT_TOKEN="{{vault_token}}" \
+        ${CLOUD_LAYER_JWT_SECRET:+CLOUD_LAYER_JWT_SECRET="$CLOUD_LAYER_JWT_SECRET"} \
+        ${CLOUD_LAYER_BASE_URL:+CLOUD_LAYER_BASE_URL="$CLOUD_LAYER_BASE_URL"} \
         ${mode_assign:+"$mode_assign"} \
         "${CARGO_TARGET_DIR:-$PWD/target}/debug/mekhan-service")
     echo "  ✓ mekhan-service (pid $pid)  {{service_url}}  log: {{log_dir}}/mekhan.log"

@@ -204,9 +204,32 @@ async fn main() {
         });
     }
 
+    // Sub-phase 2.3b: detect cloud-layer HTTP dispatch mode. When
+    // `MEKHAN_EXECUTOR_DISPATCH=http`, register the HTTP-based
+    // `HttpInferenceHandler` against `executor_submit` and skip the
+    // NATS-executor connection entirely. Default (unset / `nats`) keeps the
+    // existing NATS-dispatch path. The two modes are mutually exclusive at
+    // the registry level (`get_or_create` asserts).
+    #[cfg(feature = "executor")]
+    let use_http_dispatch = std::env::var("MEKHAN_EXECUTOR_DISPATCH")
+        .ok()
+        .map(|v| v.eq_ignore_ascii_case("http"))
+        .unwrap_or(false);
+
+    #[cfg(feature = "executor")]
+    if use_http_dispatch {
+        registry.set_http_executor_config(petri_api::HttpExecutorConfig::default());
+        info!(
+            "Executor dispatch mode: HTTP (cloud-layer; sub-phase 2.3b) — NATS executor connection skipped"
+        );
+    }
+
     // Connect executor NATS client and set config on registry (behind feature gate)
     #[cfg(feature = "executor")]
-    let executor_nats_client = if engine_config.is_executor_enabled() {
+    let executor_nats_client = if use_http_dispatch {
+        // HTTP-dispatch mode short-circuits the NATS-executor connection.
+        None
+    } else if engine_config.is_executor_enabled() {
         let executor_nats_url = std::env::var("EXECUTOR_NATS_URL")
             .or_else(|_| std::env::var("NATS_URL"))
             .unwrap_or_else(|_| "nats://localhost:4333".to_string());
@@ -900,10 +923,26 @@ impl petri_nats::NetCreator for RegistryNetCreator {
         }
 
         // Parse and load the scenario
-        // The scenario JSON is expected to be a LoadScenarioRequest-compatible format
-        let scenario: petri_api::dto::LoadScenarioRequest =
-            serde_json::from_value(request.scenario.clone())
-                .map_err(|e| format!("Invalid scenario JSON: {}", e))?;
+        // The scenario JSON is the sub-phase 2.5e-γ.mekhan LoadScenarioRequest
+        // envelope shape: { scenario, skip_mask?, stage_overrides? }. Bare
+        // ScenarioDefinition input is also tolerated here via a fallback
+        // deserialize, since this code path (NATS dispatch CLI driver) loads
+        // scenarios from on-disk JSON files that may pre-date the envelope.
+        let envelope: petri_api::dto::LoadScenarioRequest = serde_json::from_value(
+            request.scenario.clone(),
+        )
+        .or_else(|_envelope_err| {
+            // Fallback: parse as bare ScenarioDefinition for CLI/file-based
+            // dispatch (envelope wire shape is cloud-layer-only). Tracked by
+            // workstream #110 (envelope-uniform CLI loader).
+            serde_json::from_value::<petri_api::dto::ScenarioDefinition>(
+                request.scenario.clone(),
+            )
+            .map(petri_api::dto::LoadScenarioRequest::from_scenario)
+        })
+        .map_err(|e| format!("Invalid scenario JSON: {}", e))?;
+
+        let scenario = envelope.into_scenario();
 
         let parsed = petri_api::ScenarioBridge::parse(
             &scenario.places,

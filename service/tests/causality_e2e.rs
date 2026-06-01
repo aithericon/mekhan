@@ -8,7 +8,7 @@
 //!   just dev up   # Postgres + NATS + S3 + executor + engine + mekhan
 //!
 //! The engine/executor connect to the dev NATS broker (`docker-compose.yml`
-//! maps `14333:4222`); the test harness defaults to that same broker.
+//! maps `4333:4222`); the test harness defaults to that same broker.
 //!
 //! Run with:
 //!   cargo test --test causality_e2e -- --test-threads=1 --nocapture
@@ -41,7 +41,7 @@ fn engine_nats_url() -> String {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -257,7 +257,7 @@ async fn causality_full_pipeline() {
     // ── 1. Prerequisites ─────────────────────────────────────────────────
     if !engine_available().await {
         eprintln!(
-            "SKIP: engine not available at http://localhost:13030\n\
+            "SKIP: engine not available at http://localhost:3030\n\
              Start the full local stack with: just dev up"
         );
         return;
@@ -564,7 +564,7 @@ async fn interpolated_human_task_resolves_start_file_param() {
 
     if !engine_available().await {
         eprintln!(
-            "SKIP: engine not available at http://localhost:13030\n\
+            "SKIP: engine not available at http://localhost:3030\n\
              Start the full local stack with: just dev up"
         );
         return;

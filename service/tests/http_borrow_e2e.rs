@@ -8,7 +8,7 @@
 //! received that exact path — is runtime proof that the compiler synthesized
 //! the read-arc, staged `pyprod.json`, and the executor Tera-rendered the URL.
 //!
-//! Requires the full `just dev up` stack (engine :13030, executor, rustfs S3),
+//! Requires the full `just dev up` stack (engine :3030, executor, rustfs S3),
 //! with mekhan-service AND the executor rebuilt from this branch. Run serially.
 
 mod common;
@@ -183,7 +183,7 @@ fn graph(http_url: &str) -> WorkflowGraph {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {

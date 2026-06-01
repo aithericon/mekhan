@@ -196,11 +196,37 @@ impl TriggerDispatcher {
                 source,
                 enabled,
                 reply_default,
+                air_target_place_id,
                 ..
             } = &node.data
             else {
                 continue;
             };
+
+            // Pre-AIR direct-target path (clinic-style headless templates):
+            // trigger has no outgoing edge; the AIR place id is named
+            // directly on the node. Spawn-kind by construction.
+            if let Some(place_id) = air_target_place_id {
+                let record = TriggerRecord {
+                    template_id: template.id,
+                    template_version: template.version,
+                    node_id: node.id.clone(),
+                    kind: TriggerKind::Spawn,
+                    // For pre-AIR records, target_node_id mirrors the AIR place
+                    // id (used as `start_block_id` in `LaunchSpec::PreAir`).
+                    target_node_id: place_id.clone(),
+                    target_handle: String::new(),
+                    source: source.clone(),
+                    reply_default: *reply_default,
+                    enabled: *enabled,
+                    registered_at: Utc::now(),
+                    air_target_place_id: Some(place_id.clone()),
+                };
+                self.triggers.insert(node.id.clone(), record);
+                registered += 1;
+                continue;
+            }
+
             let Some((_, edge)) = locate_trigger(&graph.nodes, &graph.edges, &node.id) else {
                 tracing::warn!(
                     template_id = %template.id,
@@ -233,6 +259,7 @@ impl TriggerDispatcher {
                 reply_default: *reply_default,
                 enabled: *enabled,
                 registered_at: Utc::now(),
+                air_target_place_id: None,
             };
             // Backfill decision: only newly-added, enabled Catalog triggers
             // with `backfill=true` and only when the caller asked for it.
@@ -361,7 +388,15 @@ impl TriggerDispatcher {
         // Self-fire on the trigger node. If a fresh fire races us through
         // the coalesce gate first, that's fine — the gate is atomic and at
         // worst one fire is recorded as Coalesced (correct).
-        if let Err(e) = self.fire(&follow_up_node_id, follow_up_payload).await {
+        if let Err(e) = self
+            .fire(
+                &follow_up_node_id,
+                follow_up_payload,
+                petri_api_types::DispatchOptions::default(),
+                None,
+            )
+            .await
+        {
             tracing::warn!(
                 template_id = %template_id,
                 triggered_node_id = %follow_up_node_id,
@@ -397,13 +432,18 @@ impl TriggerDispatcher {
 
     /// Fire a trigger, discarding any WaitForResult handle. The path used by
     /// every background source (cron/catalog/lifecycle/webhook) and by
-    /// FireAndForget callers.
+    /// FireAndForget callers. `dispatch_options` threads γ.mekhan ablation
+    /// (`skip_mask` + `stage_overrides`) into the engine envelope; background
+    /// sources pass `DispatchOptions::default()` since they don't synthesize
+    /// ablation themselves (#126.2).
     pub async fn fire(
         &self,
         node_id: &str,
         event_payload: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
     ) -> Result<FireResult, TriggerError> {
-        self.fire_impl(node_id, event_payload, None)
+        self.fire_impl(node_id, event_payload, dispatch_options, net_parameters, None)
             .await
             .map(|(result, _rx)| result)
     }
@@ -415,9 +455,18 @@ impl TriggerDispatcher {
         &self,
         node_id: &str,
         event_payload: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         waiters: &ResultWaiters,
     ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
-        self.fire_impl(node_id, event_payload, Some(waiters)).await
+        self.fire_impl(
+            node_id,
+            event_payload,
+            dispatch_options,
+            net_parameters,
+            Some(waiters),
+        )
+        .await
     }
 
     /// Core fire path. Resolves the trigger, evaluates `payload_mapping`
@@ -428,6 +477,8 @@ impl TriggerDispatcher {
         &self,
         node_id: &str,
         event_payload: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         wait: Option<&ResultWaiters>,
     ) -> Result<(FireResult, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         let record = self
@@ -487,26 +538,6 @@ impl TriggerDispatcher {
             });
         };
 
-        // Resolve the port the trigger feeds. Shared with the compiler's
-        // `validate_triggers` publish-time check so the two can't drift.
-        let target_node = graph
-            .nodes
-            .iter()
-            .find(|n| n.id == record.target_node_id)
-            .ok_or_else(|| TriggerError::TargetMissing {
-                node_id: node_id.to_string(),
-                target: format!("target node '{}' missing in graph", record.target_node_id),
-            })?;
-        let target_port =
-            crate::compiler::resolve_trigger_target_port(target_node, &record.target_handle)
-                .ok_or_else(|| TriggerError::TargetMissing {
-                    node_id: node_id.to_string(),
-                    target: format!(
-                        "target port '{}' missing on node '{}'",
-                        record.target_handle, record.target_node_id
-                    ),
-                })?;
-
         let source_kind = record.source.kind().to_string();
         let locator = TriggerLocator {
             template_id: record.template_id,
@@ -528,6 +559,74 @@ impl TriggerDispatcher {
             self.record_history(&record.node_id, result.clone());
             result
         };
+
+        // Pre-AIR direct-target path (#126.1-fixup). The clinic-style headless
+        // template has a stub graph (the Trigger node only, no edges, no Start
+        // node) and addresses the AIR place id directly. None of the graph-
+        // walk / typed-port / Start-contract gates below apply — they all
+        // assume a graph edge into a typed Start. Evaluate payload_mapping in
+        // pass-through mode (no typed port to validate against) and route
+        // straight to `fire_spawn`, which already dispatches to
+        // `LaunchSpec::PreAir`.
+        if record.air_target_place_id.is_some() {
+            let token = match evaluate_mapping(payload_mapping, &event_payload, true) {
+                Ok(t) => t,
+                Err(e) => {
+                    return Ok((
+                        finalize(
+                            FireOutcome::Dropped {
+                                reason: format!("payload mapping failed: {e}"),
+                            },
+                            false,
+                        ),
+                        None,
+                    ));
+                }
+            };
+            return match self
+                .fire_spawn(
+                    &record,
+                    &template,
+                    &graph,
+                    token,
+                    dispatch_options,
+                    net_parameters,
+                    wait,
+                )
+                .await
+            {
+                Ok((outcome, rx)) => Ok((finalize(outcome, false), rx)),
+                Err(e) => {
+                    let _ = finalize(
+                        FireOutcome::Dropped {
+                            reason: format!("fire failed: {e}"),
+                        },
+                        true,
+                    );
+                    Err(e)
+                }
+            };
+        }
+
+        // Resolve the port the trigger feeds. Shared with the compiler's
+        // `validate_triggers` publish-time check so the two can't drift.
+        let target_node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == record.target_node_id)
+            .ok_or_else(|| TriggerError::TargetMissing {
+                node_id: node_id.to_string(),
+                target: format!("target node '{}' missing in graph", record.target_node_id),
+            })?;
+        let target_port =
+            crate::compiler::resolve_trigger_target_port(target_node, &record.target_handle)
+                .ok_or_else(|| TriggerError::TargetMissing {
+                    node_id: node_id.to_string(),
+                    target: format!(
+                        "target port '{}' missing on node '{}'",
+                        record.target_handle, record.target_node_id
+                    ),
+                })?;
 
         // Build the token: bind each source-scope identifier as its own Rhai
         // variable and evaluate the mappings. A failed mapping is a trigger
@@ -561,7 +660,10 @@ impl TriggerDispatcher {
             return Ok((
                 finalize(
                     FireOutcome::Dropped {
-                        reason: format!("token rejected by target port '{}': {ve}", target_port.id),
+                        reason: format!(
+                            "token rejected by target port '{}': {ve}",
+                            target_port.id
+                        ),
                     },
                     false,
                 ),
@@ -611,7 +713,15 @@ impl TriggerDispatcher {
         ) = match record.kind {
             TriggerKind::Spawn => {
                 match self
-                    .fire_spawn(&record, &template, &graph, token, wait)
+                    .fire_spawn(
+                        &record,
+                        &template,
+                        &graph,
+                        token,
+                        dispatch_options,
+                        net_parameters,
+                        wait,
+                    )
                     .await
                 {
                     Ok((outcome, rx)) => (Ok(outcome), rx),
@@ -643,6 +753,8 @@ impl TriggerDispatcher {
         template: &WorkflowTemplate,
         graph: &WorkflowGraph,
         token: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         wait: Option<&ResultWaiters>,
     ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
         // SingleActiveCoalesce: atomic check-and-set against the per-template
@@ -676,12 +788,7 @@ impl TriggerDispatcher {
                         active_instance = %active,
                         "single-active-coalesce: fire coalesced into pending follow-up"
                     );
-                    return Ok((
-                        FireOutcome::Coalesced {
-                            active_instance_id: active,
-                        },
-                        None,
-                    ));
+                    return Ok((FireOutcome::Coalesced { active_instance_id: active }, None));
                 }
                 // No active sibling — mark ourselves provisionally active
                 // before spawn so a parallel fire racing through this same
@@ -692,13 +799,31 @@ impl TriggerDispatcher {
                 state.active_instance_id = Some(placeholder);
                 drop(state);
                 return self
-                    .fire_spawn_active(record, template, graph, token, wait, placeholder)
+                    .fire_spawn_active(
+                        record,
+                        template,
+                        graph,
+                        token,
+                        dispatch_options,
+                        net_parameters,
+                        wait,
+                        placeholder,
+                    )
                     .await;
             }
         }
 
-        self.fire_spawn_active(record, template, graph, token, wait, Uuid::new_v4())
-            .await
+        self.fire_spawn_active(
+            record,
+            template,
+            graph,
+            token,
+            dispatch_options,
+            net_parameters,
+            wait,
+            Uuid::new_v4(),
+        )
+        .await
     }
 
     /// Inner spawn — assumes any coalesce gate has already been passed and
@@ -711,6 +836,8 @@ impl TriggerDispatcher {
         template: &WorkflowTemplate,
         graph: &WorkflowGraph,
         token: Value,
+        dispatch_options: petri_api_types::DispatchOptions,
+        net_parameters: Option<Value>,
         wait: Option<&ResultWaiters>,
         instance_id: Uuid,
     ) -> Result<(FireOutcome, Option<oneshot::Receiver<TerminalOutcome>>), TriggerError> {
@@ -727,11 +854,6 @@ impl TriggerDispatcher {
         let created_by = synthetic_principal_for_trigger(&record.node_id);
         let net_id = format!("mekhan-{instance_id}");
 
-        let start_tokens = vec![StartToken {
-            start_block_id: record.target_node_id.clone(),
-            token,
-        }];
-
         // Audit metadata: who triggered this and which template version.
         let metadata = json!({
             "triggered_by": record.node_id,
@@ -741,23 +863,53 @@ impl TriggerDispatcher {
         // Same parameterize → insert → deploy → rollback sequence as the user
         // POST path, owned by the launcher. A spawn folds every launch failure
         // into InstanceFailed (the dropped-fire is recorded by the caller).
+        // Pre-AIR triggers (clinic-style headless templates) construct the
+        // `PreAir` variant and seed the named AIR place directly; graph-edge
+        // resolved triggers stay on the `Templated` path.
         let launcher = InstanceLauncher::new(&self.db, &self.petri);
-        let launch_result = launcher
-            .launch(LaunchSpec {
-                instance_id,
-                net_id,
-                template_id: template.id,
-                template_version: template.version,
-                created_by,
-                metadata,
-                air_json: &air_json,
-                graph,
-                start_tokens: &start_tokens,
-                mode: None,
-                test_id: None,
-            })
-            .await
-            .map_err(|e| TriggerError::InstanceFailed(e.to_string()));
+        let launch_outcome = match &record.air_target_place_id {
+            Some(place_id) => {
+                launcher
+                    .launch(LaunchSpec::PreAir {
+                        instance_id,
+                        net_id,
+                        template_id: template.id,
+                        template_version: template.version,
+                        created_by,
+                        metadata,
+                        air_json: &air_json,
+                        air_target_place_id: place_id,
+                        token: &token,
+                        dispatch_options,
+                        net_parameters,
+                    })
+                    .await
+            }
+            None => {
+                let start_tokens = vec![StartToken {
+                    start_block_id: record.target_node_id.clone(),
+                    token,
+                }];
+                launcher
+                    .launch(LaunchSpec::Templated {
+                        instance_id,
+                        net_id,
+                        template_id: template.id,
+                        template_version: template.version,
+                        created_by,
+                        metadata,
+                        air_json: &air_json,
+                        graph,
+                        start_tokens: &start_tokens,
+                        mode: None,
+                        test_id: None,
+                        dispatch_options,
+                        net_parameters,
+                    })
+                    .await
+            }
+        };
+        let launch_result = launch_outcome.map_err(|e| TriggerError::InstanceFailed(e.to_string()));
 
         // Active-mark unwinding: if we provisionally marked ourselves active
         // for SingleActiveCoalesce and the launcher failed, clear the mark
@@ -806,7 +958,8 @@ impl TriggerDispatcher {
                         status.as_str(),
                         "completed" | "cancelled" | "failed" | "archived"
                     ) {
-                        waiters.resolve(&instance.id, TerminalOutcome { status, result });
+                        waiters
+                            .resolve(&instance.id, TerminalOutcome { status, result });
                     }
                 }
                 Some(rx)
@@ -814,12 +967,7 @@ impl TriggerDispatcher {
             None => None,
         };
 
-        Ok((
-            FireOutcome::Spawned {
-                instance_id: instance.id,
-            },
-            rx,
-        ))
+        Ok((FireOutcome::Spawned { instance_id: instance.id }, rx))
     }
 
     async fn fire_signal(

@@ -27,6 +27,7 @@ use crate::models::template::{WorkflowGraph, WorkflowTemplate};
 use crate::models::template_test::{AssertOp, Assertion, TemplateTest, TemplateTestRun};
 use crate::petri::launcher::{InstanceLauncher, LaunchSpec};
 use crate::AppState;
+use petri_api_types;
 
 /// Per-run timeout for the whole-test wall clock. Tests are MVP-scoped to
 /// short workflows; a hung test should fail fast rather than tie up the
@@ -113,7 +114,7 @@ pub async fn run_test(
     // Spawn the test_run instance.
     let launcher = InstanceLauncher::new(&state.db, &state.petri);
     let launch_result = launcher
-        .launch(LaunchSpec {
+        .launch(LaunchSpec::Templated {
             instance_id,
             net_id: net_id.clone(),
             template_id: ctx.template_id,
@@ -125,6 +126,10 @@ pub async fn run_test(
             start_tokens: &start_tokens,
             mode: Some("test_run"),
             test_id: Some(test.id),
+            // Template-tests don't surface ablation today.
+            dispatch_options: petri_api_types::DispatchOptions::default(),
+            // Template-tests don't surface a net-parameter bag today.
+            net_parameters: None,
         })
         .await;
 

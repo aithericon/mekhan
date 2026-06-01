@@ -98,7 +98,7 @@ pub async fn create_instance(
     // engine fault (502).
     let launcher = InstanceLauncher::new(&state.db, &state.petri);
     let instance = launcher
-        .launch(LaunchSpec {
+        .launch(LaunchSpec::Templated {
             instance_id,
             net_id,
             template_id: template.id,
@@ -110,10 +110,20 @@ pub async fn create_instance(
             start_tokens: &req.start_tokens,
             mode: Some(mode),
             test_id: None,
+            // User POST path does not surface ablation today; #126.2's
+            // ablation surface lives at the trigger boundary (research
+            // harness drives via fire_trigger). Plain create-instance →
+            // empty dispatch options.
+            dispatch_options: petri_api_types::DispatchOptions::default(),
+            // Tenant propagation (D1-A) is surfaced at the trigger-fire
+            // boundary; the user POST create-instance path does not carry
+            // a net-parameter bag today.
+            net_parameters: None,
         })
         .await
         .map_err(|e| match e {
             LaunchError::Parameterize(pe) => ApiError::bad_request(pe.to_string()),
+            LaunchError::ParameterizeForPlace(pe) => ApiError::bad_request(pe.to_string()),
             LaunchError::Database(msg) => ApiError::internal(msg),
             LaunchError::Deploy(msg) => ApiError::new(
                 StatusCode::BAD_GATEWAY,

@@ -164,6 +164,45 @@ impl std::fmt::Debug for ExecutorIntegrationConfig {
     }
 }
 
+/// Configuration for the HTTP-dispatch executor integration (sub-phase 2.3b).
+///
+/// When set on the `NetRegistry`, every new net instance will have an
+/// HTTP-based `executor_submit` handler ([`HttpInferenceHandler`]) registered.
+/// The handler reads cap-routing's pre-dispatch enrichment (`base_url` +
+/// `lease_token`) from `EffectInput.config` and dispatches inference
+/// synchronously via HTTP to `{base_url}/v1/inference` (the endpoint added in
+/// `executor-llm/src/inference_handler.rs`).
+///
+/// Mutually exclusive with [`ExecutorIntegrationConfig`] (NATS dispatch);
+/// `get_or_create` panics if both are set on the registry.
+///
+/// No `executor_cancel` is registered in HTTP-sync mode — there is no
+/// in-flight job to cancel from outside (the handler's `submit` is
+/// synchronous). Cancellation in HTTP-sync mode is a separate workstream.
+///
+/// [`HttpInferenceHandler`]: petri_application::http_executor_client::HttpInferenceHandler
+#[cfg(feature = "executor")]
+#[derive(Clone, Debug)]
+pub struct HttpExecutorConfig {
+    /// Input port name. Defaults to `EXECUTOR_SUBMIT.default_input_port`
+    /// (`"job"`) so scenarios authored against the NATS handler stay
+    /// portable.
+    pub input_port: String,
+    /// Output port name. Defaults to `EXECUTOR_SUBMIT.default_output_port`
+    /// (`"submitted"`).
+    pub output_port: String,
+}
+
+#[cfg(feature = "executor")]
+impl Default for HttpExecutorConfig {
+    fn default() -> Self {
+        Self {
+            input_port: effects::EXECUTOR_SUBMIT.default_input_port.to_string(),
+            output_port: effects::EXECUTOR_SUBMIT.default_output_port.to_string(),
+        }
+    }
+}
+
 /// Configuration for the data catalogue integration.
 ///
 /// When set on the `NetRegistry`, every new net instance will have
@@ -199,6 +238,11 @@ where
     pub on_scenario_loaded: RwLock<Vec<OnScenarioLoaded>>,
     /// Cancellation token for graceful shutdown of per-net tasks (eval loop, listeners).
     pub cancel_token: CancellationToken,
+    /// Sub-phase 2.5e-γ.mekhan per-run dispatch options (skip_mask +
+    /// stage_overrides). Owned here per-NetInstance so concurrent loads on
+    /// distinct net_ids never collide. `as_app_state` clones the Arc into
+    /// the per-request AppState facade.
+    pub dispatch_options: Arc<RwLock<petri_domain::DispatchOptions>>,
 }
 
 impl<E, T, S> NetInstance<E, T, S>
@@ -223,6 +267,7 @@ where
             run_mode: self.run_mode.clone(),
             eval_notify: self.eval_notify.clone(),
             event_tx: self.event_tx.clone(),
+            dispatch_options: self.dispatch_options.clone(),
         }
     }
 }
@@ -274,6 +319,8 @@ where
     cluster_registry: RwLock<Option<Arc<crate::cluster_registry::ClusterRegistry>>>,
     #[cfg(feature = "executor")]
     executor_config: Option<ExecutorIntegrationConfig>,
+    #[cfg(feature = "executor")]
+    http_executor_config: Option<HttpExecutorConfig>,
     human_config: Option<HumanIntegrationConfig>,
     #[cfg(feature = "catalogue")]
     catalogue_config: Option<CatalogueIntegrationConfig>,
@@ -310,6 +357,8 @@ where
             cluster_registry: RwLock::new(None),
             #[cfg(feature = "executor")]
             executor_config: None,
+            #[cfg(feature = "executor")]
+            http_executor_config: None,
             human_config: None,
             #[cfg(feature = "catalogue")]
             catalogue_config: None,
@@ -491,6 +540,17 @@ where
         self.executor_config = Some(config);
     }
 
+    /// Configure the HTTP-dispatch executor integration (sub-phase 2.3b).
+    ///
+    /// When set, every new net instance will have the HTTP-based
+    /// `executor_submit` handler ([`petri_application::http_executor_client::HttpInferenceHandler`])
+    /// registered. Mutually exclusive with [`set_executor_config`] —
+    /// `get_or_create` panics if both have been set on the registry.
+    #[cfg(feature = "executor")]
+    pub fn set_http_executor_config(&mut self, config: HttpExecutorConfig) {
+        self.http_executor_config = Some(config);
+    }
+
     /// Configure the data catalogue integration.
     ///
     /// When set, every new net instance will have `catalogue_register`
@@ -592,6 +652,7 @@ where
             event_tx: event_tx.clone(),
             on_scenario_loaded: RwLock::new(Vec::new()),
             cancel_token: cancel_token.clone(),
+            dispatch_options: Arc::new(RwLock::new(petri_domain::DispatchOptions::default())),
         });
 
         // Spawn evaluation loop for this net
@@ -830,6 +891,52 @@ where
                 net_id = %net_id,
                 namespace = %ecfg.namespace,
                 "Registered executor effect handlers",
+            );
+        }
+
+        // Register HTTP-dispatch executor handler if configured (sub-phase 2.3b).
+        // Mutually exclusive with NATS dispatch above; panics at registration
+        // if both configs are set.
+        #[cfg(feature = "executor")]
+        if let Some(ref hcfg) = self.http_executor_config {
+            assert!(
+                self.executor_config.is_none(),
+                "NetRegistry: executor_config (NATS) and http_executor_config (HTTP) \
+                 are mutually exclusive — set at most one"
+            );
+
+            service
+                .register_effect_handler(
+                    effects::EXECUTOR_SUBMIT.handler_id,
+                    Arc::new(
+                        petri_application::http_executor_client::HttpInferenceHandler::new(
+                            hcfg.input_port.clone(),
+                            hcfg.output_port.clone(),
+                        ),
+                    ),
+                )
+                .expect("register HTTP executor_submit effect handler");
+
+            // Compiler-generated nets (graph→AIR) emit an `executor_cancel`
+            // transition for every executor step, and deploy validation
+            // requires the referenced handler to be registered. Under HTTP-sync
+            // dispatch there is no async job to cancel, so register a no-op ack.
+            service
+                .register_effect_handler(
+                    effects::EXECUTOR_CANCEL.handler_id,
+                    Arc::new(
+                        petri_application::http_executor_client::HttpExecutorCancelNoop::new(
+                            effects::EXECUTOR_CANCEL.default_output_port,
+                        ),
+                    ),
+                )
+                .expect("register HTTP executor_cancel no-op effect handler");
+
+            tracing::info!(
+                net_id = %net_id,
+                input_port = %hcfg.input_port,
+                output_port = %hcfg.output_port,
+                "Registered HTTP executor_submit + no-op executor_cancel handlers (cloud-layer dispatch)"
             );
         }
 

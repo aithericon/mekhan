@@ -1315,6 +1315,259 @@ mod tests {
         );
     }
 
+    /// `document-pipeline-branching-v1` is the Phase-1 branching pipeline:
+    /// vision-LLM classify (on the raw file, BEFORE OCR) → `decision`
+    /// route-by-class → two branches (bloodwork: Surya OCR → OCR-text extract
+    /// → Python resolve-bbox; generic: single vision extract) → XOR-`join`
+    /// (mode=any) → Python validate → end. It exercises four things together
+    /// on a real bundled fixture: (1) a Surya `automated_step` (the
+    /// `{{ start.document_file }}` placeholder bypasses the node-file gate),
+    /// (2) the strict `$ref` ExtractionFields schema parked in the
+    /// side-channel, (3) two Python nodes whose `main.py` reads NON-predecessor
+    /// producers via bare `slug.field` accesses (`ocr.words`,
+    /// `extract_bloodwork.fields`, `extraction.fields`, `classify.document_type`)
+    /// — the read-arc synthesis the resolve-bbox cascade depends on, and (4)
+    /// the join converging the two branch tails. A break in any of those
+    /// layers fails here rather than silently at `MEKHAN__DEMOS__SEED=true`
+    /// startup. Mirrors `document_pipeline_v1_compiles_with_strict_schemas`.
+    #[test]
+    fn document_pipeline_branching_v1_compiles_with_strict_schemas() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+        use crate::models::template::{JoinMode, WorkflowNodeData};
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+            .expect("document-pipeline-branching-v1 must load");
+        assert_eq!(demo.metadata.name, "Document Pipeline — Branching v1");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-000000000054"
+        );
+
+        // Stable trigger node id — tests + the dispatcher registry key off it,
+        // so drift must be a deliberate, type-checked break.
+        assert!(
+            demo.graph
+                .nodes
+                .iter()
+                .any(|n| n.id == "trg_document_pipeline_branching_v1"),
+            "trigger node id must be trg_document_pipeline_branching_v1"
+        );
+
+        // The XOR-join the two branch tails fan into.
+        let merge = demo
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id == "merge-extraction")
+            .expect("merge-extraction node must exist");
+        match &merge.data {
+            WorkflowNodeData::Join { mode, output, .. } => {
+                assert_eq!(*mode, JoinMode::Any, "branching demo uses XOR-join (mode=any)");
+                assert!(
+                    output.fields.iter().any(|f| f.name == "fields"),
+                    "merge-extraction.output must declare a `fields` field"
+                );
+            }
+            other => panic!("merge-extraction must be a Join, got {other:?}"),
+        }
+
+        // Both Python nodes must ship their main.py with the SDK calls intact.
+        for node_id in ["resolve-bbox", "validate"] {
+            let node_files = demo
+                .files
+                .get(node_id)
+                .unwrap_or_else(|| panic!("{node_id} node must have files"));
+            assert!(
+                node_files
+                    .get("main.py")
+                    .is_some_and(|s| s.contains("set_output")),
+                "{node_id}/main.py must be loaded with the SDK calls intact"
+            );
+        }
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("document-pipeline-branching-v1 must compile (no Rhai-complexity panic)");
+
+        // Both LLM extractors park their resolved config (the strict
+        // ExtractionFields `$ref` would blow Rhai's complexity limit inline).
+        for node_id in ["classify", "extract-bloodwork", "extract-generic"] {
+            assert!(
+                node_configs.contains_key(node_id),
+                "node config for `{node_id}` must be parked in side-channel; got keys: {:?}",
+                node_configs.keys().collect::<Vec<_>>()
+            );
+        }
+        // The heavy `$ref`-expanded schema must have made it into the
+        // side-channel with the `$ref` inlined first.
+        let bw = node_configs
+            .get("extract-bloodwork")
+            .expect("extract-bloodwork config")
+            .to_string();
+        assert!(
+            bw.contains("reference_range"),
+            "extract-bloodwork config must contain the expanded ExtractionFields schema: {bw}"
+        );
+        assert!(
+            !bw.contains("\"$ref\""),
+            "$ref must have been inlined before parking: {bw}"
+        );
+    }
+
+    /// Compile the `document-pipeline-branching-v1` demo to AIR and dump the
+    /// canonical JSON to a file so the clinic can ship the **compiler output**
+    /// (not a hand-authored net). Gated on `DUMP_BRANCHING_AIR=<path>`: when
+    /// the env var is set, the test writes the AIR to that path; otherwise it
+    /// is a no-op (keeps CI quiet). This is the single export step in the
+    /// graph.json → clinic-AIR regeneration flow — see the demo README.
+    ///
+    /// The clinic ships this AIR through `apply-workflows.sh` →
+    /// `POST /api/v1/templates/apply-air`, which stores the AIR **verbatim**
+    /// and uploads **nothing** to S3 (the endpoint is opaque to
+    /// mekhan-service). The compiler's default lowering parks every node's
+    /// static config in the S3 side-channel and emits a `config_ref`
+    /// `storage_path` — which would dangle in the clinic path because no
+    /// publish-time upload runs. So this dumper post-processes the AIR to
+    /// **inline** each parked config back into its prepare-transition Rhai
+    /// (`config_ref { storage_path }` → `config { … }`), using the
+    /// `node_configs` side-channel the compiler returns. Per
+    /// `executor-domain::ExecutionSpec`, an inline `config` with no
+    /// `config_ref` is a first-class, fully-supported path (the executor's
+    /// `FetchConfigHook` is skipped). The Python `main.py` source is already
+    /// inlined by the lowering (`inputs[].source.content`), so the resulting
+    /// AIR is fully self-contained — no S3 dependency.
+    #[test]
+    fn dump_document_pipeline_branching_v1_air() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+            ConfigStorage,
+        };
+        use crate::compiler::rhai_gen::json_to_rhai_literal;
+
+        let Some(out_path) = std::env::var_os("DUMP_BRANCHING_AIR") else {
+            return;
+        };
+
+        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+            .expect("document-pipeline-branching-v1 must load");
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts {
+            mut air,
+            node_configs,
+            ..
+        } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("document-pipeline-branching-v1 must compile to AIR");
+
+        // Inline every parked config back into its prepare-transition Rhai so
+        // the AIR carries no `config_ref` storage dependency. The compiler
+        // minted each `config_ref` as the literal
+        //   "config_ref": #{ "storage_path": "<key>" }
+        // inside the `<node>/prepare` transition's logic source. We replace
+        // that exact substring with
+        //   "config": <rhai literal of the parked config>
+        // and assert each replacement landed (so a lowering change to the
+        // emitted shape fails loudly here rather than shipping a dangling ref).
+        let transitions = air
+            .get_mut("transitions")
+            .and_then(|v| v.as_array_mut())
+            .expect("AIR must carry a transitions array");
+        let mut inlined = 0usize;
+        for (node_id, config) in &node_configs {
+            let storage_key =
+                ConfigStorage::ephemeral().key(node_id);
+            let needle = format!(
+                "\"config_ref\": #{{ \"storage_path\": \"{}\" }}",
+                storage_key.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            let replacement =
+                format!("\"config\": {}", json_to_rhai_literal(config));
+
+            let prepare_id = format!("{node_id}/prepare");
+            let t = transitions
+                .iter_mut()
+                .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(prepare_id.as_str()))
+                .unwrap_or_else(|| panic!("prepare transition `{prepare_id}` must exist"));
+            let src = t
+                .pointer_mut("/logic/source")
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| panic!("`{prepare_id}` must carry a Rhai logic.source"));
+            assert!(
+                src.contains(&needle),
+                "`{prepare_id}` Rhai must contain the config_ref literal to inline; \
+                 looked for: {needle}"
+            );
+            let rewritten = src.replace(&needle, &replacement);
+            *t.pointer_mut("/logic/source").unwrap() =
+                serde_json::Value::String(rewritten);
+            inlined += 1;
+        }
+        assert_eq!(
+            inlined,
+            node_configs.len(),
+            "every parked node config must be inlined"
+        );
+
+        // No dangling storage refs may remain in any executable transition
+        // logic (proves the inlining was total). Note: the `definitions` block
+        // carries the *schema* for the ExecutorSubmitInput token, whose shape
+        // legitimately includes an (unused, None) `config_ref` field plus
+        // doc-comments that name `config_ref` / the `node-config.json` key
+        // pattern — that is inert token-type metadata, not a live storage
+        // reference. The load-bearing signal that a real parked-config offload
+        // survived is a `node-config.json` storage_path inside a
+        // `transition.logic.source`, so we assert on that surface only.
+        for t in air
+            .get("transitions")
+            .and_then(|v| v.as_array())
+            .expect("transitions array")
+        {
+            if let Some(src) = t.pointer("/logic/source").and_then(|v| v.as_str()) {
+                let tid = t.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                assert!(
+                    !src.contains("node-config.json"),
+                    "transition `{tid}` logic.source still references a node-config.json \
+                     storage path — inlining missed it"
+                );
+                assert!(
+                    !src.contains("config_ref"),
+                    "transition `{tid}` logic.source still references config_ref — \
+                     inlining missed it"
+                );
+            }
+        }
+
+        let canonical = serde_json::to_string_pretty(&air).expect("AIR must serialize");
+        std::fs::write(&out_path, format!("{canonical}\n"))
+            .unwrap_or_else(|e| panic!("write AIR to {out_path:?}: {e}"));
+        eprintln!(
+            "wrote self-contained branching AIR ({} bytes, {} configs inlined) to {:?}",
+            canonical.len(),
+            inlined,
+            out_path
+        );
+    }
+
     /// `classify-and-group-v1` is the strict prefix of `document-pipeline-v1`
     /// (OCR → vision-LLM classify; no extract / persist / verify). The demo
     /// carries a strict `GroupedClassification` `$ref` response_format schema

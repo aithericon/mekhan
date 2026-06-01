@@ -417,6 +417,76 @@ impl JobExecutor {
                     }
                 }
 
+                // Promote `file`-kind outputs into the shared ArtifactStore.
+                //
+                // A `file`-kind output's VALUE is a file-ref dict produced by
+                // the step (e.g. the Python render step's
+                // `{"key": "<run-dir-local PNG path>", ...}`). The downstream
+                // File path-site borrow (LLM `images[].path`, surya `file:`)
+                // stages it via an `InputSource::StoragePath { path: <key> }`
+                // with no per-input `storage`, which `StageInputsHook`
+                // downloads through the SAME global `ArtifactStore` this
+                // executor holds. But the step's run dir is private — its local
+                // path is not reachable from the consumer's run dir. So here we
+                // upload the local file to the global store and rewrite the
+                // file-ref `key` to the resulting shared object key, making
+                // `detail.outputs.<name>.key` a key the consumer's
+                // `store.download(StoragePath(key), …)` resolves (symmetric
+                // `put`/`download` key namespace — see executor-storage).
+                //
+                // Generic platform behaviour: any backend that declares a
+                // `file`-kind output gets this; no per-step config, no
+                // clinic-domain knowledge. Keyed off the declared output kind
+                // (`OutputDeclaration.kind == "file"`) carried across the
+                // service/executor boundary by the compiler's
+                // `declared_outputs_rhai`.
+                if matches!(exec_result.outcome, ExecutionOutcome::Success) {
+                    if let Some(store) = self.artifact_store.as_ref() {
+                        for decl in run_context.spec.outputs.iter() {
+                            if decl.kind.as_deref() != Some("file") {
+                                continue;
+                            }
+                            let Some(value) = exec_result.outputs.get(&decl.name).cloned() else {
+                                continue;
+                            };
+                            match promote_file_output_to_store(
+                                store.as_ref(),
+                                &execution_id,
+                                &decl.name,
+                                value,
+                                &run_context.run_dir.outputs_dir,
+                            )
+                            .await
+                            {
+                                Ok(Some(promoted)) => {
+                                    exec_result.outputs.insert(decl.name.clone(), promoted);
+                                }
+                                // No local file to promote (already a shared
+                                // key, null, or a non-file-ref value) — leave
+                                // the value untouched.
+                                Ok(None) => {}
+                                Err(e) => {
+                                    warn!(
+                                        %execution_id,
+                                        output = %decl.name,
+                                        error = %e,
+                                        "file output promotion to shared store failed"
+                                    );
+                                    if decl.required {
+                                        exec_result.outcome = ExecutionOutcome::BackendError {
+                                            message: format!(
+                                                "promote file output '{}' to shared store: {e}",
+                                                decl.name
+                                            ),
+                                        };
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Verify required outputs (only on success)
                 if matches!(exec_result.outcome, ExecutionOutcome::Success) {
                     let outputs_spec = &job.spec.outputs;
@@ -780,4 +850,232 @@ async fn upload_output(
     })?;
 
     Ok(destination)
+}
+
+/// Promote a `file`-kind output's local file into the shared `ArtifactStore`,
+/// rewriting the file-ref `key` to the resulting shared object key.
+///
+/// The output `value` is either:
+/// - a **file-ref object** `{ "key": "<local path>", ... }` (the canonical
+///   shape the Python render step emits — `key` is a run-dir-local file path),
+/// - a **bare string** holding a local file path, or
+/// - anything else (already a shared key, `null`, a non-path value).
+///
+/// We treat the value as promotable iff the extracted path points at an
+/// **existing local file** (absolute, or relative to the step's
+/// `outputs_dir`). When promotable, the bytes are uploaded via
+/// [`ArtifactStore::put`] under a deterministic key
+/// `artifacts/{execution_id}/outputs/{output_name}/{filename}` and the
+/// returned value carries that shared key (for an object value, only `.key`
+/// is rewritten; for a string value, the whole value becomes the shared key).
+///
+/// Returns `Ok(None)` when there is nothing to promote (the local file is
+/// absent — e.g. the value is already a shared key from a prior run, or `null`,
+/// or not a path), so the caller leaves the recorded output untouched.
+///
+/// The chosen key is in the SAME namespace the downstream File-borrow's
+/// `StageInputsHook` reads with `store.download(StoragePath(key), …)` (both
+/// sides hold the same global store), so the round-trip resolves without any
+/// prefix arithmetic.
+async fn promote_file_output_to_store(
+    store: &dyn ArtifactStore,
+    execution_id: &str,
+    output_name: &str,
+    value: serde_json::Value,
+    outputs_dir: &std::path::Path,
+) -> Result<Option<serde_json::Value>, ExecutorError> {
+    // Extract the candidate local path from the value.
+    let local_str = match &value {
+        serde_json::Value::Object(map) => map.get("key").and_then(|v| v.as_str()),
+        serde_json::Value::String(s) => Some(s.as_str()),
+        _ => None,
+    };
+    let Some(local_str) = local_str else {
+        return Ok(None);
+    };
+
+    // Resolve absolute vs. outputs-dir-relative; only an existing local file is
+    // promotable. Anything else (already a shared key, missing file) is a
+    // no-op.
+    let candidate = std::path::Path::new(local_str);
+    let local_path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        outputs_dir.join(candidate)
+    };
+    if !local_path.is_file() {
+        return Ok(None);
+    }
+
+    let filename = local_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(output_name);
+    let shared_key = format!("artifacts/{execution_id}/outputs/{output_name}/{filename}");
+
+    let bytes = tokio::fs::read(&local_path).await.map_err(|e| {
+        ExecutorError::StagingFailed(format!(
+            "read file output '{output_name}' from {}: {e}",
+            local_path.display()
+        ))
+    })?;
+    store
+        .put(&StoragePath(shared_key.clone()), bytes)
+        .await
+        .map_err(|e| {
+            ExecutorError::StagingFailed(format!(
+                "upload file output '{output_name}' to shared store key '{shared_key}': {e}"
+            ))
+        })?;
+
+    // Rewrite the value's key to the shared object key.
+    let promoted = match value {
+        serde_json::Value::Object(mut map) => {
+            map.insert(
+                "key".to_string(),
+                serde_json::Value::String(shared_key),
+            );
+            serde_json::Value::Object(map)
+        }
+        // A bare string value becomes the shared key directly.
+        _ => serde_json::Value::String(shared_key),
+    };
+    Ok(Some(promoted))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aithericon_executor_storage::LocalArtifactStore;
+    use tempfile::TempDir;
+
+    /// The load-bearing round-trip: a `file`-kind output whose value is a
+    /// file-ref `{ "key": "<local path>", … }` is uploaded into the shared
+    /// store, its `key` rewritten to the shared object key, and that exact key
+    /// is then downloadable through the SAME store — the contract the
+    /// downstream File-borrow's `StageInputsHook` relies on.
+    #[tokio::test]
+    async fn promotes_file_ref_object_and_key_is_downloadable() {
+        let store_dir = TempDir::new().unwrap();
+        let run_dir = TempDir::new().unwrap();
+        let store = LocalArtifactStore::new(store_dir.path().to_path_buf());
+
+        // The step's local PNG (lives in its private outputs dir).
+        let local_png = run_dir.path().join("page_0001.png");
+        let png_bytes = b"\x89PNG\r\n\x1a\n-fake-pixels";
+        tokio::fs::write(&local_png, png_bytes).await.unwrap();
+
+        let value = serde_json::json!({
+            "key": local_png.to_str().unwrap(),
+            "page": 1,
+            "filename": "page_0001.png",
+            "media_type": "image/png",
+        });
+
+        let promoted = promote_file_output_to_store(
+            &store,
+            "exec-abc",
+            "page_1",
+            value,
+            run_dir.path(),
+        )
+        .await
+        .unwrap()
+        .expect("a local file is promotable");
+
+        // The rewritten key is the deterministic shared key.
+        let shared_key = promoted
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            shared_key,
+            "artifacts/exec-abc/outputs/page_1/page_0001.png"
+        );
+        // Sibling fields are preserved.
+        assert_eq!(promoted.get("page").and_then(|v| v.as_u64()), Some(1));
+
+        // The downstream borrow downloads via the SAME store + key.
+        let dest = run_dir.path().join("staged_input.png");
+        store
+            .download(&StoragePath(shared_key), &dest)
+            .await
+            .expect("shared key must be downloadable through the same store");
+        assert_eq!(tokio::fs::read(&dest).await.unwrap(), png_bytes);
+    }
+
+    /// A bare-string file value (a path) is promoted to the shared key as the
+    /// whole value.
+    #[tokio::test]
+    async fn promotes_bare_string_path_value() {
+        let store_dir = TempDir::new().unwrap();
+        let run_dir = TempDir::new().unwrap();
+        let store = LocalArtifactStore::new(store_dir.path().to_path_buf());
+
+        let local = run_dir.path().join("doc.png");
+        tokio::fs::write(&local, b"bytes").await.unwrap();
+
+        let promoted = promote_file_output_to_store(
+            &store,
+            "e1",
+            "img",
+            serde_json::Value::String(local.to_str().unwrap().to_string()),
+            run_dir.path(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(promoted, serde_json::json!("artifacts/e1/outputs/img/doc.png"));
+    }
+
+    /// A value whose `key` is NOT an existing local file (e.g. already a shared
+    /// key from a prior run, or a missing path) is left untouched (no-op).
+    #[tokio::test]
+    async fn no_op_when_not_a_local_file() {
+        let store_dir = TempDir::new().unwrap();
+        let run_dir = TempDir::new().unwrap();
+        let store = LocalArtifactStore::new(store_dir.path().to_path_buf());
+
+        // Already-shared key — no local file at this relative path.
+        let value = serde_json::json!({ "key": "artifacts/old/outputs/x/page.png" });
+        let out = promote_file_output_to_store(&store, "e2", "x", value, run_dir.path())
+            .await
+            .unwrap();
+        assert!(out.is_none(), "non-local key must be a no-op");
+
+        // Null value — nothing to promote.
+        let out = promote_file_output_to_store(
+            &store,
+            "e2",
+            "x",
+            serde_json::Value::Null,
+            run_dir.path(),
+        )
+        .await
+        .unwrap();
+        assert!(out.is_none());
+    }
+
+    /// An outputs-dir-relative path resolves against the step's outputs dir.
+    #[tokio::test]
+    async fn resolves_relative_path_against_outputs_dir() {
+        let store_dir = TempDir::new().unwrap();
+        let run_dir = TempDir::new().unwrap();
+        let store = LocalArtifactStore::new(store_dir.path().to_path_buf());
+
+        let rel = "page_0002.png";
+        tokio::fs::write(run_dir.path().join(rel), b"p2").await.unwrap();
+
+        let value = serde_json::json!({ "key": rel, "page": 2 });
+        let promoted = promote_file_output_to_store(&store, "e3", "page_1", value, run_dir.path())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            promoted.get("key").and_then(|v| v.as_str()),
+            Some("artifacts/e3/outputs/page_1/page_0002.png")
+        );
+    }
 }

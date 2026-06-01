@@ -8,7 +8,7 @@
 //! reach). An empty catalogue is a valid result (total_count 0), so the net
 //! must still complete.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). No S3 /
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). No S3 /
 //! executor needed. Run serially (`--test-threads=1`).
 
 mod common;
@@ -133,7 +133,7 @@ fn catalogue_graph(step_id: &str) -> WorkflowGraph {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {

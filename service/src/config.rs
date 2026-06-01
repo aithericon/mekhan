@@ -247,15 +247,15 @@ fn default_host() -> String {
 }
 
 fn default_port() -> u16 {
-    13100
+    3100
 }
 
 fn default_petri_lab_url() -> String {
-    "http://localhost:13030".to_string()
+    "http://localhost:3030".to_string()
 }
 
 fn default_nats_url() -> String {
-    "nats://localhost:14333".to_string()
+    "nats://localhost:4333".to_string()
 }
 
 fn default_retention_hours() -> u64 {

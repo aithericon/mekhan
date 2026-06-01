@@ -357,6 +357,7 @@ mod tests {
             payload_mapping: vec![],
             reply_default: None,
             enabled: false,
+            air_target_place_id: None,
         };
         let decl = lookup_by_variant(&data).expect("trigger registered");
         assert_eq!(decl.wire_name, "trigger");

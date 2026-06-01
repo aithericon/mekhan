@@ -36,13 +36,13 @@ just dev up-<name>         # single-component restart: up-executor | up-engine |
 ```
 
 Local endpoints once `just dev` is up:
-- mekhan-service → http://localhost:13100
+- mekhan-service → http://localhost:3100
 - SvelteKit dev → http://localhost:15173 (proxies `/api/*` to mekhan, `/petri/*` to engine; `/api/yjs` is WS)
-- engine → http://localhost:13030
-- Postgres → `localhost:15439` (`mekhan:mekhan@.../mekhan`)
-- NATS → `nats://localhost:14333` (HTTP monitor :18333)
-- rustfs (S3) → http://localhost:19005 (admin `rustfsadmin/rustfsadmin`, console :19006)
-- vault → http://localhost:18200 (dev mode, root token `root`, KV v2 at `secret/`)
+- engine → http://localhost:3030
+- Postgres → `localhost:5439` (`mekhan:mekhan@.../mekhan`)
+- NATS → `nats://localhost:4333` (HTTP monitor :18333)
+- rustfs (S3) → http://localhost:9005 (admin `rustfsadmin/rustfsadmin`, console :19006)
+- vault → http://localhost:8200 (dev mode, root token `root`, KV v2 at `secret/`)
 - executor cancel → http://localhost:13105
 
 Auth defaults to `dev_noop` (every request is a fixed dev user, fully offline). Use `just dev up-auth` to run mekhan in BFF mode against Zitadel — requires `bash deploy/zitadel/bootstrap.sh` once to write `service/mekhan.local.toml`.
@@ -100,7 +100,7 @@ cargo test -p mekhan-service --test compiler_e2e -- <pattern>
   - `/api/auth/{login,callback,session,logout}` — OAuth bootstrap; the callback URL is registered with Zitadel.
   - `/api/yjs/{template_id}` — Yjs CRDT WebSocket (binary protocol, not OpenAPI-modeled).
   - `/api/triggers/webhook/{slug}` — webhook receivers; external senders post here.
-- **`/petri/*` is the engine reverse proxy** mounted INSIDE the auth gate. Streams request + response bodies (`reqwest::Body::wrap_stream` → `axum::body::Body::from_stream`) so SSE survives, strips hop-by-hop headers per RFC 7230, and inherits the same session-cookie auth as every other API route. Forwards to `config.petri_lab_url` (default `http://localhost:13030`).
+- **`/petri/*` is the engine reverse proxy** mounted INSIDE the auth gate. Streams request + response bodies (`reqwest::Body::wrap_stream` → `axum::body::Body::from_stream`) so SSE survives, strips hop-by-hop headers per RFC 7230, and inherits the same session-cookie auth as every other API route. Forwards to `config.petri_lab_url` (default `http://localhost:3030`).
 
 ## OpenAPI is a hard contract
 

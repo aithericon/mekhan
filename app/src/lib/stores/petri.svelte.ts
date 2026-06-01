@@ -313,6 +313,11 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function loadScenario(scenario: unknown): Promise<{ success: boolean; error?: string; places_count?: number; transitions_count?: number; tokens_count?: number }> {
 		try {
+			// Envelope-aware: the transport in `petri-api.ts::loadScenario` wraps the
+			// scenario in `LoadScenarioRequest { scenario, skip_mask?, stage_overrides? }`
+			// per the sub-phase 2.5e-γ.mekhan-S3 cutover. The frontend editor does not
+			// drive ablation; the wrap omits skip_mask/stage_overrides and engine serde
+			// deserialises them as empty.
 			const data = await api.loadScenario(scenario);
 			return {
 				success: true,

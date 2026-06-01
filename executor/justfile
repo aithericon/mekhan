@@ -15,6 +15,15 @@ run:
 run-debug:
     RUST_LOG=debug cargo run -p aithericon-executor-service
 
+# Launch the Surya executor pool (Item 5 of sub-phase 2.2b). Spawns the
+# managed Surya subprocess from .dev/surya-venv/ (run `just
+# surya-venv-setup` first if absent), binds /v1/healthz + /v1/ocr/extract
+# on AITHERICON_EXECUTOR_SURYA_POOL_PORT (default 3302), and registers
+# with cloud-layer-capability-routing. Fail-closed if CLOUD_LAYER_JWT_SECRET
+# is unset or the subprocess can't start.
+run-executor-surya-pool:
+    cargo run -p aithericon-executor-surya --bin aithericon-executor-surya-pool
+
 # Start NATS JetStream via Docker.
 # Standalone container (own port 4222, default in executor config) — the
 # executor workspace ships no docker-compose, so unlike engine/root (which
@@ -53,3 +62,32 @@ gen-python-proto:
         packages/aithericon-sdk/src/aithericon/_proto/executor_sidecar_pb2_grpc.py
     rm -rf "$VENV"
     echo "Python proto stubs generated"
+
+# ---------------------------------------------------------------------------
+# Surya OCR (sub-phase 2.2b)
+# ---------------------------------------------------------------------------
+
+# Create / refresh the Surya venv under .dev/surya-venv/. First invocation
+# installs PyTorch + surya-ocr + transformers + fastapi + uvicorn into the
+# venv via `uv pip install -e`. The FIRST actual Surya invocation (NOT this
+# recipe) downloads ~1-2GB of model weights from HuggingFace into the venv's
+# ~/.cache/huggingface/hub/ — operators should pre-warm by running this
+# recipe + invoking the wrapper once before relying on the 120s readiness
+# timeout in production.
+#
+# License footgun: Surya is GPL-3.0 + modified OpenRAIL-M weights with $2M
+# revenue/funding commercial-license threshold (workstream #71). Subprocess
+# process-isolation contains GPL-3.0 — the executor binary stays Apache-2.0.
+surya-venv-setup:
+    @echo "==> Creating Surya venv at .dev/surya-venv/"
+    @mkdir -p .dev
+    @if [ ! -d .dev/surya-venv ]; then \
+        uv venv .dev/surya-venv --python 3.11 ; \
+    else \
+        echo "    .dev/surya-venv already exists; reusing." ; \
+    fi
+    @echo "==> Installing surya-pool-server package (Apache-2.0 wrapper) + deps"
+    VIRTUAL_ENV=.dev/surya-venv uv pip install -e crates/executor-surya/python
+    @echo "==> Surya venv ready at .dev/surya-venv/bin/python"
+    @echo "    First Surya invocation will download ~1-2GB of models (5-15 min cold)."
+    @echo "    To pre-warm: cd .dev/surya-venv && bin/python -m surya_pool_server --port 7160"

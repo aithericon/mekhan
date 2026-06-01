@@ -64,7 +64,15 @@ pub async fn evaluate(dispatcher: &TriggerDispatcher, entry: &CatalogueEntry) {
         }
 
         let payload = entry_to_payload(entry);
-        match dispatcher.fire(&rec.node_id, payload).await {
+        match dispatcher
+            .fire(
+                &rec.node_id,
+                payload,
+                petri_api_types::DispatchOptions::default(),
+                None,
+            )
+            .await
+        {
             Ok(result) => {
                 tracing::info!(
                     node_id = %rec.node_id,
@@ -139,7 +147,15 @@ pub async fn backfill_one(
             continue;
         }
         let payload = entry_to_payload(entry);
-        match dispatcher.fire(&node_id, payload).await {
+        match dispatcher
+            .fire(
+                &node_id,
+                payload,
+                petri_api_types::DispatchOptions::default(),
+                None,
+            )
+            .await
+        {
             Ok(_) => fired += 1,
             Err(e) => {
                 tracing::warn!(

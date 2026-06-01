@@ -658,6 +658,18 @@ pub enum WorkflowNodeData {
         /// Disabled triggers are stored but the dispatcher ignores them.
         #[serde(default)]
         enabled: bool,
+        /// Pre-AIR direct target. When set, the trigger fires by seeding the
+        /// named AIR place with the supplied payload, bypassing graph-edge
+        /// resolution. Mutually exclusive with an outgoing edge in the graph:
+        /// pre-AIR templates carry a Trigger-only stub graph (no Start, no
+        /// edges). Used by clinic-style headless templates pushed through
+        /// `POST /api/templates/apply-air`.
+        #[serde(
+            rename = "airTargetPlaceId",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        air_target_place_id: Option<String>,
     },
     /// Agent block — one LLM call, optionally extended with tool children
     /// and a multi-turn loop. PR 1 only models the type; the degenerate
@@ -2356,6 +2368,62 @@ pub struct ApplyTemplateRequest {
     pub graph: WorkflowGraph,
     #[serde(default)]
     pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub source_ref: Option<SourceRef>,
+}
+
+/// Trigger spec embedded in a `POST /api/templates/apply-air` request.
+/// The endpoint synthesizes a `WorkflowGraph` stub containing only this
+/// Trigger node so that `register_triggers` (which walks `template.graph`)
+/// finds it post-commit. Direct AIR-place binding via
+/// `air_target_place_id` — no graph edge.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PreAirTriggerSpec {
+    /// Stable, globally-unique node id used in `POST /api/triggers/{node_id}/fire`
+    /// URLs. Author-controlled (e.g. `"trg_di_extraction_v1"`).
+    pub node_id: String,
+    pub label: String,
+    /// Trigger source. Clinic's initial use case is `Manual`; other sources
+    /// are valid here too (Webhook, Cron, ...) — the dispatcher resolves
+    /// them identically once the trigger is registered.
+    pub source: TriggerSource,
+    #[serde(default)]
+    pub payload_mapping: Vec<FieldMapping>,
+    #[serde(default)]
+    pub reply_default: Option<ReplyMode>,
+    /// The AIR place id whose `initial_tokens` will be seeded with the
+    /// fire payload + system fields. Must exist in the supplied AIR's
+    /// `places[]` — validated at fire time by `parameterize_for_place`.
+    pub air_target_place_id: String,
+    /// Whether the trigger is live post-apply. Explicit (no default) so
+    /// the deploy recipe must state intent — a disabled trigger never
+    /// fires even if registered.
+    pub enabled: bool,
+}
+
+/// Request body for `POST /api/templates/apply-air` — clinic-style
+/// headless template upload.
+///
+/// Accepts pre-compiled AIR directly: no `WorkflowGraph` compile pass,
+/// no Y.Doc init, no S3 file upload. The supplied `air_json` is stored
+/// verbatim into the `air_json` column; a synthetic stub graph (one
+/// Trigger node, no edges) is stored into the `graph` column so the
+/// trigger dispatcher's `register_triggers` finds it.
+///
+/// Idempotency: name-based. Re-apply with the same `name` Bumps the
+/// chain (new version row, prior version's triggers forgotten); first
+/// apply Seeds (fresh chain at v1).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ApplyAirTemplateRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Pre-compiled AIR. Stored verbatim. The endpoint runs no compile
+    /// pass; the AIR is consumed by the engine at trigger-fire time.
+    pub air_json: serde_json::Value,
+    pub trigger: PreAirTriggerSpec,
+    /// Optional git provenance, recorded into `source_ref` exactly like
+    /// the existing GitOps `apply` endpoint.
     #[serde(default)]
     pub source_ref: Option<SourceRef>,
 }

@@ -48,6 +48,11 @@ impl TestServer {
             run_mode: Arc::new(RwLock::new(RunMode::Stopped)),
             eval_notify: Arc::new(Notify::new()),
             event_tx: Arc::new(event_tx),
+            // Sub-phase 2.5e-γ.mekhan scaffold field — single-net test
+            // server uses default (empty) options. Per-test ablation
+            // exercises happen via the scenario-load envelope, not via
+            // this constructor.
+            dispatch_options: Arc::new(RwLock::new(petri_domain::DispatchOptions::default())),
         };
 
         let router = axum::Router::new().nest("/api", create_router(state));
@@ -109,8 +114,14 @@ impl TestServer {
     // ── Single-net helpers ──────────────────────────────────────────────
 
     /// Deploy a scenario (single-net mode, POST /api/scenario).
+    ///
+    /// Sub-phase 2.5e-γ.mekhan-S2: the handler now expects a
+    /// `LoadScenarioRequest` envelope (`{"scenario": <...>}`) rather than
+    /// a bare `ScenarioDefinition`. We wrap on the way out so existing
+    /// callers passing bare scenarios continue to work.
     pub async fn deploy(&self, scenario: &serde_json::Value) {
-        self.post("/api/scenario", scenario).await;
+        let envelope = serde_json::json!({"scenario": scenario});
+        self.post("/api/scenario", &envelope).await;
     }
 
     /// Evaluate (single-net mode, POST /api/command/evaluate).
@@ -125,9 +136,12 @@ impl TestServer {
     // ── Multi-net helpers ───────────────────────────────────────────────
 
     /// Deploy a scenario to a named net (multi-net mode).
+    ///
+    /// Sub-phase 2.5e-γ.mekhan-S2: see `deploy` doc; same envelope wrap
+    /// applies to the net-scoped scenario-load endpoint.
     pub async fn deploy_net(&self, net_id: &str, scenario: &serde_json::Value) {
-        self.post(&format!("/api/nets/{net_id}/scenario"), scenario)
-            .await;
+        let envelope = serde_json::json!({"scenario": scenario});
+        self.post(&format!("/api/nets/{net_id}/scenario"), &envelope).await;
     }
 
     /// Evaluate a named net (multi-net mode).

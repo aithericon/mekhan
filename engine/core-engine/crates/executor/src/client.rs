@@ -542,6 +542,7 @@ mod tests {
             priority: JobPriority::default(),
             stream_events: None,
             wrapped_secrets: None,
+            feed_chunks: false,
         };
 
         let envelope = NatsJobEnvelope {

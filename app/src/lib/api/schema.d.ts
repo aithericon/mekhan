@@ -1368,6 +1368,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/apply-air": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/apply-air
+         * @description Clinic-style headless template upload: accepts pre-compiled AIR
+         *     (`ScenarioDefinition` shape — `{places[], transitions[]}`) directly,
+         *     bypassing the editor's `WorkflowGraph` → AIR compile pass entirely.
+         *     The supplied `air_json` is stored verbatim into the `air_json` column;
+         *     a synthetic stub graph containing just the `Trigger` node is stored
+         *     into the `graph` column so the trigger dispatcher's `register_triggers`
+         *     finds it post-commit.
+         *
+         *     Idempotency: name-based, scoped per workspace. A first apply with a
+         *     given `name` in the caller's workspace Seeds a fresh v1 chain
+         *     (`is_latest = true`); subsequent applies with the same `(name,
+         *     workspace_id)` pair Bump the chain. Cross-workspace name collisions
+         *     are independent chains.
+         *
+         *     Distinct from `POST /api/v1/templates/{id}/apply` (the GitOps path for
+         *     graph-authored templates): that one demands an existing `{id}` and a
+         *     `WorkflowGraph`, then runs the compile pass. This endpoint takes
+         *     neither.
+         */
+        post: operations["apply_air_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}": {
         parameters: {
             query?: never;
@@ -2158,6 +2195,31 @@ export interface components {
             storage: components["schemas"]["StorageConfig"];
         };
         /**
+         * @description Request body for `POST /api/templates/apply-air` — clinic-style
+         *     headless template upload.
+         *
+         *     Accepts pre-compiled AIR directly: no `WorkflowGraph` compile pass,
+         *     no Y.Doc init, no S3 file upload. The supplied `air_json` is stored
+         *     verbatim into the `air_json` column; a synthetic stub graph (one
+         *     Trigger node, no edges) is stored into the `graph` column so the
+         *     trigger dispatcher's `register_triggers` finds it.
+         *
+         *     Idempotency: name-based. Re-apply with the same `name` Bumps the
+         *     chain (new version row, prior version's triggers forgotten); first
+         *     apply Seeds (fresh chain at v1).
+         */
+        ApplyAirTemplateRequest: {
+            /**
+             * @description Pre-compiled AIR. Stored verbatim. The endpoint runs no compile
+             *     pass; the AIR is consumed by the engine at trigger-fire time.
+             */
+            air_json: unknown;
+            description?: string | null;
+            name: string;
+            source_ref?: null | components["schemas"]["SourceRef"];
+            trigger: components["schemas"]["PreAirTriggerSpec"];
+        };
+        /**
          * @description Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
          *     The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
          *     assets are uploaded out-of-band via the files endpoint before this call.
@@ -2836,14 +2898,15 @@ export interface components {
          * @description Discriminator selecting which executor backend handles an automated step.
          *
          *     Snake-case wire values: `"python"`, `"process"`, `"docker"`, `"http"`,
-         *     `"llm"`, `"file_ops"`, `"kreuzberg"`, `"smtp"`, `"catalogue_query"`.
+         *     `"llm"`, `"file_ops"`, `"kreuzberg"`, `"surya"`, `"smtp"`,
+         *     `"catalogue_query"`.
          *
          *     This is the canonical OpenAPI discriminator, the Y.Doc-stored string in
          *     production templates, and the executor's `ExecutionSpec.backend` value.
          *     Both the mekhan compiler and the executor registry key off it.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "smtp" | "catalogue_query";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -2971,6 +3034,14 @@ export interface components {
         };
         FireTriggerRequest: {
             /**
+             * @description Submitter-supplied net-level parameter bag for the spawned instance.
+             *     Threaded into `LoadScenarioRequest.net_parameters` and stored on the
+             *     engine's `PetriNetService`, where the firing path consults it for
+             *     `$params.` resolution and pre-dispatch metadata (e.g. `tenant_id`).
+             *     Opaque, generic infra — no domain semantics ascribed here.
+             */
+            net_parameters?: unknown;
+            /**
              * @description JSON object whose top-level keys are bound as the trigger's scope
              *     identifiers for `payload_mapping`. For `Manual` triggers supply the
              *     form values keyed by field name (matching `source_scope`); for other
@@ -2978,6 +3049,22 @@ export interface components {
              */
             payload?: unknown;
             reply_mode?: null | components["schemas"]["ReplyMode"];
+            /**
+             * @description Per-run ablation: transition IDs to skip at evaluate-time.
+             *     Threaded through the dispatcher into the engine's
+             *     `LoadScenarioRequest.skip_mask` (γ.mekhan wire). Empty by default
+             *     — research-harness ablation flows surface this; ordinary fires omit.
+             *     #126.2: extends the previously-always-empty trigger-boundary stub.
+             */
+            skip_mask?: string[];
+            /**
+             * @description Per-run ablation: per-transition JSON merge-patch keyed by
+             *     transition_id. Threaded into `LoadScenarioRequest.stage_overrides`.
+             *     Same surface + provenance as `skip_mask`. #126.2.
+             */
+            stage_overrides?: {
+                [key: string]: unknown;
+            };
         };
         FireTriggerResponse: {
             outcome?: null | components["schemas"]["TerminalOutcome"];
@@ -3393,6 +3480,17 @@ export interface components {
             prompt: string;
             /** @description Which LLM provider to use. */
             provider: components["schemas"]["Provider"];
+            /**
+             * @description Whether the model uses reasoning / chain-of-thought ("thinking").
+             *     Maps to Ollama's `think` request parameter. `None` = leave the model's
+             *     provider default; `Some(false)` disables reasoning; `Some(true)` forces
+             *     it on. Disabling matters for reasoning-capable models (e.g. qwen3.6)
+             *     doing structured-output extraction: with reasoning on under a
+             *     `format`/json-schema constraint they can loop and generate to the token
+             *     cap without emitting valid JSON. Adapters for non-reasoning models
+             *     ignore this field.
+             */
+            reasoning?: boolean | null;
             /**
              * @description Optional workspace resource name (e.g. `openai_prod`) the LLM step is
              *     bound to. When set, the compiler emits a ResourceEnvelope borrow that
@@ -4020,6 +4118,41 @@ export interface components {
              *     Capped at the job-level `RunContext.timeout`.
              */
             statement_timeout_ms?: number;
+        };
+        /**
+         * @description Trigger spec embedded in a `POST /api/templates/apply-air` request.
+         *     The endpoint synthesizes a `WorkflowGraph` stub containing only this
+         *     Trigger node so that `register_triggers` (which walks `template.graph`)
+         *     finds it post-commit. Direct AIR-place binding via
+         *     `air_target_place_id` — no graph edge.
+         */
+        PreAirTriggerSpec: {
+            /**
+             * @description The AIR place id whose `initial_tokens` will be seeded with the
+             *     fire payload + system fields. Must exist in the supplied AIR's
+             *     `places[]` — validated at fire time by `parameterize_for_place`.
+             */
+            air_target_place_id: string;
+            /**
+             * @description Whether the trigger is live post-apply. Explicit (no default) so
+             *     the deploy recipe must state intent — a disabled trigger never
+             *     fires even if registered.
+             */
+            enabled: boolean;
+            label: string;
+            /**
+             * @description Stable, globally-unique node id used in `POST /api/triggers/{node_id}/fire`
+             *     URLs. Author-controlled (e.g. `"trg_di_extraction_v1"`).
+             */
+            node_id: string;
+            payload_mapping?: components["schemas"]["FieldMapping"][];
+            reply_default?: null | components["schemas"]["ReplyMode"];
+            /**
+             * @description Trigger source. Clinic's initial use case is `Manual`; other sources
+             *     are valid here too (Webhook, Cron, ...) — the dispatcher resolves
+             *     them identically once the trigger is registered.
+             */
+            source: components["schemas"]["TriggerSource"];
         };
         ProbeConfig: {
             include_statistics?: boolean;
@@ -5790,6 +5923,15 @@ export interface components {
             /** @enum {string} */
             type: "timeout";
         } | {
+            /**
+             * @description Pre-AIR direct target. When set, the trigger fires by seeding the
+             *     named AIR place with the supplied payload, bypassing graph-edge
+             *     resolution. Mutually exclusive with an outgoing edge in the graph:
+             *     pre-AIR templates carry a Trigger-only stub graph (no Start, no
+             *     edges). Used by clinic-style headless templates pushed through
+             *     `POST /api/templates/apply-air`.
+             */
+            airTargetPlaceId?: string | null;
             /** @description Concurrency / dedup policy applied by the dispatcher. */
             concurrency?: components["schemas"]["ConcurrencyPolicy"];
             description?: string | null;
@@ -8689,6 +8831,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    apply_air_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyAirTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Applied: seeded v1 or a new born-published version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Invalid AIR or trigger spec */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Server error */

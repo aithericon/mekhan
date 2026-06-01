@@ -20,7 +20,7 @@
 //!   envelope is emitted, the HumanTask is no longer pending (drained by
 //!   `human_cancel`), and the instance reaches `completed` cleanly.
 //!
-//! Requires `just dev up` (engine :13030 sharing the dev NATS broker). Run
+//! Requires `just dev up` (engine :3030 sharing the dev NATS broker). Run
 //! serially (`--test-threads=1`).
 
 mod common;
@@ -69,7 +69,7 @@ async fn cleanup_durables(nats: &MekhanNats) {
 }
 
 fn engine_url() -> String {
-    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:13030".to_string())
+    std::env::var("TEST_ENGINE_URL").unwrap_or_else(|_| "http://localhost:3030".to_string())
 }
 
 async fn engine_available() -> bool {
@@ -605,7 +605,7 @@ async fn timeout_timer_wins_drains_body_human_task() {
     );
 
     // Poll the hpi_tasks projection — the cancel_listener runs in the live
-    // dev mekhan (sharing this PG via :15439) and consumes `human.cancel.>`
+    // dev mekhan (sharing this PG via :5439) and consumes `human.cancel.>`
     // from JetStream, so there's a small async gap between the engine firing
     // human_cancel and the row flipping. 5s is conservative.
     let task_cancelled_within = Duration::from_secs(5);

@@ -376,6 +376,7 @@ pub(crate) async fn fire_transition<
     secret_store: Option<&dyn SecretStore>,
     net_parameters: Option<&JsonValue>,
     pre_dispatch: Option<&PreDispatchRuntime>,
+    dispatch_options: &petri_domain::DispatchOptions,
 ) -> Result<PersistedEvent, ServiceError> {
     let net = topology.get_topology().ok_or(ServiceError::NoTopology)?;
 
@@ -383,6 +384,35 @@ pub(crate) async fn fire_transition<
         .get_transition(&transition_id)
         .ok_or_else(|| ServiceError::TransitionNotFound(transition_id.clone()))?
         .clone();
+
+    // Sub-phase 2.5e-γ.mekhan: skip branch. If the transition_id is in the
+    // per-run skip_mask, consume inputs + emit TransitionSkipped event with
+    // Token::new_unit() defaults on each declared output port place. No
+    // effect dispatch, no Rhai logic, no pre-dispatch hook chain. Honest
+    // semantics for research-harness ablation per
+    // `project_three_use_cases_and_visualization`.
+    //
+    // Scaffold-stage: the guard + dispatch is wired; `execute_skip` body
+    // ships in sub-phase 2.5e-γ.mekhan-S1 (per scaffold-then-dispatch
+    // pattern). Until S1 lands, the placeholder panics — the guard's
+    // condition is only satisfied when a client explicitly populates
+    // skip_mask, so no live consumer trips this path at scaffold time.
+    if dispatch_options
+        .skip_mask
+        .iter()
+        .any(|id| id == &transition_id.0)
+    {
+        return execute_skip(
+            events,
+            executor,
+            &net,
+            marking,
+            &transition,
+            &transition_id,
+            schema_registry,
+        )
+        .await;
+    }
 
     // Branch: effect transitions use a separate path
     if transition.is_effect() {
@@ -401,6 +431,7 @@ pub(crate) async fn fire_transition<
             secret_store,
             net_parameters,
             pre_dispatch,
+            dispatch_options,
         )
         .await;
     }
@@ -479,6 +510,7 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
     secret_store: Option<&dyn SecretStore>,
     net_parameters: Option<&JsonValue>,
     pre_dispatch: Option<&PreDispatchRuntime>,
+    dispatch_options: &petri_domain::DispatchOptions,
 ) -> Result<PersistedEvent, ServiceError> {
     let transition_id = &transition.id;
     let handler_id = transition.effect_handler_id.as_ref().unwrap();
@@ -499,8 +531,17 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                 })?
             };
 
+            // Sub-phase 2.5e-γ.mekhan: apply per-run stage_overrides
+            // (RFC 7396 JSON merge-patch) BEFORE secret resolution + the
+            // pre-dispatch hook chain. Overrides keyed by transition_id.0;
+            // unknown IDs fail closed at scenario-load time, so a present
+            // override here is guaranteed to target a declared transition.
+            // No-op when there is no override entry for this transition.
+            let patched_effect_config =
+                apply_stage_override(&transition.effect_config, dispatch_options, &transition_id.0);
+
             // Resolve secrets in config (just-in-time, transient copy)
-            let resolved_config = match (secret_store, &transition.effect_config) {
+            let resolved_config = match (secret_store, &patched_effect_config) {
                 (Some(store), Some(config)) => Some(
                     aithericon_secrets::resolve_secrets(config, store)
                         .await
@@ -525,7 +566,16 @@ async fn fire_effect_transition<E: EventRepository, T: TopologyRepository, S: St
                 if !rt.chain.is_empty() {
                     let metadata_template = PreDispatchMetadata {
                         scenario_id: None,
-                        tenant_id: None,
+                        // Generic infra: submitter-supplied `net_parameters.tenant_id`
+                        // (set on the spawned net at scenario-load) populates the
+                        // pre-dispatch metadata's `tenant_id`, which threads onward
+                        // into `HttpPreDispatchRequest.metadata.tenant_id`. The
+                        // engine ascribes no semantics to the value — it is an opaque
+                        // string the net's parameter bag declares.
+                        tenant_id: net_parameters
+                            .and_then(|p| p.get("tenant_id"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
                         correlation_id: None,
                         process_step: process_step.clone(),
                         hook_chain_index: 0,
@@ -1160,5 +1210,229 @@ mod tests {
         assert!(bridge_out.is_empty());
         assert_eq!(produced.len(), 1, "Single port → exactly one token");
         assert_eq!(token_color_to_json(&produced[0].1.color), whole);
+    }
+}
+
+// =============================================================================
+// Sub-phase 2.5e-γ.mekhan skip path + stage_overrides merge-patch helper
+// =============================================================================
+
+/// Sub-phase 2.5e-γ.mekhan: skip-path executor. Consumes input tokens via
+/// the standard binding-selection path, then emits a `TransitionSkipped`
+/// domain event with `Token::new_unit()` on each output arc's target
+/// place. NO effect dispatch, NO Rhai logic, NO pre-dispatch hook chain.
+///
+/// Iterates `net.output_arcs(&transition_id)` (the structural source of
+/// truth for "declared output ports that resolve to a place"): each arc
+/// produces exactly one Unit token at its target place. Output ports
+/// without arcs are silently ignored — they have no place to write to —
+/// which matches the engine's existing route_output_tokens behaviour
+/// where an arc is required for routing.
+///
+/// Binding selection reuses `find_valid_binding` with the same arguments
+/// the Rhai / Effect branches use; the skip event docstring guarantees
+/// that consumed_tokens come from a regularly-enabled binding (skip
+/// happens AFTER input-binding selection per the spec).
+async fn execute_skip<E: EventRepository>(
+    events: &E,
+    executor: &TransitionExecutor,
+    net: &PetriNet,
+    marking: &petri_domain::Marking,
+    transition: &petri_domain::Transition,
+    transition_id: &TransitionId,
+    schema_registry: Option<&SchemaRegistry>,
+) -> Result<PersistedEvent, ServiceError> {
+    let input_arcs = net.input_arcs(transition_id);
+    let binding = find_valid_binding(executor, transition, &input_arcs, marking, schema_registry)
+        .ok_or_else(|| ServiceError::GuardNotSatisfied(transition_id.clone()))?;
+
+    // Produce one `Token::new_unit()` per declared output arc. The arc set
+    // is the structural ground truth — output ports without arcs would have
+    // no destination place anyway (mirrors route_output_tokens' arc-lookup
+    // failure mode for the live path).
+    let produced_tokens: Vec<(PlaceId, Token)> = net
+        .output_arcs(transition_id)
+        .into_iter()
+        .map(|arc| (arc.place_id.clone(), Token::new_unit()))
+        .collect();
+
+    let event = events
+        .append(DomainEvent::TransitionSkipped {
+            transition_id: transition_id.clone(),
+            transition_name: Some(transition.name.clone()),
+            consumed_tokens: binding.consumed_tokens,
+            produced_tokens,
+            skip_reason: "skip_mask".to_string(),
+        })
+        .await?;
+
+    Ok(event)
+}
+
+/// Sub-phase 2.5e-γ.mekhan: apply a per-transition `stage_overrides`
+/// merge-patch to the transition's static `effect_config` BEFORE secret
+/// resolution + pre-dispatch hook chain enrichment.
+///
+/// Semantics:
+/// - No override for this transition_id → returns the original config clone.
+/// - Override present, original `effect_config` is `None` → patch applies to
+///   an empty JSON object (`{}`), producing a new config from the patch.
+/// - Override present, original `effect_config` is `Some(json)` → RFC 7396
+///   merge-patch applied to the cloned base, returning the merged config.
+///
+/// Failing-closed on unknown transition_id is the scenario-load layer's
+/// responsibility (cloud-layer-side per the dispatch contract); by the
+/// time we reach this helper, any present override targets a declared
+/// transition. We intentionally do NOT validate per-step model presence
+/// here — per `feedback_no_default_model`, the upstream submit-path is
+/// the guard surface; mekhan's role is purely to apply the patch.
+fn apply_stage_override(
+    base: &Option<JsonValue>,
+    dispatch_options: &petri_domain::DispatchOptions,
+    transition_id_str: &str,
+) -> Option<JsonValue> {
+    let patch = match dispatch_options.stage_overrides.get(transition_id_str) {
+        Some(p) => p,
+        None => return base.clone(),
+    };
+    let mut merged = base
+        .clone()
+        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
+    petri_domain::apply_merge_patch(&mut merged, patch);
+    Some(merged)
+}
+
+#[cfg(test)]
+mod skip_and_override_tests {
+    use super::*;
+    use petri_domain::DispatchOptions;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn apply_stage_override_no_entry_returns_original_some() {
+        let base = Some(json!({"temperature": 0.7, "model": "qwen3.5:9b"}));
+        let opts = DispatchOptions::default();
+        let result = apply_stage_override(&base, &opts, "agent_a");
+        assert_eq!(result, base);
+    }
+
+    #[test]
+    fn apply_stage_override_no_entry_returns_original_none() {
+        let base: Option<JsonValue> = None;
+        let opts = DispatchOptions::default();
+        let result = apply_stage_override(&base, &opts, "agent_a");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn apply_stage_override_merge_temperature_overrides_at_fire_time() {
+        // Spec: a stage_override with `{"temperature": 0.0}` produces an
+        // effect_config with temperature 0.0 overriding the original at
+        // fire-time. This is the canonical example from the bootstrap brief.
+        let base = Some(json!({
+            "model": "qwen3.5:9b",
+            "temperature": 0.7,
+            "tools": ["search", "code"],
+        }));
+        let mut stage_overrides = HashMap::new();
+        stage_overrides.insert("agent_a".to_string(), json!({"temperature": 0.0}));
+        let opts = DispatchOptions {
+            skip_mask: vec![],
+            stage_overrides,
+        };
+        let result = apply_stage_override(&base, &opts, "agent_a").unwrap();
+        assert_eq!(
+            result,
+            json!({
+                "model": "qwen3.5:9b",
+                "temperature": 0.0,
+                "tools": ["search", "code"],
+            }),
+            "merge-patch must override leaf temperature while preserving siblings"
+        );
+    }
+
+    #[test]
+    fn apply_stage_override_nested_path_preserves_unrelated_branches() {
+        // Sanity-check that the per-transition path layers cleanly on top
+        // of the underlying RFC 7396 merge-patch primitive (which already
+        // has 7 unit tests in petri_domain::dispatch).
+        let base = Some(json!({
+            "model_config": {
+                "model": "qwen3.5:9b",
+                "temperature": 0.7,
+            },
+            "retry": {"max_attempts": 3},
+        }));
+        let mut stage_overrides = HashMap::new();
+        stage_overrides.insert(
+            "step_x".to_string(),
+            json!({"model_config": {"temperature": 0.0}}),
+        );
+        let opts = DispatchOptions {
+            skip_mask: vec![],
+            stage_overrides,
+        };
+        let result = apply_stage_override(&base, &opts, "step_x").unwrap();
+        assert_eq!(
+            result,
+            json!({
+                "model_config": {
+                    "model": "qwen3.5:9b",
+                    "temperature": 0.0,
+                },
+                "retry": {"max_attempts": 3},
+            })
+        );
+    }
+
+    #[test]
+    fn apply_stage_override_targets_only_matching_transition_id() {
+        // An override keyed by "other_step" must not affect "agent_a".
+        let base = Some(json!({"temperature": 0.7}));
+        let mut stage_overrides = HashMap::new();
+        stage_overrides.insert("other_step".to_string(), json!({"temperature": 0.0}));
+        let opts = DispatchOptions {
+            skip_mask: vec![],
+            stage_overrides,
+        };
+        let result = apply_stage_override(&base, &opts, "agent_a");
+        assert_eq!(result, base);
+    }
+
+    #[test]
+    fn apply_stage_override_with_none_base_creates_config_from_patch() {
+        // If a transition has no static effect_config and an override is
+        // submitted for it, the patch builds the config from {}. This is
+        // an honest semantics call: the merge-patch primitive on `{}` +
+        // `{"x": 1}` returns `{"x": 1}`, so the resulting effect_config is
+        // the patch itself when there is no base. Upstream submit-path
+        // validation owns the "is this safe?" decision (e.g. model-presence
+        // per `feedback_no_default_model`).
+        let base: Option<JsonValue> = None;
+        let mut stage_overrides = HashMap::new();
+        stage_overrides.insert("agent_a".to_string(), json!({"temperature": 0.0}));
+        let opts = DispatchOptions {
+            skip_mask: vec![],
+            stage_overrides,
+        };
+        let result = apply_stage_override(&base, &opts, "agent_a").unwrap();
+        assert_eq!(result, json!({"temperature": 0.0}));
+    }
+
+    #[test]
+    fn apply_stage_override_null_value_deletes_key() {
+        // RFC 7396: null in the patch deletes the key. Verify the per-
+        // transition wrapper exposes this primitive correctly.
+        let base = Some(json!({"temperature": 0.7, "max_tokens": 512}));
+        let mut stage_overrides = HashMap::new();
+        stage_overrides.insert("agent_a".to_string(), json!({"max_tokens": null}));
+        let opts = DispatchOptions {
+            skip_mask: vec![],
+            stage_overrides,
+        };
+        let result = apply_stage_override(&base, &opts, "agent_a").unwrap();
+        assert_eq!(result, json!({"temperature": 0.7}));
     }
 }

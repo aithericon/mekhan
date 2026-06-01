@@ -30,12 +30,12 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Server URL (e.g. http://localhost:13100). Falls back to $MEKHAN_CLI_SERVER.
+    /// Server URL (e.g. http://localhost:3100). Falls back to $MEKHAN_CLI_SERVER.
     #[arg(
         short,
         long,
         env = "MEKHAN_CLI_SERVER",
-        default_value = "http://localhost:13100",
+        default_value = "http://localhost:3100",
         global = true
     )]
     server: String,

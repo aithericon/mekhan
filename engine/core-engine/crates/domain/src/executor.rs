@@ -150,6 +150,7 @@ mod tests {
             event_routes: None,
             execution_id: None,
             namespace: None,
+            feed_chunks: false,
         };
 
         let json = serde_json::to_string(&request).unwrap();
