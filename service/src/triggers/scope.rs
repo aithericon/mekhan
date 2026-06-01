@@ -27,6 +27,25 @@ pub struct ScopeVar {
     pub kind: FieldKind,
 }
 
+/// JSON Schema for a trigger scope — an object whose properties are the
+/// scope vars' base types. `additionalProperties` is intentionally `true`:
+/// trigger scopes (especially webhook `payload`/`headers`/`query`) are loose
+/// Rhai-projected bags, and fire-time validation happens against the target
+/// port, not this scope. Nothing is marked required (a `ScopeVar` carries no
+/// required flag).
+pub fn scope_json_schema(vars: &[ScopeVar]) -> serde_json::Value {
+    use serde_json::json;
+    let properties: serde_json::Map<String, serde_json::Value> = vars
+        .iter()
+        .map(|v| (v.name.clone(), v.kind.base_schema()))
+        .collect();
+    json!({
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": true,
+    })
+}
+
 fn var(name: &str, kind: FieldKind) -> ScopeVar {
     ScopeVar {
         name: name.to_string(),
@@ -184,5 +203,25 @@ mod tests {
         }));
         assert_eq!(names(&s), vec!["customer", "urgent"]);
         assert!(matches!(s[1].kind, FieldKind::Bool));
+    }
+
+    #[test]
+    fn scope_json_schema_is_loose_object() {
+        let vars = vec![
+            var("fire_time", FieldKind::Timestamp),
+            var("payload", FieldKind::Json),
+            var("count", FieldKind::Number),
+        ];
+        let schema = scope_json_schema(&vars);
+        assert_eq!(schema["type"], serde_json::json!("object"));
+        // Loose bag: extra keys allowed, nothing required.
+        assert_eq!(schema["additionalProperties"], serde_json::json!(true));
+        assert!(schema.get("required").is_none());
+        let props = schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("fire_time"));
+        assert!(props.contains_key("payload"));
+        assert!(props.contains_key("count"));
+        assert_eq!(props["fire_time"]["format"], serde_json::json!("date-time"));
+        assert_eq!(props["count"]["type"], serde_json::json!("number"));
     }
 }

@@ -645,15 +645,6 @@ pub enum WorkflowNodeData {
         /// expression evaluated against the trigger source's event payload.
         #[serde(rename = "payloadMapping", default)]
         payload_mapping: Vec<FieldMapping>,
-        /// Default reply mode applied when a fire caller doesn't request one.
-        /// Optional + skip-if-none so existing published graphs round-trip
-        /// unchanged.
-        #[serde(
-            rename = "replyDefault",
-            default,
-            skip_serializing_if = "Option::is_none"
-        )]
-        reply_default: Option<ReplyMode>,
         /// Disabled triggers are stored but the dispatcher ignores them.
         #[serde(default)]
         enabled: bool,
@@ -1726,6 +1717,49 @@ impl FieldKind {
             Self::File => value.is_string() || value.is_object(),
         }
     }
+
+    /// The bare JSON Schema type for this kind — no field-level enrichment.
+    /// This is the single derivation point that keeps `accepts` (runtime
+    /// validation) and the emitted contract schema in lockstep: an anti-drift
+    /// test asserts they agree per kind.
+    pub fn base_schema(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            Self::Text | Self::Textarea | Self::Select | Self::Signature => json!({"type": "string"}),
+            Self::Number => json!({"type": "number"}),
+            Self::Bool => json!({"type": "boolean"}),
+            Self::Timestamp => json!({"type": "string", "format": "date-time"}),
+            // File is a storage-path / catalog reference on the wire.
+            Self::File => json!({"type": "string"}),
+            // Json is the opaque escape hatch — anything goes.
+            Self::Json => json!({}),
+        }
+    }
+
+    /// Field-aware JSON Schema layered on [`base_schema`]. An explicit author
+    /// `field.schema` always wins (returned verbatim). Otherwise the base type
+    /// is enriched with a `Select` `enum` from the field's options and the
+    /// field `description` when present.
+    pub fn json_schema(&self, field: &PortField) -> serde_json::Value {
+        if let Some(s) = &field.schema {
+            return s.clone();
+        }
+        let mut schema = self.base_schema();
+        if matches!(self, Self::Select) {
+            if let Some(options) = &field.options {
+                schema["enum"] = serde_json::Value::Array(
+                    options
+                        .iter()
+                        .map(|o| serde_json::Value::String(o.value.clone()))
+                        .collect(),
+                );
+            }
+        }
+        if let Some(desc) = &field.description {
+            schema["description"] = serde_json::Value::String(desc.clone());
+        }
+        schema
+    }
 }
 
 /// A single field within a typed `Port`. Identifier-like `name` is the wire
@@ -1783,6 +1817,41 @@ pub struct Port {
     pub label: String,
     #[serde(default)]
     pub fields: Vec<PortField>,
+}
+
+impl Port {
+    /// JSON Schema for this port as an object contract. An empty (undeclared)
+    /// port stays permissive — `additionalProperties: true`, no locked shape —
+    /// rather than collapsing to `{}` which would also accept non-objects.
+    /// A declared port is `additionalProperties: false` with per-field
+    /// properties (via [`FieldKind::json_schema`]) and a `required` list built
+    /// from the required fields (omitted entirely when none are required).
+    pub fn json_schema(&self) -> serde_json::Value {
+        use serde_json::json;
+        if self.fields.is_empty() {
+            return json!({"type": "object", "additionalProperties": true});
+        }
+        let properties: serde_json::Map<String, serde_json::Value> = self
+            .fields
+            .iter()
+            .map(|f| (f.name.clone(), f.kind.json_schema(f)))
+            .collect();
+        let required: Vec<serde_json::Value> = self
+            .fields
+            .iter()
+            .filter(|f| f.required)
+            .map(|f| serde_json::Value::String(f.name.clone()))
+            .collect();
+        let mut schema = json!({
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": false,
+        });
+        if !required.is_empty() {
+            schema["required"] = serde_json::Value::Array(required);
+        }
+        schema
+    }
 }
 
 /// One fold/scan slot on a [`WorkflowNodeData::Loop`]. Lives as an additional
@@ -2214,27 +2283,6 @@ pub struct FieldMapping {
     pub expression: String,
 }
 
-/// How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.
-/// The caller selects per-request (query `?reply=`, `Prefer` header, or a
-/// JSON body field); a Trigger node's optional `replyDefault` is used only
-/// when the caller doesn't specify. `Sse` is never *executed* on the fire
-/// endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
-/// modeled so a node can advertise it as the intended consumption mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReplyMode {
-    /// Return `{ result }` immediately; caller polls / streams. Default —
-    /// byte-identical to pre-feature behavior.
-    #[default]
-    FireAndForget,
-    /// Hold the HTTP connection until the spawned instance reaches a terminal
-    /// state, then return its result envelope (bounded by
-    /// `wait_timeout_secs`; degrades to `202 { instance_id }` on timeout).
-    WaitForResult,
-    /// Advisory: the caller intends to consume the dedicated SSE stream.
-    Sse,
-}
-
 // --- Branch conditions ---
 
 /// xyflow Handle id for a Decision node's otherwise/else branch. The editor's
@@ -2358,8 +2406,6 @@ pub struct PreAirTriggerSpec {
     pub source: TriggerSource,
     #[serde(default)]
     pub payload_mapping: Vec<FieldMapping>,
-    #[serde(default)]
-    pub reply_default: Option<ReplyMode>,
     /// The AIR place id whose `initial_tokens` will be seeded with the
     /// fire payload + system fields. Must exist in the supplied AIR's
     /// `places[]` — validated at fire time by `parameterize_for_place`.
@@ -3657,5 +3703,133 @@ mod tests {
         assert!(v.get("ref").is_none(), "ref must be omitted when None");
         let back: SourceRef = serde_json::from_value(v).unwrap();
         assert_eq!(back.git_ref, None);
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn pf(name: &str, kind: FieldKind, required: bool) -> PortField {
+        PortField {
+            schema: None,
+            name: name.to_string(),
+            label: name.to_string(),
+            kind,
+            required,
+            options: None,
+            description: None,
+            accept: None,
+        }
+    }
+
+    fn base_type(kind: FieldKind) -> Option<String> {
+        kind.base_schema()
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(str::to_string)
+    }
+
+    /// Anti-drift: `accepts` and `base_schema` are derived from the same
+    /// FieldKind switch and must agree on a representative value per kind.
+    #[test]
+    fn accepts_agrees_with_base_schema() {
+        assert!(FieldKind::Number.accepts(&json!(3)));
+        assert_eq!(base_type(FieldKind::Number).as_deref(), Some("number"));
+
+        assert!(FieldKind::Bool.accepts(&json!(true)));
+        assert_eq!(base_type(FieldKind::Bool).as_deref(), Some("boolean"));
+
+        assert!(FieldKind::Text.accepts(&json!("x")));
+        assert_eq!(base_type(FieldKind::Text).as_deref(), Some("string"));
+
+        assert!(FieldKind::Timestamp.accepts(&json!("2026-01-01T00:00:00Z")));
+        assert_eq!(base_type(FieldKind::Timestamp).as_deref(), Some("string"));
+
+        // Json accepts anything and emits the opaque `{}`.
+        assert!(FieldKind::Json.accepts(&json!({"any": [1, 2, 3]})));
+        assert!(FieldKind::Json.accepts(&json!("scalar")));
+        assert_eq!(FieldKind::Json.base_schema(), json!({}));
+    }
+
+    #[test]
+    fn port_json_schema_required_only_for_required_fields() {
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![
+                pf("name", FieldKind::Text, true),
+                pf("note", FieldKind::Text, false),
+            ],
+        };
+        let schema = port.json_schema();
+        assert_eq!(schema["type"], json!("object"));
+        assert_eq!(schema["additionalProperties"], json!(false));
+        assert_eq!(schema["required"], json!(["name"]));
+        assert_eq!(schema["properties"]["name"]["type"], json!("string"));
+    }
+
+    #[test]
+    fn port_json_schema_omits_required_when_none() {
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![pf("note", FieldKind::Text, false)],
+        };
+        let schema = port.json_schema();
+        assert!(
+            schema.get("required").is_none(),
+            "required must be omitted when no field is required"
+        );
+        assert_eq!(schema["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn port_json_schema_empty_port_is_permissive() {
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![],
+        };
+        let schema = port.json_schema();
+        assert_eq!(
+            schema,
+            json!({"type": "object", "additionalProperties": true})
+        );
+    }
+
+    #[test]
+    fn select_field_with_options_emits_enum() {
+        let mut field = pf("choice", FieldKind::Select, false);
+        field.options = Some(vec![
+            SelectOption {
+                value: "approve".into(),
+                label: "Approve".into(),
+            },
+            SelectOption {
+                value: "reject".into(),
+                label: "Reject".into(),
+            },
+        ]);
+        let schema = field.kind.json_schema(&field);
+        assert_eq!(schema["type"], json!("string"));
+        assert_eq!(schema["enum"], json!(["approve", "reject"]));
+    }
+
+    #[test]
+    fn field_schema_override_wins_verbatim() {
+        let mut field = pf("steps", FieldKind::Json, false);
+        let custom = json!({"type": "array", "items": {"type": "object"}});
+        field.schema = Some(custom.clone());
+        assert_eq!(field.kind.json_schema(&field), custom);
+    }
+
+    #[test]
+    fn description_is_attached() {
+        let mut field = pf("name", FieldKind::Text, false);
+        field.description = Some("the customer name".into());
+        let schema = field.kind.json_schema(&field);
+        assert_eq!(schema["description"], json!("the customer name"));
     }
 }

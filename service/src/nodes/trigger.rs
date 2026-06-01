@@ -62,7 +62,6 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         source,
         concurrency,
         payload_mapping,
-        reply_default,
         enabled,
         ..
     } = data
@@ -76,9 +75,5 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
     let mapping_val =
         serde_json::to_value(payload_mapping).unwrap_or(serde_json::Value::Array(vec![]));
     config.insert(txn, "payloadMapping", json_value_to_any(&mapping_val));
-    if let Some(rd) = reply_default {
-        let rd_val = serde_json::to_value(rd).unwrap_or_default();
-        config.insert(txn, "replyDefault", json_value_to_any(&rd_val));
-    }
     config.insert(txn, "enabled", *enabled);
 }

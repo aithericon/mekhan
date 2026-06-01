@@ -195,7 +195,6 @@ impl TriggerDispatcher {
             let WorkflowNodeData::Trigger {
                 source,
                 enabled,
-                reply_default,
                 air_target_place_id,
                 ..
             } = &node.data
@@ -217,7 +216,6 @@ impl TriggerDispatcher {
                     target_node_id: place_id.clone(),
                     target_handle: String::new(),
                     source: source.clone(),
-                    reply_default: *reply_default,
                     enabled: *enabled,
                     registered_at: Utc::now(),
                     air_target_place_id: Some(place_id.clone()),
@@ -256,7 +254,6 @@ impl TriggerDispatcher {
                 target_node_id: target_node.id.clone(),
                 target_handle,
                 source: source.clone(),
-                reply_default: *reply_default,
                 enabled: *enabled,
                 registered_at: Utc::now(),
                 air_target_place_id: None,

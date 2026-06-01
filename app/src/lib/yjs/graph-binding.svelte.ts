@@ -346,8 +346,7 @@ export class YjsGraphBinding {
 					},
 					concurrency: (config?.concurrency as TriggerNodeData['concurrency']) ?? 'allow',
 					payloadMapping: (config?.payloadMapping as TriggerNodeData['payloadMapping']) ?? [],
-					enabled: (config?.enabled as boolean) ?? false,
-					replyDefault: (config?.replyDefault as TriggerNodeData['replyDefault']) ?? undefined
+					enabled: (config?.enabled as boolean) ?? false
 				};
 			case 'sub_workflow':
 				return {
@@ -871,7 +870,6 @@ export class YjsGraphBinding {
 				config.set('concurrency', data.concurrency);
 				config.set('payloadMapping', data.payloadMapping ?? []);
 				config.set('enabled', data.enabled ?? false);
-				config.set('replyDefault', data.replyDefault ?? null);
 				break;
 			case 'sub_workflow':
 				config.set('templateId', data.templateId);

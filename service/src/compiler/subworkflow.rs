@@ -260,6 +260,72 @@ pub fn derive_child_io(child_graph: &WorkflowGraph) -> (Port, Port) {
     (input, output)
 }
 
+/// Derive a child template's **typed** output port from its `End` nodes.
+///
+/// Same union-of-`End { result_mapping }`-`target_field`s logic as
+/// [`derive_child_io`]'s output half (dedup by `name`, first-seen order, skip
+/// empties), but instead of flattening every field to [`FieldKind::Json`] this
+/// recovers the author's declared type from the matching `End { terminal }`
+/// port: for each `target_field` name, the first `End`'s `terminal` port
+/// carrying a [`PortField`] of that name contributes its `kind` (and any
+/// `options` / `description` / `schema`). Names with no declared terminal field
+/// fall back to [`FieldKind::Json`], exactly as before.
+///
+/// No `result_mapping` anywhere ⇒ empty fields = opaque pass-through, matching
+/// [`derive_child_io`].
+pub fn derive_output_port_typed(graph: &WorkflowGraph) -> Port {
+    // Look up a declared terminal field by name across all End nodes.
+    let terminal_field = |name: &str| -> Option<&PortField> {
+        graph.nodes.iter().find_map(|n| match &n.data {
+            WorkflowNodeData::End { terminal, .. } => {
+                terminal.fields.iter().find(|f| f.name == name)
+            }
+            _ => None,
+        })
+    };
+
+    let mut fields: Vec<PortField> = Vec::new();
+    for node in &graph.nodes {
+        let WorkflowNodeData::End { result_mapping, .. } = &node.data else {
+            continue;
+        };
+        for m in result_mapping {
+            let name = m.target_field.trim();
+            if name.is_empty() || fields.iter().any(|f| f.name == name) {
+                continue;
+            }
+            match terminal_field(name) {
+                Some(declared) => fields.push(PortField {
+                    schema: declared.schema.clone(),
+                    name: name.to_string(),
+                    label: name.to_string(),
+                    kind: declared.kind.clone(),
+                    required: false,
+                    options: declared.options.clone(),
+                    description: declared.description.clone(),
+                    accept: None,
+                }),
+                None => fields.push(PortField {
+                    schema: None,
+                    name: name.to_string(),
+                    label: name.to_string(),
+                    kind: FieldKind::Json,
+                    required: false,
+                    options: None,
+                    description: None,
+                    accept: None,
+                }),
+            }
+        }
+    }
+
+    Port {
+        id: "out".to_string(),
+        label: "Result".to_string(),
+        fields,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,5 +558,60 @@ mod tests {
         let (input, output) = derive_child_io(&g);
         assert!(input.fields.is_empty());
         assert_eq!(output.fields.len(), 1);
+    }
+
+    // -------------------------------------------------------------------
+    // derive_output_port_typed
+    // -------------------------------------------------------------------
+
+    fn end_typed(terminal: Port, result_mapping: Vec<FieldMapping>) -> WorkflowNodeData {
+        WorkflowNodeData::End {
+            label: "End".to_string(),
+            description: None,
+            terminal,
+            result_mapping,
+        }
+    }
+
+    #[test]
+    fn typed_output_recovers_declared_kind_else_json() {
+        // The End declares a typed `terminal` field for `amount` (Number) but
+        // none for `note` — so `amount` recovers its kind and `note` falls back.
+        let terminal = Port {
+            id: "term".to_string(),
+            label: "Terminal".to_string(),
+            fields: vec![field("amount", FieldKind::Number)],
+        };
+        let g = graph(vec![
+            gnode("s", start(Port::empty_input())),
+            gnode(
+                "e",
+                end_typed(
+                    terminal,
+                    vec![rm("amount", "review.amount"), rm("note", "review.note")],
+                ),
+            ),
+        ]);
+
+        let output = derive_output_port_typed(&g);
+
+        let names: Vec<&str> = output.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["amount", "note"]);
+
+        let amount = output.fields.iter().find(|f| f.name == "amount").unwrap();
+        assert_eq!(amount.kind, FieldKind::Number, "declared kind recovered");
+
+        let note = output.fields.iter().find(|f| f.name == "note").unwrap();
+        assert_eq!(note.kind, FieldKind::Json, "undeclared falls back to Json");
+    }
+
+    #[test]
+    fn typed_output_empty_mapping_is_passthrough() {
+        let g = graph(vec![
+            gnode("s", start(Port::empty_input())),
+            gnode("e", end(vec![])),
+        ]);
+        let output = derive_output_port_typed(&g);
+        assert!(output.fields.is_empty(), "no mapping ⇒ opaque pass-through");
     }
 }

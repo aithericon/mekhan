@@ -28,7 +28,6 @@ use utoipa::OpenApi;
             crate::causality::live::LiveMetricEvent,
             crate::causality::live::LiveLogEvent,
             crate::causality::live::LiveArtifactEvent,
-            crate::models::template::ReplyMode,
             crate::triggers::TerminalOutcome,
             // Backend registry DTOs — referenced via Vec<_> in the
             // GET /api/v1/backends handler so utoipa's auto-discovery

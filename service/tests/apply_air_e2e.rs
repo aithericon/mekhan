@@ -297,9 +297,7 @@ async fn fire_pre_air_trigger_passes_graph_walk_gate() {
                 .method("POST")
                 .uri("/api/v1/triggers/trg_fire/fire")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({ "payload": {}, "reply_mode": "nowait" }).to_string(),
-                ))
+                .body(Body::from(json!({ "payload": {} }).to_string()))
                 .unwrap(),
         )
         .await

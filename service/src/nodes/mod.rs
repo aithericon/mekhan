@@ -355,7 +355,6 @@ mod tests {
             source: TriggerSource::Manual(ManualTrigger { form: vec![] }),
             concurrency: ConcurrencyPolicy::default(),
             payload_mapping: vec![],
-            reply_default: None,
             enabled: false,
             air_target_place_id: None,
         };

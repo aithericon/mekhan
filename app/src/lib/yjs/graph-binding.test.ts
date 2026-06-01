@@ -611,37 +611,4 @@ describe('YjsGraphBinding', () => {
 		if (after?.data.type !== 'failure') return;
 		expect(after.data.failureMessage).toBeUndefined();
 	});
-
-	it('trigger replyDefault survives the updateNodeData round-trip', () => {
-		// Regression: the Yjs binding's trigger arm previously never wrote or
-		// re-materialized `replyDefault`, so the editor's "Default reply mode"
-		// Select looked inert — the change was dropped on sync and the
-		// persisted value never reloaded.
-		binding.addNode('t1', 'trigger', { x: 0, y: 0 }, createDefaultNodeData('trigger'));
-
-		const node = binding.graph.nodes.find((n) => n.id === 't1');
-		expect(node?.data.type).toBe('trigger');
-		if (node?.data.type !== 'trigger') return;
-		expect(node.data.replyDefault).toBeUndefined();
-
-		binding.updateNodeData('t1', {
-			...node.data,
-			replyDefault: 'wait_for_result'
-		} as Extract<WorkflowNodeData, { type: 'trigger' }>);
-
-		let after = binding.graph.nodes.find((n) => n.id === 't1');
-		expect(after?.data.type).toBe('trigger');
-		if (after?.data.type !== 'trigger') return;
-		expect(after.data.replyDefault).toBe('wait_for_result');
-
-		// Clearing re-materializes as undefined (treated as the
-		// FireAndForget default downstream), not a stale value.
-		binding.updateNodeData('t1', {
-			...after.data,
-			replyDefault: undefined
-		} as Extract<WorkflowNodeData, { type: 'trigger' }>);
-		after = binding.graph.nodes.find((n) => n.id === 't1');
-		if (after?.data.type !== 'trigger') return;
-		expect(after.data.replyDefault).toBeUndefined();
-	});
 });

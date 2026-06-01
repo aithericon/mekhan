@@ -264,6 +264,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))
         .routes(routes!(handlers::triggers::fire_trigger))
+        .routes(routes!(handlers::triggers::fire_trigger_sync))
         .routes(routes!(handlers::triggers::set_trigger_enabled))
         .routes(routes!(handlers::triggers::trigger_history))
         .routes(routes!(handlers::triggers::preview_cron))

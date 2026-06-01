@@ -35,14 +35,6 @@
 	const mappings = $derived(data.payloadMapping ?? []);
 	const enabled = $derived(data.enabled ?? false);
 
-	type ReplyMode = components['schemas']['ReplyMode'];
-	const replyDefault = $derived((data.replyDefault ?? 'fire_and_forget') as ReplyMode);
-	const replyLabels: Record<ReplyMode, string> = {
-		fire_and_forget: 'Fire & forget (default)',
-		wait_for_result: 'Wait for result',
-		sse: 'SSE stream'
-	};
-
 	// A trigger's *armed* state is the inverse of every other field here: it is
 	// operational state of the published template, not a draft setting. In a
 	// draft this is read-only (it ships armed by default); on the published
@@ -206,15 +198,10 @@
 	const fireUrl = $derived(`${origin}/api/triggers/${nodeId ?? '{node_id}'}/fire`);
 
 	// With file fields, fire as multipart/form-data: one `-F` per file part +
-	// a `payload` part for the rest. Otherwise a plain JSON body. SSE default
-	// adds `-N` + `Accept: text/event-stream` so curl prints events as they
-	// arrive on the same response — no second request needed.
+	// a `payload` part for the rest. Otherwise a plain JSON body.
 	const curlCommand = $derived.by(() => {
-		const sse = replyDefault === 'sse';
-		const flags = sse ? ' -N' : '';
-		const acceptHeader = sse ? [`  -H 'Accept: text/event-stream'`] : [];
 		if (fileFields.length > 0) {
-			const lines = [`curl${flags} -X POST '${fireUrl}'`, ...acceptHeader];
+			const lines = [`curl -X POST '${fireUrl}'`];
 			for (const f of fileFields) {
 				lines.push(`  -F '${f.name}=@/path/to/${f.name};type=${fileMime(f)}'`);
 			}
@@ -222,9 +209,8 @@
 			return lines.join(' \\\n');
 		}
 		return [
-			`curl${flags} -X POST '${fireUrl}'`,
+			`curl -X POST '${fireUrl}'`,
 			`  -H 'Content-Type: application/json'`,
-			...acceptHeader,
 			`  -d '${JSON.stringify({ payload: samplePayload })}'`
 		].join(' \\\n');
 	});
@@ -545,34 +531,6 @@
 			{/if}
 		</div>
 	{/if}
-
-	<!-- Default reply mode. Caller can override per-request via
-	     ?reply= / Prefer / body; this is only the fallback. -->
-	<FormField label="Default reply mode" for="trigger-reply-default">
-		<Select.Root
-			type="single"
-			value={replyDefault}
-			onValueChange={(v) => {
-				if (v) update('replyDefault', v as ReplyMode);
-			}}
-			disabled={readonly}
-		>
-			<Select.Trigger id="trigger-reply-default" class="w-full" disabled={readonly}>
-				{replyLabels[replyDefault]}
-			</Select.Trigger>
-			<Select.Content>
-				<Select.Item value="fire_and_forget" label="Fire & forget (default)" />
-				<Select.Item value="wait_for_result" label="Wait for result" />
-				<Select.Item value="sse" label="SSE stream" />
-			</Select.Content>
-		</Select.Root>
-		<p class="mt-1 text-sm text-muted-foreground">
-			Used only when a caller doesn't request a mode. <code>SSE</code> streams
-			the instance's events on the fire response itself — a leading
-			<code>fire</code> event carries the instance id and outcome, followed by
-			domain events through to a final <code>result</code>.
-		</p>
-	</FormField>
 
 	<!-- Payload mapping — each row projects one target-port field. -->
 	<div class="space-y-1.5">

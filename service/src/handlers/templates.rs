@@ -1371,7 +1371,6 @@ pub async fn apply_air_template(
             source: req.trigger.source.clone(),
             concurrency: Default::default(),
             payload_mapping: req.trigger.payload_mapping.clone(),
-            reply_default: req.trigger.reply_default,
             enabled: req.trigger.enabled,
             air_target_place_id: Some(req.trigger.air_target_place_id.clone()),
         },

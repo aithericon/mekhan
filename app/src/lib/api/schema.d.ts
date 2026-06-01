@@ -1937,6 +1937,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /**
+         * POST /api/v1/triggers/{node_id}/fire
+         * @description Async, fire-and-forget. Parses the body (JSON or multipart — see
+         *     [`parse_fire_body`]), fires the trigger, and returns immediately without
+         *     waiting for the spawned instance. A `Spawned` outcome returns
+         *     `202 { instance_id }`; a signal-kind / dropped outcome returns the
+         *     `FireResult` JSON with 200. To consume the run's events, stream
+         *     `GET /api/v1/instances/{id}/stream`; to wait for a terminal result inline,
+         *     use the sibling `.../invoke` route.
+         */
         post: operations["fire_trigger"];
         delete?: never;
         options?: never;
@@ -1955,6 +1965,32 @@ export interface paths {
         get: operations["trigger_history"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/triggers/{node_id}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/triggers/{node_id}/invoke
+         * @description Sync (WaitForResult): parses the body identically to `.../fire`, then holds
+         *     the HTTP connection until the spawned instance reaches a terminal state and
+         *     returns its result envelope (`200`, `FireTriggerResponse` with `outcome`).
+         *     Bounded by `wait_timeout_secs`; on timeout the waiter is deregistered and
+         *     the response degrades to `202 { instance_id }` so the caller can poll or
+         *     stream. A signal-kind / dropped fire has no instance to wait on and returns
+         *     the `FireResult` shape with 200.
+         */
+        post: operations["fire_trigger_sync"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2117,7 +2153,7 @@ export interface paths {
         };
         /**
          * GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json
-         * @description Returns a synthesized OpenAPI 3.0.3 document covering every webhook
+         * @description Returns a synthesized OpenAPI 3.0.3 document covering every callable
          *     trigger in the project's attached templates. The shape is suitable for
          *     feeding into `openapi-typescript`, `openapi-generator`, or any OAS3
          *     viewer.
@@ -3048,7 +3084,6 @@ export interface components {
              *     sources the dispatcher synthesizes this scope from the event itself.
              */
             payload?: unknown;
-            reply_mode?: null | components["schemas"]["ReplyMode"];
             /**
              * @description Per-run ablation: transition IDs to skip at evaluate-time.
              *     Threaded through the dispatcher into the engine's
@@ -4170,7 +4205,6 @@ export interface components {
              */
             node_id: string;
             payload_mapping?: components["schemas"]["FieldMapping"][];
-            reply_default?: null | components["schemas"]["ReplyMode"];
             /**
              * @description Trigger source. Clinic's initial use case is `Manual`; other sources
              *     are valid here too (Webhook, Cron, ...) — the dispatcher resolves
@@ -4330,16 +4364,6 @@ export interface components {
             /** @description Working directory (defaults to run_dir root). */
             working_dir?: string | null;
         };
-        /**
-         * @description How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.
-         *     The caller selects per-request (query `?reply=`, `Prefer` header, or a
-         *     JSON body field); a Trigger node's optional `replyDefault` is used only
-         *     when the caller doesn't specify. `Sse` is never *executed* on the fire
-         *     endpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is
-         *     modeled so a node can advertise it as the intended consumption mode.
-         * @enum {string}
-         */
-        ReplyMode: "fire_and_forget" | "wait_for_result" | "sse";
         ResolveEmailRequest: {
             email: string;
         };
@@ -5975,7 +5999,6 @@ export interface components {
              *     expression evaluated against the trigger source's event payload.
              */
             payloadMapping?: components["schemas"]["FieldMapping"][];
-            replyDefault?: null | components["schemas"]["ReplyMode"];
             /** @description Tagged source describing what event fires this trigger. */
             source: components["schemas"]["TriggerSource"];
             /** @enum {string} */
@@ -10174,7 +10197,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Trigger fired (FireAndForget / WaitForResult JSON, or SSE event stream when reply mode is `sse`). */
+            /** @description Signal-kind / dropped fire — no instance spawned. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10183,7 +10206,7 @@ export interface operations {
                     "application/json": components["schemas"]["FireTriggerResponse"];
                 };
             };
-            /** @description WaitForResult timed out — instance still running; poll/stream it */
+            /** @description Instance spawned — fire-and-forget. Body is `{ instance_id }`. */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -10229,6 +10252,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerHistoryResponse"];
+                };
+            };
+        };
+    };
+    fire_trigger_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Trigger node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FireTriggerRequest"];
+            };
+        };
+        responses: {
+            /** @description Instance reached a terminal state — body carries the result envelope + `outcome`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FireTriggerResponse"];
+                };
+            };
+            /** @description Wait timed out — instance still running; poll/stream it. Body is `{ instance_id }`. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Fire failed (e.g. mapping or instance error) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Trigger not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

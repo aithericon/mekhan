@@ -5537,6 +5537,8 @@
         "tags": [
           "triggers"
         ],
+        "summary": "POST /api/v1/triggers/{node_id}/fire",
+        "description": "Async, fire-and-forget. Parses the body (JSON or multipart — see\n[`parse_fire_body`]), fires the trigger, and returns immediately without\nwaiting for the spawned instance. A `Spawned` outcome returns\n`202 { instance_id }`; a signal-kind / dropped outcome returns the\n`FireResult` JSON with 200. To consume the run's events, stream\n`GET /api/v1/instances/{id}/stream`; to wait for a terminal result inline,\nuse the sibling `.../invoke` route.",
         "operationId": "fire_trigger",
         "parameters": [
           {
@@ -5561,7 +5563,7 @@
         },
         "responses": {
           "200": {
-            "description": "Trigger fired (FireAndForget / WaitForResult JSON, or SSE event stream when reply mode is `sse`).",
+            "description": "Signal-kind / dropped fire — no instance spawned.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5571,7 +5573,7 @@
             }
           },
           "202": {
-            "description": "WaitForResult timed out — instance still running; poll/stream it"
+            "description": "Instance spawned — fire-and-forget. Body is `{ instance_id }`."
           },
           "400": {
             "description": "Fire failed (e.g. mapping or instance error)",
@@ -5621,6 +5623,72 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TriggerHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/triggers/{node_id}/invoke": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "POST /api/v1/triggers/{node_id}/invoke",
+        "description": "Sync (WaitForResult): parses the body identically to `.../fire`, then holds\nthe HTTP connection until the spawned instance reaches a terminal state and\nreturns its result envelope (`200`, `FireTriggerResponse` with `outcome`).\nBounded by `wait_timeout_secs`; on timeout the waiter is deregistered and\nthe response degrades to `202 { instance_id }` so the caller can poll or\nstream. A signal-kind / dropped fire has no instance to wait on and returns\nthe `FireResult` shape with 200.",
+        "operationId": "fire_trigger_sync",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Trigger node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FireTriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Instance reached a terminal state — body carries the result envelope + `outcome`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FireTriggerResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Wait timed out — instance still running; poll/stream it. Body is `{ instance_id }`."
+          },
+          "400": {
+            "description": "Fire failed (e.g. mapping or instance error)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Trigger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -6113,7 +6181,7 @@
           "projects"
         ],
         "summary": "GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/openapi.json",
-        "description": "Returns a synthesized OpenAPI 3.0.3 document covering every webhook\ntrigger in the project's attached templates. The shape is suitable for\nfeeding into `openapi-typescript`, `openapi-generator`, or any OAS3\nviewer.",
+        "description": "Returns a synthesized OpenAPI 3.0.3 document covering every callable\ntrigger in the project's attached templates. The shape is suitable for\nfeeding into `openapi-typescript`, `openapi-generator`, or any OAS3\nviewer.",
         "operationId": "project_openapi_bundle",
         "parameters": [
           {
@@ -8448,17 +8516,6 @@
           },
           "payload": {
             "description": "JSON object whose top-level keys are bound as the trigger's scope\nidentifiers for `payload_mapping`. For `Manual` triggers supply the\nform values keyed by field name (matching `source_scope`); for other\nsources the dispatcher synthesizes this scope from the event itself."
-          },
-          "reply_mode": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ReplyMode",
-                "description": "Optional per-request reply mode (lowest of the explicit selectors —\noverridden by `?reply=` / `Prefer`, overrides the node default)."
-              }
-            ]
           },
           "skip_mask": {
             "type": "array",
@@ -10971,16 +11028,6 @@
               "$ref": "#/components/schemas/FieldMapping"
             }
           },
-          "reply_default": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ReplyMode"
-              }
-            ]
-          },
           "source": {
             "$ref": "#/components/schemas/TriggerSource",
             "description": "Trigger source. Clinic's initial use case is `Manual`; other sources\nare valid here too (Webhook, Cron, ...) — the dispatcher resolves\nthem identically once the trigger is registered."
@@ -11357,15 +11404,6 @@
             "description": "Working directory (defaults to run_dir root)."
           }
         }
-      },
-      "ReplyMode": {
-        "type": "string",
-        "description": "How a `POST /api/v1/triggers/{id}/fire` caller wants the response delivered.\nThe caller selects per-request (query `?reply=`, `Prefer` header, or a\nJSON body field); a Trigger node's optional `replyDefault` is used only\nwhen the caller doesn't specify. `Sse` is never *executed* on the fire\nendpoint — SSE is the dedicated `GET /api/v1/instances/{id}/stream` — but is\nmodeled so a node can advertise it as the intended consumption mode.",
-        "enum": [
-          "fire_and_forget",
-          "wait_for_result",
-          "sse"
-        ]
       },
       "ResolveEmailRequest": {
         "type": "object",
@@ -14712,17 +14750,6 @@
                   "$ref": "#/components/schemas/FieldMapping"
                 },
                 "description": "Per-target-field mapping. Each entry's `expression` is a Rhai\nexpression evaluated against the trigger source's event payload."
-              },
-              "replyDefault": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/ReplyMode",
-                    "description": "Default reply mode applied when a fire caller doesn't request one.\nOptional + skip-if-none so existing published graphs round-trip\nunchanged."
-                  }
-                ]
               },
               "source": {
                 "$ref": "#/components/schemas/TriggerSource",
