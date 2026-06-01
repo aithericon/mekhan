@@ -251,12 +251,30 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         );
         let p_feed_inbox: PlaceHandle<DynamicToken> =
             ctx.state(format!("p_{id}_feed_inbox"), format!("{label} - Feed Inbox"));
+        // One-shot gate for `t_capture_exec_id`. `t_capture` read-arcs the
+        // lifecycle's `submitted` place (non-consuming, so the lifecycle keeps
+        // it) — without a CONSUMING input it would be perpetually enabled and
+        // fire forever, flooding `p_exec_id` and starving the rest of the net
+        // (the producer never starts). This seeded gate is consumed on the first
+        // firing so the capture happens exactly once.
+        let p_exec_gate: PlaceHandle<DynamicToken> = ctx.state(
+            format!("p_{id}_exec_gate"),
+            format!("{label} - Exec-ID Capture Gate"),
+        );
+        ctx.seed_one(&p_exec_gate, DynamicToken::new(json!({})));
         ctx.seed_one(&p_dense_seq, DynamicToken::new(json!({ "n": 0 })));
         // Immediate bootstrap: seed a null input so `prepare` fires on net entry
         // and the reducer job submits. The reducer reads chunks ONLY via IPC, so
         // the seed value is inert (no first-chunk duplication).
         ctx.seed_one(&p_input, DynamicToken::new(json!({})));
-        Some((p_control_in, p_stream_in, p_dense_seq, p_exec_id, p_feed_inbox))
+        Some((
+            p_control_in,
+            p_stream_in,
+            p_dense_seq,
+            p_exec_id,
+            p_feed_inbox,
+            p_exec_gate,
+        ))
     } else {
         None
     };
@@ -369,17 +387,22 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // completes. The reducer's own terminal output flows through the standard
     // `t_to_output` → `split_outputs` tail below — there is no separate collect
     // (the node IS the reducer, not a container around one).
-    if let Some((p_control_in, p_stream_in, p_dense_seq, p_exec_id, p_feed_inbox)) =
+    if let Some((p_control_in, p_stream_in, p_dense_seq, p_exec_id, p_feed_inbox, p_exec_gate)) =
         &stream_reducer
     {
-        // Capture the reducer's execution id from the lifecycle's scoped
-        // `p_{id}_submitted` (read-arc, non-consuming) so it is always available
-        // for the EOF sentinel even on an empty (`stream_count == 0`) stream.
-        let p_submitted = PlaceHandle::<DynamicToken>::external(format!("p_{id}_submitted"));
+        // Capture the reducer's execution id from the lifecycle's submitted
+        // state (read-arc, non-consuming) so it is always available for the EOF
+        // sentinel even on an empty (`stream_count == 0`) stream. The lifecycle
+        // runs inside `scoped_prefix(id)`, so its internal `submitted` state is
+        // named `<id>/submitted` (scoped slash-form), NOT the `p_<id>_*`
+        // interface form — referencing the latter yields the engine's
+        // "Unknown place reference" 400 at deploy.
+        let p_submitted = PlaceHandle::<DynamicToken>::external(format!("{id}/submitted"));
         ctx.transition(
             format!("t_{id}_capture_exec_id"),
             format!("{label} - Capture Exec ID"),
         )
+        .auto_input("gate", p_exec_gate)
         .read_input("submitted", &p_submitted)
         .auto_output("exec_id", p_exec_id)
         .logic_rhai("#{ exec_id: #{ id: submitted.execution_id } }".to_string())
@@ -494,7 +517,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // (the EOF trigger), NOT to the seeded `p_input` (which only ever holds the
     // bootstrap token consumed by `prepare`).
     let mut input_handles = HashMap::new();
-    if let Some((p_control_in, p_stream_in, _, _, _)) = stream_reducer {
+    if let Some((p_control_in, p_stream_in, _, _, _, _)) = stream_reducer {
         input_handles.insert("stream".to_string(), p_stream_in);
         input_handles.insert("in".to_string(), p_control_in);
     }

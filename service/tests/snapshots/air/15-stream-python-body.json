@@ -1304,6 +1304,15 @@
       "type": "state"
     },
     {
+      "id": "p_reducer_exec_gate",
+      "initial_tokens": [
+        {}
+      ],
+      "name": "Reducer - Exec-ID Capture Gate",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "state"
+    },
+    {
       "id": "p_reducer_exec_id",
       "name": "Reducer - Reducer Execution ID",
       "token_schema": "#/definitions/DynamicToken",
@@ -5279,6 +5288,11 @@
       "input_ports": [
         {
           "cardinality": "single",
+          "name": "gate",
+          "schema_ref": "#/definitions/DynamicToken"
+        },
+        {
+          "cardinality": "single",
           "name": "submitted",
           "schema_ref": "#/definitions/DynamicToken"
         }
@@ -5293,7 +5307,12 @@
       },
       "inputs": [
         {
-          "place": "p_reducer_submitted",
+          "place": "p_reducer_exec_gate",
+          "port": "gate",
+          "weight": 1
+        },
+        {
+          "place": "reducer/submitted",
           "port": "submitted",
           "read": true,
           "weight": 1
