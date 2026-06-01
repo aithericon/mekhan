@@ -657,9 +657,10 @@ pub(super) fn resolve_binding(
         // Strip the schemars envelope (`$schema`, `title`) so the registered
         // definition is a bare object schema matching the `Data__`/`Ctrl__`
         // convention — the engine wraps it as `{definitions, $ref}` and a
-        // nested draft `$schema` would be redundant noise. These lease schemas
-        // are flat (no internal `$ref`/`definitions`), so nothing else needs
-        // lifting.
+        // nested draft `$schema` would be redundant noise. The lease schema may
+        // carry an inlined `oneOf` (the `datacenter` flavor union) but is
+        // SELF-CONTAINED — `pool::schema_value` inlines subschemas, so there is
+        // no internal `$ref`/`definitions` to lift.
         lease_schema: sanitize_definition_schema((pool_desc.lease_schema)()),
         request_rhai,
     })

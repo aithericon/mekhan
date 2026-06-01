@@ -19,11 +19,12 @@
 //!     same `grant_id` — idempotency), `scontrol show job` to resolve the node,
 //!     then `srun --jobid` a persistent drain executor onto the held alloc
 //!     (Pool mode, lease-scoped namespace `lease-<grant_id>`), returning the
-//!     lease JSON `{ node, gpu_uuid, alloc_id, expiry, executor_namespace }`.
+//!     lease JSON `{ alloc_id, node?, expiry?, executor_namespace,
+//!     scheduler: { flavor: "slurm", partition? } }`.
 //!   - **release** → `scancel <alloc_id>` (tolerant of an already-gone job) —
 //!     SIGTERM drains the executor in-flight + frees the nodes.
 //!
-//! `gpu_uuid` is `""` on the CPU-only dev cluster (no GPU to bind).
+//! `node`/`expiry` are omitted until the allocation is placed/timed.
 //!
 //! ## Idempotency (mirrors the HTTP `Idempotency-Key` contract)
 //!
@@ -142,7 +143,7 @@ impl SlurmAllocatorClient {
 
     /// Acquire (or reuse) a held allocation, resolve its node, launch ONE
     /// persistent drain executor on it (Pool mode, lease-scoped namespace), and
-    /// return the lease JSON (`node`/`gpu_uuid`/`alloc_id`/`expiry`/`executor_namespace`)
+    /// return the lease JSON (`alloc_id`/`node?`/`expiry?`/`executor_namespace`/`scheduler`)
     /// the acquire handler consumes.
     async fn acquire_lease(
         &self,
@@ -234,25 +235,25 @@ impl SlurmAllocatorClient {
             "slurm lease: launched persistent drain executor",
         );
 
-        // `Lease__datacenter` (DatacenterLease) types every field as a required
-        // `String`, and the engine validates the grant token against it on
-        // injection into the instance's grant-inbox. So absent node/expiry MUST
-        // be the empty string, NOT null — `salloc --no-shell` with no time limit
-        // has no EndTime, and a still-pending alloc has no NodeList; emitting
-        // null there fails schema validation ("null is not of type string") and
-        // the grant is silently dropped, wedging the claim.
-        let node = JsonValue::String(allocation.node.unwrap_or_default());
-        let expiry = JsonValue::String(allocation.expiry.unwrap_or_default());
+        // `DatacenterLease`: `alloc_id` is the only required field. `node`/
+        // `expiry` are optional and OMITTED when the allocator hasn't reported
+        // them — `salloc --no-shell` with no time limit has no EndTime, and a
+        // still-pending alloc has no NodeList. (The old required-String schema
+        // forced an empty-string-not-null workaround; with the optional shape we
+        // just leave the key out.) The `scheduler` detail is the typed `slurm`
+        // variant; `partition` is left None until we parse it from the alloc.
+        let mut lease = serde_json::Map::new();
+        lease.insert("alloc_id".into(), json!(alloc_id));
+        if let Some(node) = allocation.node.filter(|s| !s.is_empty()) {
+            lease.insert("node".into(), json!(node));
+        }
+        if let Some(expiry) = allocation.expiry.filter(|s| !s.is_empty()) {
+            lease.insert("expiry".into(), json!(expiry));
+        }
+        lease.insert("executor_namespace".into(), json!(executor_namespace));
+        lease.insert("scheduler".into(), json!({ "flavor": "slurm" }));
 
-        Ok(json!({
-            "node": node,
-            // CPU-only dev cluster: no GPU UUID to bind. Empty string (not null)
-            // so the body-visible lease token carries a concrete value.
-            "gpu_uuid": "",
-            "alloc_id": alloc_id,
-            "expiry": expiry,
-            "executor_namespace": executor_namespace,
-        }))
+        Ok(JsonValue::Object(lease))
     }
 }
 

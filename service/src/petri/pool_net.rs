@@ -451,12 +451,16 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
         .auto_input("reg", &register_inbox)
         .auto_output("hold", &in_use)
         .logic(
+            // `alloc_id` is load-bearing (release/reap DELETE key); the rest is
+            // adapter-side traceability. `node`/`expiry`/`scheduler` ride from the
+            // echoed lease when present (Rhai yields `()` for an absent optional —
+            // harmless on this observational hold). `gpu_uuid` is gone.
             r#"#{ hold: #{
                 grant_id: reg.grant_id,
                 alloc_id: reg.alloc_id,
                 node: reg.node,
-                gpu_uuid: reg.gpu_uuid,
-                expiry: reg.expiry
+                expiry: reg.expiry,
+                scheduler: reg.scheduler
             } }"#,
         );
 

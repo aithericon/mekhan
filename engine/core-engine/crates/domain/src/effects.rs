@@ -337,7 +337,7 @@ pub const PROCESS_LOG_MESSAGE: EffectDescriptor = EffectDescriptor {
 /// R4: the `scheduler` deployment backend's `lease` operation. The handler
 /// (`ResourceLeaseAcquireHandler`) POSTs the claim request to the allocator URL
 /// (resolved per-fire from the datacenter resource secret in `effect_config`)
-/// and emits the typed lease (`{ grant_id, node, gpu_uuid, alloc_id, expiry }`)
+/// and emits the typed lease (`{ grant_id, alloc_id, node?, expiry?, scheduler }`)
 /// — the `DatacenterLease` shape from `aithericon_resources::pool`. The
 /// allocator is the source of truth; the net holds only the lease handle.
 ///

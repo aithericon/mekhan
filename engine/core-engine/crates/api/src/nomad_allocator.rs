@@ -21,7 +21,8 @@
 //!     `DispatchedJobID` becomes the lease `alloc_id`. The lease env
 //!     (`LEASE_NAMESPACE`/`LEASE_MAX_JOBS`/`LEASE_IDLE_TIMEOUT`) rides as Nomad
 //!     dispatch `Meta` (payload-free; meta is ≤16KB). Returns the lease JSON
-//!     `{ node, gpu_uuid, alloc_id, expiry, executor_namespace }`.
+//!     `{ alloc_id, executor_namespace, scheduler: { flavor: "nomad", eval_id } }`
+//!     (node/expiry omitted — placement is async).
 //!   - **release** → `nomad job stop` (`DELETE /v1/job/{id}`) on the dispatched
 //!     job — SIGTERM → the drain executor graceful-drains in-flight + exits,
 //!     freeing the alloc. Tolerant of an already-gone job (idempotent release).
@@ -30,7 +31,7 @@
 //! types every field as a required String): unlike Slurm's synchronous
 //! `scontrol`, the Nomad alloc placement is not resolved at dispatch time
 //! (`NomadWatcher` streams running/completed signals asynchronously; acquire does
-//! not block on placement). `gpu_uuid` is `""` on the CPU dev cluster.
+//! not block on placement). No device/`gpu_uuid` field — no allocator reports it.
 //!
 //! ## Idempotency
 //!
@@ -213,16 +214,18 @@ impl NomadAllocatorClient {
             "nomad lease: dispatched persistent drain executor",
         );
 
-        // `Lease__datacenter` types every field as a required String — empty,
-        // not null. node/expiry are unresolved at dispatch (the watcher streams
-        // placement asynchronously); the drain executor self-identifies via the
-        // namespace, so those are "" here.
+        // `DatacenterLease`: only `alloc_id` is required. node/expiry are
+        // unresolved at dispatch (the watcher streams placement asynchronously),
+        // so they're OMITTED rather than emitted as empty strings — the drain
+        // executor self-identifies via the namespace. The `scheduler` detail is
+        // the typed `nomad` variant carrying the dispatch evaluation id.
         Ok(json!({
-            "node": "",
-            "gpu_uuid": "",
             "alloc_id": dispatch_resp.dispatched_job_id,
-            "expiry": "",
             "executor_namespace": executor_namespace,
+            "scheduler": {
+                "flavor": "nomad",
+                "eval_id": dispatch_resp.eval_id,
+            },
         }))
     }
 
@@ -365,7 +368,8 @@ mod tests {
             .await
             .unwrap();
 
-        // dispatched job id → alloc_id; namespace sanitised; empty-not-null fields.
+        // dispatched job id → alloc_id; namespace sanitised; node/expiry OMITTED
+        // (async placement) rather than empty-string; typed nomad scheduler detail.
         assert_eq!(
             lease.get("alloc_id").unwrap(),
             "petri-lease-executor/dispatch-99"
@@ -374,9 +378,11 @@ mod tests {
             lease.get("executor_namespace").unwrap(),
             "lease-inst-1-loop-node"
         );
-        assert_eq!(lease.get("node").unwrap(), "");
-        assert_eq!(lease.get("gpu_uuid").unwrap(), "");
-        assert_eq!(lease.get("expiry").unwrap(), "");
+        assert!(lease.get("node").is_none(), "node omitted until placed: {lease}");
+        assert!(lease.get("expiry").is_none(), "expiry omitted: {lease}");
+        assert!(lease.get("gpu_uuid").is_none(), "gpu_uuid retired: {lease}");
+        assert_eq!(lease["scheduler"]["flavor"], "nomad");
+        assert_eq!(lease["scheduler"]["eval_id"], "e1");
 
         let cap = captured.lock().unwrap().clone();
         assert_eq!(cap.method, "POST");

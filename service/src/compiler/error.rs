@@ -196,6 +196,29 @@ pub enum CompileError {
         suggested: String,
     },
 
+    /// A node borrows `<scope>.lease.<field>` where `<field>` is not part of the
+    /// typed lease the scope's resolved datacenter flavor produces. The lease is
+    /// a typed core (`alloc_id`, `node`, `expiry`, `executor_namespace`) plus a
+    /// per-flavor `scheduler` detail (`scheduler.flavor` + that flavor's fields);
+    /// borrowing anything else would resolve to a silent runtime `null`. The
+    /// classic trip is `lease.gpu_uuid` — that placeholder was removed (no
+    /// allocator reports device UUIDs). Surface flavor-specific data the engine
+    /// doesn't type via the cluster runtime view instead.
+    #[error(
+        "node '{node_label}' borrows `{referenced}`, but the lease held by lease scope \
+         '{scope_label}' (flavor '{flavor}') has no such field. Available: {allowed}."
+    )]
+    LeaseFieldUnknown {
+        node_id: String,
+        node_label: String,
+        scope_label: String,
+        flavor: String,
+        /// The exact reference text the author wrote (`gpu_lease.lease.gpu_uuid`).
+        referenced: String,
+        /// Human-readable list of the borrowable lease fields for this flavor.
+        allowed: String,
+    },
+
     /// Map has no body — no child node has `parent_id == map.id`. A Map with
     /// nothing to run per element is a config error; wire at least one node
     /// inside the map container.
@@ -731,6 +754,7 @@ impl CompileError {
             Self::LoopEmpty { .. } => "loop_empty",
             Self::LeaseScopeEmpty { .. } => "lease_scope_empty",
             Self::LoopBodyStaleControlRef { .. } => "loop_body_stale_control_ref",
+            Self::LeaseFieldUnknown { .. } => "lease_field_unknown",
             Self::MapEmpty { .. } => "map_empty",
             Self::MapRefMissingStar { .. } => "map_ref_missing_star",
             Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
@@ -806,6 +830,7 @@ impl CompileError {
             | Self::LoopEmpty { node_id }
             | Self::LeaseScopeEmpty { node_id }
             | Self::LoopBodyStaleControlRef { node_id, .. }
+            | Self::LeaseFieldUnknown { node_id, .. }
             | Self::MapEmpty { node_id }
             | Self::MapRefMissingStar { node_id, .. }
             | Self::MapResultVarInvalid { node_id, .. }

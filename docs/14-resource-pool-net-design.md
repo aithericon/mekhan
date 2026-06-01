@@ -100,7 +100,7 @@ receives the grant:
 
 ```text
   instance: grant_inbox ─[t_register]─▶ register_out ─(bridge → pool/register_inbox)
-  pool: register_inbox ─[t_admit]─▶ in_use  (CLEAN hold {grant_id, gpu_id})
+  pool: register_inbox ─[t_admit]─▶ in_use  (CLEAN hold {grant_id, unit_id})
   pool: t_release / t_reap consume the CLEAN in_use hold → clean capacity back
 ```
 
@@ -211,7 +211,7 @@ The freed GPU returns to `pool` and is immediately granted to a waiter.
 > - **`datacenter`** (`Scheduled`, `operation: lease`) → mekhan auto-deploys a `pool-<id>`
 >   lease-adapter net (`build_datacenter_lease_adapter_net`) driving the replay-safe
 >   `resource_lease_acquire`/`release` engine effects (`engine/.../resource_lease_handlers.rs`)
->   against an external allocator; lease `{node, gpu_uuid, alloc_id, expiry}`, the
+>   against an external allocator; lease `{alloc_id, node?, expiry?, executor_namespace?, scheduler{flavor,…}}`, the
 >   allocator stays source of truth (no DC mirror). This **realizes docs/13's datacenter
 >   primitive** — a datacenter is the scheduler-connection resource; `operation: submit`
 >   is today's proven scheduler-net job dispatch, `operation: lease` holds an allocation.

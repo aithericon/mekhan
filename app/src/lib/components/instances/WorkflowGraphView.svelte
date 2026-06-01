@@ -16,7 +16,9 @@
 	import { provideNodeRuntime, provideAwaitingResource } from './runtime-context';
 	import {
 		createInstanceMarkingStore,
-		isAwaitingResource
+		isAwaitingResource,
+		leaseRuntimeFor,
+		type LeaseRuntime
 	} from '$lib/stores/instance-marking.svelte';
 	import { PoolContentionView } from '$lib/components/petri';
 	import { groupChildrenByNode } from './subworkflow-children';
@@ -200,13 +202,43 @@
 		return () => clearInterval(t);
 	});
 
-	// True when the instance net actually contains resource-pool claim places
-	// (`p_<id>_pending`), i.e. the workflow has ≥1 pooled AutomatedStep. Gates
-	// the in-context PoolContentionView so it only appears for pool workflows.
-	const hasPooledNodes = $derived.by(() => {
+	// The token_pool AutomatedSteps in this graph (deployment `Executor { pool }`).
+	// Gating on NODE KIND — not on `p_<id>_pending` — is the key fix: a LeaseScope
+	// / Scheduled step ALSO emits `p_<id>_pending` (via the shared lease bridge),
+	// so the old place-based gate lit the pool widget for cluster runs. The pool
+	// overlay is a shared-capacity dashboard and belongs ONLY to genuine
+	// token-pool steps; cluster leases are surfaced in the drawer instead.
+	const tokenPoolNodes = $derived.by(() => {
+		if (!graph) return [];
+		return graph.nodes.filter((n) => {
+			const dm = (n.data as { deploymentModel?: { mode?: string; pool?: unknown } } | undefined)
+				?.deploymentModel;
+			return dm?.mode === 'executor' && !!dm.pool;
+		});
+	});
+	const hasPooledNodes = $derived(tokenPoolNodes.length > 0);
+
+	// The backing pool-net id (`pool-<resource_id>`), read from the deployed
+	// instance topology's bridge_out target on the first token-pool node's
+	// `claim_out` place — the alias→resource-id resolution already happened at
+	// publish, so we read the resolved net id rather than re-resolving client-side
+	// (and never fall back to the wrong hardcoded `resource-pool-net`).
+	const poolNetId = $derived.by(() => {
 		void markingTick;
-		if (!graph) return false;
-		return graph.nodes.some((n) => marking.hasPlace(`p_${n.id}_pending`));
+		for (const n of tokenPoolNodes) {
+			const target = marking.bridgeTarget(`p_${n.id}_claim_out`);
+			if (target) return target;
+		}
+		return null;
+	});
+
+	// Lease runtime for the node the drawer currently shows (only LeaseScope
+	// holds a lease). Re-derives each poll tick so the drawer's lease lifecycle +
+	// placement detail stay live.
+	const drawerLease = $derived.by<LeaseRuntime | null>(() => {
+		void markingTick;
+		if (!drawerNode || drawerNode.type !== 'lease_scope') return null;
+		return leaseRuntimeFor(marking, drawerNode.id);
 	});
 
 	function openDrawerFor(nodeId: string) {
@@ -257,12 +289,13 @@
 			onNodeClick={openDrawerFor}
 			onPaneClick={closeDrawer}
 		/>
-		<!-- In-context resource-pool dashboard: only for workflows that
-		     actually claim a pooled resource. `waitingNodeIds` is the M3
-		     predicate set computed from this instance's net marking. -->
-		{#if hasPooledNodes}
+		<!-- In-context resource-pool dashboard: ONLY for workflows with a genuine
+		     token_pool step (not cluster/lease runs). Pointed at the resolved
+		     backing net id (`pool-<resource_id>`) read from the instance topology.
+		     `waitingNodeIds` is the predicate set from this instance's marking. -->
+		{#if hasPooledNodes && poolNetId}
 			<div class="pointer-events-auto absolute right-3 top-3 z-10 w-72 max-w-[calc(100%-1.5rem)]">
-				<PoolContentionView compact {waitingNodeIds} />
+				<PoolContentionView compact netId={poolNetId} {waitingNodeIds} />
 			</div>
 		{/if}
 	{:else}
@@ -279,6 +312,7 @@
 	iterations={drawerIterations}
 	instanceId={instance.id}
 	childInstances={drawerChildren}
+	leaseRuntime={drawerLease}
 	open={drawerOpen}
 	onClose={closeDrawer}
 	onSelectIteration={selectIteration}

@@ -145,8 +145,9 @@
 	{/if}
 	<p class="text-sm text-muted-foreground">
 		Lease params validated against the datacenter kind’s claim schema; the granted lease is
-		readable in the body as <code class="font-mono">lease.node</code> /
-		<code class="font-mono">lease.gpu_uuid</code> / <code class="font-mono">lease.alloc_id</code>.
-		Steps inside this scope run on the held allocation automatically.
+		readable in the body as <code class="font-mono">lease.alloc_id</code> /
+		<code class="font-mono">lease.node</code> /
+		<code class="font-mono">lease.scheduler.&lt;field&gt;</code> (the fields depend on the
+		resolved scheduler flavor). Steps inside this scope run on the held allocation automatically.
 	</p>
 </div>

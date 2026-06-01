@@ -75,23 +75,93 @@ pub struct DatacenterClaim {
 }
 
 /// The lease a granted `datacenter` claim holds — a handle into the external
-/// allocator's placement, *not* a mirror of its state. Body code reads e.g.
-/// `lease.gpu_uuid` to pin `CUDA_VISIBLE_DEVICES`; the allocator stays the
+/// allocator's placement, *not* a mirror of its state. The allocator stays the
 /// source of truth and its TTL (`expiry`) drives reap.
+///
+/// ## Format: typed universal core + per-flavor tagged union
+///
+/// The core fields are the ones that are either present across *every*
+/// scheduler backend ([`Self::alloc_id`]) or are platform concepts that apply
+/// uniformly when present ([`Self::node`] / [`Self::expiry`] /
+/// [`Self::executor_namespace`]). They are typed and **borrow-checkable**: a
+/// step body or downstream guard may reference `<scope>.lease.alloc_id`,
+/// `.node`, `.expiry`, `.executor_namespace` and the compiler synthesises a
+/// read-arc against this schema.
+///
+/// Everything genuinely scheduler-specific lives under [`Self::scheduler`], a
+/// `#[serde(tag = "flavor")]` tagged union ([`SchedulerDetail`]) that `schemars`
+/// renders as a JSON-Schema `oneOf` with a `flavor` const discriminator. Because
+/// the datacenter resource (hence its flavor) is pinned at compile time, the
+/// borrow-checker can validate `<scope>.lease.scheduler.<field>` against the
+/// *resolved* variant — a field the wrong flavor doesn't carry is a compile
+/// error, not a silent runtime null.
+///
+/// There is deliberately **no `gpu_uuid` (or any GPU/device) field**: no real
+/// allocator reports device UUIDs today, so carrying one would be a typed
+/// placeholder — exactly the smell this format removes. When a GPU-aware
+/// allocator actually reports devices, add a typed, populated field then.
+///
+/// Optional core fields use `skip_serializing_if` so an absent value is simply
+/// *omitted* (and the schema marks them non-required) rather than serialised as
+/// the empty string — the old required-`String` shape forced an empty-not-null
+/// workaround at every allocator. `None` is the honest representation of "the
+/// allocator hasn't placed yet" (async Nomad) or "this leg has none" (the HTTP
+/// allocator runs no persistent executor).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DatacenterLease {
-    pub node: String,
-    pub gpu_uuid: String,
+    /// The allocator's handle for this allocation — the release/reap key. Always
+    /// present: a Slurm job id, a Nomad dispatched-job id, the HTTP allocator's
+    /// assigned id. `release`/`reap` correlate on this.
     pub alloc_id: String,
-    /// Lease expiry as the allocator reports it (ISO 8601 / RFC 3339 string).
-    pub expiry: String,
+    /// Placement host, when the allocator has placed the work. `None` while a
+    /// placement is still pending (Nomad streams it asynchronously) or for
+    /// node-less allocators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// Lease expiry as the allocator reports it (RFC 3339). `None` for an
+    /// untimed lease (`salloc --no-shell` with no time limit, HTTP with no TTL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expiry: Option<String>,
     /// The lease-scoped NATS namespace a persistent drain executor (launched on
     /// the held allocation at acquire) consumes. A leased loop body enqueues its
     /// job to `{executor_namespace}.{prio}.{exec_id}` and the warm executor
-    /// pulls + runs it. `lease-<grant_id>` for the slurm/nomad drain model; `""`
-    /// for the HTTP allocator leg (no persistent executor — empty, not null, so
-    /// the required-String `Lease__datacenter` schema still validates).
-    pub executor_namespace: String,
+    /// pulls + runs it. `Some("lease-<grant_id>")` for the slurm/nomad drain
+    /// model; `None` for the HTTP allocator leg (no persistent executor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor_namespace: Option<String>,
+    /// Scheduler-specific placement detail, typed per flavor. Required (every
+    /// datacenter resource has a flavor); the variant's body carries only what
+    /// that scheduler actually reports.
+    pub scheduler: SchedulerDetail,
+}
+
+/// Per-flavor scheduler-specific lease detail. Internally tagged on `flavor` so
+/// `schemars` emits a `oneOf` with a `flavor` const per variant — the engine's
+/// `jsonschema` validator disambiguates on the discriminator, and the compiler
+/// (which knows the flavor at compile time) borrow-checks
+/// `<scope>.lease.scheduler.<field>` against the resolved variant.
+///
+/// Variants intentionally carry only fields a real allocator populates today.
+/// They grow as allocators surface more — a field is added when something fills
+/// it, never speculatively.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "flavor", rename_all = "snake_case")]
+pub enum SchedulerDetail {
+    /// Slurm (`salloc`/`scancel` over SSH).
+    Slurm {
+        /// Partition the allocation landed in, when reported.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        partition: Option<String>,
+    },
+    /// Nomad (parameterized-job dispatch).
+    Nomad {
+        /// Evaluation id from the dispatch, when reported.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eval_id: Option<String>,
+    },
+    /// Generic HTTP allocator leg — no persistent executor, no flavor-specific
+    /// placement detail today.
+    Http {},
 }
 
 // ─── Descriptor + registry ───────────────────────────────────────────────────
@@ -113,12 +183,24 @@ pub struct PoolKindDescriptor {
     pub lease_schema: fn() -> JsonValue,
 }
 
-/// Render a `schemars`-derived type to a `serde_json::Value` schema. Infallible
-/// for our derive-generated schemas; the `expect` only trips on a non-object
-/// `RootSchema`, which `#[derive(JsonSchema)]` never produces for a struct.
+/// Render a `schemars`-derived type to a `serde_json::Value` schema, with
+/// subschemas **inlined** so the result is self-contained — no
+/// `$ref: #/definitions/<name>` left dangling.
+///
+/// This matters for tagged-union fields like [`DatacenterLease::scheduler`]:
+/// by default schemars factors the [`SchedulerDetail`] `oneOf` into a separate
+/// `definitions` entry and points the property at it with a `$ref`. The
+/// compiler emits the lease schema as a single AIR definition (`Lease__<kind>`)
+/// and the engine's `SchemaRegistry` resolves refs only against the workflow's
+/// own definitions map — a nested `$ref` to `SchedulerDetail` would be unresolvable.
+/// Inlining folds the `oneOf` straight into the `scheduler` property so the
+/// schema validates standalone. Infallible for our derive-generated schemas; the
+/// `expect` only trips on a non-object `RootSchema`, which `#[derive(JsonSchema)]`
+/// never produces for a struct.
 fn schema_value<T: JsonSchema>() -> JsonValue {
-    serde_json::to_value(schemars::schema_for!(T))
-        .expect("schemars RootSchema serializes to a JSON object")
+    let settings = schemars::gen::SchemaSettings::default().with(|s| s.inline_subschemas = true);
+    let schema = settings.into_generator().into_root_schema_for::<T>();
+    serde_json::to_value(schema).expect("schemars RootSchema serializes to a JSON object")
 }
 
 /// The two pool kinds. A static slice (not `inventory`) because the set is

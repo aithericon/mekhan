@@ -49,10 +49,11 @@ fn sandbox_config() -> SlurmConfig {
 
 /// Full acquire → (node resolved) → release cycle through the trait surface.
 ///
-/// Asserts the 4-key lease shape: a real `alloc_id`, a non-empty `node`
-/// (CPU-only sandbox grants near-instantly), empty `gpu_uuid`, and that
-/// `release` cancels the allocation. A second `acquire` for the SAME grant
-/// reuses the live allocation (idempotency) rather than allocating again.
+/// Asserts the typed lease shape: a real `alloc_id`, a non-empty `node`
+/// (CPU-only sandbox grants near-instantly), the `slurm` scheduler flavor, no
+/// `gpu_uuid` (retired), and that `release` cancels the allocation. A second
+/// `acquire` for the SAME grant reuses the live allocation (idempotency) rather
+/// than allocating again.
 #[tokio::test]
 #[ignore] // requires live Slurm container
 async fn slurm_allocator_acquire_release_lifecycle() {
@@ -72,11 +73,15 @@ async fn slurm_allocator_acquire_release_lifecycle() {
         .expect("lease has alloc_id");
     assert!(!alloc_id.is_empty(), "alloc_id must be non-empty: {lease}");
 
-    // gpu_uuid is empty on the CPU-only sandbox.
+    // Typed per-flavor scheduler detail; gpu_uuid is gone.
     assert_eq!(
-        lease.get("gpu_uuid").and_then(|v| v.as_str()),
-        Some(""),
-        "gpu_uuid must be empty string on CPU sandbox: {lease}"
+        lease.get("scheduler").and_then(|s| s.get("flavor")).and_then(|v| v.as_str()),
+        Some("slurm"),
+        "lease must carry the slurm scheduler flavor: {lease}"
+    );
+    assert!(
+        lease.get("gpu_uuid").is_none(),
+        "retired gpu_uuid must not appear: {lease}"
     );
 
     // The node may briefly be null while pending; poll until assigned.

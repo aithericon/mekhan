@@ -1446,3 +1446,107 @@ fn lease_scope_loop_counter_is_in_scope_at_end() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── Lease-field borrow validation (`<scope>.lease.<field>` per flavor) ──────
+//
+// The LeaseScope `ascope` resolves to `prod_dc`, a *slurm* datacenter
+// (`known_with_prod_dc` ⇒ scheduler_flavor "slurm"). Its typed lease is the
+// core (`alloc_id`/`node`/`expiry`/`executor_namespace`) plus the slurm
+// `scheduler` variant (`scheduler.flavor` + `scheduler.partition`). Borrowing
+// anything else off the lease is a compile error — the held lease is parked
+// `Any`, so without this pass the read-arc would silently resolve a bad field
+// to runtime null (the old `lease.gpu_uuid` footgun).
+
+/// Compile the `LeaseScope { Loop }` fixture with the End's result mapping
+/// rewritten to borrow `<expr>` off the held lease (slurm flavor).
+fn compile_lease_scope_end_borrow(expr: &str) -> Result<Value, CompileError> {
+    use mekhan_service::models::template::WorkflowNodeData;
+    let mut graph = load_graph("lease-scope-loop-end-counter.json");
+    for node in &mut graph.nodes {
+        if node.id == "end-1" {
+            if let WorkflowNodeData::End { result_mapping, .. } = &mut node.data {
+                result_mapping[0].expression = expr.to_string();
+            }
+        }
+    }
+    let mut files: HashMap<String, HashMap<String, InputSource>> = HashMap::new();
+    let mut render = HashMap::new();
+    render.insert(
+        "main.py".to_string(),
+        InputSource::Raw {
+            content: "shot = lp.iteration\n".to_string(),
+        },
+    );
+    files.insert("render".to_string(), render);
+    compile_to_air_with_options(
+        &graph,
+        "t",
+        "",
+        &files,
+        CompileOptions {
+            known_resources: &known_with_prod_dc("datacenter"),
+            ..Default::default()
+        },
+    )
+    .map(|a| a.air)
+}
+
+/// `lease.gpu_uuid` — the retired placeholder — is rejected, not silently
+/// resolved to null.
+#[test]
+fn lease_borrow_of_retired_gpu_uuid_is_rejected() {
+    let err = compile_lease_scope_end_borrow("ascope.lease.gpu_uuid").unwrap_err();
+    let CompileError::LeaseFieldUnknown {
+        referenced, flavor, ..
+    } = &err
+    else {
+        panic!("expected LeaseFieldUnknown, got {err:?}");
+    };
+    assert_eq!(referenced, "ascope.lease.gpu_uuid");
+    assert_eq!(flavor, "slurm");
+}
+
+/// A typed core lease field (`node`) is borrowable.
+#[test]
+fn lease_borrow_of_core_field_compiles() {
+    compile_lease_scope_end_borrow("ascope.lease.node")
+        .expect("borrowing the typed core `lease.node` must compile");
+}
+
+/// `executor_namespace` (core) is borrowable.
+#[test]
+fn lease_borrow_of_executor_namespace_compiles() {
+    compile_lease_scope_end_borrow("ascope.lease.executor_namespace")
+        .expect("borrowing the typed core `lease.executor_namespace` must compile");
+}
+
+/// The resolved flavor's `scheduler` field (`scheduler.partition` for slurm) is
+/// borrowable, validated against the slurm variant.
+#[test]
+fn lease_borrow_of_resolved_flavor_scheduler_field_compiles() {
+    compile_lease_scope_end_borrow("ascope.lease.scheduler.partition")
+        .expect("slurm `lease.scheduler.partition` must compile");
+    // The discriminator is always present.
+    compile_lease_scope_end_borrow("ascope.lease.scheduler.flavor")
+        .expect("`lease.scheduler.flavor` must compile");
+}
+
+/// A scheduler field belonging to a DIFFERENT flavor (`eval_id` is nomad-only)
+/// is rejected when the scope resolves to slurm.
+#[test]
+fn lease_borrow_of_wrong_flavor_scheduler_field_is_rejected() {
+    let err = compile_lease_scope_end_borrow("ascope.lease.scheduler.eval_id").unwrap_err();
+    let CompileError::LeaseFieldUnknown {
+        referenced, flavor, allowed, ..
+    } = &err
+    else {
+        panic!("expected LeaseFieldUnknown for nomad-only field on a slurm scope, got {err:?}");
+    };
+    assert_eq!(referenced, "ascope.lease.scheduler.eval_id");
+    assert_eq!(flavor, "slurm");
+    // The error lists the slurm-borrowable surface, not eval_id.
+    assert!(
+        allowed.contains("scheduler.partition") && !allowed.contains("eval_id"),
+        "allowed list should reflect the slurm variant; got `{allowed}`"
+    );
+}

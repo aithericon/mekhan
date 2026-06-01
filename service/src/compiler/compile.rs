@@ -653,6 +653,12 @@ fn run_validations(
     // enter shapes (`analyze`) and the inline Python sources, and its precise
     // error should win only after the structural/guard passes are clean.
     crate::compiler::validate::validate_loop_body_control_refs(graph, inline_sources)?;
+    // Lease borrows (`<scope>.lease.<field>`) are validated against the typed
+    // DatacenterLease of the scope's resolved flavor — catches `lease.gpu_uuid`
+    // and wrong-flavor scheduler fields that the opaque-`Any` read-arc would
+    // otherwise resolve to a runtime null. Needs the resolved resources for the
+    // flavor, so it runs here (not in the resource-free `analyze` passes).
+    crate::compiler::validate::validate_lease_field_refs(graph, known_resources)?;
     Ok(())
 }
 

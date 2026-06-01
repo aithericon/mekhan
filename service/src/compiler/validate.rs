@@ -348,6 +348,183 @@ pub(crate) fn validate_loop_body_control_refs(
     Ok(())
 }
 
+/// The borrowable-field model of `DatacenterLease`, derived from the SAME schema
+/// the engine validates grant tokens against (`pool_kind("datacenter")
+/// .lease_schema()`) — so the borrow-checker and the runtime can never drift.
+/// `core` is the flat top-level field set (minus `scheduler`); `per_flavor` maps
+/// each `scheduler` `oneOf` variant's `flavor` discriminator to the extra fields
+/// that variant carries.
+struct LeaseFieldModel {
+    core: std::collections::BTreeSet<String>,
+    per_flavor: HashMap<String, std::collections::BTreeSet<String>>,
+}
+
+fn lease_field_model() -> LeaseFieldModel {
+    use std::collections::BTreeSet;
+    let mut core = BTreeSet::new();
+    let mut per_flavor: HashMap<String, BTreeSet<String>> = HashMap::new();
+
+    let Some(desc) = aithericon_resources::pool::pool_kind("datacenter") else {
+        return LeaseFieldModel { core, per_flavor };
+    };
+    let schema = (desc.lease_schema)();
+    let Some(props) = schema.get("properties").and_then(|v| v.as_object()) else {
+        return LeaseFieldModel { core, per_flavor };
+    };
+    for (name, sub) in props {
+        if name == "scheduler" {
+            // Each `oneOf` entry is a flavor variant: `properties.flavor.enum =
+            // ["<flavor>"]` + the variant's own fields.
+            if let Some(variants) = sub.get("oneOf").and_then(|v| v.as_array()) {
+                for v in variants {
+                    let Some(vprops) = v.get("properties").and_then(|p| p.as_object()) else {
+                        continue;
+                    };
+                    let Some(flavor) = vprops
+                        .get("flavor")
+                        .and_then(|f| f.get("enum"))
+                        .and_then(|e| e.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|s| s.as_str())
+                    else {
+                        continue;
+                    };
+                    let fields = vprops
+                        .keys()
+                        .filter(|k| k.as_str() != "flavor")
+                        .cloned()
+                        .collect();
+                    per_flavor.insert(flavor.to_string(), fields);
+                }
+            }
+        } else {
+            core.insert(name.clone());
+        }
+    }
+    LeaseFieldModel { core, per_flavor }
+}
+
+/// Borrow-check `<scope>.lease.<path>` references against the typed
+/// [`DatacenterLease`] of the scope's *resolved* datacenter flavor.
+///
+/// The token-shape pass parks the held lease as an `Any` namespace under
+/// `<scope>.lease` (the grant is filled by the allocator at runtime), so the
+/// read-arc resolver synthesises an arc for *any* dotted path under `.lease`
+/// without checking field names — historically `<scope>.lease.gpu_uuid` resolved
+/// purely because the namespace was opaque, not because the field existed.
+///
+/// This pass closes that hole. Because a LeaseScope's `lease.scheduler` alias
+/// resolves to a concrete datacenter resource at compile time, its
+/// `scheduler_flavor` is known here — so we can validate each borrowed lease
+/// field against the typed core ∪ the resolved flavor's `scheduler` variant, and
+/// reject anything else (`LeaseFieldUnknown`). Conservative: a scope whose alias
+/// doesn't resolve (flavor unknown) is skipped — a different error already fires
+/// for the unresolved resource.
+pub(crate) fn validate_lease_field_refs(
+    graph: &WorkflowGraph,
+    known_resources: &crate::compiler::resource_refs::KnownResources,
+) -> Result<(), CompileError> {
+    use crate::compiler::borrow::planners::guard::{guard_refs, RefRoot};
+    use crate::models::template::WorkflowNodeData;
+
+    // Slug → (label, flavor) for every LeaseScope whose datacenter alias resolves.
+    let mut holders: HashMap<String, (String, String)> = HashMap::new();
+    for node in &graph.nodes {
+        let WorkflowNodeData::LeaseScope { lease, .. } = &node.data else {
+            continue;
+        };
+        let alias = lease.scheduler.trim();
+        let Some(flavor) = known_resources
+            .get(alias)
+            .and_then(|r| r.public_config.get("scheduler_flavor"))
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        holders.insert(
+            node.slug().to_string(),
+            (node.data.label().to_string(), flavor.to_string()),
+        );
+    }
+    if holders.is_empty() {
+        return Ok(());
+    }
+
+    let model = lease_field_model();
+
+    for node in &graph.nodes {
+        for src in crate::nodes::guard_rhai_sources(&node.data) {
+            for gref in guard_refs(src) {
+                let RefRoot::Qualified(slug) = &gref.root else {
+                    continue;
+                };
+                // A lease borrow is `<scope_slug>.lease.<…>` on a known holder.
+                let Some((scope_label, flavor)) = holders.get(slug) else {
+                    continue;
+                };
+                if gref.segs.first().map(String::as_str) != Some("lease") {
+                    continue;
+                }
+                if lease_field_violation(&model, flavor, &gref.segs).is_some() {
+                    return Err(CompileError::LeaseFieldUnknown {
+                        node_id: node.id.clone(),
+                        node_label: node.data.label().to_string(),
+                        scope_label: scope_label.clone(),
+                        flavor: flavor.clone(),
+                        referenced: gref.referenced.clone(),
+                        allowed: lease_allowed_list(&model, flavor),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns `Some(())` when the lease path (`segs` = `["lease", …]`) names a field
+/// the typed lease for `flavor` does not carry. `None` = a valid borrow (incl.
+/// borrowing the whole `lease` or whole `scheduler` object).
+fn lease_field_violation(model: &LeaseFieldModel, flavor: &str, segs: &[String]) -> Option<()> {
+    // segs[0] == "lease"; the field is segs[1], scheduler sub-field segs[2].
+    let field = match segs.get(1) {
+        None => return None, // `<scope>.lease` — the whole typed lease.
+        Some(f) => f.as_str(),
+    };
+    if field == "scheduler" {
+        let sub = match segs.get(2) {
+            None => return None,          // whole `scheduler` object.
+            Some(s) => s.as_str(),
+        };
+        if sub == "flavor" {
+            return None; // discriminator is always present.
+        }
+        return match model.per_flavor.get(flavor) {
+            Some(fields) if fields.contains(sub) => None,
+            // Unknown flavor in the model → can't prove a violation; allow.
+            None => None,
+            Some(_) => Some(()),
+        };
+    }
+    // Core field (deeper segments into a scalar are unusual but not worth
+    // flagging — the field itself is valid).
+    if model.core.contains(field) {
+        return None;
+    }
+    Some(())
+}
+
+/// Human-readable list of borrowable lease fields for `flavor`, for the error.
+fn lease_allowed_list(model: &LeaseFieldModel, flavor: &str) -> String {
+    let mut parts: Vec<String> = model.core.iter().cloned().collect();
+    parts.push("scheduler.flavor".to_string());
+    if let Some(fields) = model.per_flavor.get(flavor) {
+        for f in fields {
+            parts.push(format!("scheduler.{f}"));
+        }
+    }
+    parts.join(", ")
+}
+
 /// Delay: non-empty `durationMsExpr` (parse + ref-resolution happens in
 /// `validate_guards` alongside other Rhai surfaces).
 pub(crate) fn validate_delay(

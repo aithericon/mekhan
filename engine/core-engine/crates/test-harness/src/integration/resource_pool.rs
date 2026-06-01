@@ -1402,8 +1402,8 @@ use petri_application::resource_lease_handlers::{
     HttpAllocatorClient, ResourceLeaseAcquireHandler, ResourceLeaseReleaseHandler,
 };
 
-/// A mock HTTP allocator. POST grants a fresh `{node,gpu_uuid,alloc_id,expiry}`
-/// (alloc-N, gpu-uuid-N); DELETE `/leases/<alloc_id>` records the release. Runs
+/// A mock HTTP allocator. POST grants a fresh `{alloc_id,node,expiry,scheduler}`
+/// (alloc-N, node-N); DELETE `/leases/<alloc_id>` records the release. Runs
 /// for the test's lifetime on a `tokio` accept loop (no `wiremock`/`hyper`
 /// dev-dep — same hand-rolled TCP approach as R4a's unit test).
 struct MockAllocator {
@@ -1446,7 +1446,7 @@ impl MockAllocator {
                         let alloc_id = format!("alloc-{i}");
                         granted_c.lock().unwrap().push(alloc_id.clone());
                         format!(
-                            r#"{{"node":"node-{i}","gpu_uuid":"gpu-uuid-{i}","alloc_id":"{alloc_id}","expiry":"2026-12-31T00:00:00Z"}}"#
+                            r#"{{"alloc_id":"{alloc_id}","node":"node-{i}","expiry":"2026-12-31T00:00:00Z","scheduler":{{"flavor":"http"}}}}"#
                         )
                     } else if first_line.starts_with("DELETE") {
                         // DELETE /leases/<alloc_id>
@@ -1541,7 +1541,7 @@ fn build_datacenter_adapter_net_mirror(allocator_url: &str) -> (PetriNet, RegPoo
     // t_register: register_inbox → in_use (CLEAN hold carrying alloc_id + lease).
     let t_register = Transition::new(
         "t_register",
-        r#"#{ hold: #{ grant_id: reg.grant_id, alloc_id: reg.alloc_id, node: reg.node, gpu_uuid: reg.gpu_uuid, expiry: reg.expiry } }"#,
+        r#"#{ hold: #{ grant_id: reg.grant_id, alloc_id: reg.alloc_id, node: reg.node, expiry: reg.expiry, scheduler: reg.scheduler } }"#,
     )
     .with_input_port(Port::new("reg"))
     .with_output_port(Port::new("hold"));
@@ -1668,7 +1668,7 @@ fn build_datacenter_requester_net(adapter_net_id: &str) -> (PetriNet, RegReqPlac
     // adapter's in_use hold carries alloc_id for release).
     let t_receive = Transition::new(
         "t_receive",
-        r#"#{ holding: grant, register: #{ grant_id: grant.grant_id, alloc_id: grant.alloc_id, node: grant.node, gpu_uuid: grant.gpu_uuid, expiry: grant.expiry } }"#,
+        r#"#{ holding: grant, register: #{ grant_id: grant.grant_id, alloc_id: grant.alloc_id, node: grant.node, expiry: grant.expiry, scheduler: grant.scheduler } }"#,
     )
     .with_input_port(Port::new("grant"))
     .with_output_port(Port::new("holding"))
@@ -1709,9 +1709,9 @@ fn build_datacenter_requester_net(adapter_net_id: &str) -> (PetriNet, RegReqPlac
     )
 }
 
-/// R4c headline: K=2 instances lease GPUs from a mock datacenter allocator
-/// through the R4a effect + R4b adapter topology. Asserts each gets a real
-/// `{gpu_uuid, alloc_id}` lease from the allocator, the lease routes back
+/// R4c headline: K=2 instances lease from a mock datacenter allocator through
+/// the R4a effect + R4b adapter topology. Asserts each gets a real
+/// `{alloc_id, scheduler}` lease from the allocator, the lease routes back
 /// body-visible, release fires a DELETE with the right alloc_id, and a
 /// `lease_expired` inject reaps the hold.
 #[tokio::test]
@@ -1765,21 +1765,24 @@ async fn datacenter_lease_adapter_grants_and_releases_via_mock_allocator() {
 
     settle(&ctx, 5).await;
 
-    // TYPED LEASE: every requester holds a lease with a REAL gpu_uuid + alloc_id
-    // from the allocator (no in-net capacity — the allocator is the source of truth).
+    // TYPED LEASE: every requester holds a lease with a REAL alloc_id + the typed
+    // per-flavor `scheduler` detail from the allocator (no in-net capacity — the
+    // allocator is the source of truth).
     let mut held_allocs = std::collections::HashSet::new();
     for (svc, rp) in ctx.requesters.iter().zip(rps.iter()) {
         let m = svc.get_marking().await;
         let toks = m.tokens_at(&rp.holding);
         assert_eq!(toks.len(), 1, "each requester holds exactly one lease");
         if let TokenColor::Data(d) = &toks[0].color {
-            let gpu = d
-                .get("gpu_uuid")
+            let flavor = d
+                .get("scheduler")
+                .and_then(|s| s.get("flavor"))
                 .and_then(|v| v.as_str())
-                .expect("lease.gpu_uuid");
+                .expect("lease.scheduler.flavor");
+            assert_eq!(flavor, "http", "mock allocator emits the http flavor");
             assert!(
-                gpu.starts_with("gpu-uuid-"),
-                "real allocator gpu_uuid, got {gpu}"
+                d.get("gpu_uuid").is_none(),
+                "retired gpu_uuid must not appear on the lease"
             );
             let alloc = d
                 .get("alloc_id")
