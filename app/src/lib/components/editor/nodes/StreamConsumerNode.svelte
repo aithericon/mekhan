@@ -19,7 +19,7 @@
 	// Body-dispatch modes run a Python child per chunk — surface the body
 	// attach handles (mirrors the Map container) so the body can be wired.
 	const dispatchMode = $derived((data.dispatch ?? { mode: 'rhai' }).mode);
-	const hasBody = $derived(dispatchMode === 'sequentialBody' || dispatchMode === 'parallelBody');
+	const hasBody = $derived(dispatchMode === 'sequentialBody' || dispatchMode === 'parallelBody' || dispatchMode === 'liveReduce');
 </script>
 
 <!--
