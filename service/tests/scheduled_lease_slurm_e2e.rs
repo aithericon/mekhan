@@ -594,7 +594,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         }
         // Runtime witness of the held allocation. Tolerate transient SSH hiccups
         // by only recording successful probes.
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         concurrent_max = concurrent_max.max(ids.len());
         for id in ids {
             seen_alloc_ids.insert(id);
@@ -643,16 +643,16 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
         .collect();
 
     for required in [
-        "p_lp_claim_out",
-        "p_lp_grant_inbox",
-        "p_lp_register_out",
-        "p_lp_release_out",
-        "p_lp_held",
+        "p_lp_scope_claim_out",
+        "p_lp_scope_grant_inbox",
+        "p_lp_scope_register_out",
+        "p_lp_scope_release_out",
+        "p_lp_scope_held",
     ] {
         assert!(
             place_ids.iter().any(|p| p == required),
-            "instance net is missing the loop-lease place `{required}` — the \
-             loop-scoped lease was not hoisted (the `lease` binding was dropped?). \
+            "instance net is missing the lease-scope place `{required}` — the \
+             LeaseScope lease was not emitted (the `lease` binding was dropped?). \
              places={place_ids:?}"
         );
     }
@@ -739,7 +739,7 @@ async fn leased_loop_holds_one_slurm_alloc_across_iterations() {
     //    grant name goes empty within a deadline.
     let release_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if ids.is_empty() {
             break;
         }
@@ -966,7 +966,7 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     // Wait for the held alloc to appear (acquire → salloc).
     let alloc_deadline = Instant::now() + Duration::from_secs(120);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if !ids.is_empty() {
             break;
         }
@@ -1020,7 +1020,7 @@ async fn leased_loop_fails_fast_when_held_alloc_dies() {
     // assert it stays gone, i.e. the abort path didn't re-salloc).
     let drain_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if squeue_lease_ids(instance_id, "lp").is_empty() {
+        if squeue_lease_ids(instance_id, "lp_scope").is_empty() {
             break;
         }
         if Instant::now() > drain_deadline {
@@ -1152,7 +1152,7 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
     // Wait for the held alloc to appear.
     let alloc_deadline = Instant::now() + Duration::from_secs(120);
     let held_id = loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if let Some(first) = ids.first() {
             break first.clone();
         }
@@ -1191,7 +1191,7 @@ async fn cancelling_a_leased_instance_releases_the_held_alloc() {
     // within a deadline. (The drain executor srun'd onto it dies with the alloc.)
     let release_deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let ids = squeue_lease_ids(instance_id, "lp");
+        let ids = squeue_lease_ids(instance_id, "lp_scope");
         if ids.is_empty() {
             break;
         }
