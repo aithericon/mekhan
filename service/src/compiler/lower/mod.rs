@@ -654,25 +654,6 @@ pub(super) fn is_map_body_terminal(
     })
 }
 
-pub(super) fn is_live_reduce_body_child(
-    graph: &WorkflowGraph,
-    parent_id: Option<&str>,
-) -> bool {
-    use crate::models::template::StreamDispatch;
-    parent_id.is_some_and(|pid| {
-        graph.nodes.iter().any(|n| {
-            n.id == pid
-                && matches!(
-                    &n.data,
-                    WorkflowNodeData::StreamConsumer {
-                        dispatch: StreamDispatch::LiveReduce,
-                        ..
-                    }
-                )
-        })
-    })
-}
-
 /// Apply every queued [`AgentToolWiring`]: mint the per-tool invoke +
 /// collect (+ optional collect_error / bubble) transitions that bridge
 /// each agent's `p_dispatch_<tn>` and `p_state_in_tool` places to its

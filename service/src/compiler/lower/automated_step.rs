@@ -94,13 +94,19 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         retry_policy,
         output,
         stream_output,
+        stream_input,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
     let stream_output = *stream_output;
-    let feed_chunks = is_live_reduce_body_child(cx.graph, cx.node.parent_id.as_deref());
+    // A `streamInput` AutomatedStep is a long-lived streaming reducer: it is
+    // seeded at net entry, receives the upstream producer's chunks over IPC, and
+    // folds them in-process. The executor opts into the inbound chunk feed when
+    // `feed_chunks` is set — derived directly from the node's own flag.
+    let stream_input = *stream_input;
+    let feed_chunks = stream_input;
 
     // Is this the terminal node of a Map body? If so it must forward its FULL
     // completed envelope (park data AND the whole token) so the Map's
@@ -221,6 +227,40 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // consumed by `output_places` registration after the closure returns).
     let p_stream_bridge = p_stream.clone();
 
+    // ── streamInput reducer interface (long-lived in-process fold) ──────────
+    // When `stream_input` is set this node is a streaming REDUCER: it is seeded
+    // at net entry so its executor job starts immediately (the post-mortem
+    // "immediate bootstrap" — `p_exec_id` is always populated even for an empty
+    // stream), receives the producer's chunks over IPC, and folds them in the
+    // Python loop (`aithericon.chunks()`). The chunk feed + EOF arcs are minted
+    // after the lifecycle closure (they reference the lifecycle's scoped
+    // `p_{id}_submitted`). The control `in` edge is the EOF trigger — it is
+    // routed to `p_{id}_control_in` (NOT `p_input`) via `input_handles` below.
+    let stream_reducer = if stream_input {
+        let p_control_in: PlaceHandle<DynamicToken> =
+            ctx.state(format!("p_{id}_control_in"), format!("{label} - Control In"));
+        let p_stream_in: PlaceHandle<DynamicToken> =
+            ctx.state(format!("p_{id}_stream_in"), format!("{label} - Stream In"));
+        let p_dense_seq: PlaceHandle<DynamicToken> = ctx.state(
+            format!("p_{id}_dense_seq"),
+            format!("{label} - Dense Sequence Counter"),
+        );
+        let p_exec_id: PlaceHandle<DynamicToken> = ctx.state(
+            format!("p_{id}_exec_id"),
+            format!("{label} - Reducer Execution ID"),
+        );
+        let p_feed_inbox: PlaceHandle<DynamicToken> =
+            ctx.state(format!("p_{id}_feed_inbox"), format!("{label} - Feed Inbox"));
+        ctx.seed_one(&p_dense_seq, DynamicToken::new(json!({ "n": 0 })));
+        // Immediate bootstrap: seed a null input so `prepare` fires on net entry
+        // and the reducer job submits. The reducer reads chunks ONLY via IPC, so
+        // the seed value is inert (no first-chunk duplication).
+        ctx.seed_one(&p_input, DynamicToken::new(json!({})));
+        Some((p_control_in, p_stream_in, p_dense_seq, p_exec_id, p_feed_inbox))
+    } else {
+        None
+    };
+
     // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
     let handles = ctx.scoped_prefix(id, label, |ctx| {
         let exec_inbox = ctx.state::<ExecutorSubmitInput>("inbox", "Inbox");
@@ -323,6 +363,65 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         lc
     });
 
+    // ── streamInput chunk-feed + EOF arcs (relocated LiveReduce machinery) ──
+    // The reducer job is started by the seed above. These arcs feed each
+    // upstream chunk to it over IPC and send a clean EOF when the producer
+    // completes. The reducer's own terminal output flows through the standard
+    // `t_to_output` → `split_outputs` tail below — there is no separate collect
+    // (the node IS the reducer, not a container around one).
+    if let Some((p_control_in, p_stream_in, p_dense_seq, p_exec_id, p_feed_inbox)) =
+        &stream_reducer
+    {
+        // Capture the reducer's execution id from the lifecycle's scoped
+        // `p_{id}_submitted` (read-arc, non-consuming) so it is always available
+        // for the EOF sentinel even on an empty (`stream_count == 0`) stream.
+        let p_submitted = PlaceHandle::<DynamicToken>::external(format!("p_{id}_submitted"));
+        ctx.transition(
+            format!("t_{id}_capture_exec_id"),
+            format!("{label} - Capture Exec ID"),
+        )
+        .read_input("submitted", &p_submitted)
+        .auto_output("exec_id", p_exec_id)
+        .logic_rhai("#{ exec_id: #{ id: submitted.execution_id } }".to_string())
+        .done();
+
+        // Feed each chunk over IPC, renumbering 0..N-1 with the node's own dense
+        // counter so the executor ReorderBuffer never wedges on the producer's
+        // sparse global `sequence`.
+        ctx.transition(format!("t_{id}_feed"), format!("{label} - Feed Chunk"))
+            .auto_input("chunk", p_stream_in)
+            .auto_input("seq", p_dense_seq)
+            .read_input("exec", p_exec_id)
+            .auto_output("feed", p_feed_inbox)
+            .auto_output("seq", p_dense_seq)
+            .logic_rhai(
+                "#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: seq.n }, seq: #{ n: seq.n + 1 } }"
+                    .to_string(),
+            )
+            .done();
+
+        ctx.transition(
+            format!("t_{id}_feed_effect"),
+            format!("{label} - Stream Feed Effect"),
+        )
+        .auto_input("feed", p_feed_inbox)
+        .builtin_effect(&petri_domain::effects::EXECUTOR_STREAM_FEED);
+
+        // EOF: when the producer's control token arrives on `p_control_in` (its
+        // `out` → this node's `in`), send the EOF sentinel. The sequence is the
+        // dense total (`stream_count`), always one past the last chunk.
+        ctx.transition(format!("t_{id}_eof"), format!("{label} - Feed EOF"))
+            .auto_input("ctrl", p_control_in)
+            .read_input("exec", p_exec_id)
+            .auto_output("feed", p_feed_inbox)
+            .logic_rhai(
+                "let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; \
+                 #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }"
+                    .to_string(),
+            )
+            .done();
+    }
+
     // Bridge lifecycle outputs to node interface
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
         .auto_input("done", &handles.completed)
@@ -390,13 +489,22 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     if let Some(p_stream) = p_stream {
         output_places.push((Some("stream".to_string()), p_stream));
     }
+    // streamInput reducer: route the producer's `stream` edge to `p_stream_in`
+    // (chunks) and its control `out` → this node's `in` edge to `p_control_in`
+    // (the EOF trigger), NOT to the seeded `p_input` (which only ever holds the
+    // bootstrap token consumed by `prepare`).
+    let mut input_handles = HashMap::new();
+    if let Some((p_control_in, p_stream_in, _, _, _)) = stream_reducer {
+        input_handles.insert("stream".to_string(), p_stream_in);
+        input_handles.insert("in".to_string(), p_control_in);
+    }
     cx.ports.insert(
         id.clone(),
         NodePorts {
             input_place: p_input,
             output_places,
             input_places: HashMap::new(),
-            input_handles: HashMap::new(),
+            input_handles,
         },
     );
     // AutomatedStep is a parked producer: borrow `<slug>.<field>` reads

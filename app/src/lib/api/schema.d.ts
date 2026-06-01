@@ -5720,6 +5720,18 @@ export interface components {
              */
             retryPolicy?: components["schemas"]["RetryPolicy"];
             /**
+             * @description Opt-in streaming CONSUMER. When `true`, the node exposes a second
+             *     INPUT port "stream" and becomes a long-lived stateful reducer: it is
+             *     seeded at net entry, receives the upstream producer's chunks over IPC
+             *     (`aithericon.chunks()`), and folds them in-process. Wire the
+             *     producer's `stream` handle to this node's `stream` input and its
+             *     control `out` to this node's `in` (the control token's arrival is the
+             *     end-of-stream / EOF trigger, carrying `stream_count`). The compiler
+             *     derives the executor `feed_chunks` flag from this. Plain `bool` +
+             *     `#[serde(default)]` ⇒ existing templates round-trip unchanged.
+             */
+            streamInput?: boolean;
+            /**
              * @description PROTOTYPE — opt-in streaming side-channel. When `true`, the node
              *     exposes a second output port "stream" and the compiler synthesizes a
              *     Signal place `p_{id}_stream` that receives ONE token per executor

@@ -129,3 +129,15 @@
 		title="Stream output (log_output tokens)"
 	/>
 {/if}
+{#if data.streamInput}
+	<!-- Streaming reducer input: receives the upstream producer's chunks over
+	     IPC. Offset below the "in" handle on the left edge. Wire the producer's
+	     stream handle here (and its control out to this node's "in"). -->
+	<Handle
+		id="stream"
+		type="target"
+		position={Position.Left}
+		style="top:72%;background:#06b6d4;border-color:#0891b2;"
+		title="Stream input — chunks from a streamOutput producer (aithericon.chunks())"
+	/>
+{/if}

@@ -14194,6 +14194,10 @@
                 "$ref": "#/components/schemas/RetryPolicy",
                 "description": "Retry behaviour on execution failure/timeout. Defaults to 3\nimmediate retries (the historical hardcoded value), so existing\ntemplates keep their prior semantics without re-authoring."
               },
+              "streamInput": {
+                "type": "boolean",
+                "description": "Opt-in streaming CONSUMER. When `true`, the node exposes a second\nINPUT port \"stream\" and becomes a long-lived stateful reducer: it is\nseeded at net entry, receives the upstream producer's chunks over IPC\n(`aithericon.chunks()`), and folds them in-process. Wire the\nproducer's `stream` handle to this node's `stream` input and its\ncontrol `out` to this node's `in` (the control token's arrival is the\nend-of-stream / EOF trigger, carrying `stream_count`). The compiler\nderives the executor `feed_chunks` flag from this. Plain `bool` +\n`#[serde(default)]` ⇒ existing templates round-trip unchanged."
+              },
               "streamOutput": {
                 "type": "boolean",
                 "description": "PROTOTYPE — opt-in streaming side-channel. When `true`, the node\nexposes a second output port \"stream\" and the compiler synthesizes a\nSignal place `p_{id}_stream` that receives ONE token per executor\n`EventCategory::Log` event (Python `log_info()/log_debug()/…`). An\nedge from the \"stream\" handle fires the downstream node once per log\ntoken; the normal \"out\" control token still governs termination.\nPlain `bool` + `#[serde(default)]` ⇒ existing templates (field\nabsent → `false`) round-trip unchanged (same precedent as\n`retry_policy`/`deployment_model`)."

@@ -249,6 +249,15 @@ pub enum CompileError {
         detail: String,
     },
 
+    /// A `streamInput` AutomatedStep (streaming reducer) is mis-wired or
+    /// mis-configured: it must have exactly one inbound `stream` edge from a
+    /// `streamOutput` producer's `stream` handle plus exactly one control `in`
+    /// edge from that same producer, and it cannot run under a pooled/leased or
+    /// scheduled deployment model (the inline executor lifecycle is the only
+    /// path that plumbs the IPC chunk feed).
+    #[error("node {node_id}: invalid streamInput reducer: {detail}")]
+    StreamInputInvalid { node_id: String, detail: String },
+
     /// A Map body terminal is a node kind that cannot produce the
     /// `detail.outputs.<resultVar>` envelope the gather requires (engine-effect
     /// backends like CatalogueQuery, Scheduled AutomatedSteps whose scheduler
@@ -780,6 +789,7 @@ impl CompileError {
             Self::StreamConsumerInvalidReduce { .. } => "stream_consumer_invalid_reduce",
             Self::StreamFoldMissingHandle { .. } => "stream_fold_missing_handle",
             Self::StreamFoldInvalidReduce { .. } => "stream_fold_invalid_reduce",
+            Self::StreamInputInvalid { .. } => "stream_input_invalid",
             Self::StreamConsumerRhaiHasBody { .. } => "stream_consumer_rhai_has_body",
             Self::StreamConsumerBodyEmpty { .. } => "stream_consumer_body_empty",
             Self::StreamConsumerBodyUnsupported { .. } => "stream_consumer_body_unsupported",
@@ -862,6 +872,7 @@ impl CompileError {
             | Self::StreamConsumerInvalidReduce { node_id, .. }
             | Self::StreamFoldMissingHandle { node_id, .. }
             | Self::StreamFoldInvalidReduce { node_id, .. }
+            | Self::StreamInputInvalid { node_id, .. }
             | Self::StreamConsumerRhaiHasBody { node_id }
             | Self::StreamConsumerBodyEmpty { node_id }
             | Self::StreamConsumerBodyUnsupported { node_id, .. }

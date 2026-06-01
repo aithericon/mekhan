@@ -331,6 +331,17 @@ pub enum WorkflowNodeData {
         /// `retry_policy`/`deployment_model`).
         #[serde(rename = "streamOutput", default)]
         stream_output: bool,
+        /// Opt-in streaming CONSUMER. When `true`, the node exposes a second
+        /// INPUT port "stream" and becomes a long-lived stateful reducer: it is
+        /// seeded at net entry, receives the upstream producer's chunks over IPC
+        /// (`aithericon.chunks()`), and folds them in-process. Wire the
+        /// producer's `stream` handle to this node's `stream` input and its
+        /// control `out` to this node's `in` (the control token's arrival is the
+        /// end-of-stream / EOF trigger, carrying `stream_count`). The compiler
+        /// derives the executor `feed_chunks` flag from this. Plain `bool` +
+        /// `#[serde(default)]` ⇒ existing templates round-trip unchanged.
+        #[serde(rename = "streamInput", default)]
+        stream_input: bool,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -2896,6 +2907,8 @@ pub mod dsl {
                         // DSL does not model resource pools (yet).
                         // DSL does not model streaming output (prototype flag).
                         stream_output: false,
+                        // DSL does not model streaming input (reducer flag).
+                        stream_input: false,
                     })
                 }
                 "decision" => {

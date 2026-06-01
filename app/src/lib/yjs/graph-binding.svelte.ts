@@ -220,6 +220,9 @@ export class YjsGraphBinding {
 				// back here or the editor reconstruction drops the flag and the
 				// handle never renders even though the backend seeded it `true`.
 				const streamOutput = config?.streamOutput === true;
+				// `streamInput` makes the node a streaming reducer (exposes a
+				// "stream" INPUT handle). Same round-trip rationale as streamOutput.
+				const streamInput = config?.streamInput === true;
 				return {
 					...base,
 					type: 'automated_step',
@@ -227,7 +230,8 @@ export class YjsGraphBinding {
 					...(output ? { output: output as never } : {}),
 					retryPolicy,
 					...(deploymentModel ? { deploymentModel } : {}),
-					...(streamOutput ? { streamOutput } : {})
+					...(streamOutput ? { streamOutput } : {}),
+					...(streamInput ? { streamInput } : {})
 				};
 			}
 			case 'decision':
@@ -801,6 +805,7 @@ export class YjsGraphBinding {
 				// second "stream" handle renders. Written unconditionally (mirrors
 				// the backend's `streamOutput` Y.Map key) so clearing it persists.
 				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
+				config.set('streamInput', (data as AutomatedStepNodeData).streamInput ?? false);
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);

@@ -649,6 +649,7 @@ mod tests {
                     retry_policy: RetryPolicy::default(),
                     deployment_model: DeploymentModel::default(),
                     stream_output: false,
+                    stream_input: false,
                 },
                 parent_id: None,
                 width: None,
@@ -730,6 +731,7 @@ mod tests {
                         output: Port::empty_input(),
                         retry_policy: RetryPolicy::default(),
                         stream_output: false,
+                        stream_input: false,
                         deployment_model: DeploymentModel::Scheduled {
                             scheduler: None,
                             job_template: "mekhan-executor-worker".to_string(),

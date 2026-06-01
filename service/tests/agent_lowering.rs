@@ -141,6 +141,7 @@ fn llm_step_node(id: &str) -> WorkflowNode {
             retry_policy: RetryPolicy::default(),
             deployment_model: DeploymentModel::default(),
             stream_output: false,
+            stream_input: false,
         },
         parent_id: None,
         width: None,

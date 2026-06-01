@@ -691,6 +691,116 @@ pub(crate) fn validate_parallel_split(
 /// only that token's data, not a merge. Legal Petri, rarely the intent. Warn
 /// (don't fail — existing graphs rely on it); the editor surfaces the same
 /// caveat per-node in the step reference panel.
+/// Structural validation for an `AutomatedStep`. Runs the streamInput reducer
+/// checks when `stream_input` is set, otherwise falls through to the
+/// unmerged-fan-in warning. A `streamInput` step legitimately has two inbound
+/// edges (`stream` + control `in`), so the fan-in warning is skipped for it.
+pub(crate) fn validate_automated_step(
+    node: &WorkflowNode,
+    graph: &WorkflowGraph,
+    wg: &WorkflowDiGraph<'_>,
+) -> Result<(), CompileError> {
+    use crate::models::template::DeploymentModel;
+    let WorkflowNodeData::AutomatedStep {
+        stream_input,
+        deployment_model,
+        ..
+    } = &node.data
+    else {
+        unreachable!("validate_automated_step on non-AutomatedStep variant");
+    };
+
+    if !*stream_input {
+        return warn_unmerged_fan_in(node, graph, wg);
+    }
+
+    let err = |detail: String| CompileError::StreamInputInvalid {
+        node_id: node.id.clone(),
+        detail,
+    };
+
+    // Inline executor only — pooled/leased/scheduled bypass the inline lifecycle
+    // that plumbs the IPC chunk feed, so a streamInput flag there would silently
+    // produce a broken net.
+    match deployment_model {
+        DeploymentModel::Executor { pool: None } => {}
+        DeploymentModel::Executor { pool: Some(_) } => {
+            return Err(err(
+                "streamInput is unsupported on a pooled (token_pool) deployment — \
+                 use a plain inline Executor step"
+                    .to_string(),
+            ));
+        }
+        DeploymentModel::Scheduled { .. } => {
+            return Err(err(
+                "streamInput is unsupported on a Scheduled (cluster) deployment — \
+                 use a plain inline Executor step"
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Exactly one inbound `stream` edge + one control `in` edge.
+    let mut stream_src: Option<&str> = None;
+    let mut stream_edges = 0usize;
+    let mut control_src: Option<&str> = None;
+    let mut control_edges = 0usize;
+    for e in &graph.edges {
+        if e.target != node.id {
+            continue;
+        }
+        match e.target_handle.as_deref() {
+            Some("stream") => {
+                stream_edges += 1;
+                stream_src = Some(e.source.as_str());
+                if e.source_handle.as_deref() != Some("stream") {
+                    return Err(err(
+                        "the `stream` edge must come from a producer's `stream` output handle"
+                            .to_string(),
+                    ));
+                }
+            }
+            Some("in") => {
+                control_edges += 1;
+                control_src = Some(e.source.as_str());
+            }
+            _ => {}
+        }
+    }
+    if stream_edges != 1 {
+        return Err(err(format!(
+            "expected exactly one inbound `stream` edge, found {stream_edges}"
+        )));
+    }
+    if control_edges != 1 {
+        return Err(err(format!(
+            "expected exactly one inbound control `in` edge (the EOF trigger), found {control_edges}"
+        )));
+    }
+    // The stream + control edges must originate from the SAME producer, and that
+    // producer must be a `streamOutput` AutomatedStep.
+    if stream_src != control_src {
+        return Err(err(
+            "the `stream` and control `in` edges must come from the same streaming producer"
+                .to_string(),
+        ));
+    }
+    let producer = graph.nodes.iter().find(|n| Some(n.id.as_str()) == stream_src);
+    match producer.map(|n| &n.data) {
+        Some(WorkflowNodeData::AutomatedStep {
+            stream_output: true,
+            ..
+        }) => {}
+        _ => {
+            return Err(err(
+                "the upstream producer must be an AutomatedStep with streamOutput=true".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn warn_unmerged_fan_in(
     node: &WorkflowNode,
     _graph: &WorkflowGraph,
@@ -1091,6 +1201,7 @@ mod tests {
                 retry_policy: RetryPolicy::default(),
                 deployment_model: DeploymentModel::default(),
                 stream_output: false,
+                stream_input: false,
             },
             parent_id: None,
             width: None,
