@@ -358,6 +358,18 @@ impl EffectHandler for ResourceLeaseAcquireHandler {
                     "petri_place": "lease_failed",
                     "petri_signal_key": grant_id,
                     "petri_signal_failed": "lease_failed",
+                    // A CLEAN terminal of the drain executor (it finished draining,
+                    // hit its idle/max-jobs bound, or was SIGTERM'd by release's
+                    // `nomad job stop` / `scancel`) is NOT a held-alloc death — it
+                    // is the expected end of the lease. Route `completed` to the
+                    // benign `lease_expired` reap path (t_reap drops the hold; in
+                    // the normal release flow `in_use` is already consumed, so it
+                    // is a no-op) instead of letting it fall back to `petri_place`
+                    // (`lease_failed`), which would fire t_lease_died and surface a
+                    // FALSE failure on a successful run. Only a genuinely abnormal
+                    // terminal (`failed`/`lost` → conservative `petri_place`
+                    // fallback) routes to `lease_failed` and fails fast.
+                    "petri_signal_completed": "lease_expired",
                 });
                 match &mut request_params {
                     JsonValue::Object(map) => {
@@ -662,6 +674,10 @@ mod tests {
         assert_eq!(routing["petri_net_id"], "pool-dc-abc");
         assert_eq!(routing["petri_place"], "lease_failed");
         assert_eq!(routing["petri_signal_failed"], "lease_failed");
+        // A CLEAN drain-executor completion must NOT be treated as a death: it
+        // routes to the benign `lease_expired` reap path, not the `lease_failed`
+        // fallback (which would surface a false failure on a successful run).
+        assert_eq!(routing["petri_signal_completed"], "lease_expired");
         assert_eq!(routing["petri_signal_key"], "instance-1:render");
         // The author's original request params survive alongside the routing.
         assert_eq!(req["gpu_count"], 1);
