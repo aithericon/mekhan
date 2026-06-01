@@ -78,7 +78,7 @@ test.describe('Compile / Preview AIR', () => {
 		// The demo page starts with Start + End nodes (no edges)
 		// For this test, we use the template editor with a pre-loaded graph
 
-		await page.route('**/api/templates/air-test', async (route) => {
+		await page.route('**/api/v1/templates/air-test', async (route) => {
 			await route.fulfill({ status: 500, body: 'Not available' });
 		});
 

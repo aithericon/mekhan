@@ -39,7 +39,7 @@ const ANALYZE_RESPONSE = {
 };
 
 async function mockAnalyze(page: Page) {
-	await page.route('**/api/analyze', async (route) => {
+	await page.route('**/api/v1/analyze', async (route) => {
 		if (route.request().method() === 'POST') {
 			// Read the body to discover *every* node id in the live graph,
 			// then synthesize scope for all of them — saves us from chasing
@@ -136,8 +136,8 @@ test.describe('Variable picker (RefPicker / InsertRefButton)', () => {
 		// Re-route /api/analyze to return graph_ok:false with a synthetic
 		// diagnostic, then navigate to the IDE side. The banner should be the
 		// canonical "why is the picker empty?" affordance.
-		await page.unroute('**/api/analyze');
-		await page.route('**/api/analyze', async (route) => {
+		await page.unroute('**/api/v1/analyze');
+		await page.route('**/api/v1/analyze', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
@@ -168,8 +168,8 @@ test.describe('Variable picker (RefPicker / InsertRefButton)', () => {
 
 	test('PhaseUpdate hides RefPicker affordance when no scope is in scope', async ({ page }) => {
 		// Mock /api/analyze to return empty scope for everything.
-		await page.unroute('**/api/analyze');
-		await page.route('**/api/analyze', async (route) => {
+		await page.unroute('**/api/v1/analyze');
+		await page.route('**/api/v1/analyze', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',

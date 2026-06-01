@@ -11,7 +11,7 @@ test.describe('Template CRUD', () => {
 	test('clicking new template navigates to create flow', async ({ page }) => {
 		// Mock the API to simulate a backend not being available
 		// The app should fall back to navigating to /templates/new
-		await page.route('**/api/templates', async (route) => {
+		await page.route('**/api/v1/templates', async (route) => {
 			if (route.request().method() === 'POST') {
 				await route.fulfill({ status: 500, body: 'Not available' });
 			} else {
@@ -55,7 +55,7 @@ test.describe('Template CRUD', () => {
 
 	test('template editor page loads with toolbar and canvas', async ({ page }) => {
 		// Mock the template API
-		await page.route('**/api/templates/test-id-1', async (route) => {
+		await page.route('**/api/v1/templates/test-id-1', async (route) => {
 			await route.fulfill({ status: 500, body: 'Not available' });
 		});
 
@@ -70,7 +70,7 @@ test.describe('Template CRUD', () => {
 	test('published template editor exposes a Run button (no list round-trip)', async ({
 		page
 	}) => {
-		await page.route('**/api/templates/pub-tpl', async (route) => {
+		await page.route('**/api/v1/templates/pub-tpl', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
@@ -100,7 +100,7 @@ test.describe('Template CRUD', () => {
 
 	test('template list shows items when API returns data', async ({ page }) => {
 		// Mock the templates list API
-		await page.route('**/api/templates?*', async (route) => {
+		await page.route('**/api/v1/templates?*', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
@@ -147,7 +147,7 @@ test.describe('Template CRUD', () => {
 	});
 
 	test('delete button is available on template items', async ({ page }) => {
-		await page.route('**/api/templates?*', async (route) => {
+		await page.route('**/api/v1/templates?*', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
@@ -183,7 +183,7 @@ test.describe('Template CRUD', () => {
 	});
 
 	test('published template offers New Version which forks a draft', async ({ page }) => {
-		await page.route('**/api/templates?*', async (route) => {
+		await page.route('**/api/v1/templates?*', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
@@ -210,7 +210,7 @@ test.describe('Template CRUD', () => {
 
 		// new-version forks a fresh draft with a new id; the UI should then
 		// navigate into that draft's editor.
-		await page.route('**/api/templates/tpl-pub/new-version', async (route) => {
+		await page.route('**/api/v1/templates/tpl-pub/new-version', async (route) => {
 			expect(route.request().method()).toBe('POST');
 			await route.fulfill({
 				status: 201,

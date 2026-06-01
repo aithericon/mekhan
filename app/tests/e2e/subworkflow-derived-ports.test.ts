@@ -32,7 +32,7 @@ const MINIMAL_GRAPH = {
 };
 
 async function gotoEditor(page: Page) {
-	await page.route('**/api/templates/' + TEMPLATE_ID, async (route) => {
+	await page.route('**/api/v1/templates/' + TEMPLATE_ID, async (route) => {
 		if (route.request().method() === 'GET') {
 			await route.fulfill({
 				status: 200,
@@ -77,7 +77,7 @@ const IO_CONTRACT = {
 async function mockBackend(page: Page) {
 	// Empty scope is fine — the input rows render their own expression input
 	// and field label regardless of RefPicker scope.
-	await page.route('**/api/analyze', async (route) => {
+	await page.route('**/api/v1/analyze', async (route) => {
 		await route.fulfill({
 			status: 200,
 			contentType: 'application/json',

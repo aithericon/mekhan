@@ -1,6 +1,11 @@
 import type { Page } from '@playwright/test';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// `app/package.json` is `"type": "module"`, so this file runs as ESM where the
+// CJS `__dirname` global is undefined. Derive it from import.meta.url instead.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DEMO_ID = 'demo-template-test';
 const DEMO_NAME = 'Invoice Processing Demo';
@@ -31,7 +36,7 @@ async function loadShowcaseGraph(): Promise<unknown> {
  */
 export async function gotoDemoEditor(page: Page) {
 	const graph = await loadShowcaseGraph();
-	await page.route('**/api/templates/' + DEMO_ID, async (route) => {
+	await page.route('**/api/v1/templates/' + DEMO_ID, async (route) => {
 		if (route.request().method() === 'GET') {
 			await route.fulfill({
 				status: 200,
