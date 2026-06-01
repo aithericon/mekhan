@@ -416,20 +416,6 @@ export class YjsGraphBinding {
 					type: 'timeout',
 					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
-			case 'stream_consumer': {
-				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_consumer' }>['reduce'];
-				type StreamDispatchT = Extract<
-					WorkflowNodeData,
-					{ type: 'stream_consumer' }
-				>['dispatch'];
-				return {
-					...base,
-					type: 'stream_consumer',
-					resultVar: (config?.resultVar as string) ?? 'item',
-					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' },
-					dispatch: (config?.dispatch as StreamDispatchT) ?? { mode: 'rhai' }
-				};
-			}
 			case 'stream_fold': {
 				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_fold' }>['reduce'];
 				return {
@@ -937,11 +923,6 @@ export class YjsGraphBinding {
 				break;
 			case 'timeout':
 				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
-				break;
-			case 'stream_consumer':
-				config.set('resultVar', data.resultVar ?? 'item');
-				config.set('reduce', data.reduce ?? { kind: 'array' });
-				config.set('dispatch', data.dispatch ?? { mode: 'rhai' });
 				break;
 			case 'stream_fold':
 				config.set('resultVar', data.resultVar ?? 'item');

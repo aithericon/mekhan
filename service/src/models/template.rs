@@ -502,43 +502,6 @@ pub enum WorkflowNodeData {
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<Port>,
     },
-    /// Drains a streaming producer AutomatedStep's per-call structured output
-    /// (`set_output(name, value)` events landing on the producer's Signal
-    /// place), reduces (folds) them, and gates completion behind an
-    /// end-of-stream counted barrier sized by `completed.detail.stream_count`.
-    ///
-    /// Two named inbound handles: `"stream"` carries the data chunks (one
-    /// token per `output_set` event); `"control"` carries the producer's
-    /// terminal completion token whose `detail.stream_count` is the expected
-    /// chunk count. The gather can't fire until all `N` chunks AND the count
-    /// token are present, so the net stays alive until the stream fully drains
-    /// — mirroring Map's counted-barrier gather, but counting on a runtime
-    /// `stream_count` instead of a scattered collection length. NO engine
-    /// change: the engine's two-pass binding already admits the count
-    /// coordinator arriving after results, and each stream-token injection
-    /// re-kicks the eval loop.
-    #[serde(rename = "stream_consumer")]
-    StreamConsumer {
-        label: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-        /// Name of the field each chunk's value is read as. Documentary for
-        /// v1 (the ingest is a pure Rhai passthrough of `chunk.detail.value`);
-        /// a body-per-chunk variant would bind it as the process input.
-        #[serde(rename = "resultVar", default = "default_stream_result_var")]
-        result_var: String,
-        /// How the drained chunks are folded into the single output token.
-        /// Defaults to an ordered `Array` (sort by stream sequence, project
-        /// `.value`).
-        #[serde(default)]
-        reduce: StreamReduce,
-        /// How each drained chunk is dispatched BEFORE the reduce. Defaults to
-        /// `Rhai` — today's pure-Rhai passthrough with NO per-chunk body. Every
-        /// shipped consumer template omits this field and MUST decode to `Rhai`;
-        /// any other default would make them demand a body and break at publish.
-        #[serde(default)]
-        dispatch: StreamDispatch,
-    },
     /// Stream fold — drains a streaming producer's per-call `set_output` chunks
     /// and folds them into ONE output token via a declarative `reduce` strategy,
     /// gating completion behind an end-of-stream counted barrier sized by the
@@ -878,7 +841,6 @@ impl WorkflowNodeData {
             | Self::Scope { label, .. }
             | Self::LeaseScope { label, .. }
             | Self::Map { label, .. }
-            | Self::StreamConsumer { label, .. }
             | Self::StreamFold { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
@@ -913,7 +875,6 @@ impl WorkflowNodeData {
             | Self::Scope { description, .. }
             | Self::LeaseScope { description, .. }
             | Self::Map { description, .. }
-            | Self::StreamConsumer { description, .. }
             | Self::StreamFold { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
@@ -1523,15 +1484,15 @@ fn default_item_var() -> String {
     "item".to_string()
 }
 
-/// Default `StreamConsumer.result_var` — chunks bind their value as `item`.
+/// Default `StreamFold.result_var` — chunks bind their value as `item`.
 fn default_stream_result_var() -> String {
     "item".to_string()
 }
 
-/// How a `StreamConsumer` folds the drained chunks into its single output
-/// token. Tagged on `kind` (camelCase), mirroring the serde conventions of the
-/// other config enums. Each variant selects the gather barrier's reduce Rhai in
-/// `compiler/lower/stream_consumer.rs`.
+/// How a `StreamFold` folds the drained chunks into its single output token.
+/// Tagged on `kind` (camelCase), mirroring the serde conventions of the other
+/// config enums. Each variant selects the gather barrier's reduce Rhai in
+/// `compiler/lower/stream_fold.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[derive(Default)]
@@ -1551,36 +1512,6 @@ pub enum StreamReduce {
     /// Author-supplied Rhai over `__r` (the sorted array of
     /// `#{ value, __map_idx, __map_id }`), returning the reduced value.
     Custom { expr: String },
-}
-
-/// How a `StreamConsumer` dispatches each drained chunk BEFORE the reduce.
-/// Tagged on `mode` (camelCase), mirroring the other config enums.
-///
-/// - `Rhai` (default, unchanged): the ingest is a pure-Rhai passthrough of
-///   `chunk.detail.value`; there is NO per-chunk body. Every shipped consumer
-///   template omits `dispatch` and decodes to this — anything else would force a
-///   body and break those templates at publish.
-/// - `SequentialBody`: each chunk runs a child Python AutomatedStep body, one at
-///   a time in strict stream-sequence order (a single-permit lock + a
-///   next-expected-sequence guard), then the N results are reduced.
-/// - `ParallelBody`: same per-chunk body, dispatched map-style concurrently;
-///   results are re-ordered + reduced at the gather barrier.
-/// - `LiveReduce`: one long-lived Python reducer fed chunks over IPC. Not
-///   implemented in this phase — the lowering rejects it cleanly.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema, Default)]
-#[serde(tag = "mode", rename_all = "camelCase")]
-pub enum StreamDispatch {
-    /// Pure-Rhai passthrough, no per-chunk body. THE DEFAULT — keeps every
-    /// existing consumer template byte-identical.
-    #[default]
-    Rhai,
-    /// Python body per chunk, strictly one-at-a-time in stream order, then reduce.
-    SequentialBody,
-    /// Python body per chunk, map-style concurrent, reduce at the gather.
-    ParallelBody,
-    /// One long-lived Python reducer fed chunks live over IPC. Phase-3 only —
-    /// the compiler rejects this mode for now.
-    LiveReduce,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
@@ -3169,7 +3100,6 @@ pub mod dsl {
                 | WorkflowNodeData::Delay { .. }
                 | WorkflowNodeData::Timeout { .. }
                 | WorkflowNodeData::Map { .. }
-                | WorkflowNodeData::StreamConsumer { .. }
                 | WorkflowNodeData::StreamFold { .. } => {
                     // DSL doesn't model the process-control / container nodes —
                     // GUI-authored for now. Same lossy-drop behaviour as

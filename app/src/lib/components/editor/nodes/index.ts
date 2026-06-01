@@ -20,7 +20,6 @@ import TimeoutNode from './TimeoutNode.svelte';
 import TriggerNode from './TriggerNode.svelte';
 import SubWorkflowNode from './SubWorkflowNode.svelte';
 import AgentNode from './AgentNode.svelte';
-import StreamConsumerNode from './StreamConsumerNode.svelte';
 import StreamFoldNode from './StreamFoldNode.svelte';
 
 // Compile-time exhaustiveness: `satisfies Record<NodeKind, Component>` makes a
@@ -49,7 +48,6 @@ export const nodeTypes = {
 	trigger: TriggerNode,
 	sub_workflow: SubWorkflowNode,
 	agent: AgentNode,
-	stream_consumer: StreamConsumerNode,
 	stream_fold: StreamFoldNode
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 } satisfies Record<NodeKind, Component<any>> as unknown as NodeTypes;

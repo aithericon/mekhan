@@ -1,14 +1,14 @@
-# Reducer — demo 15 (StreamConsumer dispatch=LiveReduce).
+# Reducer — demo 15 (AutomatedStep with streamInput=true).
 #
-# LiveReduce: the StreamConsumer is a thin router that forwards chunks to this
-# long-lived Python process via IPC. We receive chunks via `aithericon.chunks()`,
-# do our own reduction (uppercase + concatenate), and emit the final result.
+# A streamInput AutomatedStep IS the reducer: it is seeded at net entry (starts
+# immediately), receives the upstream producer's chunks via `aithericon.chunks()`
+# over the IPC sidecar, does its own reduction (uppercase + concatenate), and
+# emits the final result. No container node, no Petri-net gather barrier — this
+# single step owns the reduction.
 #
-# The StreamConsumer owns the stream_count barrier and EOF sentinel; we own the
-# reduction logic. No Petri-net gather barrier — the Python script is the reducer.
-#
-# `aithericon.chunks()` is a generator that yields chunk values as they arrive
-# over the IPC sidecar. It terminates when the producer's stream ends (EOF).
+# `aithericon.chunks()` is a generator that yields chunk values as they arrive.
+# It terminates when the producer's stream ends (the EOF sentinel, sent when the
+# producer's control token reaches this node's `in`).
 
 from aithericon import chunks, set_output
 
