@@ -46,15 +46,41 @@ docker compose -p "$COMPOSE_PROJECT_NAME" down -v --remove-orphans >/dev/null 2>
 echo "▶ infra up (postgres + nats + vault + rustfs) — project ${COMPOSE_PROJECT_NAME}…"
 docker compose -p "$COMPOSE_PROJECT_NAME" up -d --remove-orphans postgres nats vault rustfs
 
-# Attach the running step container to the compose network for DNS access.
-# The step's container id is the 64-hex string in its own mountinfo (overlay
-# upperdir path); `hostname` is the fallback (docker sets it to the short id).
-_self="$(grep -m1 -oE '[0-9a-f]{64}' /proc/self/mountinfo 2>/dev/null | head -c 12 || true)"
-[ -n "$_self" ] || _self="$(hostname)"
-if docker network connect "$_ci_net" "$_self" 2>/dev/null; then
-  echo "  ✓ joined compose network ${_ci_net} as ${_self}"
+# Attach THIS step's container to the compose network so the services resolve
+# by their compose DNS name. Reliable self-id: /etc/hostname, /etc/hosts and
+# /etc/resolv.conf are bind-mounted from the host path
+# /var/lib/docker/containers/<CONTAINER-ID>/..., so the 64-hex after
+# `containers/` in our OWN mountinfo is our container id on the host daemon —
+# unlike the overlay layer ids, which a bare `[0-9a-f]{64}` grep would catch.
+_self="$(grep -oE 'containers/[0-9a-f]{64}' /proc/self/mountinfo 2>/dev/null | head -1 | cut -d/ -f2 || true)"
+[ -n "$_self" ] || _self="$(cat /etc/hostname 2>/dev/null || hostname)"
+echo "  · step container id: ${_self:-<unknown>}"
+# Surface the real docker error (no 2>/dev/null) and fail fast — a silent skip
+# here just turns into a confusing 60s DNS timeout later.
+if docker network connect "$_ci_net" "$_self"; then
+  echo "  ✓ joined compose network ${_ci_net}"
 else
-  echo "  · network connect skipped (already attached, or running with host net)"
+  rc=$?
+  # rc!=0 can also mean "already attached" (idempotent re-run); only hard-fail
+  # if the infra DNS genuinely doesn't resolve.
+  echo "  · docker network connect returned $rc — verifying DNS…" >&2
+fi
+
+# Hard gate: confirm a service name actually resolves from this step before we
+# waste time on readiness loops. Catches a wrong self-id / failed attach.
+# Guarded on getent — if it's absent we skip the gate and let the readiness
+# loops below surface any DNS failure (just more slowly).
+if command -v getent >/dev/null 2>&1; then
+  for _ in $(seq 1 10); do
+    getent hosts nats >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! getent hosts nats >/dev/null 2>&1; then
+    echo "✗ 'nats' does not resolve from this step — network attach failed (id='${_self}', net='${_ci_net}')" >&2
+    echo "  attached networks for this container:" >&2
+    docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$_self" 2>/dev/null >&2 || true
+    exit 1
+  fi
 fi
 
 # Endpoints — compose-internal DNS names + CONTAINER ports (not host ports).
