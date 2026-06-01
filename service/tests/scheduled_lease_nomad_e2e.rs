@@ -578,7 +578,7 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
     // ── (6) That alloc drained all N iterations, warm — its logs carry the
     //    Pool/drain config for THIS instance's lease namespace plus
     //    >= MAX_ITERATIONS `handling execution job` lines.
-    let expected_ns = format!("lease-{instance_id}-lp");
+    let expected_ns = format!("lease-{instance_id}-lp_scope");
     let out_deadline = Instant::now() + Duration::from_secs(120);
     let (alloc, logs) = loop {
         if let Some(alloc) = child_alloc_id(&drain_child) {
@@ -618,8 +618,10 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         logs.lines().rev().take(30).collect::<Vec<_>>().join("\n")
     );
 
-    // ── (7) Topology guard: loop lease places present AND the body retargeted
-    //    to the executor lifecycle (`body/inbox`, NOT `p_body_sched_out`).
+    // ── (7) Topology guard: lease-scope lease places present AND the body
+    //    retargeted to the executor lifecycle (`body/inbox`, NOT `p_body_sched_out`).
+    //    The lease now lives on the enclosing `LeaseScope` (`lp_scope`), so the
+    //    handshake places are scope-namespaced `p_lp_scope_*`.
     let topo: Value = reqwest::get(format!(
         "{}/api/nets/mekhan-{instance_id}/topology",
         engine_url()
@@ -636,15 +638,15 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         .filter_map(|p| p["id"].as_str().map(str::to_string))
         .collect();
     for required in [
-        "p_lp_claim_out",
-        "p_lp_grant_inbox",
-        "p_lp_register_out",
-        "p_lp_release_out",
-        "p_lp_held",
+        "p_lp_scope_claim_out",
+        "p_lp_scope_grant_inbox",
+        "p_lp_scope_register_out",
+        "p_lp_scope_release_out",
+        "p_lp_scope_held",
     ] {
         assert!(
             place_ids.iter().any(|p| p == required),
-            "instance net is missing the loop-lease place `{required}`. places={place_ids:?}"
+            "instance net is missing the lease-scope place `{required}`. places={place_ids:?}"
         );
     }
     assert!(

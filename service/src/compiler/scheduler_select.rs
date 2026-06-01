@@ -47,6 +47,22 @@ pub fn resolve_scheduler_defaults(
     // The fallback alias the two defaults provide (template wins over workspace).
     let default_alias: Option<&str> = template_default.or(workspace_default);
 
+    // A `Scheduled` body enclosed by a `LeaseScope` (at any depth — e.g.
+    // `LeaseScope { Loop { body } }`) derives its datacenter from the scope's
+    // held allocation BY CONTAINMENT; lowering resolves it through
+    // `enclosing_leased_scope_slug`. Such a body needs NO node-level scheduler,
+    // so it is exempt from the scheduler-required rule below. Precompute the set
+    // off the immutable input graph (the parent walk needs whole-graph access,
+    // which the `&mut out.nodes` loop cannot borrow).
+    let lease_enclosed: std::collections::HashSet<&str> = graph
+        .nodes
+        .iter()
+        .filter(|n| {
+            crate::compiler::lower::automated_step::enclosing_leased_scope_slug(n, graph).is_some()
+        })
+        .map(|n| n.id.as_str())
+        .collect();
+
     let mut out = graph.clone();
     let mut errors: Vec<CompileError> = Vec::new();
 
@@ -62,6 +78,12 @@ pub fn resolve_scheduler_defaults(
                     // Explicit node-level alias — already the effective cluster.
                     // Normalize away a blank-but-present string just in case.
                     *scheduler = node_scheduler.map(str::to_string);
+                    continue;
+                }
+                // Lease-enclosed body: its cluster is the enclosing LeaseScope's,
+                // resolved by containment during lowering. Leave `scheduler`
+                // unset — it must NOT be forced to name (or inherit) a cluster.
+                if lease_enclosed.contains(node.id.as_str()) {
                     continue;
                 }
                 // No node-level alias: inherit the default.
@@ -208,5 +230,86 @@ mod tests {
         let g = graph(vec![scheduled_node("a", None)], Some("tmpl_dc"));
         let out = resolve_scheduler_defaults(&g, Some("ws_dc")).unwrap();
         assert_eq!(node_scheduler(&out, "a"), Some("tmpl_dc"));
+    }
+
+    /// A `lease_scope` node carrying `lease.scheduler`.
+    fn lease_scope_node(id: &str, scheduler: &str) -> WorkflowNode {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "type": "lease_scope",
+            "slug": id,
+            "position": { "x": 0.0, "y": 0.0 },
+            "data": {
+                "type": "lease_scope",
+                "label": "Lease Scope",
+                "lease": { "scheduler": scheduler },
+            }
+        }))
+        .expect("lease_scope node fixture")
+    }
+
+    /// A `loop` node parented under `parent`.
+    fn loop_node(id: &str, parent: &str) -> WorkflowNode {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "type": "loop",
+            "slug": id,
+            "position": { "x": 0.0, "y": 0.0 },
+            "parentId": parent,
+            "data": {
+                "type": "loop",
+                "label": "Loop",
+                "maxIterations": 3,
+                "loopCondition": "true",
+                "accumulators": [],
+            }
+        }))
+        .expect("loop node fixture")
+    }
+
+    /// A `scheduled_node` parented under `parent` (no node-level scheduler).
+    fn scheduled_child(id: &str, parent: &str) -> WorkflowNode {
+        let mut n = scheduled_node(id, None);
+        n.parent_id = Some(parent.to_string());
+        n
+    }
+
+    // A `Scheduled` body enclosed by a `LeaseScope` — even two levels deep,
+    // through a `Loop` — needs NO scheduler and NO default: its cluster comes
+    // from the enclosing scope by containment. It must compile (the publish-path
+    // analogue of compiler_e2e's `scheduled_body_inside_lease_scope_*`), and the
+    // body's `scheduler` must stay unset so lowering resolves it by containment.
+    #[test]
+    fn lease_enclosed_scheduled_body_needs_no_scheduler() {
+        let g = graph(
+            vec![
+                lease_scope_node("scope", "dc"),
+                loop_node("lp", "scope"),
+                scheduled_child("body", "lp"),
+            ],
+            None, // no template default
+        );
+        let out = resolve_scheduler_defaults(&g, None).expect("lease-enclosed body must compile");
+        assert_eq!(
+            node_scheduler(&out, "body"),
+            None,
+            "lease-enclosed body's scheduler stays unset (resolved by containment)"
+        );
+        assert_eq!(node_scheduler(&out, "scope"), Some("dc"));
+    }
+
+    // The exemption is strictly containment-gated: a Scheduled body NOT enclosed
+    // by a LeaseScope (a bare Loop parent) still hard-errors when unresolved.
+    #[test]
+    fn non_enclosed_scheduled_body_still_unresolved() {
+        let g = graph(
+            vec![loop_node("lp", "scope_missing"), scheduled_child("body", "lp")],
+            None,
+        );
+        // `lp`'s parent does not exist → no enclosing LeaseScope → body unresolved.
+        let errs = resolve_scheduler_defaults(&g, None).expect_err("non-enclosed must fail");
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].kind(), "scheduler_unresolved");
+        assert_eq!(errs[0].node_id(), Some("body"));
     }
 }
