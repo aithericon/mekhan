@@ -1425,6 +1425,33 @@ pub mod net_scoped {
         // Gate on bridge validation when transitioning to Running
         if body.mode == RunMode::Running {
             if let Some(topology) = instance.service.get_topology() {
+                // Wake any hibernated bridge-target nets BEFORE validating. A
+                // target net's topology is durable (its `NetInitialized` event),
+                // but after an engine restart it is hibernated (absent from the
+                // in-memory registry). The strict resolver (`resolve_topology`)
+                // only sees *live* nets, so without this it would report
+                // BRIDGE_TARGET_NET_MISSING for a target that merely needs
+                // rehydrating. Trigger the SAME metadata-gated wake-on-demand
+                // path `get_instance` uses (Known → rehydrate from the event
+                // log; Tombstoned/Unknown → left unresolved for validation to
+                // report honestly). `$`-parameterized targets are resolved at
+                // runtime, so they are skipped here.
+                let mut targets: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for place in topology.places.values() {
+                    if let petri_domain::PlaceKind::BridgeOut { target_net_id, .. } = &place.kind {
+                        if target_net_id.contains('$') || *target_net_id == net_id {
+                            continue;
+                        }
+                        targets.insert(target_net_id.clone());
+                    }
+                }
+                for target in targets {
+                    // Wake-if-known; ignore errors — a tombstoned/unknown target
+                    // stays unresolved and is reported by validation below.
+                    let _ = get_instance(&registry, &target).await;
+                }
+
                 let report = petri_application::validate_bridges(
                     &net_id,
                     &topology,
