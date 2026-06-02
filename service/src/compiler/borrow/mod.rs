@@ -365,6 +365,7 @@ mod tests {
                     Uuid::new_v4(),
                     3,
                     Uuid::new_v4(),
+                    crate::models::asset::Cardinality::Collection,
                     Vec::<PortField>::new(),
                     None,
                 ),

@@ -58,9 +58,15 @@ impl AssetResolver {
     }
 
     /// Materialize every pinned asset's records into the envelope JSON ready
-    /// for splicing into the AIR. Keyed by binding **alias** (the staged-file
-    /// stem the prepare transition indexes), each value is the JSON array of
-    /// record rows at the pinned version, ordered by `row_idx`.
+    /// for splicing into the AIR. Keyed by the staged-file stem the prepare
+    /// transition indexes (binding alias, else ref-key).
+    ///
+    /// The value shape follows the asset's **cardinality**: a `Collection`
+    /// stages the JSON array of record rows (ordered by `row_idx`); an `Object`
+    /// stages its single record **dict** (row 0, `{}` if empty) so that, once
+    /// staged as `<key>.json`, the Python runner exposes it as an
+    /// attribute-accessible global (`steel_spec.yield_strength`) — symmetric
+    /// with how a resource's public fields are reached.
     ///
     /// Unlike the resource resolver this writes no audit rows (assets carry no
     /// secret access to attribute) and has no ACL gate (visibility was already
@@ -69,6 +75,8 @@ impl AssetResolver {
         &self,
         known: &KnownAssets,
     ) -> Result<JsonValue, AssetResolverError> {
+        use crate::models::asset::Cardinality;
+
         let mut envelope = JsonMap::with_capacity(known.len());
         for (alias, info) in known {
             let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
@@ -80,8 +88,15 @@ impl AssetResolver {
             .bind(info.version)
             .fetch_all(&self.db)
             .await?;
-            let records: Vec<JsonValue> = rows.into_iter().map(|(d,)| d).collect();
-            envelope.insert(alias.clone(), JsonValue::Array(records));
+            let mut records: Vec<JsonValue> = rows.into_iter().map(|(d,)| d).collect();
+            let value = match info.cardinality {
+                Cardinality::Object => records
+                    .drain(..)
+                    .next()
+                    .unwrap_or_else(|| JsonValue::Object(JsonMap::new())),
+                Cardinality::Collection => JsonValue::Array(records),
+            };
+            envelope.insert(alias.clone(), value);
         }
         Ok(JsonValue::Object(envelope))
     }

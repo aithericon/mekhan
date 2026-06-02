@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
+use crate::models::asset::Cardinality;
+
 /// One asset the publish handler resolved + pinned for a node binding. The
 /// pin (`asset_id` + `version`) is baked into the AIR so post-publish record
 /// edits don't retroactively change an already-published workflow — symmetric
@@ -35,6 +37,10 @@ pub struct KnownAsset {
     /// records at publish so post-publish edits don't bleed into running
     /// instances.
     pub version: i32,
+    /// Cardinality of the pinned asset. Selects the staging shape: an `Object`
+    /// stages its single record as a dict (`<key>.json` ⇒ an attribute-accessible
+    /// Python global), a `Collection` stages the full row list.
+    pub cardinality: Cardinality,
 }
 
 /// Per-publish asset-binding manifest. Keyed by the binding **alias** (the

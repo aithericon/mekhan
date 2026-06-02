@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
+use crate::models::asset::Cardinality;
 use crate::models::template::PortField;
 
 /// Which kind of named global an entry is. Resources are workspace-scoped
@@ -67,6 +68,11 @@ pub struct NamedGlobal {
     /// `AssetStaging` borrow record + downstream consumers (matches
     /// [`crate::compiler::asset_refs::KnownAsset::type_id`]).
     pub type_id: Option<Uuid>,
+    /// Asset cardinality (`object` = single record, `collection` = many rows)
+    /// for `Asset` globals; `None` for resources. Drives the staging transport:
+    /// an object asset stages its single record as a dict (`<name>.json` ⇒ an
+    /// attribute-accessible Python global), a collection stages the row list.
+    pub cardinality: Option<Cardinality>,
     /// Typed field contract: the resource type descriptor's public fields, or
     /// the asset type's [`PortField`] schema. Feeds the editor picker /
     /// diagnostics (Phase 3) and the typed `resolve_ref`.
@@ -77,7 +83,10 @@ pub struct NamedGlobal {
     pub static_vals: Option<serde_json::Value>,
     /// `true` when this global *can* ride a runtime envelope/staging splice
     /// (a structural capability): every resource (secret envelope) and every
-    /// collection asset (bulk staging); `false` for object assets (inline-only).
+    /// asset (bulk staging — a collection as a row list, an object as its single
+    /// record dict). Orthogonal to [`Self::inline_channel`]: an object asset
+    /// carries both (inline its record into a guard, OR stage it into a Python
+    /// body) exactly as a resource with `public_config` carries both.
     pub envelope_channel: bool,
     /// `true` when [`Self::static_vals`] is present, i.e. the global has static
     /// field values inlinable as control-flow constants. Always equals
@@ -119,6 +128,7 @@ impl NamedGlobal {
             version,
             type_name: Some(type_name),
             type_id: None,
+            cardinality: None,
             fields,
             static_vals,
             envelope_channel: true,
@@ -129,14 +139,21 @@ impl NamedGlobal {
 
     /// Build an asset entry. `record` is the object-asset's single record (row
     /// 0) for `object` cardinality, or `None` for a `collection` asset.
-    /// Object assets are inline-only; collection assets are envelope-only
-    /// (bulk-staged as `<alias>.json`).
+    ///
+    /// Both channels are available and orthogonal: `static_vals` (the object's
+    /// record) feeds the **inline** channel (a guard constant), and *every*
+    /// asset rides the **envelope/staging** channel — a collection stages its
+    /// row list, an object stages its single record dict — so the same
+    /// `<name>.<field>` reference resolves in a Python body too. Which channel a
+    /// given graph actually *uses* is decided per-reference at discovery
+    /// (`envelope_used`), not structurally here.
     #[allow(dead_code)] // ctor used by discover.rs (Phase 1) / borrow source (Phase 2)
     pub(crate) fn from_asset(
         name: String,
         id: Uuid,
         version: i32,
         type_id: Uuid,
+        cardinality: Cardinality,
         fields: Vec<PortField>,
         record: Option<serde_json::Value>,
     ) -> Self {
@@ -149,11 +166,10 @@ impl NamedGlobal {
             version,
             type_name: None,
             type_id: Some(type_id),
+            cardinality: Some(cardinality),
             fields,
             static_vals,
-            // Collection assets (no row-0 record) ride the staging envelope;
-            // object assets inline their single record and need no envelope.
-            envelope_channel: !inline_channel,
+            envelope_channel: true,
             inline_channel,
             envelope_used: false,
         }
@@ -274,11 +290,12 @@ pub(crate) fn splice_resources_from_globals(
 }
 
 /// The publish-time `__assets` splice manifest: the `Asset` globals this graph
-/// references through their **staging** channel (a collection asset bound on a
-/// node), keyed by the binding **alias** (the registry key, which the AIR
-/// indexes as `__assets["<alias>"]`). Excludes object assets (inline-only) and
-/// assets referenced only via control flow. Matches the set of `AssetStaging`
-/// borrows the compiler emits.
+/// references through their **staging** channel — a collection asset bound on a
+/// node OR any asset (object or collection) named in a Python/config body —
+/// keyed by the registry key (binding alias, else ref-key), which the AIR
+/// indexes as `__assets["<key>"]`. Excludes assets referenced *only* as a
+/// control-flow constant (those inline via `static_vals`). Matches the set of
+/// `AssetStaging` borrows the compiler emits.
 pub(crate) fn splice_assets_from_globals(
     globals: &KnownGlobals,
 ) -> crate::compiler::asset_refs::KnownAssets {
@@ -296,6 +313,7 @@ pub(crate) fn splice_assets_from_globals(
                 type_id: g.type_id.unwrap_or_default(),
                 ref_key: g.name.clone(),
                 version: g.version,
+                cardinality: g.cardinality.unwrap_or(Cardinality::Collection),
             },
         );
     }

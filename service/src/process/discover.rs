@@ -18,11 +18,14 @@
 //!   not (so it inlines its constant but never gets a needless `__resources`
 //!   secret splice).
 //! - **Assets** are template-visible (`scope::visible_scopes_for`). Heads come
-//!   from node-data asset bindings (the staging/envelope channel) AND from the
-//!   same control-flow Rhai scan (object assets inline their single record).
+//!   from node-data asset bindings, the control-flow Rhai scan, AND the *same
+//!   Python/config body scan that feeds resources* (`collect_body_field_heads`)
+//!   — so an asset is first-class in a step body exactly like a resource.
 //!   Producer-slug heads are dropped (a real upstream ref wins). An `object`
-//!   asset fetches its row-0 record into `static_vals` (inline channel); a
-//!   `collection` asset bound on a node carries `envelope_used` (bulk staging).
+//!   asset fetches its row-0 record into `static_vals` (inline channel for
+//!   guards); any asset reached via a binding or a body head carries
+//!   `envelope_used` (staging — object as a record dict, collection as a row
+//!   list).
 //!
 //! ## Strict vs. registry-only
 //!
@@ -76,7 +79,16 @@ pub(crate) async fn discover_named_globals(
         discover_resource_globals(state, graph, ws, inline_sources, strict, &mut globals).await?;
     }
     if let Some(tpl) = template_id {
-        discover_asset_globals(state, graph, tpl, workspace_id, strict, &mut globals).await?;
+        discover_asset_globals(
+            state,
+            graph,
+            tpl,
+            workspace_id,
+            inline_sources,
+            strict,
+            &mut globals,
+        )
+        .await?;
     }
 
     Ok(globals)
@@ -132,6 +144,72 @@ fn collect_control_flow_heads(graph: &WorkflowGraph) -> Result<BTreeSet<String>,
         .map_err(|e| ApiError::compile(format!("compilation failed: {e}"), vec![e.to_view()]))?;
     heads.retain(|h| slugs.node_for(h).is_none());
     Ok(heads)
+}
+
+/// Collect every `<head>.<field>` access head found in a Python/config **body**
+/// across all AutomatedStep/Agent nodes (the same backend `ref_scanner` that
+/// drives resource discovery). Kind-agnostic: the returned heads are raw names
+/// — *which library they belong to* (resource path vs asset ref-key) is decided
+/// by registry resolution at the call site. This is the single body scan that
+/// both [`discover_resource_globals`] (envelope heads) and
+/// [`discover_asset_globals`] (staging heads) read, so an asset referenced from
+/// a Python body resolves exactly like a resource does — no second scanner.
+fn collect_body_field_heads(
+    graph: &WorkflowGraph,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
+) -> BTreeSet<String> {
+    use crate::backends::ScanCtx;
+    use crate::compiler::resource_binding::collect_resource_heads;
+
+    let mut heads: BTreeSet<String> = BTreeSet::new();
+    for node in &graph.nodes {
+        let (backend_type, config_owned, config_ref, entrypoint): (
+            crate::models::template::ExecutionBackendType,
+            Option<serde_json::Value>,
+            Option<&serde_json::Value>,
+            Option<&str>,
+        ) = match &node.data {
+            WorkflowNodeData::AutomatedStep { execution_spec, .. } => (
+                execution_spec.backend_type,
+                None,
+                Some(&execution_spec.config),
+                execution_spec.entrypoint.as_deref(),
+            ),
+            WorkflowNodeData::Agent {
+                model,
+                system_prompt,
+                user_prompt,
+                response_format,
+                images,
+                ..
+            } => (
+                crate::models::template::ExecutionBackendType::Llm,
+                Some(crate::models::template::agent_to_llm_config(
+                    model,
+                    system_prompt.as_deref(),
+                    user_prompt,
+                    response_format.as_ref(),
+                    images,
+                    &[],
+                )),
+                None,
+                None,
+            ),
+            _ => continue,
+        };
+        let config: &serde_json::Value =
+            config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
+        let ctx = ScanCtx {
+            config,
+            node_id: &node.id,
+            inline_sources,
+            entrypoint,
+        };
+        for head in collect_resource_heads(&ctx, backend_type) {
+            heads.insert(head);
+        }
+    }
+    heads
 }
 
 /// Workspace-scoped resource discovery. Folds the former
@@ -366,18 +444,22 @@ fn field_kind_of(v: &serde_json::Value) -> FieldKind {
 }
 
 /// Template-visible asset discovery. Folds the former `discover_asset_bindings`
-/// (node-data bindings, with the declared-binding hard-fail) and the asset half
-/// of the constant-inline pre-pass (control-flow Rhai heads). Object assets
-/// fetch their row-0 record (inline channel); collection assets bound on a node
-/// carry `envelope_used` (bulk staging).
+/// (node-data bindings, with the declared-binding hard-fail), the asset half of
+/// the constant-inline pre-pass (control-flow Rhai heads), AND the Python/config
+/// body scan (`collect_body_field_heads`). Object assets fetch their row-0
+/// record (inline channel, for guards); any asset reached via a binding or a
+/// body head carries `envelope_used` (staging — object as a record dict,
+/// collection as a row list).
 async fn discover_asset_globals(
     state: &AppState,
     graph: &WorkflowGraph,
     template_id: Uuid,
     workspace_fallback: Option<Uuid>,
+    inline_sources: &HashMap<String, HashMap<String, String>>,
     strict: bool,
     out: &mut KnownGlobals,
 ) -> Result<(), ApiError> {
+    use crate::compiler::token_shape::references_head_token;
     use crate::models::asset::{Cardinality, ScopeKind};
     use crate::models::template::AssetBinding;
     use crate::scope::{resolve_one, visible_scopes_for, Scope, ScopedItem};
@@ -407,14 +489,15 @@ async fn discover_asset_globals(
     // Pass 1b: control-flow Rhai heads (object-asset constant inline).
     let cf_heads = collect_control_flow_heads(graph)?;
 
-    // Union of ref-keys to resolve: binding ref-keys + control-flow heads.
-    let mut ref_keys: BTreeSet<String> = binding_aliases.keys().cloned().collect();
-    ref_keys.extend(cf_heads.iter().cloned());
-    if ref_keys.is_empty() {
-        return Ok(());
-    }
+    // Pass 1c: DOTTED Python/config body heads — the same ref-scanner that
+    // feeds resource envelope discovery (covers config-embedded refs too). A
+    // head matching an asset ref-key stages it (object → record dict,
+    // collection → row list) under its ref-key, so `steel_spec.yield_strength`
+    // resolves in a `.py` body exactly as `pg.host` does.
+    let dotted_body_heads = collect_body_field_heads(graph, inline_sources);
 
-    // The template's downward-visible scope set.
+    // The template's downward-visible scope set — resolved before the bare-body
+    // token scan (Pass 1d) so we know which curated ref-keys to look for.
     let visible = visible_scopes_for(&state.db, ScopeKind::Template, template_id)
         .await
         .map_err(|e| ApiError::internal(format!("asset scope resolution: {e}")))?;
@@ -440,6 +523,53 @@ async fn discover_asset_globals(
         }
     }
     if scope_kinds.is_empty() {
+        return Ok(());
+    }
+
+    // Pass 1d: BARE body references. A collection asset is used bare
+    // (`len(metals_db)`, `for m in metals_db`), which the dotted scanner can't
+    // see. Token-scan every step's inline body for each *visible* asset ref-key
+    // — scanning against the curated library names (not arbitrary identifiers)
+    // bounds false positives to a real asset whose name a body mentions.
+    let body_sources: Vec<&str> = inline_sources
+        .values()
+        .flat_map(|files| files.values())
+        .map(String::as_str)
+        .collect();
+    let mut token_refs: BTreeSet<String> = BTreeSet::new();
+    if !body_sources.is_empty() {
+        let visible_ref_keys: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT a.ref_key FROM assets a \
+             JOIN UNNEST($1::text[], $2::uuid[]) AS s(scope_kind, scope_id) \
+               ON a.scope_kind = s.scope_kind AND a.scope_id = s.scope_id \
+             WHERE a.deleted_at IS NULL",
+        )
+        .bind(&scope_kinds)
+        .bind(&scope_ids)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("visible asset ref-keys: {e}")))?;
+        for (rk,) in visible_ref_keys {
+            if body_sources
+                .iter()
+                .any(|src| references_head_token(src, &rk))
+            {
+                token_refs.insert(rk);
+            }
+        }
+    }
+
+    // Every ref reached through a STAGING surface (node binding, dotted body,
+    // or bare body). A cf-only head stays inline-only (object guard constant).
+    let mut body_staged: BTreeSet<String> = dotted_body_heads;
+    body_staged.extend(token_refs);
+
+    // Union of ref-keys to resolve: binding ref-keys + control-flow heads +
+    // staged body refs.
+    let mut ref_keys: BTreeSet<String> = binding_aliases.keys().cloned().collect();
+    ref_keys.extend(cf_heads.iter().cloned());
+    ref_keys.extend(body_staged.iter().cloned());
+    if ref_keys.is_empty() {
         return Ok(());
     }
 
@@ -535,12 +665,23 @@ async fn discover_asset_globals(
             .clone()
             .unwrap_or_else(|| ref_key.clone());
 
-        let mut global =
-            NamedGlobal::from_asset(ref_key.clone(), asset_id, version, type_id, fields, record);
-        // Staged (envelope) iff bound on a node AND a collection (object assets
-        // are inline-only — their single record substitutes as a constant, so
-        // they never ride the `__assets` staging envelope).
-        global.envelope_used = bound_alias.is_some() && global.envelope_channel;
+        let mut global = NamedGlobal::from_asset(
+            ref_key.clone(),
+            asset_id,
+            version,
+            type_id,
+            card,
+            fields,
+            record,
+        );
+        // Staged (envelope) iff the graph references the asset through a
+        // staging surface: a node-data binding OR a Python/config body ref
+        // (dotted or bare). Either cardinality stages (object → record dict,
+        // collection → row list). An asset reached *only* as a control-flow
+        // constant (cf_heads, no binding, no body ref) keeps
+        // `envelope_used = false` and inlines its record into the guard via
+        // `static_vals`.
+        global.envelope_used = bound_alias.is_some() || body_staged.contains(ref_key);
         // Resources inserted first win a name collision (see fn docs).
         out.entry(key).or_insert(global);
     }

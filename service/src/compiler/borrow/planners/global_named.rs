@@ -52,8 +52,14 @@ impl BorrowSource for GlobalNamedSource {
         // BTreeMap registry key (alias-or-refkey) is used directly for the
         // AssetStaging path below.
         emit_constant_inlines(ctx.graph, ctx.known_globals, &mut out);
-        emit_resource_envelopes(ctx, &mut out);
-        emit_asset_stagings(ctx.graph, ctx.known_globals, &mut out);
+        // One `seen` set keyed by (node_id, staged_name) shared across both
+        // staging surfaces — node-data bindings and body-scan heads — so an
+        // asset that is BOTH bound and referenced in the same step's body under
+        // the same name stages exactly once.
+        let mut staged_seen: BTreeSet<(String, String)> = BTreeSet::new();
+        emit_resource_envelopes(ctx, &mut staged_seen, &mut out);
+        emit_asset_body_tokens(ctx, &mut staged_seen, &mut out);
+        emit_asset_stagings(ctx.graph, ctx.known_globals, &mut staged_seen, &mut out);
         Ok(out)
     }
 }
@@ -152,15 +158,22 @@ fn emit_constant_inlines(
     }
 }
 
-/// ResourceEnvelope: scan every Python/Agent AutomatedStep's config for
-/// `<head>.<attr>` accesses whose head is a `Resource` global, and emit one
-/// `ResourceEnvelope` per `(consumer, name)`. Folds the former `ResourceSource`
-/// — same `collect_resource_heads` scanner, discriminated against the registry.
-fn emit_resource_envelopes(ctx: &PlanCtx<'_>, out: &mut Vec<Borrow>) {
+/// Body-scan envelope/staging: scan every Python/Agent AutomatedStep's config
+/// for `<head>.<attr>` accesses, resolve the head against the registry, and emit
+/// the kind-appropriate borrow — `ResourceEnvelope` for a `Resource`,
+/// `AssetStaging` for an `Asset` (staged under its ref-key). One scanner
+/// (`collect_resource_heads`), the matched global's kind picks the transport —
+/// so an asset is first-class in a step body exactly like a resource. Folds the
+/// former `ResourceSource` and extends it to assets (the unification mirror of
+/// `discover::collect_body_field_heads`).
+fn emit_resource_envelopes(
+    ctx: &PlanCtx<'_>,
+    seen: &mut BTreeSet<(String, String)>,
+    out: &mut Vec<Borrow>,
+) {
     use crate::backends::ScanCtx;
     use crate::compiler::resource_binding::collect_resource_heads;
 
-    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
     for node in &ctx.graph.nodes {
         let (backend_type, config_owned, config_ref, entrypoint): (
             ExecutionBackendType,
@@ -208,22 +221,90 @@ fn emit_resource_envelopes(ctx: &PlanCtx<'_>, out: &mut Vec<Borrow>) {
             let Some(global) = global_by_name(ctx.known_globals, &head) else {
                 continue;
             };
-            if global.kind != GlobalKind::Resource {
-                continue;
-            }
             let key = (node.id.clone(), head.clone());
             if !seen.insert(key) {
                 continue;
             }
+            match global.kind {
+                GlobalKind::Resource => out.push(Borrow {
+                    consumer_node_id: node.id.clone(),
+                    producer_node: format!("__resources__/{}", global.name),
+                    slug: global.name.clone(),
+                    resolution: BorrowResolution::ResourceEnvelope {
+                        name: global.name.clone(),
+                        resource_id: global.id,
+                        type_name: global.type_name.clone().unwrap_or_default(),
+                        latest_version: global.version,
+                    },
+                }),
+                GlobalKind::Asset => {
+                    // A body-referenced asset stages under its ref-key (the name
+                    // the step code reads). `__assets["<ref_key>"]` is sized by
+                    // cardinality at splice time (object → dict, collection →
+                    // list); the runner then exposes `<ref_key>` as a global.
+                    if !global.envelope_channel {
+                        continue;
+                    }
+                    out.push(Borrow {
+                        consumer_node_id: node.id.clone(),
+                        producer_node: format!("__assets__/{}", global.name),
+                        slug: global.name.clone(),
+                        resolution: BorrowResolution::AssetStaging {
+                            alias: global.name.clone(),
+                            asset_id: global.id,
+                            type_id: global.type_id.unwrap_or_default(),
+                            version: global.version,
+                        },
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Bare-reference asset staging: a collection asset used bare in a step body
+/// (`len(metals_db)`, `for m in metals_db`) is invisible to the dotted
+/// `collect_resource_heads` scanner that `emit_resource_envelopes` uses. For
+/// each node's inline body sources, token-scan for every asset global's ref-key
+/// and emit one `AssetStaging` per match — deduped against the dotted asset
+/// branch via the shared `seen`. This is the borrow-source mirror of
+/// `discover`'s Pass 1d, so the registry's `envelope_used` and the emitted
+/// `job_inputs.push` always agree.
+fn emit_asset_body_tokens(
+    ctx: &PlanCtx<'_>,
+    seen: &mut BTreeSet<(String, String)>,
+    out: &mut Vec<Borrow>,
+) {
+    use crate::compiler::token_shape::references_head_token;
+
+    for node in &ctx.graph.nodes {
+        let Some(files) = ctx.inline_sources.get(&node.id) else {
+            continue;
+        };
+        for global in ctx.known_globals.values() {
+            if global.kind != GlobalKind::Asset || !global.envelope_channel {
+                continue;
+            }
+            let key = (node.id.clone(), global.name.clone());
+            if seen.contains(&key) {
+                continue;
+            }
+            if !files
+                .values()
+                .any(|src| references_head_token(src, &global.name))
+            {
+                continue;
+            }
+            seen.insert(key);
             out.push(Borrow {
                 consumer_node_id: node.id.clone(),
-                producer_node: format!("__resources__/{}", global.name),
+                producer_node: format!("__assets__/{}", global.name),
                 slug: global.name.clone(),
-                resolution: BorrowResolution::ResourceEnvelope {
-                    name: global.name.clone(),
-                    resource_id: global.id,
-                    type_name: global.type_name.clone().unwrap_or_default(),
-                    latest_version: global.version,
+                resolution: BorrowResolution::AssetStaging {
+                    alias: global.name.clone(),
+                    asset_id: global.id,
+                    type_id: global.type_id.unwrap_or_default(),
+                    version: global.version,
                 },
             });
         }
@@ -237,9 +318,9 @@ fn emit_resource_envelopes(ctx: &PlanCtx<'_>, out: &mut Vec<Borrow>) {
 fn emit_asset_stagings(
     graph: &WorkflowGraph,
     globals: &crate::compiler::named_global::KnownGlobals,
+    seen: &mut BTreeSet<(String, String)>,
     out: &mut Vec<Borrow>,
 ) {
-    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
     for node in &graph.nodes {
         let bindings: &[AssetBinding] = match &node.data {
             WorkflowNodeData::AutomatedStep { asset_bindings, .. } => asset_bindings,
