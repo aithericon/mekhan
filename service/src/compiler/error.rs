@@ -619,6 +619,44 @@ pub enum CompileError {
         message: String,
     },
 
+    // --- Phase 4: step placement Requirements validated against the workspace
+    //     capability registry. These run at the PUBLISH compile path (where the
+    //     `KnownCapabilities` map is loaded from the DB) — the pure
+    //     `compile_to_air` has no DB, so they cannot live in a `validate` hook.
+    /// A step Constraint names a `capability` that is not a defined
+    /// `capability_type` in the workspace. Point the author at the registry.
+    #[error(
+        "node '{node_id}': requirement references capability '{capability}' which is not a \
+         defined capability type in this workspace — define it at /capability-types"
+    )]
+    UndefinedRequirementCapability { node_id: String, capability: String },
+
+    /// A step Constraint names a `field` that is not declared on the referenced
+    /// (defined) capability's typed schema.
+    #[error(
+        "node '{node_id}': requirement references field '{field}' on capability \
+         '{capability}', but that capability has no such field"
+    )]
+    UnknownRequirementField {
+        node_id: String,
+        capability: String,
+        field: String,
+    },
+
+    /// A step Constraint's `op`/`value` is incompatible with the referenced
+    /// field's declared [`crate::models::template::FieldKind`] — e.g. a numeric
+    /// comparison (`gt`/`lt`) on a `text` field, or an `value` whose JSON type
+    /// the field's kind rejects.
+    #[error(
+        "node '{node_id}': requirement on '{capability}.{field}' is type-incompatible: {message}"
+    )]
+    RequirementTypeMismatch {
+        node_id: String,
+        capability: String,
+        field: String,
+        message: String,
+    },
+
     // --- Repeater block validation (Feature B). A HumanTask
     //     `TaskBlockConfig::Repeater` carries a structured `<slug>.<field>[*]…`
     //     reference into an upstream array. The compiler validates the ref
@@ -813,6 +851,9 @@ impl CompileError {
             Self::JobTemplateFlavorMismatch { .. } => "job_template_flavor_mismatch",
             Self::ResourcePoolRequestInvalid { .. } => "resource_pool_request_invalid",
             Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
+            Self::UndefinedRequirementCapability { .. } => "undefined_requirement_capability",
+            Self::UnknownRequirementField { .. } => "unknown_requirement_field",
+            Self::RequirementTypeMismatch { .. } => "requirement_type_mismatch",
             Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
             Self::RepeaterRefUnresolved { .. } => "repeater_ref_unresolved",
             Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
@@ -882,6 +923,9 @@ impl CompileError {
             | Self::BackendPlaceholderSyntax { node_id, .. }
             | Self::LlmImageRefNotFileKind { node_id, .. }
             | Self::SchemaRefUnresolved { node_id, .. }
+            | Self::UndefinedRequirementCapability { node_id, .. }
+            | Self::UnknownRequirementField { node_id, .. }
+            | Self::RequirementTypeMismatch { node_id, .. }
             | Self::RepeaterRefMalformed { node_id, .. }
             | Self::RepeaterRefUnresolved { node_id, .. }
             | Self::RepeaterItemsRefNotArray { node_id, .. }

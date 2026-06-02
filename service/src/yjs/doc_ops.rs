@@ -693,6 +693,7 @@ mod tests {
                     deployment_model: DeploymentModel::default(),
                     stream_output: false,
                     stream_input: false,
+                    requirements: None,
                 },
                 parent_id: None,
                 width: None,
@@ -715,6 +716,103 @@ mod tests {
                 );
                 let names: Vec<&str> = output.fields.iter().map(|f| f.name.as_str()).collect();
                 assert_eq!(names, vec!["vendor", "amount"]);
+            }
+            other => panic!("expected AutomatedStep, got {other:?}"),
+        }
+    }
+
+    /// Phase 4 — a presence-pooled step's `requirements` (placement
+    /// constraints) MUST survive graph→Y.Doc→graph: the editor authors them off
+    /// the Y.Doc and publish reads them back via `doc_to_graph` to inject the
+    /// claim payload + run the registry validation. Same `#[serde(default)]`
+    /// drop class as `default_scheduler`/`stream_input`: an encoder that forgets
+    /// the field silently downgrades a constrained step to "matches any runner".
+    #[test]
+    fn automated_step_requirements_survive_ydoc_roundtrip() {
+        use crate::models::template::{
+            Constraint, ConstraintOp, DeploymentModel, ExecutionBackendType, ExecutionSpecConfig,
+            Port, Requirements, RetryPolicy, WorkflowEdge, WorkflowNode,
+        };
+
+        fn step_with(requirements: Option<Requirements>) -> WorkflowGraph {
+            WorkflowGraph {
+                nodes: vec![WorkflowNode {
+                    id: "step".to_string(),
+                    node_type: "automated_step".to_string(),
+                    slug: None,
+                    position: Position { x: 0.0, y: 0.0 },
+                    data: WorkflowNodeData::AutomatedStep {
+                        label: "Step".to_string(),
+                        description: None,
+                        execution_spec: ExecutionSpecConfig {
+                            backend_type: ExecutionBackendType::Python,
+                            entrypoint: Some("main.py".to_string()),
+                            config: serde_json::json!({"python": "python3"}),
+                        },
+                        input: Port::empty_input(),
+                        output: Port::empty_input(),
+                        retry_policy: RetryPolicy::default(),
+                        deployment_model: DeploymentModel::default(),
+                        stream_output: false,
+                        stream_input: false,
+                        requirements,
+                    },
+                    parent_id: None,
+                    width: None,
+                    height: None,
+                }],
+                edges: Vec::<WorkflowEdge>::new(),
+                viewport: None,
+                instance_concurrency: Default::default(),
+                definitions: Default::default(),
+                default_scheduler: None,
+            }
+        }
+
+        // Set → preserved through graph→Y.Doc→graph (the publish path).
+        //
+        // NB: the constraint `value` is a `serde_json::Value` carried through the
+        // Yjs `Any` representation, which has a SINGLE numeric type (f64). A
+        // whole-number JSON value (`160.0` ⇄ `160`) therefore cannot survive that
+        // boundary byte-for-byte — Yjs `Any::Number` round-trips back to a JSON
+        // integer. That int/float tag is semantically irrelevant here (the engine
+        // `satisfies` matcher and the publish-time validator both coerce int⇄float),
+        // so we exercise the round-trip with a FRACTIONAL float (`160.5`) that is
+        // stable through Yjs, alongside a non-numeric (Null) value, which together
+        // prove capability/field/op/value all survive intact.
+        let reqs = Requirements {
+            constraints: vec![
+                Constraint {
+                    capability: "xrd".to_string(),
+                    field: "max_2theta".to_string(),
+                    op: ConstraintOp::Gte,
+                    value: serde_json::json!(160.5),
+                },
+                Constraint {
+                    capability: "xrd".to_string(),
+                    field: "source".to_string(),
+                    op: ConstraintOp::Exists,
+                    value: serde_json::Value::Null,
+                },
+            ],
+        };
+        let rt = doc_to_graph(&graph_to_doc(&step_with(Some(reqs.clone())))).expect("parse Y.Doc");
+        match &rt.nodes[0].data {
+            WorkflowNodeData::AutomatedStep { requirements, .. } => {
+                assert_eq!(
+                    requirements.as_ref(),
+                    Some(&reqs),
+                    "requirements must survive Y.Doc round-trip byte-for-byte"
+                );
+            }
+            other => panic!("expected AutomatedStep, got {other:?}"),
+        }
+
+        // None → stays None (opt-out: no stray key written/read back).
+        let rt_none = doc_to_graph(&graph_to_doc(&step_with(None))).expect("parse Y.Doc");
+        match &rt_none.nodes[0].data {
+            WorkflowNodeData::AutomatedStep { requirements, .. } => {
+                assert_eq!(*requirements, None);
             }
             other => panic!("expected AutomatedStep, got {other:?}"),
         }

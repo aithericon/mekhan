@@ -99,6 +99,7 @@ fn catalogue_graph(step_id: &str) -> WorkflowGraph {
                     deployment_model: Default::default(),
                     stream_output: false,
                     stream_input: false,
+                    requirements: None,
                 },
                 parent_id: None,
                 width: None,

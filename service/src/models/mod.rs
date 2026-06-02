@@ -1,4 +1,5 @@
 pub mod auth_token;
+pub mod capability;
 pub mod error;
 pub mod instance;
 pub mod job_template;

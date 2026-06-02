@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::auth::extractor::CookieAuthUser;
 use crate::auth::runner_token::runner_subject;
 use crate::auth::AuthUser;
+use crate::models::capability::{load_known_capabilities, validate_caps_against_types};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::runner::{
     mint_token, CreateRegistrationTokenRequest, CreatedRegistrationToken, EnrollRequest,
@@ -177,6 +178,19 @@ pub async fn enroll_runner(
     .ok_or_else(|| {
         ApiError::forbidden("registration token is no longer usable (revoked, expired, or exhausted)")
     })?;
+
+    // 4b. Phase 4 — type the advertised capabilities against the workspace's
+    //    capability registry BEFORE inserting. The workspace is the (re-read)
+    //    registration token's — the same source step 5's INSERT binds. A runner
+    //    advertising no caps (`{}`) always passes (empty => Ok). An unknown
+    //    capability or a field whose value mismatches its declared FieldKind is
+    //    rejected with a 400 carrying the validator's human-readable message.
+    //    Returning here drops the open `tx`, rolling back the claimed use so a
+    //    bad-caps enroll does not burn a registration-token use.
+    let known_caps = load_known_capabilities(&state.db, claimed.workspace_id).await?;
+    if let Err(msg) = validate_caps_against_types(&req.capabilities, &known_caps) {
+        return Err(ApiError::bad_request(msg));
+    }
 
     // 5. Mint the runner credential + insert the row. workspace_id + pool flow
     //    from the (re-read) registration token; enrolled_by = its created_by.
@@ -608,4 +622,12 @@ pub async fn revoke_registration_token(
 //   TODO: enroll with revoked/expired/exhausted reg token → 403.
 //   TODO: heartbeat with a foreign runner's token → 401.
 //   TODO: list/get/revoke workspace-scoping (cross-workspace 404).
+// Phase 4 enroll-time capability typing (needs a live DB + a seeded reg token):
+//   TODO: define a capability_type (e.g. `xrd` {max_2theta: number, source: text})
+//         then enroll with `{"xrd":{"max_2theta":180.0,"source":"synchrotron"}}` → 201.
+//   TODO: enroll referencing an UNDEFINED capability (e.g. `{"foo":{}}` in a
+//         workspace with no `foo` type) → 400, and assert the reg-token use was
+//         NOT consumed (the open tx rolls back on the validation early-return).
+//   TODO: enroll with `{}` (no caps) → 201 regardless of the registry.
 // Pure token mint/parse/verify unit tests live in `models::runner::tests`.
+// Pure `validate_caps_against_types` unit tests live in `models::capability`.

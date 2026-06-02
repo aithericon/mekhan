@@ -155,6 +155,19 @@ pub fn build_presence_pool_net(resource_id: Uuid) -> ScenarioDefinition {
         ctx.transition("t_grant", "Grant Capacity")
             .auto_input("claim", &claim_inbox)
             .auto_input("unit", &pool)
+            // Phase 4 — placement matching. `satisfies(requirements, caps)` is a
+            // custom fn registered in the engine's guard Rhai engine
+            // (`petri-application` `register_satisfies`): it AND-s every
+            // constraint in `claim.requirements.constraints` against the unit's
+            // advertised `unit.caps`, short-circuiting to `true` on empty/absent
+            // constraints (so an unconstrained step matches any runner). A claim
+            // whose requirements no unit satisfies leaves `t_grant` disabled
+            // against that unit and the claim queues (backpressure) until a
+            // satisfying runner checks in. `guard_rhai` (NOT `guard`) is used so
+            // the SDK's build-time `validate_script_inline` — which only knows
+            // input PORT names, not registered fns — doesn't reject `satisfies`
+            // at net-build time. token_pool's `t_grant` stays UNGUARDED.
+            .guard_rhai("satisfies(claim.requirements, unit.caps)")
             .auto_output("grant", &grant_outbox)
             .logic(
                 r#"#{ grant: #{
@@ -552,6 +565,24 @@ mod tests {
         assert!(
             reg_src.contains("grant_id: reg.grant_id") && reg_src.contains("unit_id: reg.unit_id"),
             "t_register hold carries grant_id + unit_id: {reg_src}"
+        );
+    }
+
+    /// Phase 4 — the presence pool's `t_grant` is GUARDED by the placement
+    /// matcher `satisfies(claim.requirements, unit.caps)` so a claim is only
+    /// granted a unit whose advertised caps satisfy the step's requirements.
+    /// (token_pool's `t_grant` is unguarded — asserted in its own net module.)
+    #[test]
+    fn grant_guarded_by_satisfies() {
+        let a = air(Uuid::nil());
+        let g = transition(&a, "t_grant").expect("t_grant");
+        let guard_src = g["guard"]["source"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| g["guard"].to_string());
+        assert!(
+            guard_src.contains("satisfies(claim.requirements, unit.caps)"),
+            "t_grant must be guarded by satisfies(claim.requirements, unit.caps): {guard_src}"
         );
     }
 

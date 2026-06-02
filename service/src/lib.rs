@@ -298,6 +298,20 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::runners::get_runner,
             handlers::runners::revoke_runner
         ))
+        // Capability types (Phase 4 — typed capability registry). Admin-curated,
+        // workspace-scoped vocabulary the enroll path validates runner caps
+        // against and the publish path validates step Requirements against.
+        // List/create on the collection, get/revoke on `{id}`. Create + revoke
+        // are cookie-only (browser admin boundary, same as registration-token
+        // mint) so a machine token can't curate the vocabulary.
+        .routes(routes!(
+            handlers::capabilities::list_capability_types,
+            handlers::capabilities::create_capability_type
+        ))
+        .routes(routes!(
+            handlers::capabilities::get_capability_type,
+            handlers::capabilities::delete_capability_type
+        ))
         // Job templates (Phase 3, B-model) — versioned cluster job-spec entity
         // (flavor-tagged slurm/nomad) + staging join. Mirrors the resources
         // CRUD + versioning pattern but with NO Vault coupling. DB-only.

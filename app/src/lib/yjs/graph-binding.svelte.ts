@@ -223,6 +223,14 @@ export class YjsGraphBinding {
 				// `streamInput` makes the node a streaming reducer (exposes a
 				// "stream" INPUT handle). Same round-trip rationale as streamOutput.
 				const streamInput = config?.streamInput === true;
+				// `requirements` (Phase 4) carries the step's capability-match
+				// constraints. The whole nested object round-trips as one value —
+				// it MUST be read back (and written below) or a template authored
+				// with requirements silently drops them on the next graph mutation
+				// (the Yjs graph-binding drop-class trap).
+				const requirements = config?.requirements as
+					| AutomatedStepNodeData['requirements']
+					| undefined;
 				return {
 					...base,
 					type: 'automated_step',
@@ -231,7 +239,8 @@ export class YjsGraphBinding {
 					retryPolicy,
 					...(deploymentModel ? { deploymentModel } : {}),
 					...(streamOutput ? { streamOutput } : {}),
-					...(streamInput ? { streamInput } : {})
+					...(streamInput ? { streamInput } : {}),
+					...(requirements ? { requirements } : {})
 				};
 			}
 			case 'decision':
@@ -791,6 +800,13 @@ export class YjsGraphBinding {
 				// the backend's `streamOutput` Y.Map key) so clearing it persists.
 				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
 				config.set('streamInput', (data as AutomatedStepNodeData).streamInput ?? false);
+				// `requirements` (Phase 4) round-trips whole, conditionally (mirrors
+				// `output`): persist when the step carries capability constraints so
+				// collaborative edits don't drop them on publish.
+				{
+					const reqs = (data as AutomatedStepNodeData).requirements;
+					if (reqs) config.set('requirements', reqs);
+				}
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);

@@ -178,6 +178,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // prototype streaming side-channel.
             stream_output: false,
             stream_input: false,
+            requirements: None,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,

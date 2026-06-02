@@ -1,5 +1,6 @@
 pub mod auth_tokens;
 pub mod backends;
+pub mod capabilities;
 pub mod cloud_layer_proxy;
 pub mod clusters;
 pub mod demos;

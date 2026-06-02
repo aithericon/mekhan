@@ -168,6 +168,42 @@ impl<'a> PublishService<'a> {
         let known_resources =
             discover_known_resources(self.state, &compiled_graph, files, workspace_id).await?;
 
+        // Phase 4 — validate every AutomatedStep's placement Requirements
+        // against the workspace capability registry. Loaded via the SAME
+        // `load_known_capabilities` the enroll path uses (single source — the
+        // producer/consumer of caps can't drift), alongside
+        // `discover_known_resources` so both DB-backed validations bracket the
+        // pure `compile_to_air` (which has no DB handle). HARD violations
+        // (undefined capability / unknown field / op-type mismatch) collapse
+        // into a single `ApiError::compile` carrying every offending node's
+        // `to_view()` so the editor highlights each bad step.
+        let known_capabilities =
+            crate::models::capability::load_known_capabilities(&self.state.db, workspace_id)
+                .await?;
+        let req_errors = crate::models::capability::validate_requirements_against_registry(
+            &compiled_graph,
+            &known_capabilities,
+        );
+        if !req_errors.is_empty() {
+            let summary = req_errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let views: Vec<_> = req_errors.iter().map(|e| e.to_view()).collect();
+            return Err(ApiError::compile(
+                format!("requirement validation failed: {summary}"),
+                views,
+            ));
+        }
+
+        // Empty-fleet WARNING (non-blocking, best-effort): if a step declares
+        // requirements but NO currently-enrolled runner in the workspace
+        // advertises caps that satisfy them, the step will queue indefinitely at
+        // claim time. We log a warning (a publish must not hard-fail on transient
+        // fleet state — a satisfying runner may enroll later), and never error.
+        warn_on_empty_fleet(self.state, &compiled_graph, workspace_id).await;
+
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
         // planner gets the inline source map directly via the `_inline`
@@ -306,6 +342,64 @@ impl<'a> PublishService<'a> {
             return 0;
         }
         self.state.triggers.register_template(template, true).await
+    }
+}
+
+/// Phase 4 — best-effort empty-fleet WARNING. For each `AutomatedStep` that
+/// declares non-empty placement Requirements, check whether ANY currently-live
+/// (non-revoked) runner in the workspace advertises caps that satisfy them
+/// (using the pure Rust mirror of the engine `satisfies` matcher). If none does,
+/// log a warning — the step will queue at claim time until a satisfying runner
+/// enrolls. NEVER hard-fails (a publish must not depend on transient fleet
+/// state); a DB hiccup is swallowed with a debug log. This is the only
+/// "diagnostics" channel for the warning — we deliberately do NOT invent a new
+/// surface (see Phase-4 task §5 empty-fleet).
+async fn warn_on_empty_fleet(state: &AppState, graph: &WorkflowGraph, workspace_id: Uuid) {
+    // Collect the steps that carry constraints first — skip the runner query
+    // entirely when there's nothing to check.
+    let constrained: Vec<(&str, &crate::models::template::Requirements)> = graph
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.data {
+            WorkflowNodeData::AutomatedStep {
+                requirements: Some(reqs),
+                ..
+            } if !reqs.constraints.is_empty() => Some((n.id.as_str(), reqs)),
+            _ => None,
+        })
+        .collect();
+    if constrained.is_empty() {
+        return;
+    }
+
+    // Live runners' advertised caps in this workspace.
+    let caps_rows = match sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT capabilities FROM runners WHERE workspace_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::debug!(%e, "empty-fleet warning: runner caps query failed — skipping warning");
+            return;
+        }
+    };
+
+    for (node_id, reqs) in constrained {
+        let any_satisfies = caps_rows.iter().any(|caps| {
+            crate::models::capability::caps_satisfy_constraints(&reqs.constraints, caps)
+        });
+        if !any_satisfies {
+            tracing::warn!(
+                node_id,
+                workspace_id = %workspace_id,
+                runner_count = caps_rows.len(),
+                "publish: step requirements are satisfied by NO currently-enrolled runner — \
+                 instances will queue at claim time until a matching runner checks in"
+            );
+        }
     }
 }
 

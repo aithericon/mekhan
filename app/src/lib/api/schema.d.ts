@@ -168,6 +168,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/capability-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/capability-types` — paginated, workspace-scoped (live only). */
+        get: operations["list_capability_types"];
+        put?: never;
+        /**
+         * `POST /api/v1/capability-types` — mint a capability type. Cookie-only
+         *     (browser admin boundary, same as `runners::create_registration_token`).
+         */
+        post: operations["create_capability_type"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/capability-types/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/capability-types/{id}` — admin detail (workspace-scoped). */
+        get: operations["get_capability_type"];
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/capability-types/{id}` — revoke (soft delete: set
+         *     `revoked_at`). Cookie-only, mirroring the create boundary.
+         */
+        delete: operations["delete_capability_type"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalogue": {
         parameters: {
             query?: never;
@@ -2853,6 +2895,39 @@ export interface components {
          * @enum {string}
          */
         CalloutSeverity: "info" | "warning" | "error" | "success";
+        /**
+         * @description One typed field on a capability. `kind` reuses the platform's unified
+         *     [`FieldKind`] vocabulary (the SAME enum the compiler/port model use) — do
+         *     not invent a parallel enum here. `options` carries the enum members when
+         *     `kind == FieldKind::Select`.
+         */
+        CapabilityField: {
+            kind: components["schemas"]["FieldKind"];
+            name: string;
+            /** @description Enum members for `Select`-kind fields. Ignored for other kinds. */
+            options?: string[] | null;
+            required?: boolean;
+        };
+        /** @description Detail view returned by `GET /api/v1/capability-types/{id}`. */
+        CapabilityTypeDetail: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            fields: components["schemas"]["CapabilityField"][];
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        /** @description Compact list-row shape. Returned by `GET /api/v1/capability-types`. */
+        CapabilityTypeSummary: {
+            /** Format: date-time */
+            created_at: string;
+            fields: components["schemas"]["CapabilityField"][];
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
         CatalogTrigger: {
             /**
              * @description If true, the dispatcher walks existing catalogue entries matching the
@@ -3136,6 +3211,26 @@ export interface components {
             };
         };
         /**
+         * @description One placement constraint over a `<capability>.<field>` of a runner's
+         *     advertised caps. `op == Exists` ignores `value`; every other op compares the
+         *     present `caps[capability][field]` against `value` per [`ConstraintOp`].
+         */
+        Constraint: {
+            /** @description Capability name — must be a defined `capability_type` in the workspace. */
+            capability: string;
+            /** @description Field within that capability's typed schema. */
+            field: string;
+            op: components["schemas"]["ConstraintOp"];
+            /** @description Comparison operand. Ignored when `op == Exists`. Defaults to `null`. */
+            value?: unknown;
+        };
+        /**
+         * @description Comparison operator for a [`Constraint`]. Wire values are lowercase so they
+         *     match the engine `satisfies` matcher's op strings exactly.
+         * @enum {string}
+         */
+        ConstraintOp: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "exists";
+        /**
          * @description Context-window management strategy for an [`WorkflowNodeData::Agent`].
          *     Inert in PR 1's degenerate path; declared upfront so the type stays
          *     stable across the follow-up loop-lowering PR (`docs/12` § 3).
@@ -3149,6 +3244,13 @@ export interface components {
             destination_storage?: null | components["schemas"]["StorageConfig"];
             source: string;
             source_storage: components["schemas"]["StorageConfig"];
+        };
+        /** @description Request body for `POST /api/v1/capability-types`. */
+        CreateCapabilityTypeRequest: {
+            /** @description Typed field list. */
+            fields?: components["schemas"]["CapabilityField"][];
+            /** @description Capability name, unique within the workspace. */
+            name: string;
         };
         CreateInstanceRequest: {
             /**
@@ -4462,6 +4564,22 @@ export interface components {
          * @enum {string}
          */
         OutputAuthoring: "free" | "fixed" | "derived";
+        PaginatedResponse_CapabilityTypeSummary: {
+            items: {
+                /** Format: date-time */
+                created_at: string;
+                fields: components["schemas"]["CapabilityField"][];
+                /** Format: uuid */
+                id: string;
+                name: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
         PaginatedResponse_InstanceListItem: {
             items: {
                 /** Format: date-time */
@@ -5136,6 +5254,16 @@ export interface components {
             reusable: boolean;
             /** Format: int32 */
             uses: number;
+        };
+        /**
+         * @description Phase 4 — placement Requirements authored on a PRESENCE-pooled
+         *     `AutomatedStep`. A set of typed [`Constraint`]s over the runner-advertised
+         *     `caps`. Empty `constraints` (the default) matches any pool unit. The engine
+         *     matcher (`satisfies(requirements, caps)`) AND-s every constraint.
+         */
+        Requirements: {
+            /** @description AND-ed constraints. Empty ⇒ matches anything. */
+            constraints?: components["schemas"]["Constraint"][];
         };
         ResolveEmailRequest: {
             email: string;
@@ -6676,6 +6804,7 @@ export interface components {
              *     caller needs the canonical backend shape.
              */
             output?: components["schemas"]["Port"];
+            requirements?: null | components["schemas"]["Requirements"];
             /**
              * @description Retry behaviour on execution failure/timeout. Defaults to 3
              *     immediate retries (the historical hardcoded value), so existing
@@ -7421,6 +7550,151 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_capability_types: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated list of capability types */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_CapabilityTypeSummary"];
+                };
+            };
+        };
+    };
+    create_capability_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCapabilityTypeRequest"];
+            };
+        };
+        responses: {
+            /** @description Capability type created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityTypeSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already exists in workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_capability_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Capability type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capability type detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityTypeDetail"];
+                };
+            };
+            /** @description Capability type not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_capability_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Capability type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capability type revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Capability type not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };

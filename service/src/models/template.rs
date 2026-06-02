@@ -342,6 +342,22 @@ pub enum WorkflowNodeData {
         /// `#[serde(default)]` ⇒ existing templates round-trip unchanged.
         #[serde(rename = "streamInput", default)]
         stream_input: bool,
+        /// Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of
+        /// typed [`Constraint`]s over the pool unit's advertised `caps` (the
+        /// `runners.capabilities` blob keyed by capability name). At claim time
+        /// the compiler injects these into the claim payload as a Rhai literal
+        /// and the presence pool's `t_grant` guard
+        /// (`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner
+        /// whose caps satisfy every constraint. `None` (the default) ⇒ no
+        /// placement constraint (matches any unit) and the claim carries an
+        /// empty `#{ constraints: [] }`. Ignored on token_pool / Scheduled /
+        /// inline deployments (the claim there is unchanged; publish-time
+        /// validation still checks the constraint shapes). Plain
+        /// `#[serde(default, skip_serializing_if)]` ⇒ existing templates
+        /// round-trip unchanged (same precedent as `retry_policy` /
+        /// `deployment_model`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requirements: Option<Requirements>,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -1791,6 +1807,47 @@ impl FieldKind {
     }
 }
 
+/// Phase 4 — placement Requirements authored on a PRESENCE-pooled
+/// `AutomatedStep`. A set of typed [`Constraint`]s over the runner-advertised
+/// `caps`. Empty `constraints` (the default) matches any pool unit. The engine
+/// matcher (`satisfies(requirements, caps)`) AND-s every constraint.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Requirements {
+    /// AND-ed constraints. Empty ⇒ matches anything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<Constraint>,
+}
+
+/// One placement constraint over a `<capability>.<field>` of a runner's
+/// advertised caps. `op == Exists` ignores `value`; every other op compares the
+/// present `caps[capability][field]` against `value` per [`ConstraintOp`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Constraint {
+    /// Capability name — must be a defined `capability_type` in the workspace.
+    pub capability: String,
+    /// Field within that capability's typed schema.
+    pub field: String,
+    pub op: ConstraintOp,
+    /// Comparison operand. Ignored when `op == Exists`. Defaults to `null`.
+    #[serde(default)]
+    pub value: serde_json::Value,
+}
+
+/// Comparison operator for a [`Constraint`]. Wire values are lowercase so they
+/// match the engine `satisfies` matcher's op strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ConstraintOp {
+    Eq,
+    Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    In,
+    Exists,
+}
+
 /// A single field within a typed `Port`. Identifier-like `name` is the wire
 /// key in the token; `label` is for display.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -2913,6 +2970,7 @@ pub mod dsl {
                         stream_output: false,
                         // DSL does not model streaming input (reducer flag).
                         stream_input: false,
+                        requirements: None,
                     })
                 }
                 "decision" => {

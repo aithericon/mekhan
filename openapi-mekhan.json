@@ -368,6 +368,193 @@
         }
       }
     },
+    "/api/v1/capability-types": {
+      "get": {
+        "tags": [
+          "capability-types"
+        ],
+        "summary": "`GET /api/v1/capability-types` — paginated, workspace-scoped (live only).",
+        "operationId": "list_capability_types",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of capability types",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_CapabilityTypeSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "capability-types"
+        ],
+        "summary": "`POST /api/v1/capability-types` — mint a capability type. Cookie-only\n(browser admin boundary, same as `runners::create_registration_token`).",
+        "operationId": "create_capability_type",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCapabilityTypeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Capability type created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityTypeSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already exists in workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capability-types/{id}": {
+      "get": {
+        "tags": [
+          "capability-types"
+        ],
+        "summary": "`GET /api/v1/capability-types/{id}` — admin detail (workspace-scoped).",
+        "operationId": "get_capability_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capability type id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capability type detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityTypeDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capability type not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "capability-types"
+        ],
+        "summary": "`DELETE /api/v1/capability-types/{id}` — revoke (soft delete: set\n`revoked_at`). Cookie-only, mirroring the create boundary.",
+        "operationId": "delete_capability_type",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capability type id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Capability type revoked"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capability type not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/catalogue": {
       "get": {
         "tags": [
@@ -7936,6 +8123,98 @@
           "success"
         ]
       },
+      "CapabilityField": {
+        "type": "object",
+        "description": "One typed field on a capability. `kind` reuses the platform's unified\n[`FieldKind`] vocabulary (the SAME enum the compiler/port model use) — do\nnot invent a parallel enum here. `options` carries the enum members when\n`kind == FieldKind::Select`.",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FieldKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Enum members for `Select`-kind fields. Ignored for other kinds."
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CapabilityTypeDetail": {
+        "type": "object",
+        "description": "Detail view returned by `GET /api/v1/capability-types/{id}`.",
+        "required": [
+          "id",
+          "name",
+          "fields",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityField"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CapabilityTypeSummary": {
+        "type": "object",
+        "description": "Compact list-row shape. Returned by `GET /api/v1/capability-types`.",
+        "required": [
+          "id",
+          "name",
+          "fields",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityField"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "CatalogTrigger": {
         "type": "object",
         "properties": {
@@ -8575,6 +8854,45 @@
           }
         ]
       },
+      "Constraint": {
+        "type": "object",
+        "description": "One placement constraint over a `<capability>.<field>` of a runner's\nadvertised caps. `op == Exists` ignores `value`; every other op compares the\npresent `caps[capability][field]` against `value` per [`ConstraintOp`].",
+        "required": [
+          "capability",
+          "field",
+          "op"
+        ],
+        "properties": {
+          "capability": {
+            "type": "string",
+            "description": "Capability name — must be a defined `capability_type` in the workspace."
+          },
+          "field": {
+            "type": "string",
+            "description": "Field within that capability's typed schema."
+          },
+          "op": {
+            "$ref": "#/components/schemas/ConstraintOp"
+          },
+          "value": {
+            "description": "Comparison operand. Ignored when `op == Exists`. Defaults to `null`."
+          }
+        }
+      },
+      "ConstraintOp": {
+        "type": "string",
+        "description": "Comparison operator for a [`Constraint`]. Wire values are lowercase so they\nmatch the engine `satisfies` matcher's op strings exactly.",
+        "enum": [
+          "eq",
+          "neq",
+          "gt",
+          "gte",
+          "lt",
+          "lte",
+          "in",
+          "exists"
+        ]
+      },
       "ContextStrategy": {
         "type": "string",
         "description": "Context-window management strategy for an [`WorkflowNodeData::Agent`].\nInert in PR 1's degenerate path; declared upfront so the type stays\nstable across the follow-up loop-lowering PR (`docs/12` § 3).",
@@ -8630,6 +8948,26 @@
           },
           "source_storage": {
             "$ref": "#/components/schemas/StorageConfig"
+          }
+        }
+      },
+      "CreateCapabilityTypeRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/capability-types`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityField"
+            },
+            "description": "Typed field list."
+          },
+          "name": {
+            "type": "string",
+            "description": "Capability name, unique within the workspace."
           }
         }
       },
@@ -11811,6 +12149,61 @@
           "derived"
         ]
       },
+      "PaginatedResponse_CapabilityTypeSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row shape. Returned by `GET /api/v1/capability-types`.",
+              "required": [
+                "id",
+                "name",
+                "fields",
+                "created_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CapabilityField"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "PaginatedResponse_InstanceListItem": {
         "type": "object",
         "required": [
@@ -13437,6 +13830,19 @@
           "uses": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "Requirements": {
+        "type": "object",
+        "description": "Phase 4 — placement Requirements authored on a PRESENCE-pooled\n`AutomatedStep`. A set of typed [`Constraint`]s over the runner-advertised\n`caps`. Empty `constraints` (the default) matches any pool unit. The engine\nmatcher (`satisfies(requirements, caps)`) AND-s every constraint.",
+        "properties": {
+          "constraints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Constraint"
+            },
+            "description": "AND-ed constraints. Empty ⇒ matches anything."
           }
         }
       },
@@ -16559,6 +16965,17 @@
                 "$ref": "#/components/schemas/Port",
                 "description": "Declared output shape. Persisted as-is once authored; the bare\ndefault has no fields and should be re-derived from\n`execution_spec.backend_type` via `default_output_port` whenever a\ncaller needs the canonical backend shape."
               },
+              "requirements": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Requirements",
+                    "description": "Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of\ntyped [`Constraint`]s over the pool unit's advertised `caps` (the\n`runners.capabilities` blob keyed by capability name). At claim time\nthe compiler injects these into the claim payload as a Rhai literal\nand the presence pool's `t_grant` guard\n(`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner\nwhose caps satisfy every constraint. `None` (the default) ⇒ no\nplacement constraint (matches any unit) and the claim carries an\nempty `#{ constraints: [] }`. Ignored on token_pool / Scheduled /\ninline deployments (the claim there is unchanged; publish-time\nvalidation still checks the constraint shapes). Plain\n`#[serde(default, skip_serializing_if)]` ⇒ existing templates\nround-trip unchanged (same precedent as `retry_policy` /\n`deployment_model`)."
+                  }
+                ]
+              },
               "retryPolicy": {
                 "$ref": "#/components/schemas/RetryPolicy",
                 "description": "Retry behaviour on execution failure/timeout. Defaults to 3\nimmediate retries (the historical hardcoded value), so existing\ntemplates keep their prior semantics without re-authoring."
@@ -17485,6 +17902,10 @@
     {
       "name": "runners",
       "description": "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."
+    },
+    {
+      "name": "capability-types",
+      "description": "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."
     }
   ]
 }

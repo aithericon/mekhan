@@ -266,6 +266,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                requirements: None,
             },
             parent_id: None,
             width: None,

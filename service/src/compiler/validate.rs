@@ -1380,6 +1380,7 @@ mod tests {
                 deployment_model: DeploymentModel::default(),
                 stream_output: false,
                 stream_input: false,
+                requirements: None,
             },
             parent_id: None,
             width: None,

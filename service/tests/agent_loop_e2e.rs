@@ -165,6 +165,7 @@ fn tool_child(id: &str, _agent_id: &str, tool_name: &str) -> WorkflowNode {
             deployment_model: DeploymentModel::default(),
             stream_output: false,
             stream_input: false,
+            requirements: None,
         },
         parent_id: None,
         width: None,

@@ -880,6 +880,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         execution_spec,
         retry_policy,
         output,
+        requirements,
         ..
     } = &cx.node.data
     else {
@@ -888,6 +889,20 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     let label = label.clone();
     let retry_policy = *retry_policy;
     let backend_type = execution_spec.backend_type;
+    // Capture the authored placement Requirements as a Rhai literal NOW, while we
+    // still hold `&cx.node.data` (the `&mut *cx.ctx` reborrow below ends this
+    // borrow). Serialized to JSON then lowered to a Rhai map so the presence
+    // pool's `t_grant` guard `satisfies(claim.requirements, unit.caps)` can read
+    // `requirements.constraints`. `None` (or an empty set) ⇒ `#{ constraints: [] }`
+    // (matches anything — the guard short-circuits to true). Gated on
+    // `is_presence` at the claim-payload site so token_pool / Scheduled AIR stays
+    // byte-identical (no `requirements` key in their claim).
+    let requirements_rhai = match requirements {
+        Some(req) if !req.constraints.is_empty() => {
+            json_to_rhai_literal(&serde_json::to_value(req).unwrap_or_default())
+        }
+        _ => "#{ constraints: [] }".to_string(),
+    };
 
     // Same config offload + staged inputs + declared outputs as the inline
     // path (`lower_automated_step`) — keep the job-spec Rhai byte-for-byte
@@ -1091,10 +1106,25 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // ── ClaimRequest payload: `grant_id` + the validated `request` params (the
     // kind's claim-schema shape; `()` when omitted) so the backing net's
     // `t_grant` can size/shape the grant.
-    let claim_payload = format!(
-        "#{{ grant_id: gid, request: {} }}",
-        pool_binding.request_rhai
-    );
+    //
+    // PRESENCE pools ONLY additionally carry the step's placement `requirements`
+    // so the presence pool's guarded `t_grant`
+    // (`satisfies(claim.requirements, unit.caps)`) can admit only a runner whose
+    // advertised caps satisfy every constraint. token_pool (static `Tokens`)
+    // claims get NO `requirements` field — their `t_grant` is UNGUARDED — so
+    // their claim AIR stays byte-identical to pre-Phase-4. This is the sole
+    // claim-payload divergence between the two backends.
+    let claim_payload = if is_presence {
+        format!(
+            "#{{ grant_id: gid, request: {}, requirements: {} }}",
+            pool_binding.request_rhai, requirements_rhai
+        )
+    } else {
+        format!(
+            "#{{ grant_id: gid, request: {} }}",
+            pool_binding.request_rhai
+        )
+    };
     // ── t_claim: mint grant_id, emit ClaimRequest, park {input, grant_id} ───
     ctx.transition(format!("t_{id}_claim"), format!("{label} - Claim"))
         .auto_input("input", &p_input)

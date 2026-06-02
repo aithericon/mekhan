@@ -78,6 +78,23 @@ use utoipa::OpenApi;
             crate::models::runner::CreateRegistrationTokenRequest,
             crate::models::runner::CreatedRegistrationToken,
             crate::models::runner::RegistrationTokenSummary,
+            // Phase 4 (typed capability registry) — capability type DTOs +
+            // the CapabilityField sub-shape. The list/detail bodies refer to
+            // these via PaginatedResponse<_> / nested Vec<_>, which utoipa's
+            // auto-discovery doesn't fully walk, so register them explicitly
+            // for frontend codegen.
+            crate::models::capability::CapabilityField,
+            crate::models::capability::CapabilityTypeSummary,
+            crate::models::capability::CapabilityTypeDetail,
+            crate::models::capability::CreateCapabilityTypeRequest,
+            // Phase 4 (placement requirements) — the AutomatedStep `requirements`
+            // sub-shape. Nested inside WorkflowNodeData::AutomatedStep (carried
+            // over Yjs, not a direct request body), so register explicitly so
+            // frontend codegen emits the matching TS types for the editor's
+            // requirements authoring panel + the typed claim payload.
+            crate::models::template::Requirements,
+            crate::models::template::Constraint,
+            crate::models::template::ConstraintOp,
             // Executor backend config DTOs — the JSON shape each AutomatedStep
             // backend's `spec.config` carries. Registered so the SPA's generic
             // schema-driven config form can read them off the OpenAPI document
@@ -164,6 +181,7 @@ use utoipa::OpenApi;
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),
         (name = "clusters", description = "Multi-cluster scheduling control plane — live datacenter cluster clients (connection health, watcher state, active leases) + force-reconnect / drain (read-through of the engine `ClusterRegistry`)."),
         (name = "runners", description = "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."),
+        (name = "capability-types", description = "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."),
     ),
 )]
 pub struct ApiDoc;
