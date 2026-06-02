@@ -150,9 +150,33 @@ config blocks). Fields: `enabled`, `memory_limit_mb`, `cpu_ms_per_sec`,
 ### `executor-service/src/main.rs`
 
 Where backends are constructed (`~:566-577`): if `config.sandbox.enabled`,
-build a `SandboxConfig`, call `.validate()?` (fail-closed at startup — exits
-non-zero if nsjail missing or non-Linux), and thread it via `.with_sandbox(cfg)`
-into `ProcessBackend` and `PythonBackend`.
+build a `SandboxConfig`, call `.validate()?` (fail-closed at startup), and thread
+it via `.with_sandbox(cfg)` into `ProcessBackend` and `PythonBackend`.
+
+### `validate()` is a real nsjail self-test, not just a `--help` probe
+
+The executor almost always runs **inside a Docker container**, and a
+default-profile container (restricted seccomp, no `CAP_SYS_ADMIN`, private
+cgroupns) can *find* nsjail on PATH but **cannot create the namespaces/cgroups**
+a real job needs. A `--help`-only check would pass startup and then fail every
+job. So `validate()` additionally runs a representative ONCE-mode jail around
+`/bin/true` (`self_test`/`self_test_args`: new namespaces + uid drop + coarse
+mounts + the cgroup flags real jobs use) and requires a clean exit; otherwise it
+aborts startup with nsjail's stderr. Verified live: privileged container →
+`exit 0`; default container → `mount('/proc') … Operation not permitted`,
+non-zero → boot refused.
+
+### Deployment requirement (containerized executor)
+
+When the sandbox is enabled, the executor's container must grant nsjail what it
+needs to nest namespaces + cgroups:
+`--cap-add=SYS_ADMIN` (or `--privileged`), `--cgroupns=host`, and a relaxed
+seccomp profile (`--security-opt seccomp=unconfined`). In the Nomad docker
+driver that is `cap_add`/`cgroupns_mode`/`security_opt` in the task `config`;
+today `deploy/dev/executor.nomad.hcl.tpl` sets none of these, so enabling the
+sandbox there requires adding them (gated on the sandbox toggle). The self-test
+above turns a missing grant into a clear boot-time failure rather than silent
+per-job failures.
 
 ## Backend coverage — nsjail is not uniform
 

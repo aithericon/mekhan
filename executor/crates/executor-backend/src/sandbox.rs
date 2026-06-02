@@ -94,11 +94,12 @@ impl SandboxConfig {
             )));
         }
 
-        // Probe that the binary is resolvable AND behaves like nsjail. `--help`
-        // exits fast and touches nothing. We reject three fail-closed cases: a
-        // spawn failure (not found / not executable), and a present-but-wrong
-        // binary whose `--help` neither succeeds nor mentions nsjail in its
-        // usage output (a stub named `nsjail` must not pass).
+        // Fast pre-check: the binary is resolvable AND behaves like nsjail.
+        // `--help` exits fast and touches nothing. Rejects a spawn failure (not
+        // found / not executable) and a present-but-wrong binary whose `--help`
+        // neither succeeds nor mentions nsjail (a stub named `nsjail` must not
+        // pass) — this gives a clear "not nsjail" message before the heavier
+        // self-test below.
         match Command::new(&self.nsjail_bin).arg("--help").output() {
             Ok(out) => {
                 let looks_like_nsjail = out.status.success()
@@ -108,21 +109,119 @@ impl SandboxConfig {
                     || String::from_utf8_lossy(&out.stdout)
                         .to_lowercase()
                         .contains("nsjail");
-                if looks_like_nsjail {
-                    Ok(())
-                } else {
-                    Err(ExecutorError::Config(format!(
+                if !looks_like_nsjail {
+                    return Err(ExecutorError::Config(format!(
                         "sandbox enabled but {:?} on PATH does not behave like nsjail \
                          (--help produced no nsjail usage output)",
                         self.nsjail_bin
-                    )))
+                    )));
                 }
             }
-            Err(e) => Err(ExecutorError::Config(format!(
-                "sandbox enabled but the nsjail binary {:?} is not runnable on PATH: {e}",
-                self.nsjail_bin
-            ))),
+            Err(e) => {
+                return Err(ExecutorError::Config(format!(
+                    "sandbox enabled but the nsjail binary {:?} is not runnable on PATH: {e}",
+                    self.nsjail_bin
+                )));
+            }
         }
+
+        // The real gate: prove this *environment* actually grants nsjail what it
+        // needs to isolate a job. `--help` is not enough — the executor almost
+        // always runs inside a Docker container, and a default-profile container
+        // (restricted seccomp, no CAP_SYS_ADMIN, private cgroupns) passes the
+        // `--help` probe but cannot create the user/pid/mount/net/cgroup
+        // namespaces a real job requires. Without this self-test the executor
+        // would boot and then fail *every* sandboxed job at spawn. Run a
+        // representative ONCE-mode jail around a trivial `true` and require a
+        // clean exit; fail-closed (abort startup) otherwise.
+        self.self_test()
+    }
+
+    /// Spawn a representative ONCE-mode nsjail around `/bin/true` and require a
+    /// clean exit — see [`Self::validate`]. Exercises the privilege-sensitive
+    /// subset of a real job: new namespaces + the uid drop + coarse mounts (so
+    /// the command resolves) + the cgroup flags real jobs would use. Fail-closed:
+    /// a spawn failure or non-zero exit returns the nsjail diagnostics so the
+    /// operator can see *why* (missing CAP_SYS_ADMIN, cgroupns, seccomp, …).
+    fn self_test(&self) -> Result<(), ExecutorError> {
+        let true_bin = TRUE_CANDIDATES
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .ok_or_else(|| {
+                ExecutorError::Config(
+                    "sandbox self-test: no `true` binary found (looked for /bin/true, \
+                     /usr/bin/true) to probe with"
+                        .into(),
+                )
+            })?;
+
+        let args = self.self_test_args(true_bin);
+        let output = Command::new(&self.nsjail_bin)
+            .args(&args)
+            .output()
+            .map_err(|e| {
+                ExecutorError::Config(format!(
+                    "sandbox self-test: failed to spawn nsjail {:?}: {e}",
+                    self.nsjail_bin
+                ))
+            })?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(ExecutorError::Config(format!(
+                "sandbox self-test FAILED — nsjail could not run a trivial command in this \
+                 environment (exit {:?}). The executor (almost always containerized) likely \
+                 lacks the privileges nsjail needs: run the container with CAP_SYS_ADMIN (or \
+                 privileged), cgroupns=host, and a relaxed seccomp profile. nsjail stderr:\n{}",
+                output.status.code(),
+                stderr.trim()
+            )))
+        }
+    }
+
+    /// Build the argv for the startup self-test: the privilege-sensitive subset
+    /// of a real job invocation (namespaces + uid drop + coarse mounts so the
+    /// command resolves; cgroup flags only when resource caps are configured, so
+    /// the test mirrors what real jobs will exercise), running `true_bin`.
+    fn self_test_args(&self, true_bin: &str) -> Vec<String> {
+        let mut argv: Vec<String> = vec![
+            "-Mo".into(),
+            "--really_quiet".into(),
+            "--log_fd".into(),
+            "2".into(),
+            "--user".into(),
+            self.sandbox_uid.to_string(),
+            "--group".into(),
+            self.sandbox_uid.to_string(),
+            "--cwd".into(),
+            "/".into(),
+            "--tmpfsmount".into(),
+            "/tmp".into(),
+        ];
+        argv.extend(coarse_ro_binds(|p| std::path::Path::new(p).exists()));
+
+        // Mirror the real netns behaviour so the self-test matches what jobs do.
+        if self.allow_network {
+            argv.push("--disable_clone_newnet".into());
+        }
+
+        // Exercise cgroup creation/write perms only if real jobs would (caps set).
+        let any_cgroup_cap =
+            self.memory_limit.is_some() || self.pids_max.is_some() || self.cpu_ms_per_sec.is_some();
+        if any_cgroup_cap {
+            if needs_cgroupv2_flag(true, |p| std::path::Path::new(p).exists()) {
+                argv.push("--use_cgroupv2".into());
+            }
+            // A token cap is enough to force nsjail to create + write the cgroup.
+            argv.push("--cgroup_pids_max".into());
+            argv.push("100".into());
+        }
+
+        argv.push("--".into());
+        argv.push(true_bin.into());
+        argv
     }
 
     /// Build the full nsjail argv for one job.
@@ -302,6 +401,10 @@ impl SandboxConfig {
     }
 }
 
+/// Candidate `true` binaries for the startup self-test, in preference order.
+/// Both are coreutils' `true`; usrmerge hosts have only `/usr/bin/true`.
+const TRUE_CANDIDATES: &[&str] = &["/bin/true", "/usr/bin/true"];
+
 /// Candidate coarse system dirs bound read-only when no nix closure is present.
 /// Which ones exist is distro/arch-dependent (`/lib64` is x86_64-only), so the
 /// builder filters by existence — see [`coarse_ro_binds`].
@@ -456,6 +559,36 @@ mod tests {
             !arm.iter().any(|a| a == "/lib64:/lib64"),
             "missing /lib64 must be skipped"
         );
+    }
+
+    #[test]
+    fn self_test_args_shape() {
+        // No caps → namespaces + uid drop + command after --, no cgroup flags.
+        let cfg = base_config();
+        let argv = cfg.self_test_args("/bin/true");
+        assert!(contains(&argv, "-Mo"));
+        let sep = pos(&argv, "--").expect("must have -- separator");
+        assert_eq!(argv[sep + 1], "/bin/true", "true binary must follow --");
+        // uid drop present (base_config uses sandbox_uid 65534)
+        assert!(contains(&argv, "--user") && argv.iter().any(|a| a == "65534"));
+        // no cgroup flags when no caps configured
+        assert!(!contains(&argv, "--cgroup_pids_max"));
+        // deny-network default → no --disable_clone_newnet
+        assert!(!contains(&argv, "--disable_clone_newnet"));
+
+        // With a cap → a token cgroup cap is exercised.
+        let mut capped = base_config();
+        capped.memory_limit = Some(64 * 1024 * 1024);
+        let argv2 = capped.self_test_args("/usr/bin/true");
+        assert!(
+            contains(&argv2, "--cgroup_pids_max"),
+            "a configured cap must make the self-test exercise cgroup perms"
+        );
+
+        // allow_network → self-test mirrors the shared-netns behaviour.
+        let mut net = base_config();
+        net.allow_network = true;
+        assert!(contains(&net.self_test_args("/bin/true"), "--disable_clone_newnet"));
     }
 
     #[test]
