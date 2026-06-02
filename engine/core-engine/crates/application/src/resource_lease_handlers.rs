@@ -40,6 +40,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::effect::{EffectError, EffectHandler, EffectInput, EffectOutput};
@@ -53,6 +54,99 @@ pub enum AllocatorError {
     Status { status: u16, body: String },
     #[error("allocator response was not valid lease JSON: {0}")]
     BadResponse(String),
+}
+
+// ---------------------------------------------------------------------------
+// Stage-template wire types (Phase 4 control plane)
+// ---------------------------------------------------------------------------
+//
+// These mirror the PINNED wire contract mekhan is built against. They live here
+// (next to the `AllocatorClient` trait) so the trait's `stage_template_with_connection`
+// can reference `StageTemplateArgs` and the per-flavor allocator legs in petri-api
+// can share them. The serde structs deserialize the `request` input token; the
+// allocator-facing args (`StageTemplateArgs`) are the parsed, handler-owned view.
+
+/// The typed resource spec on the `request` token's `spec` field. Every field is
+/// optional (`null` allowed) — the renderer fills cluster defaults for absent
+/// fields.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StageSpec {
+    #[serde(default)]
+    pub cpus: Option<i64>,
+    #[serde(default)]
+    pub gpus: Option<i64>,
+    #[serde(default)]
+    pub gpu_type: Option<String>,
+    #[serde(default)]
+    pub mem_mb: Option<i64>,
+    #[serde(default)]
+    pub time_limit: Option<String>,
+    #[serde(default)]
+    pub partition: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+/// Per-flavor raw escape hatch on the `request` token's `escape_hatch` field:
+/// author-supplied raw directives spliced verbatim into the rendered template.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StageEscapeHatch {
+    /// Raw `#SBATCH` directive lines (Slurm), spliced verbatim into the sbatch
+    /// script. One element per directive line — mirrors mekhan's
+    /// `EscapeHatch.sbatch_directives: Vec<String>` authoring model (the pinned
+    /// wire contract). Empty when absent.
+    #[serde(default)]
+    pub sbatch_directives: Vec<String>,
+    /// Raw HCL/JSON stanza (Nomad), merged into the rendered job (v1: advisory).
+    #[serde(default)]
+    pub hcl_stanza: Option<String>,
+}
+
+/// Optional package reference on the `request` token's `package_ref` field. v1
+/// threads it through but treats it as a best-effort no-op (a TODO + log) — no
+/// container/cache subsystem is built here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StagePackageRef {
+    pub catalogue_entry_id: String,
+}
+
+/// The full `request` input token the `stage_template` handler deserializes.
+#[derive(Clone, Debug, Deserialize)]
+pub struct StageRequestToken {
+    pub staging_id: String,
+    pub slug: String,
+    #[serde(default)]
+    pub spec: StageSpec,
+    #[serde(default)]
+    pub escape_hatch: StageEscapeHatch,
+    #[serde(default)]
+    pub package_ref: Option<StagePackageRef>,
+}
+
+/// The parsed, allocator-facing view of a stage request — what the per-flavor
+/// allocator leg renders from. `staging_id` stays on the handler (it rides the
+/// output token, not the rendered template).
+#[derive(Clone, Debug)]
+pub struct StageTemplateArgs {
+    /// The job name to register (Nomad job ID / Slurm script basename).
+    pub slug: String,
+    /// Typed resource requirements.
+    pub spec: StageSpec,
+    /// Per-flavor raw escape hatch.
+    pub escape_hatch: StageEscapeHatch,
+    /// Optional package reference (v1: best-effort no-op).
+    pub package_ref: Option<StagePackageRef>,
+}
+
+/// The successful outcome of a stage: the cluster-assigned `remote_ref` (Nomad
+/// slug, or Slurm remote path).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageOutcome {
+    pub remote_ref: String,
 }
 
 /// Client for a generic HTTP lease allocator. Trait so handlers can be tested
@@ -177,6 +271,27 @@ pub trait AllocatorClient: Send + Sync {
         let token = config.get("token").and_then(|v| v.as_str()).unwrap_or("");
         self.release_with_flavor(flavor, allocator_url, token, alloc_id)
             .await
+    }
+
+    /// Connection-aware stage-template (Phase 4 control plane). Registers a job
+    /// template onto the cluster the `effect_config` resolves to, using the same
+    /// per-fire connection the lease path consumes. Returns the cluster-assigned
+    /// [`StageOutcome`] (`remote_ref`).
+    ///
+    /// Default impl is an UNSUPPORTED error so the generic HTTP leg (and any
+    /// leaf client that doesn't stage) compiles without staging support — only
+    /// the registry-backed adapter (petri-api) and the slurm/nomad legs override
+    /// it. Staging is a register-once operation with no held lease, so there is
+    /// NO active-count bump here (unlike acquire/release).
+    async fn stage_template_with_connection(
+        &self,
+        config: &JsonValue,
+        args: &StageTemplateArgs,
+    ) -> Result<StageOutcome, AllocatorError> {
+        let _ = (config, args);
+        Err(AllocatorError::BadResponse(
+            "stage_template is unsupported on this allocator leg".into(),
+        ))
     }
 }
 

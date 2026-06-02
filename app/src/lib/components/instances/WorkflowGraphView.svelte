@@ -3,6 +3,8 @@
 		getTemplate,
 		listStepExecutions,
 		listInstanceChildren,
+		listAllocations,
+		type AllocationResponse,
 		type InstanceChild,
 		type StepExecution,
 		type Template,
@@ -32,6 +34,7 @@
 	let template = $state<Template | null>(null);
 	let executions = $state<StepExecution[]>([]);
 	let children = $state<InstanceChild[]>([]);
+	let allocations = $state<AllocationResponse[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let drawerStep = $state<StepExecution | null>(null);
@@ -110,6 +113,25 @@
 		drawerNode ? (childrenByNode.get(drawerNode.id) ?? []) : []
 	);
 
+	// `node_id → AllocationResponse[]` — keyed by the grant's `node_id` field
+	// (the LeaseScope container id or the Scheduled AutomatedStep id that held
+	// the grant). Used by the drawer to surface per-node allocation detail.
+	const allocationsByNode = $derived.by(() => {
+		const map = new Map<string, AllocationResponse[]>();
+		for (const a of allocations) {
+			if (!a.node_id) continue;
+			const list = map.get(a.node_id) ?? [];
+			list.push(a);
+			map.set(a.node_id, list);
+		}
+		return map;
+	});
+
+	// Allocations for the node currently shown in the drawer.
+	const drawerAllocations = $derived(
+		drawerNode ? (allocationsByNode.get(drawerNode.id) ?? []) : []
+	);
+
 	const graph = $derived<WorkflowGraph | null>(
 		template?.graph ? (template.graph as WorkflowGraph) : null
 	);
@@ -165,6 +187,14 @@
 		}
 	}
 
+	async function refreshAllocations() {
+		try {
+			allocations = await listAllocations(instance.id);
+		} catch {
+			// Non-fatal: allocation detail just won't appear this tick.
+		}
+	}
+
 	$effect(() => {
 		void instance.id;
 		loading = true;
@@ -185,7 +215,8 @@
 				loadTemplate(),
 				refreshExecutions(),
 				refreshMarking(),
-				refreshChildren()
+				refreshChildren(),
+				refreshAllocations()
 			]);
 			loading = false;
 		})();
@@ -198,6 +229,7 @@
 			void refreshExecutions();
 			void refreshMarking();
 			void refreshChildren();
+			void refreshAllocations();
 		}, 2000);
 		return () => clearInterval(t);
 	});
@@ -313,6 +345,7 @@
 	instanceId={instance.id}
 	childInstances={drawerChildren}
 	leaseRuntime={drawerLease}
+	allocationRows={drawerAllocations}
 	open={drawerOpen}
 	onClose={closeDrawer}
 	onSelectIteration={selectIteration}

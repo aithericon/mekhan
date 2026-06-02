@@ -2,6 +2,7 @@ pub mod asset;
 pub mod auth_token;
 pub mod error;
 pub mod instance;
+pub mod job_template;
 pub mod resource;
 pub mod responses;
 pub mod template;

@@ -317,6 +317,74 @@ impl DatacenterConnection {
 
         cfg
     }
+
+    /// Build a [`DatacenterConnection`] from a datacenter resource's resolved
+    /// `public_config` + identity. `vault_path` is the per-version secret base
+    /// (caller computes via [`crate::handlers::resources::vault_path_for`]).
+    ///
+    /// Returns `None` when the flavor's required connection field is missing
+    /// (caller skips — R1 create/publish validation is the authoritative gate).
+    /// This is the single source of the public-config → connection mapping,
+    /// shared by the resource-create adapter-net deploy
+    /// (`ensure_pool_net_for_kind`) and the B-staging resolver
+    /// (`crate::petri::staging_net::resolve_datacenter_connection`), so the two
+    /// can never drift on secret-ref shape or required-field gates.
+    pub(crate) fn from_public_config(
+        resource_id: Uuid,
+        resource_version: i32,
+        vault_path: &str,
+        public: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<Self> {
+        let scheduler_flavor = public
+            .get("scheduler_flavor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("http")
+            .to_string();
+
+        let secret_ref = |field: &str| format!("{{{{secret:{vault_path}#{field}}}}}");
+        let s = |k: &str| public.get(k).and_then(|v| v.as_str()).map(String::from);
+        let port = |k: &str| {
+            public
+                .get(k)
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u16::try_from(n).ok())
+        };
+
+        let required_present = match scheduler_flavor.as_str() {
+            "slurm" => public.get("ssh_host").and_then(|v| v.as_str()).is_some(),
+            "nomad" => public.get("nomad_addr").and_then(|v| v.as_str()).is_some(),
+            _ => public
+                .get("allocator_url")
+                .and_then(|v| v.as_str())
+                .is_some(),
+        };
+        if !required_present {
+            return None;
+        }
+
+        Some(DatacenterConnection {
+            resource_id,
+            resource_version,
+            scheduler_flavor: scheduler_flavor.clone(),
+
+            allocator_url: s("allocator_url"),
+            token_secret_ref: matches!(scheduler_flavor.as_str(), "http")
+                .then(|| secret_ref("token")),
+
+            ssh_host: s("ssh_host"),
+            ssh_port: port("ssh_port"),
+            ssh_user: s("ssh_user"),
+            ssh_known_hosts: s("ssh_known_hosts"),
+            template_dir: s("template_dir"),
+            ssh_key_secret_ref: (scheduler_flavor == "slurm").then(|| secret_ref("ssh_key")),
+
+            nomad_addr: s("nomad_addr"),
+            nomad_region: s("nomad_region"),
+            nomad_token_secret_ref: (scheduler_flavor == "nomad"
+                && public.contains_key(crate::handlers::resources::NOMAD_TOKEN_SENTINEL))
+            .then(|| secret_ref("nomad_token")),
+        })
+    }
 }
 
 /// Build the AIR `ScenarioDefinition` for a `datacenter` resource's

@@ -16,6 +16,7 @@ use aithericon_executor_domain::{
 
 use aithericon_executor_backend::tail::TailBuffer;
 use aithericon_executor_backend::traits::StatusCallback;
+use aithericon_executor_backend::SandboxConfig;
 
 use crate::{DockerConfig, PullPolicy, CONTAINER_RUN_DIR};
 
@@ -67,12 +68,13 @@ pub async fn run_container(
     max_output_bytes: usize,
     status_cb: &StatusCallback,
     cancel: CancellationToken,
+    sandbox: Option<&SandboxConfig>,
 ) -> Result<ExecutionResult, ExecutorError> {
     let start = tokio::time::Instant::now();
     let timeout = run_context.timeout;
 
     // Build container configuration
-    let body = build_container_body(config, run_context);
+    let body = build_container_body(config, run_context, sandbox);
 
     let container_name = format!("aithericon-{}", run_context.execution_id);
     let create_opts = CreateContainerOptionsBuilder::new()
@@ -167,7 +169,11 @@ pub async fn run_container(
 }
 
 /// Build the Docker container body from DockerConfig and RunContext.
-fn build_container_body(config: &DockerConfig, run_context: &RunContext) -> ContainerCreateBody {
+fn build_container_body(
+    config: &DockerConfig,
+    run_context: &RunContext,
+    sandbox: Option<&SandboxConfig>,
+) -> ContainerCreateBody {
     // Build environment variables
     let mut env_vars = build_env_vars(config, run_context);
 
@@ -227,6 +233,12 @@ fn build_container_body(config: &DockerConfig, run_context: &RunContext) -> Cont
         host_config.cpu_quota = limits.cpu_quota;
     }
 
+    // Map the executor-wide sandbox policy onto Docker's native isolation. This
+    // is the Docker analogue of the nsjail wrap on the process/python backends
+    // (see executor-backend::sandbox) — same intent, Docker mechanism. Returns
+    // the non-root user string to stamp onto the ContainerCreateBody.
+    let sandbox_user = sandbox.and_then(|sb| apply_sandbox_to_host_config(&mut host_config, sb));
+
     let cmd = if config.command.is_empty() {
         None
     } else {
@@ -239,8 +251,72 @@ fn build_container_body(config: &DockerConfig, run_context: &RunContext) -> Cont
         cmd,
         entrypoint: config.entrypoint.clone(),
         host_config: Some(host_config),
+        user: sandbox_user,
         ..Default::default()
     }
+}
+
+/// Translate a [`SandboxConfig`] onto a container's [`HostConfig`], returning
+/// the non-root `user` string for the `ContainerCreateBody`. The Docker
+/// analogue of the nsjail wrap on the process/python backends — same intent,
+/// Docker mechanism.
+///
+/// Security floors (enforced, override the per-job `DockerConfig`):
+/// - network denied (`network_mode = "none"`) unless `allow_network`
+/// - all Linux capabilities dropped (`cap_drop = ["ALL"]`)
+/// - no privilege escalation (`security_opt = ["no-new-privileges:true"]`)
+/// - read-only rootfs + a private writable `/tmp` tmpfs (mirrors the nsjail
+///   private tmpfs; the run_dir bind stays writable for outputs/ipc)
+/// - the container process runs as the unprivileged `sandbox_uid`
+///
+/// Resource ceilings (tightened to the stricter of job-vs-sandbox):
+/// - `memory` = min(job, sandbox); `pids_limit` + `cpu_period`/`cpu_quota`
+///   from the sandbox when set.
+fn apply_sandbox_to_host_config(host_config: &mut HostConfig, sb: &SandboxConfig) -> Option<String> {
+    // Network: deny by default (override any job network_mode); the workload
+    // keeps egress only when the operator opted in via allow_network.
+    if !sb.allow_network {
+        host_config.network_mode = Some("none".into());
+    }
+
+    // Drop all caps + forbid privilege escalation.
+    host_config.cap_drop = Some(vec!["ALL".into()]);
+    let mut security_opt = host_config.security_opt.take().unwrap_or_default();
+    if !security_opt.iter().any(|o| o == "no-new-privileges:true") {
+        security_opt.push("no-new-privileges:true".into());
+    }
+    host_config.security_opt = Some(security_opt);
+
+    // Read-only rootfs + private writable /tmp (parity with the nsjail tmpfs).
+    // The run_dir is bind-mounted RW above, so outputs/ipc still work.
+    host_config.readonly_rootfs = Some(true);
+    let mut tmpfs = host_config.tmpfs.take().unwrap_or_default();
+    tmpfs.insert("/tmp".into(), format!("rw,size={}m", sb.tmpfs_size_mb));
+    host_config.tmpfs = Some(tmpfs);
+
+    // Memory ceiling: the tighter of the per-job limit and the sandbox cap.
+    if let Some(mem) = sb.memory_limit {
+        let mem = mem as i64;
+        host_config.memory = Some(match host_config.memory {
+            Some(existing) if existing > 0 => existing.min(mem),
+            _ => mem,
+        });
+    }
+
+    // PID cap.
+    if let Some(pids) = sb.pids_max {
+        host_config.pids_limit = Some(pids as i64);
+    }
+
+    // CPU quota: cpu_ms_per_sec is ms of CPU per wall-second. With the standard
+    // 100ms period, quota = cpu_ms_per_sec * 100 (e.g. 500 → 50_000 = 50%).
+    if let Some(cpu_ms) = sb.cpu_ms_per_sec {
+        host_config.cpu_period = Some(100_000);
+        host_config.cpu_quota = Some((cpu_ms as i64) * 100);
+    }
+
+    // Non-root: run the container process as the unprivileged sandbox uid.
+    Some(format!("{}:{}", sb.sandbox_uid, sb.sandbox_uid))
 }
 
 /// Build the list of environment variables for the container.
@@ -396,4 +472,125 @@ async fn capture_logs(
     }
 
     (stdout_buf.into_string(), stderr_buf.into_string())
+}
+
+#[cfg(test)]
+mod sandbox_host_config_tests {
+    use super::*;
+    use crate::ResourceLimits;
+    use aithericon_executor_domain::{ExecutionSpec, RunDirectory};
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    fn sandbox() -> SandboxConfig {
+        SandboxConfig {
+            nsjail_bin: "nsjail".into(),
+            memory_limit: Some(64 * 1024 * 1024),
+            cpu_ms_per_sec: Some(500),
+            pids_max: Some(128),
+            rlimit_fsize_mb: None,
+            rlimit_nofile: None,
+            allow_network: false,
+            tmpfs_size_mb: 64,
+            sandbox_uid: 99999,
+            readonly_mounts: vec![],
+            writable_mounts: vec![],
+        }
+    }
+
+    fn docker_config() -> DockerConfig {
+        DockerConfig {
+            image: "alpine".into(),
+            command: vec![],
+            entrypoint: None,
+            env: Default::default(),
+            pull_policy: PullPolicy::IfNotPresent,
+            resource_limits: None,
+            network_mode: Some("bridge".into()),
+            extra_volumes: vec![],
+            remove_container: true,
+        }
+    }
+
+    fn run_ctx() -> RunContext {
+        let rd = RunDirectory::new(&PathBuf::from("/data/exec"), "docker-1");
+        RunContext::for_test(
+            "docker-1",
+            ExecutionSpec {
+                backend: "docker".into(),
+                inputs: vec![],
+                outputs: vec![],
+                config: serde_json::json!({}),
+                config_ref: None,
+            },
+            rd,
+            Duration::from_secs(60),
+        )
+    }
+
+    #[test]
+    fn sandbox_off_leaves_host_config_untouched() {
+        let body = build_container_body(&docker_config(), &run_ctx(), None);
+        let hc = body.host_config.unwrap();
+        assert_eq!(
+            hc.network_mode.as_deref(),
+            Some("bridge"),
+            "job network_mode must be preserved when no sandbox"
+        );
+        assert!(hc.cap_drop.is_none());
+        assert!(hc.readonly_rootfs.is_none());
+        assert!(hc.pids_limit.is_none());
+        assert!(body.user.is_none());
+    }
+
+    #[test]
+    fn sandbox_enforces_isolation_floors() {
+        let sb = sandbox();
+        let body = build_container_body(&docker_config(), &run_ctx(), Some(&sb));
+        let hc = body.host_config.unwrap();
+        // network denied — overrides the job's "bridge"
+        assert_eq!(hc.network_mode.as_deref(), Some("none"));
+        // all caps dropped + no privilege escalation
+        assert_eq!(hc.cap_drop, Some(vec!["ALL".to_string()]));
+        assert!(hc
+            .security_opt
+            .unwrap()
+            .iter()
+            .any(|o| o == "no-new-privileges:true"));
+        // read-only rootfs + private writable /tmp
+        assert_eq!(hc.readonly_rootfs, Some(true));
+        assert!(hc.tmpfs.unwrap().contains_key("/tmp"));
+        // resource caps
+        assert_eq!(hc.memory, Some(64 * 1024 * 1024));
+        assert_eq!(hc.pids_limit, Some(128));
+        assert_eq!(hc.cpu_period, Some(100_000));
+        assert_eq!(hc.cpu_quota, Some(50_000));
+        // non-root user
+        assert_eq!(body.user.as_deref(), Some("99999:99999"));
+    }
+
+    #[test]
+    fn sandbox_allow_network_keeps_job_network() {
+        let mut sb = sandbox();
+        sb.allow_network = true;
+        let body = build_container_body(&docker_config(), &run_ctx(), Some(&sb));
+        assert_eq!(
+            body.host_config.unwrap().network_mode.as_deref(),
+            Some("bridge"),
+            "allow_network must NOT force network none"
+        );
+    }
+
+    #[test]
+    fn sandbox_memory_takes_min_of_job_and_cap() {
+        let mut cfg = docker_config();
+        // job asks for 32 MiB; sandbox cap is 64 MiB → effective = 32 MiB (min)
+        cfg.resource_limits = Some(ResourceLimits {
+            memory_bytes: Some(32 * 1024 * 1024),
+            cpu_shares: None,
+            cpu_quota: None,
+        });
+        let body = build_container_body(&cfg, &run_ctx(), Some(&sandbox()));
+        assert_eq!(body.host_config.unwrap().memory, Some(32 * 1024 * 1024));
+    }
 }

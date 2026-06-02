@@ -1,0 +1,172 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.sandbox-test — Linux runtime for the nsjail sandbox e2e
+# (executor/docs/sandbox.md, decision #12 / phased build step 4).
+#
+# The executor cannot run nsjail on macOS — nsjail needs Linux namespaces +
+# cgroups. This image is the Linux side of the Docker-testcontainer gate: it
+# bundles a pinned nsjail, python3, and nix (single-user) and runs a
+# CROSS-COMPILED `aithericon-executor-service` (built on the host via the
+# slurm-up zigbuild path) in drain mode against the test NATS.
+#
+# Build it through the `just sandbox-test-image` recipe — it zigbuilds the
+# Linux binary first, then `docker build`s this file with EXECUTOR_BIN pointing
+# at the freshly-built artifact. See that recipe for the exact human command.
+#
+# Run it privileged enough to NEST namespaces (the executor's nsjail child
+# creates its own user/pid/mount/net/ipc/uts/cgroup namespaces *inside* this
+# container):
+#
+#   docker run --privileged --cgroupns=host ...
+#   # or the least-privilege equivalent:
+#   docker run --cap-add=SYS_ADMIN --cgroupns=host \
+#              --security-opt seccomp=unconfined ...
+#
+# `--cgroupns=host` is required for nsjail's `--cgroup_*` caps to attach;
+# without it cgroup v2 delegation inside the container's own cgroup namespace
+# fails and the memory-OOM / pids-cap probes won't fire.
+
+# ---------------------------------------------------------------------------
+# Stage 1 — build nsjail from a pinned, known-good git tag.
+#
+# Debian/Ubuntu ship no `nsjail` apt package, so we build from source. We pin
+# the 3.4 release tag (last tagged release, stable; commit-pinning the tag means
+# the build is reproducible). nsjail's documented build deps are autoconf,
+# bison, flex, gcc/g++, make, pkg-config, libprotobuf, protobuf-compiler,
+# libnl-3 + libnl-route-3, and (vendored as a submodule) the kafel seccomp
+# policy compiler. We use `--recursive` so kafel comes along.
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS nsjail-build
+
+# NSJAIL_REF is the pinned release tag. Override at build time only to bump the
+# pin deliberately; the default is the locked v1 version.
+ARG NSJAIL_REF=3.4
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        build-essential \
+        autoconf \
+        bison \
+        flex \
+        gcc \
+        g++ \
+        make \
+        pkg-config \
+        libprotobuf-dev \
+        protobuf-compiler \
+        libnl-route-3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone --recursive --branch "${NSJAIL_REF}" --depth 1 \
+        https://github.com/google/nsjail.git nsjail \
+    && cd nsjail \
+    && make \
+    && install -Dm0755 nsjail /usr/local/bin/nsjail \
+    # Fail the build on a broken/non-nsjail binary — a present-but-wrong nsjail
+    # would silently disable isolation. `--help` must run AND mention nsjail.
+    && /usr/local/bin/nsjail --help 2>&1 | grep -qi nsjail
+
+# ---------------------------------------------------------------------------
+# Stage 2 — the runtime image.
+#
+# bookworm-slim base + python3 + the runtime shared libs nsjail links against
+# (libprotobuf, libnl-route-3 — the -dev packages from the build stage pull
+# these; here we install just the runtime ones). nix is installed single-user
+# so a job carrying `backend_state.nix.store_path` can RO-bind `/nix/store`;
+# the DEFAULT e2e probes use the coarse `/usr,/lib,/lib64,/bin` fallback (no
+# nix store_path on the job), so a missing /nix/store does not break the gate.
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+# python3 + venv + uv-friendly tooling: the python backend runs `run_process`
+# which we wrap in nsjail. `prefer_uv` works if `uv` is present; pip/venv is the
+# always-available fallback. ca-certificates is needed for the `allow_network`
+# probe (DNS + TLS). libnl-route-3-200 / libprotobuf are nsjail's runtime libs.
+# procps gives the test harness `ps`-style introspection if it shells in.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        python3 \
+        python3-venv \
+        python3-pip \
+        libprotobuf32 \
+        libnl-route-3-200 \
+        xz-utils \
+        curl \
+        procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pull the host-built nsjail across.
+COPY --from=nsjail-build /usr/local/bin/nsjail /usr/local/bin/nsjail
+
+# Plant a host-only secret OUTSIDE any run_dir so the FS-confinement probe has a
+# real host file to be denied (executor-service/tests/sandbox.rs PLANTED_HOST_SECRET).
+# Without this the probe's `cat /host-secret` would fail merely because the file
+# is absent, making the confinement assertion vacuous. 0600 + root-owned.
+RUN echo 'TOP-SECRET-HOST-DATA-must-not-be-readable-from-sandbox' > /host-secret \
+    && chmod 600 /host-secret
+
+# nix — single-user install. This lays down /nix and the `nix` client so a job
+# whose RunContext carries `backend_state.nix.store_path` gets its closure
+# RO-bound by SandboxConfig::build_nsjail_args. Single-user (not the daemon /
+# multi-user install) is the lighter footprint the design accepts: we only need
+# the store + client tooling for /nix/store mounts, not a build daemon. If the
+# install network-fails in a restricted build environment, the image is still
+# usable for the coarse-mount probes — see NIX_INSTALL below.
+ARG NIX_VERSION=2.24.9
+# Single-user install writes to /nix and needs no systemd. We run as root in
+# the build stage so `--no-daemon` single-user mode is appropriate.
+RUN curl -fsSL "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" -o /tmp/nix-install \
+    && sh /tmp/nix-install --no-daemon --yes \
+    && rm -f /tmp/nix-install \
+    || echo "WARN: nix install failed (network-restricted build?) — coarse-mount e2e probes still work, /nix/store mount probe will be skipped"
+ENV PATH="/root/.nix-profile/bin:${PATH}"
+
+# ---------------------------------------------------------------------------
+# The cross-compiled executor binary.
+#
+# EXECUTOR_BIN is the build-context-relative path to the host-zigbuilt Linux
+# x86_64 `aithericon-executor-service`. The `just sandbox-test-image` recipe
+# builds it at
+#   target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service
+# and passes that as the build arg. The aithericon Python SDK is copied in too
+# so `sdk: true` python steps (the default) can `import aithericon`.
+# ---------------------------------------------------------------------------
+ARG EXECUTOR_BIN=target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service
+COPY ${EXECUTOR_BIN} /opt/aithericon/bin/executor
+RUN chmod +x /opt/aithericon/bin/executor
+
+COPY packages/aithericon-sdk /opt/aithericon/aithericon-sdk
+
+# ---------------------------------------------------------------------------
+# Drain-mode runtime env. Mirrors the slurm-up worker template
+# (just/dev.just::slurm-up): EXECUTOR_SOURCE=nats_queue +
+# EXECUTOR_LIFETIME=run_to_completion is drain mode — pull from the NATS queue,
+# process up to EXECUTOR_MAX_JOBS, exit on the cap or idle timeout.
+#
+# The e2e harness (executor-service/tests/sandbox.rs) overrides
+# EXECUTOR_NATS_URL, EXECUTOR_NAMESPACE, EXECUTOR_MAX_JOBS and the
+# EXECUTOR_SANDBOX__* knobs per test (UUID-prefixed stream isolation) via
+# `docker run -e ...` / testcontainers env. These are sane defaults so the
+# container is runnable standalone for manual probing.
+# ---------------------------------------------------------------------------
+ENV EXECUTOR_SOURCE=nats_queue \
+    EXECUTOR_LIFETIME=run_to_completion \
+    EXECUTOR_NAMESPACE=executor \
+    EXECUTOR_CONCURRENCY=1 \
+    EXECUTOR_MAX_JOBS=1 \
+    EXECUTOR_IDLE_TIMEOUT_SECS=30 \
+    EXECUTOR_DEFAULT_TIMEOUT_SECS=120 \
+    EXECUTOR_BASE_DIR=/tmp/aithericon-executor \
+    EXECUTOR_PYTHON__ENABLED=true \
+    EXECUTOR_PYTHON__PREFER_UV=false \
+    AITHERICON_SDK_PATH=/opt/aithericon/aithericon-sdk \
+    EXECUTOR_SANDBOX__ENABLED=true \
+    PATH="/opt/aithericon/bin:/root/.nix-profile/bin:/usr/local/bin:/usr/bin:/bin"
+
+# nsjail drops the child to this uid; it must be a valid (if nobody-like) uid in
+# the container. 99999 matches SandboxSettings::default_sandbox_uid. No matching
+# /etc/passwd entry is required (nsjail sets the uid numerically).
+
+ENTRYPOINT ["/opt/aithericon/bin/executor"]

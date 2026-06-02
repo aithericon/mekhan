@@ -47,6 +47,9 @@ function unwrap<T>(result: {
 
 export type ClusterSummary = components['schemas']['ClusterSummary'];
 export type ClusterActionResponse = components['schemas']['ClusterActionResponse'];
+export type ClusterMetrics = components['schemas']['ClusterMetrics'];
+export type FleetMetrics = components['schemas']['FleetMetrics'];
+export type AllocationResponse = components['schemas']['AllocationResponse'];
 
 // Calls
 
@@ -77,6 +80,44 @@ export async function drainCluster(
 	return unwrap(
 		await client.POST('/api/v1/clusters/{resource_id}/drain', {
 			params: { path: { resource_id: resourceId } }
+		})
+	);
+}
+
+/** Historical ledger of datacenter leases held by this cluster, newest first.
+ *  Each row carries timing + accounting (`duration_ms`, `cpu_seconds`, etc.).
+ *  Returns 400 when `resourceId` is not a valid datacenter UUID (e.g. `_env`). */
+export async function listClusterLeases(resourceId: string): Promise<AllocationResponse[]> {
+	return unwrap(
+		await client.GET('/api/v1/clusters/{resource_id}/leases', {
+			params: { path: { resource_id: resourceId } }
+		})
+	);
+}
+
+/** Windowed accounting metrics for a single datacenter cluster.
+ *  `window` is `Nd` / `Nh` / `Nm`; defaults to `7d` (overrides the API's `24h`
+ *  default so the detail view has a longer horizon by default).
+ *  Returns an all-zero `ClusterMetrics` (not a 404) when no in-window leases
+ *  exist for the workspace. */
+export async function clusterMetrics(
+	resourceId: string,
+	window = '7d'
+): Promise<ClusterMetrics> {
+	return unwrap(
+		await client.GET('/api/v1/clusters/{resource_id}/metrics', {
+			params: { path: { resource_id: resourceId }, query: { window } }
+		})
+	);
+}
+
+/** Fleet-wide accounting metrics across all clusters for the caller's workspace.
+ *  `window` defaults to `24h`. Returns one `ClusterMetrics` per touched cluster
+ *  plus a `fleet_total` rollup. */
+export async function fleetMetrics(window = '24h'): Promise<FleetMetrics> {
+	return unwrap(
+		await client.GET('/api/v1/clusters/metrics', {
+			params: { query: { window } }
 		})
 	);
 }

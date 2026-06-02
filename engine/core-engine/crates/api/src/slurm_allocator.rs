@@ -45,7 +45,9 @@ use std::sync::Arc;
 
 use serde_json::Value as JsonValue;
 
-use petri_application::resource_lease_handlers::{AllocatorClient, AllocatorError};
+use petri_application::resource_lease_handlers::{
+    AllocatorClient, AllocatorError, StageOutcome, StageTemplateArgs,
+};
 
 #[cfg(feature = "slurm")]
 use petri_slurm::alloc;
@@ -255,6 +257,62 @@ impl SlurmAllocatorClient {
 
         Ok(JsonValue::Object(lease))
     }
+
+    /// Render the typed stage spec → an sbatch script and DELIVER it over SSH to
+    /// `{template_dir}/{slug}.sh`. Returns `remote_ref = the remote path`.
+    ///
+    /// Basic delivery (Phase 4): a single-quoted heredoc `cat > path && chmod +x`
+    /// via the held SSH session. `escape_hatch.sbatch_directives` is spliced
+    /// verbatim after the typed `#SBATCH` directives. NOTE: Slurm is implemented
+    /// compile-correct + best-effort and is NOT live-tested in this phase.
+    async fn stage_template(
+        &self,
+        args: &StageTemplateArgs,
+    ) -> Result<JsonValue, SlurmAllocError> {
+        let mut guard = self.ssh.lock().await;
+        if guard.is_none() {
+            *guard = Some(SshSession::connect(&self.config).await?);
+        }
+        let session = guard.as_ref().unwrap();
+
+        // Reconstruct the spec JSON the renderer reads (typed → json). Keeping the
+        // renderer JSON-driven lets it live in petri-slurm without a petri-application
+        // dep (the StageSpec type lives in petri-application).
+        let spec = json!({
+            "cpus": args.spec.cpus,
+            "gpus": args.spec.gpus,
+            "gpu_type": args.spec.gpu_type,
+            "mem_mb": args.spec.mem_mb,
+            "time_limit": args.spec.time_limit,
+            "partition": args.spec.partition,
+            "entrypoint": args.spec.entrypoint,
+        });
+        // mekhan models `sbatch_directives` as one element per directive line;
+        // the renderer takes a single verbatim block, so join with newlines
+        // (None when empty → renderer omits the block).
+        let directives = (!args.escape_hatch.sbatch_directives.is_empty())
+            .then(|| args.escape_hatch.sbatch_directives.join("\n"));
+        let script = alloc::render_sbatch_script(
+            &args.slug,
+            &spec,
+            directives.as_deref(),
+            &args.spec.env,
+        );
+
+        let remote_path = format!(
+            "{}/{}.sh",
+            self.config.template_dir.trim_end_matches('/'),
+            args.slug,
+        );
+        alloc::deliver_template_file(session, &remote_path, &script).await?;
+
+        tracing::info!(
+            slug = %args.slug,
+            remote_path = %remote_path,
+            "slurm stage_template: delivered sbatch script",
+        );
+        Ok(json!({ "remote_ref": remote_path }))
+    }
 }
 
 #[cfg(feature = "slurm")]
@@ -286,6 +344,23 @@ impl AllocatorClient for SlurmAllocatorClient {
             .map_err(|e| AllocatorError::from(SlurmAllocError::Ssh(e)))?;
         tracing::info!(alloc_id = %alloc_id, "slurm lease: released");
         Ok(())
+    }
+
+    async fn stage_template_with_connection(
+        &self,
+        _config: &JsonValue,
+        args: &StageTemplateArgs,
+    ) -> Result<StageOutcome, AllocatorError> {
+        // Slurm uses its own held SlurmConfig (the registry built THIS client from
+        // the connection in `config`); the config arg is ignored here, symmetric
+        // with acquire/release.
+        let out = self.stage_template(args).await?;
+        let remote_ref = out
+            .get("remote_ref")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AllocatorError::BadResponse("slurm stage returned no remote_ref".into()))?
+            .to_string();
+        Ok(StageOutcome { remote_ref })
     }
 }
 
@@ -393,6 +468,24 @@ impl AllocatorClient for FlavorDispatchAllocatorClient {
     ) -> Result<(), AllocatorError> {
         self.leg(scheduler_flavor)?
             .release(allocator_url, token, alloc_id)
+            .await
+    }
+
+    async fn stage_template_with_connection(
+        &self,
+        config: &JsonValue,
+        args: &StageTemplateArgs,
+    ) -> Result<StageOutcome, AllocatorError> {
+        // The env-fallback path (no ClusterRegistry installed): route staging on
+        // the `scheduler_flavor` the handler read off the effect_config, exactly
+        // like acquire/release. The resolved leg (slurm/nomad) holds its own
+        // connection, so we pass `config` through (its leaf ignores it).
+        let flavor = config
+            .get("scheduler_flavor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("http");
+        self.leg(flavor)?
+            .stage_template_with_connection(config, args)
             .await
     }
 }

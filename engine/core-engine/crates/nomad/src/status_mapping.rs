@@ -162,10 +162,7 @@ mod tests {
             job_id: "j".into(),
             client_status: status.into(),
             desired_status: "run".into(),
-            task_states: HashMap::new(),
-            node_id: String::new(),
-            node_name: String::new(),
-            job: None,
+            ..Default::default()
         };
 
         assert_eq!(

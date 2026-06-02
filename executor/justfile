@@ -91,3 +91,75 @@ surya-venv-setup:
     @echo "==> Surya venv ready at .dev/surya-venv/bin/python"
     @echo "    First Surya invocation will download ~1-2GB of models (5-15 min cold)."
     @echo "    To pre-warm: cd .dev/surya-venv && bin/python -m surya_pool_server --port 7160"
+
+# ---------------------------------------------------------------------------
+# nsjail sandbox e2e (docs/sandbox.md, phased build step 4)
+# ---------------------------------------------------------------------------
+
+# Image tag for the sandbox e2e runtime. The test harness
+# (crates/executor-service/tests/sandbox.rs, gated TEST_SANDBOX=1) boots THIS
+# tag via testcontainers, so the recipe and the test must agree on the name.
+sandbox_test_image := env_var_or_default("SANDBOX_TEST_IMAGE", "aithericon-executor-sandbox-test:latest")
+
+# Cross-compile the Linux executor + assemble the nsjail+python+nix e2e image.
+#
+# REUSES the slurm-up zigbuild path verbatim (just/dev.just::slurm-up step 2):
+# the executor can't run nsjail on macOS, so we cross-compile a Linux x86_64
+# binary with cargo-zigbuild and COPY it into Dockerfile.sandbox-test. Same
+# toolchain, same target triple, same trimmed feature set as slurm-up (python +
+# http + opendal-s3 + url-inputs — docker/file-ops are dropped: docker is
+# meaningless inside the container and file-ops pulls libnetcdf+libhdf5 cross
+# system libs we don't have and the sandbox e2e doesn't exercise).
+#
+# Does NOT run a heavy build by default beyond zigbuild + docker build. After
+# this completes, run the e2e with:
+#   TEST_SANDBOX=1 cargo test -p aithericon-executor-service --test sandbox
+sandbox-test-image:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # 1. cargo-zigbuild is the cross toolchain (same as slurm-up).
+    command -v cargo-zigbuild >/dev/null 2>&1 || {
+      echo "✗ cargo-zigbuild not on PATH — cargo install cargo-zigbuild" >&2; exit 1; }
+    command -v docker >/dev/null 2>&1 || {
+      echo "✗ docker not on PATH" >&2; exit 1; }
+
+    # 2. Pick the Linux target to MATCH the Docker engine's arch, so nsjail runs
+    #    natively (under qemu emulation its namespace/seccomp ops misbehave).
+    #    Auto-detect from the host (Docker Desktop's VM follows host arch);
+    #    override with SANDBOX_TARGET for cross-arch CI.
+    target="${SANDBOX_TARGET:-}"
+    if [ -z "$target" ]; then
+      case "$(uname -m)" in
+        arm64|aarch64) target="aarch64-unknown-linux-gnu" ;;
+        *)             target="x86_64-unknown-linux-gnu" ;;
+      esac
+    fi
+    case "$target" in
+      aarch64-*) platform="linux/arm64" ;;
+      *)         platform="linux/amd64" ;;
+    esac
+
+    # Cross-compile the executor for $target. Mirrors the slurm-up feature set;
+    # the sandbox path lives in executor-process / executor-python (python
+    # feature).
+    echo "▶ cross-compiling executor for $target (sandbox e2e features)…"
+    cargo zigbuild -p aithericon-executor-service \
+       --features "python,http,http-cancel,opendal-s3,url-inputs" \
+       --target "$target"
+    exec_bin="target/$target/debug/aithericon-executor-service"
+    if [ ! -f "$exec_bin" ]; then
+      echo "✗ Linux executor binary not found at $exec_bin" >&2; exit 1; fi
+
+    # 3. Build the image for the matching platform. Build context = the executor
+    #    workspace root so both the binary (EXECUTOR_BIN) and
+    #    packages/aithericon-sdk are reachable.
+    echo "▶ docker build {{sandbox_test_image}} ($platform; nsjail + python3 + nix)…"
+    docker build \
+      --platform "$platform" \
+      -f Dockerfile.sandbox-test \
+      --build-arg EXECUTOR_BIN="$exec_bin" \
+      -t {{sandbox_test_image}} \
+      .
+    echo "  ✓ {{sandbox_test_image}} built ($platform, binary: $exec_bin)"
+    echo "    Run the e2e: TEST_SANDBOX=1 cargo test -p aithericon-executor-service --test sandbox"

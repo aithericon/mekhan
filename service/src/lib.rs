@@ -181,6 +181,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::clusters::list_clusters))
         .routes(routes!(handlers::clusters::reconnect_cluster))
         .routes(routes!(handlers::clusters::drain_cluster))
+        .routes(routes!(handlers::clusters::list_cluster_leases))
+        .routes(routes!(handlers::clusters::fleet_metrics))
+        .routes(routes!(handlers::clusters::cluster_metrics))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,
@@ -207,6 +210,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::instances::get_instance_events))
         .routes(routes!(handlers::instances::list_step_executions))
         .routes(routes!(handlers::instances::list_instance_children))
+        .routes(routes!(handlers::instances::list_instance_allocations))
         .routes(routes!(handlers::instances::stream_instance))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))
@@ -293,6 +297,23 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::assets::import_asset_csv))
         .routes(routes!(handlers::assets::upload_asset_file))
         .routes(routes!(handlers::assets::asset_usage))
+        // Job templates (Phase 3, B-model) — versioned cluster job-spec entity
+        // (flavor-tagged slurm/nomad) + staging join. Mirrors the resources
+        // CRUD + versioning pattern but with NO Vault coupling. DB-only.
+        .routes(routes!(
+            handlers::job_templates::list_job_templates,
+            handlers::job_templates::create_job_template
+        ))
+        .routes(routes!(
+            handlers::job_templates::get_job_template,
+            handlers::job_templates::update_job_template,
+            handlers::job_templates::delete_job_template
+        ))
+        .routes(routes!(handlers::job_templates::list_job_template_stagings))
+        // Stage a template version onto datacenter(s) (Phase 4, B-staging) —
+        // kicks a generated staging Petri-net per (version × datacenter).
+        // Registered AFTER {id}/stagings so matchit prefers the literal path.
+        .routes(routes!(handlers::job_templates::stage_job_template))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))

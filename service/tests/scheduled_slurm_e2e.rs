@@ -125,6 +125,7 @@ fn scheduled_graph(step_id: &str, scheduler: &str) -> WorkflowGraph {
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: Some(scheduler.to_string()),
                         job_template: "mekhan-executor-worker".to_string(),
+                        job_template_ref: None,
                         resources: None,
                     },
                     stream_output: false,

@@ -20,12 +20,12 @@ use tokio::sync::RwLock;
 
 use petri_domain::ExternalSignal;
 use petri_scheduler_bridge::{
-    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, CheckpointStore, RoutingMeta,
-    SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
+    signal_subject, slurm_poll_cursor_key, slurm_tracked_jobs_key, AllocatedTres, AllocationMetrics,
+    CheckpointStore, RequestedTres, RoutingMeta, SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
 };
 
 use crate::config::SlurmConfig;
-use crate::models::{SacctEntry, SqueueEntry};
+use crate::models::{self, SacctEntry, SqueueEntry, SACCT_FORMAT};
 use crate::ssh::SshSession;
 use crate::status_mapping;
 
@@ -294,8 +294,8 @@ impl SlurmWatcher {
         start_time: &str,
     ) -> Result<Vec<SacctEntry>, WatcherError> {
         let command = format!(
-            "sacct -o 'JobID,Comment,State,ExitCode,NodeList' --parsable2 -n --noconvert -S {}",
-            start_time
+            "sacct -o '{}' --parsable2 -n --noconvert -S {}",
+            SACCT_FORMAT, start_time
         );
         let output = ssh.exec(&command).await?;
         Ok(SacctEntry::parse_all(&output))
@@ -319,7 +319,7 @@ impl SlurmWatcher {
         if should_signal {
             if let Some(job_status) = status_mapping::map_slurm_state(&entry.state) {
                 let msg_id = format!("slurm-{}-{}", entry.job_id, job_status.as_str());
-                self.publish_signal(&routing, &entry.job_id, &job_status, &msg_id, "", "")
+                self.publish_signal(&routing, &entry.job_id, &job_status, &msg_id, None)
                     .await;
             }
         }
@@ -398,8 +398,7 @@ impl SlurmWatcher {
                         &entry.job_id,
                         &running_status,
                         &running_msg_id,
-                        "",
-                        "",
+                        None,
                     )
                     .await;
                 }
@@ -407,15 +406,11 @@ impl SlurmWatcher {
 
             let msg_id = format!("slurm-{}-{}", entry.job_id, job_status.as_str());
 
-            self.publish_signal(
-                &routing,
-                &entry.job_id,
-                &job_status,
-                &msg_id,
-                &entry.exit_code,
-                &entry.node_list,
-            )
-            .await;
+            // Build allocation accounting from the sacct row already fetched and
+            // flatten it into the terminal signal payload (payload-only).
+            let metrics = build_slurm_metrics(entry);
+            self.publish_signal(&routing, &entry.job_id, &job_status, &msg_id, Some(&metrics))
+                .await;
 
             let terminal_at = terminal_at_for(&entry.state);
             self.tracked.write().await.insert(
@@ -440,8 +435,7 @@ impl SlurmWatcher {
         job_id: &str,
         job_status: &petri_domain::JobStatus,
         msg_id: &str,
-        exit_code: &str,
-        node_list: &str,
+        metrics: Option<&AllocationMetrics>,
     ) {
         // When explicit signal routes are configured, only publish for mapped statuses.
         // This prevents e.g. "queued" signals from falling through to the fallback place.
@@ -466,16 +460,27 @@ impl SlurmWatcher {
             "Signaling Slurm job state change"
         );
 
+        // Base payload always carries source/job/status. AllocationMetrics
+        // (when present) is FLATTENED in so its keys (exit_code, node,
+        // elapsed_ms, …) sit alongside — payload-only enrichment, no schema
+        // change to ExternalSignal itself.
+        let mut payload = serde_json::json!({
+            "source": "slurm",
+            "scheduler_job_id": job_id,
+            "job_status": job_status,
+        });
+        if let Some(metrics) = metrics {
+            if let (Some(obj), Ok(serde_json::Value::Object(extra))) =
+                (payload.as_object_mut(), serde_json::to_value(metrics))
+            {
+                obj.extend(extra);
+            }
+        }
+
         let signal = ExternalSignal {
             source: "slurm".to_string(),
             signal_key: routing.signal_key.clone(),
-            payload: serde_json::json!({
-                "source": "slurm",
-                "scheduler_job_id": job_id,
-                "job_status": job_status,
-                "exit_code": exit_code,
-                "node_list": node_list,
-            }),
+            payload,
             timestamp: Utc::now(),
             // dedup_id mirrors the JetStream `Nats-Msg-Id` so the engine
             // `DedupIndex` suppresses re-detected/redelivered signals beyond
@@ -537,15 +542,16 @@ impl SlurmWatcher {
                     job_id,
                     &running_status,
                     &running_msg_id,
-                    "",
-                    "",
+                    None,
                 )
                 .await;
             }
 
+            // Inferred completion (job left squeue, no sacct row) — we have no
+            // accounting data, so the terminal payload carries no metrics.
             let job_status = petri_domain::JobStatus::Completed;
             let msg_id = format!("slurm-{}-{}", job_id, job_status.as_str());
-            self.publish_signal(&tracked_job.routing, job_id, &job_status, &msg_id, "", "")
+            self.publish_signal(&tracked_job.routing, job_id, &job_status, &msg_id, None)
                 .await;
 
             self.tracked.write().await.insert(
@@ -585,6 +591,77 @@ impl SlurmWatcher {
             }
         });
     }
+}
+
+/// Build [`AllocationMetrics`] from a terminal sacct row.
+///
+/// Every field is best-effort: an empty / unparseable sacct column simply omits
+/// that metric (`None`), keeping the flattened payload minimal. `node` comes
+/// from the sacct `NodeList` (scontrol resolves the same host during the lease;
+/// the sacct row is authoritative at terminal). `gpu_seconds` is derived as the
+/// allocated gpu count × elapsed seconds when both are known.
+fn build_slurm_metrics(entry: &SacctEntry) -> AllocationMetrics {
+    let elapsed_ms = models::parse_duration_ms(&entry.elapsed);
+
+    let queue_wait_ms = match (
+        parse_slurm_time_ms(&entry.submit),
+        parse_slurm_time_ms(&entry.start),
+    ) {
+        (Some(sub), Some(start)) => Some((start - sub).max(0)),
+        _ => None,
+    };
+
+    let req = models::parse_tres(&entry.req_tres);
+    let alloc = models::parse_tres(&entry.alloc_tres);
+
+    // gpu_seconds: allocated gpu count × elapsed (seconds). Falls back to the
+    // requested count if allocated is absent.
+    let gpu_count_for_secs = alloc.gpu_count.or(req.gpu_count);
+    let gpu_seconds = match (gpu_count_for_secs, elapsed_ms) {
+        (Some(g), Some(ms)) if g > 0 => Some(g as f64 * (ms as f64 / 1_000.0)),
+        _ => None,
+    };
+
+    AllocationMetrics {
+        exit_code: models::parse_exit_code(&entry.exit_code),
+        node: if entry.node_list.trim().is_empty() {
+            None
+        } else {
+            Some(entry.node_list.clone())
+        },
+        queue_wait_ms,
+        elapsed_ms,
+        cpu_seconds: models::parse_duration_secs(&entry.total_cpu),
+        gpu_seconds,
+        peak_rss_bytes: models::parse_mem_bytes(&entry.max_rss),
+        requested_tres: RequestedTres {
+            cpu_count: req.cpu_count,
+            gpu_count: req.gpu_count,
+            gpu_type: req.gpu_type,
+            memory_gb: req.memory_gb,
+        }
+        .non_empty(),
+        allocated_tres: AllocatedTres {
+            cpu_count: alloc.cpu_count,
+            gpu_count: alloc.gpu_count,
+            memory_gb: alloc.memory_gb,
+        }
+        .non_empty(),
+    }
+}
+
+/// Parse a Slurm timestamp (`YYYY-MM-DDTHH:MM:SS`, cluster-local, no offset)
+/// into epoch milliseconds for queue-wait math. We only need the DIFFERENCE of
+/// two such stamps, so a naive (TZ-less) parse is fine — both share the same
+/// clock. Returns `None` for empty/`Unknown`/`None` sentinels.
+fn parse_slurm_time_ms(field: &str) -> Option<i64> {
+    let f = field.trim();
+    if f.is_empty() || f == "Unknown" || f == "None" {
+        return None;
+    }
+    chrono::NaiveDateTime::parse_from_str(f, "%Y-%m-%dT%H:%M:%S")
+        .ok()
+        .map(|dt| dt.and_utc().timestamp_millis())
 }
 
 /// Extract routing metadata from a job comment (JSON-encoded meta tags).

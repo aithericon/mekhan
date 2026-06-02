@@ -328,10 +328,159 @@ pub async fn srun_lease_executor(
     Ok(())
 }
 
+/// Render an sbatch script from a typed stage spec (Phase 4 `stage_template`).
+///
+/// Maps the typed `StageSpec`-equivalent JSON onto `#SBATCH` directives, then an
+/// author-supplied raw `sbatch_directives` escape-hatch block (spliced verbatim
+/// after the typed ones), then the entrypoint body. Recognised spec keys (all
+/// optional): `cpus`→`--cpus-per-task`, `gpus`(+`gpu_type`)→`--gres=gpu[:type]:N`,
+/// `mem_mb`→`--mem=<N>M`, `time_limit`→`--time`, `partition`→`--partition`,
+/// `entrypoint`→the script body. `env` entries become `export K=V` lines.
+///
+/// Pure string render (no SSH) so it is unit-testable; delivery is
+/// [`deliver_template_file`].
+pub fn render_sbatch_script(
+    slug: &str,
+    spec: &JsonValue,
+    sbatch_directives: Option<&str>,
+    env: &std::collections::HashMap<String, String>,
+) -> String {
+    let mut lines: Vec<String> = vec!["#!/bin/bash".to_string()];
+    lines.push(format!("#SBATCH --job-name={}", slug));
+
+    if let Some(cpus) = spec
+        .get("cpus")
+        .and_then(|v| v.as_i64())
+        .filter(|c| *c > 0)
+    {
+        lines.push(format!("#SBATCH --cpus-per-task={cpus}"));
+    }
+    if let Some(gpus) = spec
+        .get("gpus")
+        .and_then(|v| v.as_i64())
+        .filter(|g| *g > 0)
+    {
+        let gres = match spec.get("gpu_type").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            Some(ty) => format!("gpu:{ty}:{gpus}"),
+            None => format!("gpu:{gpus}"),
+        };
+        lines.push(format!("#SBATCH --gres={gres}"));
+    }
+    if let Some(mem) = spec
+        .get("mem_mb")
+        .and_then(|v| v.as_i64())
+        .filter(|m| *m > 0)
+    {
+        lines.push(format!("#SBATCH --mem={mem}M"));
+    }
+    if let Some(time_limit) = spec.get("time_limit").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        lines.push(format!("#SBATCH --time={time_limit}"));
+    }
+    if let Some(partition) = spec.get("partition").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        lines.push(format!("#SBATCH --partition={partition}"));
+    }
+
+    // Escape-hatch raw directives spliced verbatim after the typed ones.
+    if let Some(raw) = sbatch_directives.filter(|s| !s.trim().is_empty()) {
+        lines.push(raw.trim_end().to_string());
+    }
+
+    lines.push(String::new());
+    // env exports (deterministic order for stable rendering/tests).
+    let mut keys: Vec<&String> = env.keys().collect();
+    keys.sort();
+    for k in keys {
+        lines.push(format!("export {}={}", k, sq_dq(&env[k])));
+    }
+
+    let entrypoint = spec
+        .get("entrypoint")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("true");
+    lines.push(entrypoint.to_string());
+
+    let mut script = lines.join("\n");
+    script.push('\n');
+    script
+}
+
+/// Double-quote shell-escape for an env value embedded in `export K="…"`.
+fn sq_dq(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Deliver a rendered template file to `{remote_path}` over SSH.
+///
+/// Writes the content via a single-quoted heredoc `cat > path` then `chmod +x`,
+/// creating the parent dir first. Returns the remote path on success (the
+/// `stage_template` `remote_ref`). Basic delivery — the heredoc avoids a second
+/// scp round-trip and keeps the SSH session contract identical to the rest of
+/// the slurm allocator.
+pub async fn deliver_template_file(
+    ssh: &SshSession,
+    remote_path: &str,
+    content: &str,
+) -> Result<(), AllocError> {
+    // A unique heredoc sentinel that cannot appear in rendered sbatch content.
+    let sentinel = "PETRI_STAGE_EOF_8F3A";
+    let dir = remote_path.rsplit_once('/').map(|(d, _)| d).unwrap_or(".");
+    let command = format!(
+        "mkdir -p '{}' && cat > '{}' <<'{}'\n{}\n{}\nchmod +x '{}'",
+        sq(dir),
+        sq(remote_path),
+        sentinel,
+        content,
+        sentinel,
+        sq(remote_path),
+    );
+    ssh.exec(&command).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_render_sbatch_script_typed_and_escape_hatch() {
+        let env: std::collections::HashMap<String, String> =
+            std::iter::once(("FOO".to_string(), "bar baz".to_string())).collect();
+        let spec = json!({
+            "cpus": 4, "gpus": 2, "gpu_type": "a100", "mem_mb": 8192,
+            "time_limit": "01:00:00", "partition": "gpu",
+            "entrypoint": "python run.py"
+        });
+        let script = render_sbatch_script(
+            "train-job",
+            &spec,
+            Some("#SBATCH --exclusive\n#SBATCH --nodes=2"),
+            &env,
+        );
+        assert!(script.starts_with("#!/bin/bash\n"), "{script}");
+        assert!(script.contains("#SBATCH --job-name=train-job"), "{script}");
+        assert!(script.contains("#SBATCH --cpus-per-task=4"), "{script}");
+        assert!(script.contains("#SBATCH --gres=gpu:a100:2"), "{script}");
+        assert!(script.contains("#SBATCH --mem=8192M"), "{script}");
+        assert!(script.contains("#SBATCH --time=01:00:00"), "{script}");
+        assert!(script.contains("#SBATCH --partition=gpu"), "{script}");
+        // escape hatch spliced verbatim
+        assert!(script.contains("#SBATCH --exclusive"), "{script}");
+        assert!(script.contains("#SBATCH --nodes=2"), "{script}");
+        // env export + entrypoint body
+        assert!(script.contains("export FOO=\"bar baz\""), "{script}");
+        assert!(script.trim_end().ends_with("python run.py"), "{script}");
+    }
+
+    #[test]
+    fn test_render_sbatch_script_defaults_entrypoint() {
+        let env = std::collections::HashMap::new();
+        let script = render_sbatch_script("j", &json!({}), None, &env);
+        assert!(script.contains("#SBATCH --job-name=j"));
+        // no resource directives, entrypoint defaults to a no-op
+        assert!(script.trim_end().ends_with("true"), "{script}");
+    }
 
     #[test]
     fn test_salloc_command_minimal() {

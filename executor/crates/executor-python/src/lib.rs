@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
+use aithericon_executor_backend::SandboxConfig;
 use aithericon_executor_backend::DEFAULT_MAX_OUTPUT_BYTES;
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext,
@@ -27,6 +28,9 @@ pub use aithericon_executor_backend_configs::python::{
 pub struct PythonBackend {
     max_output_bytes: usize,
     venv_cache: Option<Arc<VenvCache>>,
+    /// When set, the Python child is wrapped in nsjail (shared with the process
+    /// backend via `run_process`). Default `None` (unsandboxed).
+    sandbox: Option<SandboxConfig>,
 }
 
 impl PythonBackend {
@@ -34,11 +38,18 @@ impl PythonBackend {
         Self {
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             venv_cache: None,
+            sandbox: None,
         }
     }
 
     pub fn with_max_output_bytes(mut self, bytes: usize) -> Self {
         self.max_output_bytes = bytes;
+        self
+    }
+
+    /// Wrap the executed Python command in nsjail using the given sandbox config.
+    pub fn with_sandbox(mut self, cfg: SandboxConfig) -> Self {
+        self.sandbox = Some(cfg);
         self
     }
 
@@ -241,6 +252,7 @@ impl ExecutionBackend for PythonBackend {
             self.max_output_bytes,
             &status_cb,
             cancel,
+            self.sandbox.as_ref(),
         )
         .await
     }

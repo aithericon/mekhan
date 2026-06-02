@@ -4992,6 +4992,7 @@ fn automated_step_scheduled_emits_pooled_topology() {
                 DeploymentModel::Scheduled {
                     scheduler: Some("prod_dc".to_string()),
                     job_template: "petri-mumax3-worker".to_string(),
+                    job_template_ref: None,
                     resources: None,
                 },
             ),
@@ -6549,6 +6550,7 @@ fn deployment_model_surface_round_trips() {
         DeploymentModel::Scheduled {
             scheduler: None,
             job_template: "petri-mumax3-worker".to_string(),
+            job_template_ref: None,
             resources: None,
         }
     );

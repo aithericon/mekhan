@@ -96,7 +96,7 @@ const KV_KEYS_FIELD: &str = "__kv_keys";
 /// adapter-net builder whether to thread the `{{secret:…#nomad_token}}` template
 /// (present → authenticated Nomad) or omit it (absent → unauthenticated Nomad).
 /// Underscore-prefixed so it can't collide with a real connection field name.
-const NOMAD_TOKEN_SENTINEL: &str = "__has_nomad_token";
+pub(crate) const NOMAD_TOKEN_SENTINEL: &str = "__has_nomad_token";
 
 /// Split a raw config map into `(public, secret)` JsonMaps based on the
 /// descriptor's field lists. Strays (keys that match neither list) become
@@ -898,86 +898,28 @@ async fn ensure_pool_net_for_kind(
             .await;
         }
         "datacenter" => {
-            // `scheduler_flavor` (public field) is the discriminant: it picks the
-            // per-flavor connection the engine's `ClusterRegistry` builds a client
-            // from — `"slurm"` → SSH salloc/scancel, `"nomad"` → Nomad API,
-            // `"http"` (default) → POST/DELETE against `allocator_url`. The
+            // `scheduler_flavor` (public field) is the discriminant the connection
+            // builder reads: `"slurm"` → SSH salloc/scancel, `"nomad"` → Nomad
+            // API, `"http"` (default) → POST/DELETE against `allocator_url`. The
             // per-flavor connection fields all ride ON the resource (docs/16 §1).
-            let scheduler_flavor = public
-                .get("scheduler_flavor")
-                .and_then(|v| v.as_str())
-                .unwrap_or("http")
-                .to_string();
-
-            // Secret fields (`token`, `ssh_key`, `nomad_token`) are referenced as
-            // `{{secret:<vault_path>#<field>}}` templates (the same shape
-            // `resource_resolver.rs` emits), resolved by the engine at fire time
-            // (`firing.rs` `resolve_secrets`) — never in the AIR/event log. Only
-            // the secret the flavor actually carries is threaded.
+            // Secret fields (`token`/`ssh_key`/`nomad_token`) become
+            // `{{secret:<vault_path>#<field>}}` templates the engine resolves at
+            // fire time — the shared `from_public_config` builds the same shape
+            // the B-staging resolver uses, so they can't drift.
             let vault_path = vault_path_for(workspace_id, resource_id, version);
-            let secret_ref = |field: &str| format!("{{{{secret:{vault_path}#{field}}}}}");
-
-            // String/number readers off the public_config blob.
-            let s = |k: &str| public.get(k).and_then(|v| v.as_str()).map(String::from);
-            let port = |k: &str| {
-                public
-                    .get(k)
-                    .and_then(|v| v.as_u64())
-                    .and_then(|n| u16::try_from(n).ok())
-            };
-
-            // Validate-by-flavor: the required connection fields must be present
-            // (publish-time + create-time validation in R1 is the authoritative
-            // gate, but the net can't be deployed without them either). Skip the
-            // adapter-net deploy when malformed (best-effort — the resource CRUD
-            // already succeeded).
-            let required_present = match scheduler_flavor.as_str() {
-                "slurm" => public.get("ssh_host").and_then(|v| v.as_str()).is_some(),
-                "nomad" => public.get("nomad_addr").and_then(|v| v.as_str()).is_some(),
-                // http (or unknown) → needs allocator_url
-                _ => public
-                    .get("allocator_url")
-                    .and_then(|v| v.as_str())
-                    .is_some(),
-            };
-            if !required_present {
+            let Some(conn) = crate::petri::pool_net::DatacenterConnection::from_public_config(
+                resource_id,
+                version,
+                &vault_path,
+                public,
+            ) else {
                 tracing::warn!(
                     %resource_id,
-                    scheduler_flavor,
                     "datacenter resource is missing its flavor's required connection field in \
                      public_config; skipping adapter-net deploy (R1 publish/create validation \
                      is the authoritative gate)"
                 );
                 return;
-            }
-
-            let conn = crate::petri::pool_net::DatacenterConnection {
-                resource_id,
-                resource_version: version,
-                scheduler_flavor: scheduler_flavor.clone(),
-
-                allocator_url: s("allocator_url"),
-                token_secret_ref: matches!(scheduler_flavor.as_str(), "http")
-                    .then(|| secret_ref("token")),
-
-                ssh_host: s("ssh_host"),
-                ssh_port: port("ssh_port"),
-                ssh_user: s("ssh_user"),
-                ssh_known_hosts: s("ssh_known_hosts"),
-                template_dir: s("template_dir"),
-                ssh_key_secret_ref: (scheduler_flavor == "slurm").then(|| secret_ref("ssh_key")),
-
-                nomad_addr: s("nomad_addr"),
-                nomad_region: s("nomad_region"),
-                // nomad_token is the optional nomad-leg secret. Whether the
-                // resource actually carries it lives in Vault, not public_config,
-                // so mekhan can't tell from here — R1 surfaces its presence via
-                // the `NOMAD_TOKEN_SENTINEL` key it stashes in public_config when
-                // (and only when) the secret was supplied. Absent sentinel →
-                // unauthenticated Nomad, omit the key entirely (docs/16 §2.1).
-                nomad_token_secret_ref: (scheduler_flavor == "nomad"
-                    && public.contains_key(NOMAD_TOKEN_SENTINEL))
-                .then(|| secret_ref("nomad_token")),
             };
 
             crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;

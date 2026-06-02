@@ -1351,11 +1351,40 @@ pub enum DeploymentModel {
         /// `datacenter` resource alias.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheduler: Option<String>,
+        /// Legacy/manual native job NAME registered on the scheduler. When
+        /// `job_template_ref` is `Some`, publish OVERWRITES this string with the
+        /// referenced template's slug (the name Phase-4 staging registers the
+        /// native job under), so lowering/engine always read a concrete name
+        /// here regardless of which authoring path produced it.
         #[serde(rename = "jobTemplate")]
         job_template: String,
+        /// Optional control-plane job-template REFERENCE (Phase 3, B-model).
+        /// When `Some`, publish resolves+validates it against the step's
+        /// resolved cluster (`resolve_job_templates`) and stamps the template's
+        /// slug into `job_template`. `None` ⇒ the bare `job_template` string is
+        /// used verbatim (legacy/manual path). The actual staging mechanism is
+        /// Phase 4 — this field only drives resolve+validate at publish.
+        #[serde(rename = "jobTemplateRef", default, skip_serializing_if = "Option::is_none")]
+        job_template_ref: Option<TemplateRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resources: Option<ResourceConfig>,
     },
+}
+
+/// A pinned reference to a control-plane job template (Phase 3, B-model).
+///
+/// Lives on [`DeploymentModel::Scheduled::job_template_ref`]. At publish,
+/// `resolve_job_templates` loads the `(template_id, version)` row, validates the
+/// template's flavor against the step's resolved cluster flavor, and stamps the
+/// template's slug into the sibling `job_template` string. The actual staging of
+/// the native job onto the cluster is Phase 4.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateRef {
+    /// `job_templates.id` — the logical template (workspace-scoped).
+    pub template_id: Uuid,
+    /// `job_template_versions.version` — the immutable version to bind.
+    pub version: i32,
 }
 
 impl Default for DeploymentModel {

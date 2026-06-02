@@ -127,6 +127,18 @@ Drain mode env vars (setting either auto-promotes lifetime to `run_to_completion
 - `EXECUTOR_MIN_JOBS` — Minimum completions before idle shutdown eligible (default unset)
 - `EXECUTOR_IDLE_TIMEOUT_SECS` — Idle timeout after min_jobs reached (default 30)
 
+Sandbox env vars (nsjail process isolation for the `process` + `python` backends; Linux-only, off by default). See `docs/sandbox.md`:
+- `EXECUTOR_SANDBOX__ENABLED` — Wrap process/python child execution in nsjail (default `false`). **Fail-closed**: when `true`, the executor validates nsjail is present + on Linux at startup and refuses to boot otherwise.
+- `EXECUTOR_SANDBOX__ALLOW_NETWORK` — Share the host netns + bind `/etc/resolv.conf` (default `false` → isolated netns, no egress).
+- `EXECUTOR_SANDBOX__MEMORY_LIMIT_MB` — cgroup memory cap (default unset).
+- `EXECUTOR_SANDBOX__CPU_MS_PER_SEC` — cgroup CPU quota, ms per wall-second (default unset).
+- `EXECUTOR_SANDBOX__PIDS_MAX` — cgroup max pids (default unset).
+- `EXECUTOR_SANDBOX__RLIMIT_FSIZE_MB` / `__RLIMIT_NOFILE` — rlimits (default unset).
+- `EXECUTOR_SANDBOX__TMPFS_SIZE_MB` — private `/tmp` tmpfs size (default 64).
+- `EXECUTOR_SANDBOX__SANDBOX_UID` — unprivileged uid the child is dropped to (default 99999).
+
+The sandbox wraps the single `run_process` chokepoint (`executor-process`), so both the process and python backends are covered by nsjail; env is **scrubbed by default** (the executor's own vault/NATS creds are NOT inherited; only spec + RunContext env pass via nsjail `--env`). The **docker** backend honours the same `EXECUTOR_SANDBOX__*` knobs by mapping them onto the container's native `HostConfig` (network=none, cap_drop ALL, no-new-privileges, readonly rootfs + private tmpfs, non-root uid, memory/pids/cpu caps) — Docker is the isolator there, not nsjail. In-process backends (http/postgres/file_ops/smtp/llm) have no child to wrap; kreuzberg/surya in-process parsing of untrusted input is an out-of-process follow-up. See `docs/sandbox.md` → "Backend coverage".
+
 ### Testing
 
 Integration tests live in `crates/executor-service/tests/`. Each test gets an isolated NATS stream via `ExecutorTestContext` (UUID-prefixed). Tests require Docker for testcontainers NATS. Key test files: `integration.rs`, `error_paths.rs`, `output_capture.rs`, `concurrency.rs`, `ipc.rs`, `storage_staging.rs`, `cleanup.rs`, `batch.rs`, `drain.rs`.

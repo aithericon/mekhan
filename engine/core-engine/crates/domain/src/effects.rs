@@ -369,6 +369,35 @@ pub const RESOURCE_LEASE_RELEASE: EffectDescriptor = EffectDescriptor {
     default_output_schema: None,
 };
 
+/// Stage a job template onto an external cluster (datacenter resource).
+///
+/// Phase 4 of the control plane: an INLINE engine effect that *registers* a
+/// job template onto the cluster the datacenter `effect_config` resolves to,
+/// using the engine's existing cluster connection (the same
+/// `DatacenterConnection.effect_config()` JSON the lease adapter consumes).
+///
+///   - **Nomad:** render the typed `spec`/`escape_hatch` → a Nomad PARAMETERIZED
+///     job JSON and `PUT /v1/job/{slug}` (the REGISTER endpoint, NOT dispatch).
+///     `remote_ref` = the slug. The registered job's `ParameterizedJob.MetaOptional`
+///     carries the routing meta keys the later `submit` dispatch path sends, so
+///     it is dispatchable.
+///   - **Slurm:** render → an sbatch script, delivered over SSH to
+///     `{template_dir}/{slug}.sh`. `remote_ref` = the remote path.
+///
+/// Categorised under [`ServiceCategory::Scheduler`] — staging is "external
+/// cluster" admission, the same subsystem as submit/lease. The handler returns
+/// `status:"staged"|"failed"` DATA on BOTH success and cluster failure (a
+/// staging failure is recorded data, NOT a `NetFailed`); only truly-fatal
+/// config/parse errors return `Err`. `replay()` is a no-op (stateless).
+pub const STAGE_TEMPLATE: EffectDescriptor = EffectDescriptor {
+    handler_id: "stage_template",
+    default_input_port: "request",
+    default_output_port: "staged",
+    category: ServiceCategory::Scheduler,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
 /// All built-in effect descriptors.
 pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &SCHEDULER_SUBMIT,
@@ -395,6 +424,7 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &PROCESS_LOG_MESSAGE,
     &RESOURCE_LEASE_ACQUIRE,
     &RESOURCE_LEASE_RELEASE,
+    &STAGE_TEMPLATE,
 ];
 
 /// Look up a built-in descriptor by handler_id.
@@ -449,7 +479,7 @@ mod tests {
 
     #[test]
     fn all_builtin_covers_all_handlers() {
-        assert_eq!(ALL_BUILTIN.len(), 23);
+        assert_eq!(ALL_BUILTIN.len(), 25);
         let ids: Vec<&str> = ALL_BUILTIN.iter().map(|d| d.handler_id).collect();
         assert!(ids.contains(&"scheduler_submit"));
         assert!(ids.contains(&"scheduler_cancel"));
@@ -473,6 +503,7 @@ mod tests {
         assert!(ids.contains(&"process_log_message"));
         assert!(ids.contains(&"resource_lease_acquire"));
         assert!(ids.contains(&"resource_lease_release"));
+        assert!(ids.contains(&"stage_template"));
     }
 
     #[test]
