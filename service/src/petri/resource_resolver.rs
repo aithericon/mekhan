@@ -52,6 +52,21 @@ use aithericon_resources::{registry::lookup, ResourcePin};
 use crate::compiler::resource_refs::KnownResources;
 use crate::models::resource::{ResourceRow, ResourceVersionRow};
 
+/// Sentinel key in `public_config` recording which of the type's declared
+/// secret fields actually had a value stored in Vault for this version.
+///
+/// Required secrets are always present, so before this marker existed every
+/// declared secret field could be templated unconditionally. Optional secrets
+/// (e.g. a `loki` resource's `token`, absent for an unauthenticated endpoint)
+/// break that assumption: emitting a `{{secret:…#token}}` template for a
+/// secret that was never stored makes firing-time secret resolution fail
+/// fatally. `write_resource_version` writes this list at create/update/rotate
+/// time; [`ResourceResolver::resolve_one`] consults it so the envelope only
+/// carries templates for secrets that exist. Absent on pre-marker rows — those
+/// fall back to "template every declared secret" (safe: legacy secrets were
+/// all required, hence present).
+pub const SECRET_KEYS_MARKER: &str = "__secret_keys";
+
 /// Per-call audit attribution. The resolver writes one `resource_audit` row
 /// per resolved alias using the same context, so a launch-time resolve is
 /// fully attributable in one query.
@@ -348,7 +363,24 @@ impl ResourceResolver {
             }
         }
 
+        // Which secret fields actually have a stored value? Newer versions
+        // record the provided names under `__secret_keys`; pre-marker rows
+        // return `None` and fall back to "template every declared secret"
+        // (safe — every legacy secret field was required, hence present).
+        let stored_secrets: Option<std::collections::HashSet<&str>> = public_obj
+            .get(SECRET_KEYS_MARKER)
+            .and_then(JsonValue::as_array)
+            .map(|arr| arr.iter().filter_map(JsonValue::as_str).collect());
+
         for field_name in descriptor.secret_fields {
+            // An optional secret the user never set (absent from the marker)
+            // gets NO template — emitting one would make firing-time secret
+            // resolution fail on a Vault key that was never written.
+            if let Some(ref stored) = stored_secrets {
+                if !stored.contains(field_name) {
+                    continue;
+                }
+            }
             // {{secret:<vault_path>#<field>}} — the existing
             // `extract_secret_keys` regex captures the whole key
             // (verified in `shared/resources/tests/registry.rs`).

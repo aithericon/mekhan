@@ -3761,6 +3761,18 @@
             }
           },
           {
+            "name": "execution_id",
+            "in": "query",
+            "description": "Narrow to a single executor execution. Each executor job maps 1:1 to a\nworkflow step+iteration, so this is the reliable key for scoping logs to\na particular step in the instance view (the `StepExecution` row has no\nexecution_id of its own — it lives on the parked output envelope and on\nevery log line's `detail.fields.execution_id`, stamped by the executor's\n`enrich_log_fields`). Matched against `detail.fields.execution_id` with a\nfallback to a top-level `detail.execution_id` to mirror the frontend's\nhistorical client-side filter.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -10567,7 +10579,8 @@
           "surya",
           "smtp",
           "catalogue_query",
-          "postgres"
+          "postgres",
+          "loki"
         ]
       },
       "ExecutionSpecConfig": {
@@ -12366,6 +12379,88 @@
             }
           }
         }
+      },
+      "LokiConfig": {
+        "type": "object",
+        "description": "Configuration for a single Loki query job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.",
+        "required": [
+          "resource_alias",
+          "query"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/LokiDirection",
+            "description": "Search direction. Defaults to `Backward` (newest-first)."
+          },
+          "end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "End of the time window (RFC3339 timestamp or unix nanoseconds).\n\nMay carry `{{slug.field}}` references. When absent the backend defaults\nto \"now\" (range queries only)."
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum number of entries returned. Defaults to 1000.",
+            "minimum": 0
+          },
+          "operation": {
+            "$ref": "#/components/schemas/LokiOperation",
+            "description": "Range query vs instant query. Defaults to `QueryRange`. The source of\ntruth for which Loki HTTP API path the backend targets."
+          },
+          "query": {
+            "type": "string",
+            "description": "The LogQL query.\n\nMay carry `{{slug.field}}` references resolved at runtime against the\nstaged producer envelopes. Interpolated values are escaped for a LogQL\ndouble-quoted string literal so an upstream value cannot break out of a\nmatcher."
+          },
+          "resource_alias": {
+            "type": "string",
+            "description": "Which workspace `loki` resource binds the connection. Required —\nthis is the connection binding; the compiler errors if absent. The\nresolved resource (base_url/token/org_id) is overlaid into the config\nbefore execution."
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Relative look-back duration used when `start`/`end` are absent, e.g.\n`\"5m\"`, `\"1h\"` (range queries only)."
+          },
+          "start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Start of the time window (RFC3339 timestamp or unix nanoseconds).\n\nMay carry `{{slug.field}}` references. When absent the backend derives\nthe start from `since` (range queries only)."
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Query resolution step for metric range queries, e.g. `\"30s\"`."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Per-request timeout in milliseconds. Defaults to 30000.\n\nCapped at the job-level `RunContext.timeout`.",
+            "minimum": 0
+          }
+        }
+      },
+      "LokiDirection": {
+        "type": "string",
+        "description": "Search direction for log queries.\n\n`Backward` (the default) returns the newest entries first — the usual\n\"tail\" view. `Forward` returns oldest-first. Passed through to Loki as the\n`direction` query parameter.",
+        "enum": [
+          "backward",
+          "forward"
+        ]
+      },
+      "LokiOperation": {
+        "type": "string",
+        "description": "Whether the step runs a range query or an instant query.\n\n`QueryRange` (the default) hits `/loki/api/v1/query_range` over a time\nwindow — the usual mode for log streams. `Query` hits\n`/loki/api/v1/query` for an instant query at a single point in time\n(typically a metric query). This is the source of truth for which Loki\nHTTP API path the backend targets.",
+        "enum": [
+          "query_range",
+          "query"
+        ]
       },
       "LoopAccumulator": {
         "type": "object",

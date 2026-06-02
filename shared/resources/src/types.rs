@@ -99,6 +99,30 @@ pub struct Anthropic {
     pub base_url: Option<String>,
 }
 
+/// Grafana Loki HTTP API binding for the `loki` log-query backend. Bind it on
+/// a `loki` AutomatedStep (ConfigOverlay channel) so the executor reads the
+/// endpoint + optional auth from the staged `<alias>.json` and runs the step's
+/// LogQL query against it.
+///
+/// In-cluster Loki is frequently unauthenticated, so `token` is optional —
+/// absent means no `Authorization` header is sent. `org_id` is the
+/// multi-tenant `X-Scope-OrgID` header, also optional.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "loki", display_name = "Loki", icon = "lucide-scroll-text")]
+pub struct Loki {
+    /// Base URL of the Loki HTTP API, e.g. `http://localhost:3100` (no trailing
+    /// `/loki/api/...` — the backend appends the API path).
+    pub base_url: String,
+    /// Optional bearer token for gateway / Grafana Cloud auth. Vault-stored.
+    /// Absent → no Authorization header (in-cluster Loki is often unauthenticated).
+    #[serde(default)]
+    #[resource(secret)]
+    pub token: Option<String>,
+    /// Optional `X-Scope-OrgID` tenant header for multi-tenant Loki.
+    #[serde(default)]
+    pub org_id: Option<String>,
+}
+
 /// Slack webhook target — v1 only supports incoming-webhook posting. Bot-
 /// token / OAuth Slack flows land in v2.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
