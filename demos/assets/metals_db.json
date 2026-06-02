@@ -17,7 +17,7 @@
     { "name": "Aluminum 6061", "density": 2.70, "e_modulus": 69 },
     { "name": "Titanium Ti-6Al-4V", "density": 4.51, "e_modulus": 114 },
     { "name": "Steel A36", "density": 7.85, "e_modulus": 200 },
-    { "name": "Copper C110", "density": 8.96, "e_modulus": 117 },
+    { "name": "Copper C110", "density": 8.96, "e_modulus": 117, "datasheet": { "__file": "files/copper_c110_datasheet.txt" } },
     { "name": "Magnesium AZ31", "density": 1.74, "e_modulus": 45 }
   ]
 }
