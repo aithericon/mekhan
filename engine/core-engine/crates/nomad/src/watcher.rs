@@ -23,12 +23,12 @@ use tokio_util::io::StreamReader;
 
 use petri_domain::ExternalSignal;
 use petri_scheduler_bridge::{
-    nomad_event_index_key, signal_subject, CheckpointStore, RoutingMeta, SignalPublisher,
-    DEV_BOOTSTRAP_CLUSTER_KEY,
+    nomad_event_index_key, signal_subject, AllocatedTres, AllocationMetrics, CheckpointStore,
+    RoutingMeta, SignalPublisher, DEV_BOOTSTRAP_CLUSTER_KEY,
 };
 
 use crate::config::NomadConfig;
-use crate::models::{Allocation, EventStreamData, Job};
+use crate::models::{Allocation, EventStreamData, Job, TaskEvent, TaskState};
 use crate::status_mapping;
 
 /// Errors from the Nomad event watcher.
@@ -416,19 +416,37 @@ impl NomadWatcher {
                         saw_terminal = true;
                     }
 
+                    let mut payload = serde_json::json!({
+                        "source": "nomad",
+                        "scheduler_job_id": alloc.job_id,
+                        "allocation_id": alloc.id,
+                        "job_status": job_status,
+                        "message": task_event.display_message,
+                        "node_id": alloc.node_id,
+                        "node_name": alloc.node_name,
+                    });
+                    // On terminal task events, flatten allocation accounting in
+                    // (payload-only enrichment). Non-terminal events keep just
+                    // the base fields.
+                    if job_status.is_terminal() {
+                        let metrics =
+                            build_nomad_metrics(alloc, task_state, Some(task_event));
+                        flatten_metrics(&mut payload, &metrics);
+                    } else {
+                        // Preserve the historical `exit_code` field on
+                        // non-terminal events for back-compat.
+                        if let Some(obj) = payload.as_object_mut() {
+                            obj.insert(
+                                "exit_code".into(),
+                                serde_json::json!(task_event.exit_code),
+                            );
+                        }
+                    }
+
                     let signal = ExternalSignal {
                         source: "nomad".to_string(),
                         signal_key: meta.signal_key.clone(),
-                        payload: serde_json::json!({
-                            "source": "nomad",
-                            "scheduler_job_id": alloc.job_id,
-                            "allocation_id": alloc.id,
-                            "job_status": job_status,
-                            "exit_code": task_event.exit_code,
-                            "message": task_event.display_message,
-                            "node_id": alloc.node_id,
-                            "node_name": alloc.node_name,
-                        }),
+                        payload,
                         timestamp: Utc::now(),
                         dedup_id: Some(msg_id.clone()),
                     };
@@ -452,18 +470,25 @@ impl NomadWatcher {
                     let target_place = meta.place_for_status(job_status.as_str());
                     let msg_id = format!("{}-alloc-{}", alloc.id, alloc.client_status);
 
+                    let mut payload = serde_json::json!({
+                        "source": "nomad",
+                        "scheduler_job_id": alloc.job_id,
+                        "allocation_id": alloc.id,
+                        "job_status": job_status,
+                        "client_status": alloc.client_status,
+                        "node_id": alloc.node_id,
+                        "node_name": alloc.node_name,
+                    });
+                    // Alloc-level fallback is only reached at terminal — flatten
+                    // metrics (no task state for our task, so task timing/exit
+                    // are absent; node + allocated_tres still populate).
+                    let metrics = build_nomad_metrics(alloc, &TaskState::default(), None);
+                    flatten_metrics(&mut payload, &metrics);
+
                     let signal = ExternalSignal {
                         source: "nomad".to_string(),
                         signal_key: meta.signal_key.clone(),
-                        payload: serde_json::json!({
-                            "source": "nomad",
-                            "scheduler_job_id": alloc.job_id,
-                            "allocation_id": alloc.id,
-                            "job_status": job_status,
-                            "client_status": alloc.client_status,
-                            "node_id": alloc.node_id,
-                            "node_name": alloc.node_name,
-                        }),
+                        payload,
                         timestamp: Utc::now(),
                         dedup_id: Some(msg_id.clone()),
                     };
@@ -478,5 +503,242 @@ impl NomadWatcher {
                 }
             }
         }
+    }
+}
+
+/// Flatten an [`AllocationMetrics`] into an existing JSON payload object.
+///
+/// Serializes the metrics to a JSON object and extends `payload` (which must be
+/// an object) with its keys. Skips silently if either side isn't an object or
+/// the metrics are empty — payload-only enrichment that never fails the publish.
+fn flatten_metrics(payload: &mut serde_json::Value, metrics: &AllocationMetrics) {
+    if metrics.is_empty() {
+        return;
+    }
+    if let (Some(obj), Ok(serde_json::Value::Object(extra))) =
+        (payload.as_object_mut(), serde_json::to_value(metrics))
+    {
+        obj.extend(extra);
+    }
+}
+
+/// Build [`AllocationMetrics`] for a terminal Nomad allocation.
+///
+/// Timing comes from the task state (`StartedAt`/`FinishedAt`) and alloc
+/// `CreateTime`; exit code from the terminal task event; node from the alloc
+/// `NodeName`; allocated TRES + gpu count from `AllocatedResources`. CPU/GPU
+/// seconds are derived from allocated resources × elapsed (Nomad's event stream
+/// does not carry per-task cpu/gpu utilization — that lives behind the client
+/// stats endpoint, intentionally not polled here). Peak RSS is likewise not in
+/// the event stream and is left `None`.
+fn build_nomad_metrics(
+    alloc: &Allocation,
+    task_state: &TaskState,
+    terminal_event: Option<&TaskEvent>,
+) -> AllocationMetrics {
+    let started_ms = parse_rfc3339_ms(&task_state.started_at);
+    let finished_ms = parse_rfc3339_ms(&task_state.finished_at);
+
+    let elapsed_ms = match (started_ms, finished_ms) {
+        (Some(s), Some(f)) => Some((f - s).max(0)),
+        _ => None,
+    };
+
+    // queue_wait = task start - alloc create.
+    let create_ms = if alloc.create_time > 0 {
+        Some(alloc.create_time / 1_000_000) // nanos → ms
+    } else {
+        None
+    };
+    let queue_wait_ms = match (create_ms, started_ms) {
+        (Some(c), Some(s)) => Some((s - c).max(0)),
+        _ => None,
+    };
+
+    // Allocated TRES + device (GPU) accounting from AllocatedResources for the
+    // configured task. Pick the single task share if there is exactly one, else
+    // fall back to summing — but the lease/worker job is single-task, so the
+    // first task is the right one.
+    let task_res = alloc
+        .allocated_resources
+        .as_ref()
+        .and_then(|r| r.tasks.values().next());
+
+    // AllocatedTres carries no gpu_type slot (only RequestedTres does, and Nomad
+    // doesn't surface a requested-vs-allocated split in the alloc event), so we
+    // extract only the allocated cpu-shares / memory / gpu COUNT here.
+    let (alloc_cpu_shares, alloc_mem_mb, gpu_count) = match task_res {
+        Some(t) => {
+            let gpus: i64 = t
+                .devices
+                .iter()
+                .filter(|d| d.type_field.eq_ignore_ascii_case("gpu"))
+                .map(|d| d.device_ids.len() as i64)
+                .sum();
+            (
+                if t.cpu.cpu_shares > 0 {
+                    Some(t.cpu.cpu_shares)
+                } else {
+                    None
+                },
+                if t.memory.memory_mb > 0 {
+                    Some(t.memory.memory_mb)
+                } else {
+                    None
+                },
+                if gpus > 0 { Some(gpus) } else { None },
+            )
+        }
+        None => (None, None, None),
+    };
+
+    let allocated_tres = AllocatedTres {
+        // Nomad allocates CPU as MHz shares, not whole cores — leave cpu_count
+        // unset (it isn't a comparable core count) but keep memory.
+        cpu_count: None,
+        gpu_count,
+        memory_gb: alloc_mem_mb.map(|mb| mb as f64 / 1024.0),
+    }
+    .non_empty();
+
+    // gpu_seconds: allocated gpu count × elapsed seconds.
+    let gpu_seconds = match (gpu_count, elapsed_ms) {
+        (Some(g), Some(ms)) if g > 0 => Some(g as f64 * (ms as f64 / 1_000.0)),
+        _ => None,
+    };
+
+    let node = if alloc.node_name.trim().is_empty() {
+        None
+    } else {
+        Some(alloc.node_name.clone())
+    };
+
+    // exit_code from the terminal event (Terminated/Killed carry it). The model
+    // field is i32; widen to i64 for the metric.
+    let exit_code = terminal_event.map(|e| e.exit_code as i64);
+
+    let _ = alloc_cpu_shares; // recorded above for clarity; not surfaced as a metric
+
+    AllocationMetrics {
+        exit_code,
+        node,
+        queue_wait_ms,
+        elapsed_ms,
+        // Nomad's event stream lacks per-task cpu utilization — left None.
+        cpu_seconds: None,
+        gpu_seconds,
+        // memory_max / peak RSS lives behind the client stats endpoint — None.
+        peak_rss_bytes: None,
+        // Nomad's allocation event does not carry the requested TRES distinctly
+        // (only the allocated share); requested is omitted here.
+        requested_tres: None,
+        allocated_tres,
+    }
+}
+
+/// Parse an RFC3339 timestamp (Nomad task `StartedAt`/`FinishedAt`) into epoch
+/// milliseconds. Returns `None` for empty / unparseable / zero-time values.
+fn parse_rfc3339_ms(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if s.is_empty() || s.starts_with("0001-01-01") {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        AllocatedCpu, AllocatedDevice, AllocatedMemory, AllocatedResources, AllocatedTaskResources,
+    };
+    use std::collections::HashMap;
+
+    fn term_event(code: i32) -> TaskEvent {
+        TaskEvent {
+            type_field: "Terminated".into(),
+            exit_code: code,
+            display_message: "done".into(),
+            time: 0,
+        }
+    }
+
+    #[test]
+    fn build_metrics_timing_and_exit() {
+        let task_state = TaskState {
+            state: "dead".into(),
+            started_at: "2026-05-29T12:00:05Z".into(),
+            finished_at: "2026-05-29T12:00:20Z".into(),
+            ..Default::default()
+        };
+        let alloc = Allocation {
+            id: "a1".into(),
+            job_id: "j1".into(),
+            node_name: "worker-1".into(),
+            // 2026-05-29T12:00:00Z in nanos
+            create_time: 1780056000i64 * 1_000_000_000,
+            ..Default::default()
+        };
+        let m = build_nomad_metrics(&alloc, &task_state, Some(&term_event(0)));
+        assert_eq!(m.exit_code, Some(0));
+        assert_eq!(m.node, Some("worker-1".into()));
+        assert_eq!(m.elapsed_ms, Some(15_000));
+        // start - create = 5s
+        assert_eq!(m.queue_wait_ms, Some(5_000));
+    }
+
+    #[test]
+    fn build_metrics_gpu_and_memory_from_allocated_resources() {
+        let mut tasks = HashMap::new();
+        tasks.insert(
+            "petri-worker".to_string(),
+            AllocatedTaskResources {
+                cpu: AllocatedCpu { cpu_shares: 2000 },
+                memory: AllocatedMemory { memory_mb: 2048 },
+                devices: vec![AllocatedDevice {
+                    type_field: "gpu".into(),
+                    name: "a100".into(),
+                    device_ids: vec!["GPU-0".into(), "GPU-1".into()],
+                }],
+            },
+        );
+        let task_state = TaskState {
+            started_at: "2026-05-29T12:00:00Z".into(),
+            finished_at: "2026-05-29T12:00:10Z".into(),
+            ..Default::default()
+        };
+        let alloc = Allocation {
+            allocated_resources: Some(AllocatedResources { tasks }),
+            ..Default::default()
+        };
+        let m = build_nomad_metrics(&alloc, &task_state, Some(&term_event(0)));
+        let at = m.allocated_tres.unwrap();
+        assert_eq!(at.gpu_count, Some(2));
+        assert_eq!(at.memory_gb, Some(2.0));
+        // gpu_seconds = 2 gpus × 10s
+        assert_eq!(m.gpu_seconds, Some(20.0));
+    }
+
+    #[test]
+    fn flatten_skips_empty_metrics() {
+        let mut payload = serde_json::json!({"source": "nomad"});
+        flatten_metrics(&mut payload, &AllocationMetrics::default());
+        assert_eq!(payload, serde_json::json!({"source": "nomad"}));
+    }
+
+    #[test]
+    fn flatten_merges_metric_keys() {
+        let mut payload = serde_json::json!({"source": "nomad", "scheduler_job_id": "j"});
+        let m = AllocationMetrics {
+            exit_code: Some(1),
+            node: Some("n2".into()),
+            ..Default::default()
+        };
+        flatten_metrics(&mut payload, &m);
+        assert_eq!(payload["source"], "nomad");
+        assert_eq!(payload["exit_code"], 1);
+        assert_eq!(payload["node"], "n2");
     }
 }

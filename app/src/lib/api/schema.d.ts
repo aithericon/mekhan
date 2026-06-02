@@ -369,6 +369,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/clusters/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/clusters/metrics?window=24h
+         * @description Live-aggregated [`FleetMetrics`] over the `allocations` projection for the
+         *     caller's workspace: one [`ClusterMetrics`] per datacenter the workspace
+         *     touched in-window, plus a `fleet_total` rollup over the same row set. Counts
+         *     are over `datacenter_lease` rows with `acquired_at` inside the rolling
+         *     `[now - window, now]` window. NULL-`instance_id` pool-management nets are
+         *     excluded (not workspace-attributable). Default window `24h`.
+         */
+        get: operations["fleet_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clusters/{resource_id}/drain": {
         parameters: {
             query?: never;
@@ -385,6 +410,58 @@ export interface paths {
          *     engine's `POST /api/clusters/{resource_id}/drain`.
          */
         post: operations["drain_cluster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clusters/{resource_id}/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/clusters/{resource_id}/leases
+         * @description List the datacenter leases this cluster held, from the `allocations`
+         *     projection (`kind = 'datacenter_lease'`, filtered to this datacenter
+         *     resource). Distinct from `active_lease_count` on the live `ClusterSummary`
+         *     (an instantaneous gauge) — this is the historical ledger of leases against
+         *     the cluster, newest first, each with timing + accounting (`duration_ms`
+         *     computed: `released_at - acquired_at`, or live for a still-`held` lease).
+         *
+         *     `resource_id` is a datacenter resource UUID; the `_env` dev-bootstrap
+         *     cluster has no resource row and therefore no leases (returns `400` on an
+         *     unparseable id rather than silently emptying).
+         */
+        get: operations["list_cluster_leases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clusters/{resource_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/clusters/{resource_id}/metrics?window=7d
+         * @description Live-aggregated [`ClusterMetrics`] over the `allocations` projection for a
+         *     single datacenter resource, scoped to the caller's workspace. Same window
+         *     semantics as the fleet endpoint. Returns an all-zero `ClusterMetrics` (not a
+         *     404) when the cluster has no in-window leases in the workspace.
+         */
+        get: operations["cluster_metrics"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -513,6 +590,33 @@ export interface paths {
         post?: never;
         /** DELETE /api/v1/instances/:id */
         delete: operations["cancel_instance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instances/{id}/allocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/instances/:id/allocations
+         * @description Lists the resource grants (datacenter leases + token-pool admissions) this
+         *     instance held over its lifetime, from the `allocations` projection table.
+         *     Each row is one `(net_id, grant_id, kind)` grant: a LeaseScope / Loop body
+         *     holding a Slurm/Nomad/HTTP allocation (`datacenter_lease`), or an admission
+         *     against one of our own worker pools (`token_pool_grant`). The instance view
+         *     surfaces these to show "what did this run hold, for how long, and at what
+         *     cost" — `duration_ms` is computed (`released_at - acquired_at`, or live for
+         *     a still-`held` grant). Ordered by `acquired_at` (acquisition order).
+         */
+        get: operations["list_instance_allocations"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2206,6 +2310,88 @@ export interface components {
              */
             subject: string;
         };
+        /**
+         * @description Response shape for `GET /api/v1/instances/{id}/allocations` and
+         *     `GET /api/v1/clusters/{id}/leases`.
+         *
+         *     One row of the `allocations` projection table — a resource grant on the
+         *     Petri substrate: either a `datacenter_lease` (an external-cluster
+         *     Slurm/Nomad/HTTP allocation held by a LeaseScope / Loop body) or a
+         *     `token_pool_grant` (an admission against one of our own worker pools).
+         *     Materialized field-for-field by the allocations projection consumer
+         *     (sequence-guarded upsert keyed on `(net_id, grant_id, kind)`), with a
+         *     computed `duration_ms` overlaid the same way `StepExecutionResponse` does.
+         *
+         *     Every nullable column mirrors a `NULL`-able DB column: pool grants carry no
+         *     `cluster_resource_id` / `scheduler_flavor`; pool-management nets carry no
+         *     `instance_id`; timing/accounting fields fill in as the grant progresses.
+         */
+        AllocationResponse: {
+            /** Format: date-time */
+            acquired_at?: string | null;
+            /** @description Slurm jobid / Nomad dispatched job id. */
+            alloc_id?: string | null;
+            allocated_tres?: unknown;
+            /**
+             * Format: uuid
+             * @description Datacenter resource; `None` for `token_pool_grant`.
+             */
+            cluster_resource_id?: string | null;
+            /**
+             * Format: int64
+             * @description Rounded CPU-seconds (the engine payload float is rounded to `i64`).
+             */
+            cpu_seconds?: number | null;
+            /**
+             * Format: int64
+             * @description `released_at - acquired_at`, or `now - acquired_at` while `held`.
+             *     `None` until the grant is acquired. Computed by the handler — not a
+             *     column, so it defaults to `None` when read via `FromRow`.
+             */
+            duration_ms?: number | null;
+            /** Format: int64 */
+            elapsed_ms?: number | null;
+            /** @description `lease-<sanitized grant_id>`. */
+            executor_namespace?: string | null;
+            /** Format: int32 */
+            exit_code?: number | null;
+            /** Format: date-time */
+            expiry?: string | null;
+            /** Format: int64 */
+            gpu_seconds?: number | null;
+            /** @description Engine grant key (`instance_id:node_id`); equals the accounting signal key. */
+            grant_id: string;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description Resolved owning instance; `None` for pool-management nets.
+             */
+            instance_id?: string | null;
+            /** @description `"datacenter_lease" | "token_pool_grant"`. */
+            kind: string;
+            last_error?: string | null;
+            /** Format: int64 */
+            last_sequence: number;
+            net_id: string;
+            /** @description Placement host. */
+            node?: string | null;
+            /** @description Workflow node / LeaseScope container id that holds the grant. */
+            node_id?: string | null;
+            /** Format: int64 */
+            peak_rss_bytes?: number | null;
+            /** Format: int64 */
+            queue_wait_ms?: number | null;
+            /** Format: date-time */
+            released_at?: string | null;
+            /** Format: date-time */
+            requested_at?: string | null;
+            requested_tres?: unknown;
+            /** @description `"slurm" | "nomad" | "http"`; `None` for pool grants. */
+            scheduler_flavor?: string | null;
+            /** @description `"pending" | "held" | "released" | "failed" | "expired"`. */
+            status: string;
+        };
         AncestryNode: {
             /** Format: int32 */
             depth: number;
@@ -2508,6 +2694,90 @@ export interface components {
              */
             applied: boolean;
             resource_id: string;
+        };
+        /**
+         * @description Live-aggregated accounting for one cluster (or the fleet rollup) over a
+         *     rolling time window, computed straight off the `allocations` projection.
+         *
+         *     All counts/sums are over `datacenter_lease` rows whose `acquired_at` falls
+         *     inside `[window_start, window_end]` AND whose owning instance resolves into
+         *     the requesting user's workspace (NULL-`instance_id` pool-management nets are
+         *     excluded — they are not workspace-attributable). The percentiles are
+         *     `PERCENTILE_CONT` over `queue_wait_ms` of the acquired rows; the `held_*`
+         *     gauges are an instantaneous read of the still-held leases (`released_at IS
+         *     NULL`), decoded best-effort from `requested_tres`.
+         */
+        ClusterMetrics: {
+            /**
+             * Format: int64
+             * @description Currently-held leases (`released_at IS NULL`) — instantaneous gauge.
+             */
+            active_lease_count: number;
+            /** @description Datacenter `resource_id` (UUID string), or `"fleet"` for the rollup. */
+            cluster_id: string;
+            /**
+             * Format: int64
+             * @description Σ `cpu_seconds` over released rows.
+             */
+            cpu_seconds_total: number;
+            /**
+             * Format: int64
+             * @description Leases that ended `failed` or `expired`.
+             */
+            failed_count: number;
+            /**
+             * Format: int64
+             * @description Σ `gpu_seconds` over released rows.
+             */
+            gpu_seconds_total: number;
+            /**
+             * Format: int64
+             * @description Σ requested CPU-count of currently-held leases (best-effort, NULL-safe).
+             */
+            held_cpu_seconds: number;
+            /**
+             * Format: int64
+             * @description Σ requested GPU-count of currently-held leases (best-effort, NULL-safe).
+             */
+            held_gpu_seconds: number;
+            /**
+             * Format: int64
+             * @description Total leases acquired in-window.
+             */
+            lease_count: number;
+            /**
+             * Format: int64
+             * @description Σ `peak_rss_bytes` over released rows.
+             */
+            peak_rss_bytes_total: number;
+            /**
+             * Format: double
+             * @description `PERCENTILE_CONT(0.5)` of `queue_wait_ms` over acquired rows.
+             */
+            queue_wait_p50_ms?: number | null;
+            /** Format: double */
+            queue_wait_p95_ms?: number | null;
+            /** Format: double */
+            queue_wait_p99_ms?: number | null;
+            /**
+             * Format: int64
+             * @description Leases that reached `status = 'released'`.
+             */
+            released_count: number;
+            /**
+             * @description The datacenter resource's snake_case `path`, when it resolves. `None`
+             *     for the fleet rollup or a deleted resource.
+             */
+            resource_path?: string | null;
+            /**
+             * Format: double
+             * @description `released_count / lease_count` (0.0 when no leases).
+             */
+            success_rate: number;
+            /** Format: date-time */
+            window_end: string;
+            /** Format: date-time */
+            window_start: string;
         };
         /**
          * @description One live cluster's observable state, as surfaced to the control plane.
@@ -3104,6 +3374,15 @@ export interface components {
         FireTriggerResponse: {
             outcome?: null | components["schemas"]["TerminalOutcome"];
             result: components["schemas"]["FireResult"];
+        };
+        /**
+         * @description `GET /api/v1/clusters/metrics` response — one [`ClusterMetrics`] per cluster
+         *     the caller's workspace touched in-window, plus a `fleet_total` rollup over
+         *     the same windowed, workspace-scoped row set.
+         */
+        FleetMetrics: {
+            clusters: components["schemas"]["ClusterMetrics"][];
+            fleet_total: components["schemas"]["ClusterMetrics"];
         };
         /** @description Flattened guard diagnostic (`node_id` is highlighted in the editor). */
         GuardDiagnosticDto: {
@@ -6797,6 +7076,50 @@ export interface operations {
             };
         };
     };
+    fleet_metrics: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Lookback window: `Nd` / `Nh` / `Nm` (days / hours / minutes), e.g.
+                 *     `24h`, `7d`, `90m`. Defaults to `24h`.
+                 */
+                window?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-cluster + fleet-total accounting over the window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetMetrics"];
+                };
+            };
+            /** @description Invalid window */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     drain_cluster: {
         parameters: {
             query?: never;
@@ -6820,6 +7143,94 @@ export interface operations {
             };
             /** @description Engine cluster API unavailable */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_cluster_leases: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Datacenter resource id (UUID) */
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Datacenter leases held against this cluster */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationResponse"][];
+                };
+            };
+            /** @description resource_id is not a valid datacenter UUID */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cluster_metrics: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Lookback window: `Nd` / `Nh` / `Nm` (days / hours / minutes), e.g.
+                 *     `24h`, `7d`, `90m`. Defaults to `24h`.
+                 */
+                window?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Datacenter resource id (UUID) */
+                resource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Windowed accounting for this datacenter */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterMetrics"];
+                };
+            };
+            /** @description Invalid resource_id or window */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7124,6 +7535,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowInstance"];
+                };
+            };
+            /** @description Instance not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_instance_allocations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Instance id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource grants held by this instance */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllocationResponse"][];
                 };
             };
             /** @description Instance not found */

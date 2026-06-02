@@ -23,6 +23,7 @@ import Timer from '@lucide/svelte/icons/timer';
 import TimerOff from '@lucide/svelte/icons/timer-off';
 import Bot from '@lucide/svelte/icons/bot';
 import Box from '@lucide/svelte/icons/box';
+import Server from '@lucide/svelte/icons/server';
 
 export type NodeKindMeta = {
 	/** Lucide icon component. */
@@ -52,7 +53,9 @@ const KIND_META: Record<string, NodeKindMeta> = {
 	phase_update: { icon: Flag, label: 'Phase update',   iconClass: 'text-white', chipClass: 'bg-node-phase-update' },
 	progress_update: { icon: Gauge, label: 'Progress update', iconClass: 'text-white', chipClass: 'bg-node-progress-update' },
 	trigger: { icon: Zap,      label: 'Trigger',         iconClass: 'text-white', chipClass: 'bg-node-trigger' },
-	scope: { icon: Box,        label: 'Scope',           iconClass: 'text-white', chipClass: 'bg-node-scope' }
+	scope: { icon: Box,        label: 'Scope',           iconClass: 'text-white', chipClass: 'bg-node-scope' },
+	scheduled: { icon: Timer,  label: 'Scheduled',       iconClass: 'text-white', chipClass: 'bg-node-delay' },
+	lease_scope: { icon: Server, label: 'Lease scope',   iconClass: 'text-white', chipClass: 'bg-node-scope' }
 };
 
 const DEFAULT: NodeKindMeta = {

@@ -77,6 +77,9 @@ pub struct NomadAllocatorClient {
     http: reqwest::Client,
     /// The parameterized job ID dispatched per-acquire (the drain executor).
     lease_job_template: String,
+    /// Bounded budget for the best-effort post-dispatch placement-node poll.
+    /// Defaults to ~30s; tests set 0 to skip the poll entirely.
+    placement_poll_budget: std::time::Duration,
 }
 
 #[cfg(feature = "nomad")]
@@ -103,6 +106,7 @@ impl NomadAllocatorClient {
             config,
             http,
             lease_job_template,
+            placement_poll_budget: std::time::Duration::from_secs(30),
         })
     }
 
@@ -214,19 +218,114 @@ impl NomadAllocatorClient {
             "nomad lease: dispatched persistent drain executor",
         );
 
-        // `DatacenterLease`: only `alloc_id` is required. node/expiry are
-        // unresolved at dispatch (the watcher streams placement asynchronously),
-        // so they're OMITTED rather than emitted as empty strings — the drain
-        // executor self-identifies via the namespace. The `scheduler` detail is
-        // the typed `nomad` variant carrying the dispatch evaluation id.
-        Ok(json!({
+        // Best-effort, BOUNDED post-dispatch poll for the placement node. Unlike
+        // Slurm's synchronous scontrol, Nomad placement is async — we poll
+        // `GET /v1/allocation?job=<dispatched_job_id>` for up to ~30s to capture
+        // the node the drain executor landed on (telemetry parity with Slurm's
+        // lease node). On timeout we leave `node` null; the terminal signal's
+        // AllocationMetrics will still carry it once the watcher observes the
+        // alloc. NON-fatal: any error/timeout just omits the field.
+        let node = self
+            .poll_placement_node(&dispatch_resp.dispatched_job_id)
+            .await;
+
+        // `DatacenterLease`: only `alloc_id` is required. `expiry` is unresolved
+        // at dispatch and OMITTED. `node` is included ONLY when the bounded poll
+        // resolved it (else omitted, not empty-string). The `scheduler` detail
+        // is the typed `nomad` variant carrying the dispatch evaluation id.
+        let mut lease = json!({
             "alloc_id": dispatch_resp.dispatched_job_id,
             "executor_namespace": executor_namespace,
             "scheduler": {
                 "flavor": "nomad",
                 "eval_id": dispatch_resp.eval_id,
             },
-        }))
+        });
+        if let Some(node) = node {
+            if let Some(obj) = lease.as_object_mut() {
+                obj.insert("node".to_string(), json!(node));
+            }
+        }
+        Ok(lease)
+    }
+
+    /// BOUNDED, best-effort poll of `GET /v1/allocation?job=<job_id>` for the
+    /// placement node name. Polls every 1s up to ~30s; returns the first
+    /// allocation's non-empty `NodeName`, or `None` on timeout / any error
+    /// (NEVER fails the acquire). On timeout the node is filled later by the
+    /// terminal signal's AllocationMetrics.
+    async fn poll_placement_node(&self, dispatched_job_id: &str) -> Option<String> {
+        use std::time::{Duration, Instant};
+
+        let budget = self.placement_poll_budget;
+        // Zero budget → skip the poll entirely (tests / opt-out).
+        if budget.is_zero() {
+            return None;
+        }
+        const INTERVAL: Duration = Duration::from_secs(1);
+
+        // Nomad's allocations-list (`/v1/allocations?prefix=` or `?job=`) returns
+        // a slim list; the per-job filter is `?job=<id>`. We reuse the watcher's
+        // `Allocation` model (its `node_name` field is present on list stubs).
+        let url = format!(
+            "{}/v1/allocations?job={}&region={}",
+            self.config.addr.trim_end_matches('/'),
+            dispatched_job_id,
+            self.config.region,
+        );
+
+        let deadline = Instant::now() + budget;
+        loop {
+            let resp = match self.auth(self.http.get(&url)).send().await {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    tracing::debug!(
+                        status = %r.status(),
+                        dispatched_job_id,
+                        "nomad lease: placement poll non-200 (will retry within budget)"
+                    );
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    tokio::time::sleep(INTERVAL).await;
+                    continue;
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, dispatched_job_id, "nomad lease: placement poll transport error");
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    tokio::time::sleep(INTERVAL).await;
+                    continue;
+                }
+            };
+
+            if let Ok(allocs) =
+                resp.json::<Vec<petri_nomad::models::Allocation>>().await
+            {
+                if let Some(node) = allocs
+                    .iter()
+                    .map(|a| a.node_name.trim())
+                    .find(|n| !n.is_empty())
+                {
+                    tracing::info!(
+                        dispatched_job_id,
+                        node,
+                        "nomad lease: resolved placement node via post-dispatch poll"
+                    );
+                    return Some(node.to_string());
+                }
+            }
+
+            if Instant::now() >= deadline {
+                tracing::debug!(
+                    dispatched_job_id,
+                    "nomad lease: placement node unresolved within budget — leaving node null"
+                );
+                return None;
+            }
+            tokio::time::sleep(INTERVAL).await;
+        }
     }
 
     /// Stop the dispatched drain-executor job: `nomad job stop` →
@@ -401,11 +500,13 @@ mod tests {
             addr: addr.to_string(),
             ..NomadConfig::default()
         };
-        // bypass env-driven template selection for the test
+        // bypass env-driven template selection for the test; skip the bounded
+        // placement poll (the one-shot fake Nomad only serves the dispatch POST).
         NomadAllocatorClient {
             http: config.build_http_client().unwrap(),
             config,
             lease_job_template: "petri-lease-executor".to_string(),
+            placement_poll_budget: std::time::Duration::ZERO,
         }
     }
 

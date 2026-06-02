@@ -98,6 +98,7 @@ export type CreateInstanceRequest = components['schemas']['CreateInstanceRequest
 export type InstanceStateResponse = components['schemas']['InstanceStateResponse'];
 export type StepExecution = components['schemas']['StepExecutionResponse'];
 export type InstanceChild = components['schemas']['InstanceChild'];
+export type AllocationResponse = components['schemas']['AllocationResponse'];
 
 // ─── Processes / HPI ────────────────────────────────────────────────────────
 export type HpiProcess = components['schemas']['HpiProcess'];
@@ -592,6 +593,21 @@ export async function listStepExecutions(id: string): Promise<StepExecution[]> {
 			params: { path: { id } }
 		})
 	) as StepExecution[];
+}
+
+/**
+ * Resource grants (datacenter leases / token-pool grants) held by this
+ * instance over its lifetime, from the `allocations` projection table.
+ * Returns one `AllocationResponse` per grant, ordered by `requested_at`.
+ * Mirrors `listStepExecutions` — the array is always present (empty list
+ * when no scheduler steps have run).
+ */
+export async function listAllocations(id: string): Promise<AllocationResponse[]> {
+	return unwrap(
+		await client.GET('/api/v1/instances/{id}/allocations', {
+			params: { path: { id } }
+		})
+	) as AllocationResponse[];
 }
 
 /**

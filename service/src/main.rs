@@ -154,6 +154,14 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // Allocations projection (PETRI_GLOBAL domain events → allocations table).
+    // Folds resource-lease acquire/release effects + accounting signals into
+    // per-grant rows for the control-plane allocations / instance overlays.
+    tokio::spawn(mekhan_service::projections::allocations::start_allocations_ingest(
+        mekhan_nats.clone(),
+        db.clone(),
+    ));
+
     // Engine-initiated human task cancellations. When a Timeout's timer wins
     // the SLA race, the engine fires `human_cancel` and publishes to
     // `human.cancel.{net_id}.{place}` — without this listener, hpi_tasks

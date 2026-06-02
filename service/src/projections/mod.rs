@@ -5,4 +5,5 @@
 //! into a dedicated table for fast UI queries. The projector function is
 //! reused by tests (offline replay) and by the consumer (online ingest).
 
+pub mod allocations;
 pub mod step_executions;

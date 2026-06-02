@@ -94,6 +94,87 @@ pub struct StepExecutionResponse {
     pub error: Option<serde_json::Value>,
 }
 
+/// Response shape for `GET /api/v1/instances/{id}/allocations` and
+/// `GET /api/v1/clusters/{id}/leases`.
+///
+/// One row of the `allocations` projection table — a resource grant on the
+/// Petri substrate: either a `datacenter_lease` (an external-cluster
+/// Slurm/Nomad/HTTP allocation held by a LeaseScope / Loop body) or a
+/// `token_pool_grant` (an admission against one of our own worker pools).
+/// Materialized field-for-field by the allocations projection consumer
+/// (sequence-guarded upsert keyed on `(net_id, grant_id, kind)`), with a
+/// computed `duration_ms` overlaid the same way `StepExecutionResponse` does.
+///
+/// Every nullable column mirrors a `NULL`-able DB column: pool grants carry no
+/// `cluster_resource_id` / `scheduler_flavor`; pool-management nets carry no
+/// `instance_id`; timing/accounting fields fill in as the grant progresses.
+#[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+pub struct AllocationResponse {
+    pub id: Uuid,
+    /// `"datacenter_lease" | "token_pool_grant"`.
+    pub kind: String,
+    pub net_id: String,
+    /// Resolved owning instance; `None` for pool-management nets.
+    pub instance_id: Option<Uuid>,
+    /// Workflow node / LeaseScope container id that holds the grant.
+    pub node_id: Option<String>,
+    /// Engine grant key (`instance_id:node_id`); equals the accounting signal key.
+    pub grant_id: String,
+    /// Datacenter resource; `None` for `token_pool_grant`.
+    pub cluster_resource_id: Option<Uuid>,
+    /// `"slurm" | "nomad" | "http"`; `None` for pool grants.
+    pub scheduler_flavor: Option<String>,
+    /// Slurm jobid / Nomad dispatched job id.
+    pub alloc_id: Option<String>,
+    /// Placement host.
+    pub node: Option<String>,
+    /// `lease-<sanitized grant_id>`.
+    pub executor_namespace: Option<String>,
+    /// `"pending" | "held" | "released" | "failed" | "expired"`.
+    pub status: String,
+    pub requested_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub acquired_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub released_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub expiry: Option<chrono::DateTime<chrono::Utc>>,
+    pub exit_code: Option<i32>,
+    pub queue_wait_ms: Option<i64>,
+    pub elapsed_ms: Option<i64>,
+    /// Rounded CPU-seconds (the engine payload float is rounded to `i64`).
+    pub cpu_seconds: Option<i64>,
+    pub gpu_seconds: Option<i64>,
+    pub peak_rss_bytes: Option<i64>,
+    pub requested_tres: Option<serde_json::Value>,
+    pub allocated_tres: Option<serde_json::Value>,
+    pub last_error: Option<String>,
+    pub last_sequence: i64,
+    /// `released_at - acquired_at`, or `now - acquired_at` while `held`.
+    /// `None` until the grant is acquired. Computed by the handler — not a
+    /// column, so it defaults to `None` when read via `FromRow`.
+    #[sqlx(default)]
+    pub duration_ms: Option<i64>,
+}
+
+impl AllocationResponse {
+    /// Overlay the computed `duration_ms` (the row's own column is absent, so
+    /// `FromRow` left it `None`): `released_at - acquired_at` for a finished
+    /// grant, or `now - acquired_at` for one still `held`.
+    pub fn with_duration(mut self) -> Self {
+        self.duration_ms = match (self.acquired_at, self.released_at) {
+            (Some(a), Some(r)) => Some((r - a).num_milliseconds()),
+            (Some(a), None) if self.status == "held" => {
+                Some((chrono::Utc::now() - a).num_milliseconds())
+            }
+            _ => None,
+        };
+        self
+    }
+}
+
+/// Alias for the cluster-leases view (`GET /api/v1/clusters/{id}/leases`),
+/// which returns the same `allocations` shape filtered to `datacenter_lease`
+/// rows for one datacenter resource. Same wire shape as [`AllocationResponse`].
+pub type LeaseResponse = AllocationResponse;
+
 /// One spawned sub-workflow child run of a parent instance, returned by
 /// `GET /api/v1/instances/{id}/children`. A SubWorkflow node runs its child as
 /// a separate engine net; the causality ingest registers each spawn as a

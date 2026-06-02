@@ -174,6 +174,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::clusters::list_clusters))
         .routes(routes!(handlers::clusters::reconnect_cluster))
         .routes(routes!(handlers::clusters::drain_cluster))
+        .routes(routes!(handlers::clusters::list_cluster_leases))
+        .routes(routes!(handlers::clusters::fleet_metrics))
+        .routes(routes!(handlers::clusters::cluster_metrics))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,
@@ -200,6 +203,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::instances::get_instance_events))
         .routes(routes!(handlers::instances::list_step_executions))
         .routes(routes!(handlers::instances::list_instance_children))
+        .routes(routes!(handlers::instances::list_instance_allocations))
         .routes(routes!(handlers::instances::stream_instance))
         // Processes (HPI inspection)
         .routes(routes!(process::handlers::list_processes))

@@ -384,4 +384,32 @@ impl MekhanNats {
             .await?;
         Ok(consumer)
     }
+
+    /// Create or get the durable consumer for the allocations projection.
+    /// Consumes `petri.events.>` and folds resource-lease acquire/release
+    /// `EffectCompleted` events (plus the accounting-signal `TokenCreated`
+    /// events the per-cluster watcher injects) into per-grant rows via the
+    /// projector in `service/src/projections/allocations/`.
+    ///
+    /// The enriched terminal accounting payload lands in the SAME PETRI_GLOBAL
+    /// log as a `TokenCreated` tagged `signal_key == grant_id`, so this single
+    /// `petri.events.>` consumer sees it — no second `petri.signal.>` consumer
+    /// is required (see the consumer module docs).
+    pub async fn allocations_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
+        let durable = self.durable_name("mekhan-allocations");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
 }

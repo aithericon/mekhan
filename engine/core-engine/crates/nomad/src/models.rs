@@ -134,7 +134,7 @@ pub struct EventPayload {
 }
 
 /// Nomad allocation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Allocation {
     /// Allocation ID.
@@ -161,6 +161,88 @@ pub struct Allocation {
     /// The job spec (for accessing meta tags).
     #[serde(default)]
     pub job: Option<AllocationJob>,
+    /// Allocation create time (Unix nanos) — start of queue wait.
+    #[serde(default)]
+    pub create_time: i64,
+    /// Resources actually allocated to this alloc (for `allocated_tres`).
+    #[serde(default)]
+    pub allocated_resources: Option<AllocatedResources>,
+}
+
+/// `Allocation.AllocatedResources` — the resources Nomad placed for the alloc.
+///
+/// We read the per-task share for the configured task plus the shared network
+/// (unused here). Only the subset needed for `allocated_tres` is modeled.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AllocatedResources {
+    /// Per-task allocated resources, keyed by task name.
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub tasks: HashMap<String, AllocatedTaskResources>,
+}
+
+/// `AllocatedResources.Tasks[task]` — cpu/memory/devices for one task.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AllocatedTaskResources {
+    /// CPU share.
+    #[serde(default)]
+    pub cpu: AllocatedCpu,
+    /// Memory share.
+    #[serde(default)]
+    pub memory: AllocatedMemory,
+    /// Allocated devices (GPUs, etc.). Nomad emits `"Devices": null` when none
+    /// are assigned, so tolerate explicit null (not just a missing key).
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub devices: Vec<AllocatedDevice>,
+}
+
+/// Deserialize helper: coerce an explicit JSON `null` to `T::default()`.
+///
+/// Nomad renders empty collections as `null` rather than `[]`/`{}` in several
+/// places (e.g. `Devices`, `DeviceIDs`). `#[serde(default)]` only covers a
+/// MISSING key — an explicit null still errors with "invalid type: null". This
+/// wraps the value in `Option` and falls back to default on null.
+fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// CPU portion of an allocated task resource block.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AllocatedCpu {
+    /// Allocated CPU shares (MHz). Not a core count, but recorded for context.
+    #[serde(default, rename = "CpuShares")]
+    pub cpu_shares: i64,
+}
+
+/// Memory portion of an allocated task resource block.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AllocatedMemory {
+    /// Allocated memory in mebibytes.
+    #[serde(default, rename = "MemoryMB")]
+    pub memory_mb: i64,
+}
+
+/// An allocated device block (e.g. GPUs). `Type` is the device family
+/// (`gpu`), `Name` the model, `DeviceIDs` the assigned units.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AllocatedDevice {
+    /// Device type (e.g. `gpu`).
+    #[serde(default, rename = "Type")]
+    pub type_field: String,
+    /// Device name/model.
+    #[serde(default)]
+    pub name: String,
+    /// Assigned device unit IDs.
+    #[serde(default, rename = "DeviceIDs", deserialize_with = "null_to_default")]
+    pub device_ids: Vec<String>,
 }
 
 /// Minimal job embedded in allocation events (for meta tag access).
@@ -176,7 +258,7 @@ pub struct AllocationJob {
 }
 
 /// State of a task within an allocation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct TaskState {
     /// Current state: "pending", "running", "dead".
@@ -185,6 +267,12 @@ pub struct TaskState {
     /// Whether the task failed.
     #[serde(default)]
     pub failed: bool,
+    /// When the task started running (RFC3339; empty until started).
+    #[serde(default)]
+    pub started_at: String,
+    /// When the task finished (RFC3339; empty until terminal).
+    #[serde(default)]
+    pub finished_at: String,
     /// Task events (state transitions).
     #[serde(default)]
     pub events: Vec<TaskEvent>,

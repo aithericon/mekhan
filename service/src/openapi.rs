@@ -105,6 +105,13 @@ use utoipa::OpenApi;
             crate::handlers::clusters::ClusterSummary,
             crate::handlers::clusters::ClustersResponse,
             crate::handlers::clusters::ClusterActionResponse,
+            // Live-aggregated cluster accounting over the allocations table.
+            crate::handlers::clusters::ClusterMetrics,
+            crate::handlers::clusters::FleetMetrics,
+            // Resource-grant (allocations) read DTO, shared by the instance-
+            // allocations and cluster-leases endpoints (`LeaseResponse` is an
+            // alias for it, so only the one schema needs registering).
+            crate::models::responses::AllocationResponse,
         ),
     ),
     tags(
