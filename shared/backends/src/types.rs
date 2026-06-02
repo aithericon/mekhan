@@ -45,6 +45,13 @@ pub enum ExecutionBackendType {
     /// (not schedulable). Produces structured `rows` / `row_count` /
     /// `rows_affected` output.
     Postgres,
+    /// Resource-bound LogQL query against a Grafana Loki HTTP API. The bound
+    /// `loki` resource (`base_url` + optional bearer token + optional
+    /// `X-Scope-OrgID` tenant header) is overlaid into the resolved config
+    /// (`ConfigOverlay`); the backend issues an in-process HTTP request from
+    /// the executor daemon. Inline-only (not schedulable). Produces structured
+    /// `entries` / `series` / `result_type` / `stats` output.
+    Loki,
 }
 
 impl ExecutionBackendType {
@@ -64,6 +71,7 @@ impl ExecutionBackendType {
             Self::Smtp => "smtp",
             Self::CatalogueQuery => "catalogue_query",
             Self::Postgres => "postgres",
+            Self::Loki => "loki",
         }
     }
 
@@ -83,6 +91,7 @@ impl ExecutionBackendType {
             "smtp" => Some(Self::Smtp),
             "catalogue_query" => Some(Self::CatalogueQuery),
             "postgres" => Some(Self::Postgres),
+            "loki" => Some(Self::Loki),
             _ => None,
         }
     }
