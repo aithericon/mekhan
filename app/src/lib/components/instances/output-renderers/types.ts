@@ -36,6 +36,12 @@ export type RenderContext = {
 	/** Step's ISO completion time. Upper bound for the same log fetch.
 	 *  When the step is still running, the renderer falls back to "now". */
 	stepCompletedAt?: string;
+	/** When the surrounding view already renders a dedicated, step-scoped logs
+	 *  section (e.g. the instance side panel's first-class "Logs" section), the
+	 *  AutomatedStepEnvelope suppresses its own inline logs block to avoid
+	 *  showing the same lines twice. Defaults to false (envelopes shown in
+	 *  process views / inputs keep their inline logs). */
+	suppressLogs?: boolean;
 };
 
 export type RendererProps = {
