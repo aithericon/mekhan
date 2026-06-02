@@ -412,4 +412,28 @@ impl MekhanNats {
             .await?;
         Ok(consumer)
     }
+
+    /// Create or get the durable consumer for the `template_stagings` projection
+    /// (B-staging, Phase 4). Consumes `petri.events.>` and folds each staging
+    /// net's terminal `stage_template` `EffectCompleted`/`EffectFailed` into the
+    /// matching `template_stagings` row (see
+    /// `service/src/projections/template_stagings/`). The consumer cheaply
+    /// pre-filters to `staging-*` nets in-process.
+    pub async fn template_stagings_consumer(&self) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
+        let durable = self.durable_name("mekhan-template-stagings");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
 }

@@ -36,6 +36,7 @@ export type TemplateParameter = components['schemas']['TemplateParameter'];
 export type TemplateStaging = components['schemas']['TemplateStaging'];
 export type CreateJobTemplateRequest = components['schemas']['CreateJobTemplateRequest'];
 export type UpdateJobTemplateRequest = components['schemas']['UpdateJobTemplateRequest'];
+export type StageJobTemplateRequest = components['schemas']['StageJobTemplateRequest'];
 export type PaginatedJobTemplates = components['schemas']['PaginatedResponse_JobTemplateSummary'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -114,5 +115,25 @@ export async function deleteJobTemplate(id: string): Promise<void> {
 export async function listJobTemplateStagings(id: string): Promise<TemplateStaging[]> {
 	return unwrap(
 		await client.GET('/api/v1/job-templates/{id}/stagings', { params: { path: { id } } })
+	);
+}
+
+/**
+ * POST /api/v1/job-templates/{id}/stage — trigger staging of a template version
+ * onto one or more datacenters. Returns 202 with the created/updated staging rows.
+ *
+ * Pass `datacenter_resource_ids: [thisClusterResourceId]` to stage only to the
+ * cluster the user is viewing. Omit to stage to every compatible datacenter in
+ * the workspace.
+ */
+export async function stageJobTemplate(
+	id: string,
+	body: StageJobTemplateRequest
+): Promise<TemplateStaging[]> {
+	return unwrap(
+		await client.POST('/api/v1/job-templates/{id}/stage', {
+			params: { path: { id } },
+			body
+		})
 	);
 }

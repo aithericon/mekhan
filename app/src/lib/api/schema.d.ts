@@ -807,6 +807,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/job-templates/{id}/stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/job-templates/{id}/stage` — push a template version onto one or
+         *     more datacenter clusters (B-staging, Phase 4). For each target this kicks a
+         *     generated staging Petri-net (`stage_template` effect) and upserts its
+         *     `template_stagings` row; the rows start at `staging` and the projection
+         *     advances them to `staged`/`failed` as the nets complete. Returns 202 with the
+         *     triggered rows.
+         * @description Authority = datacenter-resource access (workspace-scoped), not an admin role:
+         *     if you can reference cluster X in your workspace, you can stage to it. The
+         *     staging-net deploy is async, so this returns promptly.
+         *
+         *     Target selection: an explicit `datacenter_resource_ids` list fails the whole
+         *     request on the first incompatible target (a flavor mismatch is a user error).
+         *     With no list, it stages to EVERY workspace datacenter, silently skipping ones
+         *     whose flavor doesn't match the template (you only stage to compatible clusters).
+         */
+        post: operations["stage_job_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/job-templates/{id}/stagings": {
         parameters: {
             query?: never;
@@ -5334,6 +5366,29 @@ export interface components {
             scope: components["schemas"]["ScopeVar"][];
         };
         /**
+         * @description Request body for `POST /api/v1/job-templates/{id}/stage` (B-staging, Phase 4).
+         *     Pushes one template *version* onto one-or-more *datacenter* clusters by
+         *     kicking a generated staging Petri-net per `(version × datacenter)`.
+         */
+        StageJobTemplateRequest: {
+            /**
+             * @description Target datacenter resource ids. `None`/empty ⇒ every datacenter resource
+             *     in the template's workspace (authority = datacenter-resource access).
+             */
+            datacenter_resource_ids?: string[] | null;
+            /**
+             * Format: uuid
+             * @description Optional catalogue entry id to deliver as the run package (B5 — package
+             *     *source*). v1 threads it through to the staging net; delivery is basic.
+             */
+            package_catalogue_entry_id?: string | null;
+            /**
+             * Format: int32
+             * @description Template version to stage. `None` ⇒ the template's `latest_version`.
+             */
+            version?: number | null;
+        };
+        /**
          * @description A typed token seed for a single `Start` block in the template. The token
          *     must be a JSON object matching the Start's declared `initial` port shape
          *     (required fields present, kinds compatible). See `FieldKind::accepts`.
@@ -8307,6 +8362,60 @@ export interface operations {
             };
             /** @description Job template not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    stage_job_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StageJobTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Staging runs triggered */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateStaging"][];
+                };
+            };
+            /** @description Incompatible target / no version */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Job template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

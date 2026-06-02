@@ -65,6 +65,7 @@ use utoipa::OpenApi;
             crate::models::job_template::TemplateStaging,
             crate::models::job_template::CreateJobTemplateRequest,
             crate::models::job_template::UpdateJobTemplateRequest,
+            crate::models::job_template::StageJobTemplateRequest,
             // Executor backend config DTOs — the JSON shape each AutomatedStep
             // backend's `spec.config` carries. Registered so the SPA's generic
             // schema-driven config form can read them off the OpenAPI document

@@ -1,7 +1,7 @@
 # 20 — Control-Plane Gaps: Allocation Visibility, Cluster Metrics, Job-Template Management, Staging
 
-Status: **design, approved for build** (grilled 2026-06-01/02). Captures the resolved decision tree
-for closing four control-plane gaps. Builds on
+Status: **IMPLEMENTED** (all four phases built 2026-06-02; design grilled 2026-06-01/02). Captures the
+resolved decision tree for closing four control-plane gaps. Builds on
 [13-scheduler-as-resource-design](13-scheduler-as-resource-design.md),
 [14-resource-pool-net-design](14-resource-pool-net-design.md),
 [16-multi-cluster-scheduling](16-multi-cluster-scheduling.md),
@@ -40,12 +40,31 @@ offline-green first (`cargo check`/`test`, `svelte-check`, `openapi-drift`) then
 Slurm validated via the local Dockerized `just dev slurm-up` for phase 4 (heavy container/cache steps
 stay present-but-basic — a Docker cluster can't exercise real Apptainer-on-HPC).
 
-| Phase | Name | Codebases | Live verify |
-|------|------|-----------|-------------|
-| 1 | A-capture | engine + service (+ migration) | offline + Nomad |
-| 2 | A-surface | service + app | in-app |
-| 3 | B-model | service + app (+ migration, OpenAPI) | offline |
-| 4 | B-staging | engine + executor + service + app | Nomad + `slurm-up` |
+| Phase | Name | Codebases | Live verify | Status |
+|------|------|-----------|-------------|--------|
+| 1 | A-capture | engine + service (+ migration) | offline + Nomad | ✅ live-Nomad |
+| 2 | A-surface | service + app | in-app | ✅ live (+ bug fixed) |
+| 3 | B-model | service + app (+ migration, OpenAPI) | offline | ✅ live CRUD |
+| 4 | B-staging | engine + executor + service + app | Nomad + `slurm-up` | ✅ live-Nomad staging |
+
+**Phase 4 implementation note (2026-06-02).** The staging mechanism is a generated one-shot Petri net
+(`service/src/petri/staging_net.rs`, net id `staging-<row-id>`) that fires a NEW inline engine effect
+`stage_template` (`engine/.../stage_template_handlers.rs`, registered like `resource_lease`) which
+renders the typed spec + escape-hatch to a native job and (Nomad) `PUT /v1/job/{slug}` registers it,
+or (Slurm) writes an sbatch script + rsyncs it over SSH. The effect reports cluster success AND a
+non-fatal cluster failure as `status` DATA (so the net completes cleanly and the
+`template_stagings` projection — mirror of the allocations projection — records `staged`/`failed` +
+`remote_ref`). Dual-triggered: `POST /api/v1/job-templates/{id}/stage` + a best-effort publish-time
+auto-stage hook (`publish.rs::auto_stage_templates`). The Phase-3 slug hook is closed: the compiler
+now stamps `d.job_template_id = "<slug>"` (`scheduled_job_template_frag`), which the engine's
+`SchedulerSubmitHandler` already reads — so a `Scheduled` step dispatches the registered parameterized
+job by its resolved name. **Live-Nomad-green:** staging a nomad template registered the parameterized
+job on Nomad and flipped its `template_stagings` row to `staged`/`remote_ref` via the projection; the
+staging net reached `NetCompleted`. Slug-forwarding is offline-proven (compiler unit tests + the
+engine handler's existing tests); the full Scheduled-submit-with-ref *run* dogfood is the one deferred
+live check. Slurm staging is compile-correct + best-effort (not live-run — no Linux/HPC). The engine
+also carries an honest present-but-basic `package_ref` seam (catalogue entry id threaded; industrial
+container/cache build deferred per B5/B6).
 
 ---
 

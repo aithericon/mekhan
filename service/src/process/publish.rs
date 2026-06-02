@@ -146,6 +146,16 @@ impl<'a> PublishService<'a> {
         let compiled_graph =
             resolve_job_templates(&compiled_graph, workspace_id, &self.state.db).await?;
 
+        // Phase 4 (B-staging): best-effort publish-time AUTO-STAGE. For each
+        // resolved (template version × cluster) that isn't already freshly
+        // staged, kick a generated staging net (the dual-trigger's automatic
+        // arm; the explicit one is `POST /job-templates/{id}/stage`). This runs
+        // AFTER `resolve_job_templates` succeeded, so every (ref, cluster) pair
+        // is known-valid. Engine-down / per-target failures are SWALLOWED — a
+        // staging hiccup must never fail a publish (the Templates-tab "stage now"
+        // + the staging net's own retry are the backstops).
+        auto_stage_templates(self.state, &compiled_graph, workspace_id).await;
+
         // Discover workspace resources this graph touches by source-scanning
         // Python entrypoints for `<head>.<field>` accesses and looking the
         // heads up in the workspace's resources list. The compiler uses this
@@ -531,6 +541,126 @@ async fn datacenter_flavor(
         .and_then(|c| c.get("scheduler_flavor"))
         .and_then(|v| v.as_str())
         .map(str::to_string))
+}
+
+/// Look up a `datacenter` resource's id by workspace alias (path). Mirrors
+/// [`datacenter_flavor`]'s join but returns the resource id — the staging target
+/// the Phase-4 auto-stage hook feeds to `trigger_staging`.
+async fn datacenter_resource_id(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    alias: &str,
+) -> Result<Option<Uuid>, ApiError> {
+    sqlx::query_scalar(
+        "SELECT id FROM resources \
+         WHERE workspace_id = $1 AND path = $2 \
+           AND resource_type = 'datacenter' AND deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(alias)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiError::internal(format!("datacenter resource id lookup: {e}")))
+}
+
+/// Publish-time auto-stage (Phase 4, B-staging). BEST-EFFORT: for each Scheduled
+/// step carrying a resolved job-template ref + cluster, ensure the
+/// `(template version × datacenter)` is staged, kicking a generated staging net
+/// for any combination not already `staged` at this exact version. Re-walks the
+/// already-validated `compiled_graph` (`resolve_job_templates` passed), so every
+/// lookup is consistent. ALL failures are logged + swallowed — a staging hiccup
+/// must never fail a publish (the explicit `POST /job-templates/{id}/stage` +
+/// the staging net itself are the backstops).
+async fn auto_stage_templates(state: &AppState, graph: &WorkflowGraph, workspace_id: Uuid) {
+    use crate::models::job_template::JobTemplateRow;
+    use crate::models::template::DeploymentModel;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            deployment_model:
+                DeploymentModel::Scheduled {
+                    scheduler,
+                    job_template_ref: Some(tref),
+                    ..
+                },
+            ..
+        } = &node.data
+        else {
+            continue;
+        };
+        let template_id = tref.template_id;
+        let version = tref.version;
+
+        let Some(alias) = resolved_cluster_alias(node, graph, scheduler.as_deref()) else {
+            continue;
+        };
+        let dc_id = match datacenter_resource_id(&state.db, workspace_id, &alias).await {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(node = %node.id, error = ?e, "auto-stage: datacenter id lookup failed");
+                continue;
+            }
+        };
+
+        // Skip if already freshly staged at this exact version.
+        let existing: Option<String> = match sqlx::query_scalar(
+            "SELECT status FROM template_stagings \
+             WHERE template_id = $1 AND template_version = $2 AND datacenter_resource_id = $3",
+        )
+        .bind(template_id)
+        .bind(version)
+        .bind(dc_id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(node = %node.id, %e, "auto-stage: staging status lookup failed");
+                continue;
+            }
+        };
+        if existing.as_deref() == Some("staged") {
+            continue;
+        }
+
+        // Load the template row (validated to exist by resolve_job_templates).
+        let template = match sqlx::query_as::<_, JobTemplateRow>(
+            "SELECT * FROM job_templates WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(template_id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(Some(t)) => t,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(node = %node.id, %e, "auto-stage: template load failed");
+                continue;
+            }
+        };
+
+        match crate::petri::staging_net::trigger_staging(
+            &state.db,
+            &state.petri,
+            workspace_id,
+            &template,
+            version,
+            dc_id,
+            None,
+        )
+        .await
+        {
+            Ok(row) => tracing::info!(
+                template = %template.slug, version, %dc_id, staging_id = %row.id,
+                "auto-staged template at publish"
+            ),
+            Err(e) => tracing::warn!(
+                template = %template.slug, version, %dc_id, %e,
+                "auto-stage failed (swallowed)"
+            ),
+        }
+    }
 }
 
 /// Read the workspace's default-datacenter setting and map it to its resource

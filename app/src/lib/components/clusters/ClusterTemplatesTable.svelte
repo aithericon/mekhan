@@ -4,6 +4,10 @@
 	// Lists job templates filtered to this cluster's flavor (all workspace-visible
 	// templates when flavor is unknown). Provides create / edit / delete in an
 	// inline expandable form, reusing existing Input/Textarea/Badge/Button widgets.
+	//
+	// Phase 4 (B-staging): adds a "Stage" button per row that triggers
+	// POST /api/v1/job-templates/{id}/stage targeting this datacenter, and shows
+	// the resulting TemplateStaging status badge (staging/staged/failed/stale).
 
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -16,12 +20,17 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import ChevronUp from '@lucide/svelte/icons/chevron-up';
+	import Upload from '@lucide/svelte/icons/upload';
+	import StagingStatusBadge from './StagingStatusBadge.svelte';
 	import {
 		listJobTemplates,
 		createJobTemplate,
 		updateJobTemplate,
 		deleteJobTemplate,
+		listJobTemplateStagings,
+		stageJobTemplate,
 		type JobTemplateSummary,
+		type TemplateStaging,
 		type CreateJobTemplateRequest,
 		type UpdateJobTemplateRequest,
 		type CommonSpec
@@ -30,7 +39,8 @@
 	type Props = {
 		/** Cluster flavor (`slurm` | `nomad`). Null when unknown — shows all templates. */
 		flavor?: string | null;
-		/** The datacenter resource id for this cluster (for display). */
+		/** The datacenter resource id for this cluster. Used both for display and for
+		 *  staging (passed as `datacenter_resource_ids` to the stage endpoint). */
 		clusterId?: string;
 	};
 
@@ -40,12 +50,23 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
+	// ── Staging state ─────────────────────────────────────────────────────────
+	// Map from template id → the TemplateStaging row for THIS cluster (may be
+	// undefined when a template has never been staged here).
+	let stagingByTemplate = $state<Map<string, TemplateStaging>>(new Map());
+	let stagingBusy = $state<Set<string>>(new Set());
+	let stagingError = $state<Map<string, string>>(new Map());
+
 	async function load() {
 		loading = true;
 		error = null;
 		try {
 			const page = await listJobTemplates({ flavor: flavor ?? undefined, perPage: 200 });
 			templates = page.items;
+			// Load stagings in parallel for all templates, best-effort.
+			if (clusterId) {
+				await loadAllStagings(page.items.map((t) => t.id));
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load job templates';
 		} finally {
@@ -53,11 +74,58 @@
 		}
 	}
 
+	/** Fetch stagings for every template id in `ids`, then update the map to keep
+	 *  only the row matching this cluster (the latest version wins). */
+	async function loadAllStagings(ids: string[]) {
+		if (!clusterId) return;
+		const results = await Promise.allSettled(ids.map((id) => listJobTemplateStagings(id)));
+		const next = new Map<string, TemplateStaging>();
+		for (let i = 0; i < ids.length; i++) {
+			const r = results[i];
+			if (r.status !== 'fulfilled') continue;
+			// Filter to this cluster, pick the row with the highest template_version.
+			const rows = r.value.filter((s) => s.datacenter_resource_id === clusterId);
+			if (rows.length === 0) continue;
+			const best = rows.reduce((a, b) => (a.template_version >= b.template_version ? a : b));
+			next.set(ids[i], best);
+		}
+		stagingByTemplate = next;
+	}
+
 	$effect(() => {
 		void flavor;
 		void clusterId;
 		load();
 	});
+
+	// ── Stage action ──────────────────────────────────────────────────────────
+
+	async function doStage(templateId: string) {
+		if (!clusterId) return;
+		// Optimistic busy state — copy-on-write for the Set.
+		stagingBusy = new Set([...stagingBusy, templateId]);
+		stagingError = new Map([...stagingError].filter(([k]) => k !== templateId));
+		try {
+			const rows = await stageJobTemplate(templateId, {
+				datacenter_resource_ids: [clusterId]
+			});
+			// Update the local map with the returned rows for this cluster.
+			const clusterRows = rows.filter((s) => s.datacenter_resource_id === clusterId);
+			if (clusterRows.length > 0) {
+				const best = clusterRows.reduce((a, b) =>
+					a.template_version >= b.template_version ? a : b
+				);
+				stagingByTemplate = new Map([...stagingByTemplate, [templateId, best]]);
+			}
+		} catch (e) {
+			stagingError = new Map([
+				...stagingError,
+				[templateId, e instanceof Error ? e.message : 'Stage failed']
+			]);
+		} finally {
+			stagingBusy = new Set([...stagingBusy].filter((id) => id !== templateId));
+		}
+	}
 
 	// ── Create / Edit form ────────────────────────────────────────────────────
 
@@ -215,6 +283,9 @@
 	const isCreate = $derived(formMode === 'create');
 	const editingId = $derived(typeof formMode === 'object' ? formMode.editing : null);
 	const formOpen = $derived(formMode !== 'hidden');
+
+	/** Whether to show the staging column (only when we have a concrete cluster id). */
+	const showStagingCol = $derived(!!clusterId);
 </script>
 
 <div class="space-y-4">
@@ -446,11 +517,17 @@
 						<th class="px-3 py-2 font-medium">Flavor</th>
 						<th class="px-3 py-2 font-medium">Version</th>
 						<th class="px-3 py-2 font-medium">Visibility</th>
+						{#if showStagingCol}
+							<th class="px-3 py-2 font-medium">Staging</th>
+						{/if}
 						<th class="px-3 py-2"></th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each templates as t (t.id)}
+						{@const staging = stagingByTemplate.get(t.id)}
+						{@const isStagingBusy = stagingBusy.has(t.id)}
+						{@const stageErr = stagingError.get(t.id)}
 						<tr class="border-b border-border/30 last:border-0 hover:bg-muted/10 transition-colors">
 							<td class="px-3 py-2 font-mono text-sm">{t.slug}</td>
 							<td class="px-3 py-2 text-sm">{t.display_name}</td>
@@ -461,8 +538,37 @@
 							<td class="px-3 py-2">
 								<Badge variant="secondary" class="text-xs">{t.visibility}</Badge>
 							</td>
+							{#if showStagingCol}
+								<td class="px-3 py-2 min-w-[9rem]">
+									<StagingStatusBadge {staging} />
+									{#if stageErr}
+										<p class="mt-0.5 text-xs text-destructive" title={stageErr}>
+											{stageErr.length > 40 ? `${stageErr.slice(0, 38)}…` : stageErr}
+										</p>
+									{/if}
+								</td>
+							{/if}
 							<td class="px-3 py-2">
 								<div class="flex items-center justify-end gap-1">
+									{#if showStagingCol}
+										<Button
+											variant="ghost"
+											size="sm"
+											class="h-7 px-2 text-xs"
+											disabled={isStagingBusy}
+											onclick={() => doStage(t.id)}
+											aria-label="Stage template on this cluster"
+											title="Stage latest version onto this cluster"
+										>
+											{#if isStagingBusy}
+												<span class="inline-block size-3 animate-spin rounded-full border border-current border-t-transparent" aria-hidden="true"></span>
+												<span class="ml-1">Staging…</span>
+											{:else}
+												<Upload class="size-3.5" />
+												<span class="ml-1">Stage</span>
+											{/if}
+										</Button>
+									{/if}
 									<Button
 										variant="ghost"
 										size="sm"

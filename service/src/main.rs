@@ -162,6 +162,16 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
     ));
 
+    // Template-stagings projection (PETRI_GLOBAL → template_stagings). Folds each
+    // generated staging net's terminal `stage_template` effect into its staging
+    // row's status/remote_ref/last_error (B-staging, Phase 4).
+    tokio::spawn(
+        mekhan_service::projections::template_stagings::start_template_stagings_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     // Engine-initiated human task cancellations. When a Timeout's timer wins
     // the SLA race, the engine fires `human_cancel` and publishes to
     // `human.cancel.{net_id}.{place}` — without this listener, hpi_tasks

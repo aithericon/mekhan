@@ -32,8 +32,10 @@ use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::job_template::{
     CommonSpec, CreateJobTemplateRequest, EscapeHatch, JobTemplateDetail, JobTemplateRow,
     JobTemplateSummary, JobTemplateVersion, JobTemplateVersionRow, ListJobTemplatesQuery,
-    TemplateParameter, TemplateStaging, TemplateStagingRow, UpdateJobTemplateRequest,
+    StageJobTemplateRequest, TemplateParameter, TemplateStaging, TemplateStagingRow,
+    UpdateJobTemplateRequest,
 };
+use crate::petri::staging_net::trigger_staging;
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
 
@@ -592,4 +594,94 @@ pub async fn list_job_template_stagings(
             .map(TemplateStaging::from)
             .collect(),
     ))
+}
+
+/// `POST /api/v1/job-templates/{id}/stage` — push a template version onto one or
+/// more datacenter clusters (B-staging, Phase 4). For each target this kicks a
+/// generated staging Petri-net (`stage_template` effect) and upserts its
+/// `template_stagings` row; the rows start at `staging` and the projection
+/// advances them to `staged`/`failed` as the nets complete. Returns 202 with the
+/// triggered rows.
+///
+/// Authority = datacenter-resource access (workspace-scoped), not an admin role:
+/// if you can reference cluster X in your workspace, you can stage to it. The
+/// staging-net deploy is async, so this returns promptly.
+///
+/// Target selection: an explicit `datacenter_resource_ids` list fails the whole
+/// request on the first incompatible target (a flavor mismatch is a user error).
+/// With no list, it stages to EVERY workspace datacenter, silently skipping ones
+/// whose flavor doesn't match the template (you only stage to compatible clusters).
+#[utoipa::path(
+    post,
+    path = "/api/v1/job-templates/{id}/stage",
+    params(("id" = Uuid, Path, description = "Job template id")),
+    request_body = StageJobTemplateRequest,
+    responses(
+        (status = 202, description = "Staging runs triggered", body = Vec<TemplateStaging>),
+        (status = 400, description = "Incompatible target / no version", body = ErrorResponse),
+        (status = 404, description = "Job template not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "job-templates",
+)]
+pub async fn stage_job_template(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<StageJobTemplateRequest>,
+) -> Result<(StatusCode, Json<Vec<TemplateStaging>>), ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let template = require_visible_template(&state.db, id, workspace_id).await?;
+    let version = req.version.unwrap_or(template.latest_version);
+
+    // Resolve targets: explicit list, else every workspace datacenter.
+    let explicit = req
+        .datacenter_resource_ids
+        .as_ref()
+        .filter(|v| !v.is_empty())
+        .cloned();
+    let targets: Vec<Uuid> = match explicit {
+        Some(ids) => ids,
+        None => sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM resources \
+             WHERE workspace_id = $1 AND resource_type = 'datacenter' AND deleted_at IS NULL",
+        )
+        .bind(workspace_id)
+        .fetch_all(&state.db)
+        .await?,
+    }
+    .into_iter()
+    .collect();
+
+    let explicit_targets = req
+        .datacenter_resource_ids
+        .as_ref()
+        .is_some_and(|v| !v.is_empty());
+
+    let mut out = Vec::with_capacity(targets.len());
+    for dc in targets {
+        match trigger_staging(
+            &state.db,
+            &state.petri,
+            workspace_id,
+            &template,
+            version,
+            dc,
+            req.package_catalogue_entry_id,
+        )
+        .await
+        {
+            Ok(row) => out.push(TemplateStaging::from(row)),
+            Err(e) => {
+                if explicit_targets {
+                    // An explicit target that can't be staged is a user error.
+                    return Err(ApiError::bad_request(e.to_string()));
+                }
+                // Enumerated targets: skip incompatible/unresolvable clusters.
+                tracing::debug!(%dc, error = %e, "skipping staging target");
+            }
+        }
+    }
+
+    Ok((StatusCode::ACCEPTED, Json(out)))
 }

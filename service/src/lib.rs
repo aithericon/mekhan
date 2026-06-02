@@ -277,6 +277,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::job_templates::delete_job_template
         ))
         .routes(routes!(handlers::job_templates::list_job_template_stagings))
+        // Stage a template version onto datacenter(s) (Phase 4, B-staging) —
+        // kicks a generated staging Petri-net per (version × datacenter).
+        // Registered AFTER {id}/stagings so matchit prefers the literal path.
+        .routes(routes!(handlers::job_templates::stage_job_template))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))

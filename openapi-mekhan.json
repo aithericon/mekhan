@@ -2067,6 +2067,83 @@
         }
       }
     },
+    "/api/v1/job-templates/{id}/stage": {
+      "post": {
+        "tags": [
+          "job-templates"
+        ],
+        "summary": "`POST /api/v1/job-templates/{id}/stage` — push a template version onto one or\nmore datacenter clusters (B-staging, Phase 4). For each target this kicks a\ngenerated staging Petri-net (`stage_template` effect) and upserts its\n`template_stagings` row; the rows start at `staging` and the projection\nadvances them to `staged`/`failed` as the nets complete. Returns 202 with the\ntriggered rows.",
+        "description": "Authority = datacenter-resource access (workspace-scoped), not an admin role:\nif you can reference cluster X in your workspace, you can stage to it. The\nstaging-net deploy is async, so this returns promptly.\n\nTarget selection: an explicit `datacenter_resource_ids` list fails the whole\nrequest on the first incompatible target (a flavor mismatch is a user error).\nWith no list, it stages to EVERY workspace datacenter, silently skipping ones\nwhose flavor doesn't match the template (you only stage to compatible clusters).",
+        "operationId": "stage_job_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageJobTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Staging runs triggered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateStaging"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Incompatible target / no version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/job-templates/{id}/stagings": {
       "get": {
         "tags": [
@@ -13439,6 +13516,39 @@
               "$ref": "#/components/schemas/ScopeVar"
             },
             "description": "Identifiers a `payload_mapping` expression may reference for this source\nkind, with their declared kinds. `manual` returns empty — the editor\nderives that scope from the (client-side) form schema."
+          }
+        }
+      },
+      "StageJobTemplateRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/job-templates/{id}/stage` (B-staging, Phase 4).\nPushes one template *version* onto one-or-more *datacenter* clusters by\nkicking a generated staging Petri-net per `(version × datacenter)`.",
+        "properties": {
+          "datacenter_resource_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Target datacenter resource ids. `None`/empty ⇒ every datacenter resource\nin the template's workspace (authority = datacenter-resource access)."
+          },
+          "package_catalogue_entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Optional catalogue entry id to deliver as the run package (B5 — package\n*source*). v1 threads it through to the staging net; delivery is basic."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Template version to stage. `None` ⇒ the template's `latest_version`."
           }
         }
       },

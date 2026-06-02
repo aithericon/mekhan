@@ -29,8 +29,8 @@ use petri_application::{
     HttpAllocatorClient, MockSchedulerClient, PetriNetService, ProcessCompleteHandler,
     ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler, ProcessStartHandler,
     ProcessStatusDetailHandler, ResourceLeaseAcquireHandler, ResourceLeaseReleaseHandler,
-    SchedulerCancelHandler, SchedulerSubmitHandler, StateProjection, TimerCancelHandler,
-    TimerScheduleHandler, TopologyRepository,
+    SchedulerCancelHandler, SchedulerSubmitHandler, StageTemplateHandler, StateProjection,
+    TimerCancelHandler, TimerScheduleHandler, TopologyRepository,
 };
 #[cfg(feature = "catalogue")]
 use petri_application::{
@@ -1078,13 +1078,30 @@ where
             .register_effect_handler(
                 effects::RESOURCE_LEASE_RELEASE.handler_id,
                 Arc::new(ResourceLeaseReleaseHandler::new(
-                    allocator_client,
+                    allocator_client.clone(),
                     effects::RESOURCE_LEASE_RELEASE.default_input_port,
                     effects::RESOURCE_LEASE_RELEASE.default_output_port,
                 )),
             )
             .expect("register resource_lease_release effect handler");
         tracing::info!(net_id = %net_id, "Registered resource_lease effect handlers (acquire + release)");
+
+        // Register the stage_template effect handler (Phase 4 control plane). It
+        // shares the SAME `allocator_client` as the lease handlers — staging
+        // registers a job template onto the cluster the per-fire `effect_config`
+        // resolves to (the same `DatacenterConnection.effect_config()` JSON), via
+        // the registry-backed (multi-cluster) or env-flavor-dispatch allocator.
+        service
+            .register_effect_handler(
+                effects::STAGE_TEMPLATE.handler_id,
+                Arc::new(StageTemplateHandler::new(
+                    allocator_client,
+                    effects::STAGE_TEMPLATE.default_input_port,
+                    effects::STAGE_TEMPLATE.default_output_port,
+                )),
+            )
+            .expect("register stage_template effect handler");
+        tracing::info!(net_id = %net_id, "Registered stage_template effect handler");
 
         // Register timer effect handlers if configured
         if let Some(ref timer_client) = self.timer_client {

@@ -7,3 +7,4 @@
 
 pub mod allocations;
 pub mod step_executions;
+pub mod template_stagings;

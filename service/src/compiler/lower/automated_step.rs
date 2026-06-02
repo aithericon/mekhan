@@ -180,6 +180,14 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         })
         .unwrap_or_default();
 
+    // Slug forwarding (B-staging, Phase 4): stamp the resolved scheduler
+    // `job_template` slug onto the job token as `job_template_id` so the engine's
+    // `SchedulerSubmitHandler` dispatches the registered parameterized job by that
+    // name. A static string literal (no borrow ref), so it never needs the
+    // `logic_rhai` deferral. Empty for non-Scheduled steps / an unresolved slug —
+    // then the handler's config default applies (the legacy path).
+    let job_template_frag = scheduled_job_template_frag(cx.node);
+
     // Rust panic/Result model: a WIRED error handle (`source_handle == "error"`)
     // means a permanent failure routes to the handler (handled `Result::Err`,
     // net continues); an UNWIRED handle means a permanent failure crashes the
@@ -318,7 +326,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             r#"["metric", "progress", "phase", "log"]"#
         };
         let prepare_logic = format!(
-            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; d.feed_chunks = {feed_chunks};{ns_frag} #{{ job: d }}"#
+            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; d.feed_chunks = {feed_chunks};{ns_frag}{job_template_frag} #{{ job: d }}"#
         );
         let prepare = ctx
             .transition("prepare", format!("{label} - Prepare"))
@@ -818,6 +826,30 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     lower_pooled_body(cx, pool_binding)
 }
 
+/// Rhai fragment stamping a resolved scheduler `job_template` slug onto the job
+/// token `d` as `job_template_id` (B-staging slug forwarding, Phase 4). The
+/// engine's `SchedulerSubmitHandler` reads `job_data.job_template_id` and
+/// dispatches THAT registered parameterized job (falling back to its config
+/// default only when the field is absent), so this is how a `Scheduled` step's
+/// Phase-3-resolved template name finally reaches the cluster dispatch.
+///
+/// A bare string-literal assignment (no borrow ref) — safe under `logic()`'s
+/// build-time validation. Empty for a non-Scheduled step or an unresolved
+/// (empty) slug, leaving the legacy config-default path untouched.
+fn scheduled_job_template_frag(node: &WorkflowNode) -> String {
+    if let WorkflowNodeData::AutomatedStep {
+        deployment_model: DeploymentModel::Scheduled { job_template, .. },
+        ..
+    } = &node.data
+    {
+        let slug = job_template.trim();
+        if !slug.is_empty() {
+            return format!(r#" d.job_template_id = "{}";"#, rhai_str_escape(slug));
+        }
+    }
+    String::new()
+}
+
 /// The shared claim/grant/register/release body-wrapping, parameterized by the
 /// resolved [`PoolBinding`]. `Executor { pool: Some }` calls this;
 /// the topology + executor job-spec are byte-identical regardless of backend.
@@ -875,6 +907,13 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // is_agent_tool: see lower_automated_step — a tool child forces p_error so
     // its failure feeds the agent's on_tool_error wiring, never a crash.
     let error_handled = cx.is_agent_tool || super::error_path_wired(cx.outgoing_edges);
+
+    // Slug forwarding (B-staging, Phase 4) — see `lower_automated_step`. For a
+    // standalone `Scheduled` datacenter `submit` this is THE path that reaches
+    // the engine's `SchedulerSubmitHandler`; stamping `job_template_id` makes it
+    // dispatch the registered parameterized job by the resolved slug. Empty for a
+    // token_pool body (not Scheduled) — harmless. Read `cx.node` before reborrow.
+    let job_template_frag = scheduled_job_template_frag(cx.node);
 
     // grant_id literal builder (see the doc comment for the replay-safety
     // argument). Built inside the Rhai logic from `input._instance_id` so it
@@ -1071,7 +1110,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .auto_output("reg", &p_register_out)
         .auto_output("held", &p_held)
         .logic(format!(
-            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
+            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}{job_template_frag}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": ["metric", "progress", "phase", "log"] }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
         ));
 
     // ── Terminal exits: BOTH consume p_held and BOTH arc to p_release_out.
@@ -1348,5 +1387,77 @@ mod datacenter_connection_tests {
 
         let ok = json!({ "scheduler_flavor": "http", "allocator_url": "http://a.test" });
         assert!(datacenter_missing_connection_fields(&ok).is_none());
+    }
+}
+
+#[cfg(test)]
+mod slug_forwarding_tests {
+    use super::scheduled_job_template_frag;
+    use crate::models::template::WorkflowNode;
+    use serde_json::json;
+
+    fn scheduled_node(job_template: &str) -> WorkflowNode {
+        serde_json::from_value(json!({
+            "id": "n1",
+            "type": "automated_step",
+            "slug": "n1",
+            "position": { "x": 0.0, "y": 0.0 },
+            "data": {
+                "type": "automated_step",
+                "label": "Step",
+                "executionSpec": { "backendType": "docker", "config": { "image": "alpine:latest" } },
+                "deploymentModel": { "mode": "scheduled", "scheduler": "nomad_dc", "jobTemplate": job_template },
+            }
+        }))
+        .expect("scheduled node fixture")
+    }
+
+    fn executor_node() -> WorkflowNode {
+        serde_json::from_value(json!({
+            "id": "n2",
+            "type": "automated_step",
+            "slug": "n2",
+            "position": { "x": 0.0, "y": 0.0 },
+            "data": {
+                "type": "automated_step",
+                "label": "Step",
+                "executionSpec": { "backendType": "docker", "config": { "image": "alpine:latest" } },
+                "deploymentModel": { "mode": "executor" },
+            }
+        }))
+        .expect("executor node fixture")
+    }
+
+    #[test]
+    fn resolved_slug_is_stamped_as_job_template_id() {
+        // A Scheduled step whose `job_template` was resolved to a concrete slug
+        // (Phase 3) forwards it to the engine submit handler via `d.job_template_id`.
+        let node = scheduled_node("petri_stage_demo");
+        assert_eq!(
+            scheduled_job_template_frag(&node),
+            r#" d.job_template_id = "petri_stage_demo";"#
+        );
+    }
+
+    #[test]
+    fn empty_slug_yields_no_frag() {
+        // No ref / unresolved slug ⇒ the engine handler's config default applies.
+        assert_eq!(scheduled_job_template_frag(&scheduled_node("")), "");
+        assert_eq!(scheduled_job_template_frag(&scheduled_node("   ")), "");
+    }
+
+    #[test]
+    fn non_scheduled_step_yields_no_frag() {
+        // A token_pool / plain Executor body carries no job-template name.
+        assert_eq!(scheduled_job_template_frag(&executor_node()), "");
+    }
+
+    #[test]
+    fn slug_is_rhai_escaped() {
+        // Defensive: a slug with a quote can't break out of the literal (slugs are
+        // validated snake_case at create, but the stamp must escape regardless).
+        let node = scheduled_node(r#"a"b"#);
+        let frag = scheduled_job_template_frag(&node);
+        assert!(frag.contains(r#"\""#), "quote must be escaped: {frag}");
     }
 }

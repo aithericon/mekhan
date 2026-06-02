@@ -271,6 +271,24 @@ pub struct UpdateJobTemplateRequest {
     pub parameters: Option<Vec<TemplateParameter>>,
 }
 
+/// Request body for `POST /api/v1/job-templates/{id}/stage` (B-staging, Phase 4).
+/// Pushes one template *version* onto one-or-more *datacenter* clusters by
+/// kicking a generated staging Petri-net per `(version × datacenter)`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct StageJobTemplateRequest {
+    /// Template version to stage. `None` ⇒ the template's `latest_version`.
+    #[serde(default)]
+    pub version: Option<i32>,
+    /// Target datacenter resource ids. `None`/empty ⇒ every datacenter resource
+    /// in the template's workspace (authority = datacenter-resource access).
+    #[serde(default)]
+    pub datacenter_resource_ids: Option<Vec<Uuid>>,
+    /// Optional catalogue entry id to deliver as the run package (B5 — package
+    /// *source*). v1 threads it through to the staging net; delivery is basic.
+    #[serde(default)]
+    pub package_catalogue_entry_id: Option<Uuid>,
+}
+
 // ── Query params ────────────────────────────────────────────────────────────
 
 /// Query params for `GET /api/v1/job-templates`.
