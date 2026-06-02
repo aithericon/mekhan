@@ -142,6 +142,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     })?;
     config.normalize();
 
+    // Fail-closed sandbox validation. When the sandbox is enabled we must be on
+    // Linux with a runnable `nsjail` on PATH — otherwise we exit non-zero now
+    // rather than silently running user code unsandboxed (or failing every job
+    // later). Disabled/None → no-op, behavior is exactly as today.
+    if config.sandbox.as_ref().map(|s| s.enabled).unwrap_or(false) {
+        let sandbox_cfg = config
+            .sandbox
+            .as_ref()
+            .expect("checked enabled above")
+            .to_sandbox_config();
+        if let Err(e) = sandbox_cfg.validate() {
+            error!("sandbox startup validation failed: {e}");
+            return Err(e.into());
+        }
+        info!(
+            allow_network = config.sandbox.as_ref().map(|s| s.allow_network).unwrap_or(false),
+            "sandbox enabled — process/python jobs run under nsjail"
+        );
+    }
+
     info!(
         name = %config.name,
         nats_url = %config.nats_url,
@@ -224,8 +244,13 @@ async fn run_nats_daemon(
 
     info!("connected to NATS");
 
-    let reporter =
-        StatusReporter::new(jetstream.clone(), config.name.clone(), config.status_replicas).await?;
+    let reporter = StatusReporter::new_with_prefix(
+        jetstream.clone(),
+        config.name.clone(),
+        config.status_replicas,
+        config.subject_prefix.clone(),
+    )
+    .await?;
 
     let nats_config = build_apalis_nats_config(&config);
 
@@ -328,8 +353,13 @@ async fn run_nats_drain(
 
     info!("connected to NATS");
 
-    let reporter =
-        StatusReporter::new(jetstream.clone(), config.name.clone(), config.status_replicas).await?;
+    let reporter = StatusReporter::new_with_prefix(
+        jetstream.clone(),
+        config.name.clone(),
+        config.status_replicas,
+        config.subject_prefix.clone(),
+    )
+    .await?;
 
     let nats_config = build_apalis_nats_config(&config);
 
@@ -463,8 +493,13 @@ async fn run_manifest(
     // Connect to NATS
     let nats_client = connect_nats(&config).await?;
     let jetstream = async_nats::jetstream::new(nats_client.clone());
-    let reporter =
-        StatusReporter::new(jetstream, config.name.clone(), config.status_replicas).await?;
+    let reporter = StatusReporter::new_with_prefix(
+        jetstream,
+        config.name.clone(),
+        config.status_replicas,
+        config.subject_prefix.clone(),
+    )
+    .await?;
 
     // Manifest-specific storage: no retries, no DLQ — failures go to BatchResult.
     // Manifest mode is its own dispatcher (BatchRunner pushes the jobs locally),
@@ -560,10 +595,24 @@ fn register_executor_backend(
     config: &ExecutorConfig,
     #[allow(unused_variables)] base_dir: &Path,
 ) -> BackendRegistry {
+    // Enabled-sandbox config, shared by the process + python backends. The
+    // fail-closed `validate()` already ran once at startup in `main`, so an
+    // enabled sandbox here is known-good (Linux + nsjail on PATH).
+    let sandbox_cfg = config
+        .sandbox
+        .as_ref()
+        .filter(|s| s.enabled)
+        .map(|s| s.to_sandbox_config());
+
     match meta.wire_name {
         "process" => {
             info!("process backend registered");
-            registry.register(ProcessBackend::new().with_max_output_bytes(config.max_output_bytes))
+            let mut process =
+                ProcessBackend::new().with_max_output_bytes(config.max_output_bytes);
+            if let Some(cfg) = &sandbox_cfg {
+                process = process.with_sandbox(cfg.clone());
+            }
+            registry.register(process)
         }
         #[cfg(feature = "python")]
         "python" => {
@@ -573,6 +622,9 @@ fn register_executor_backend(
                 info!("python backend registered with venv cache");
             } else {
                 info!("python backend registered (no venv cache)");
+            }
+            if let Some(cfg) = &sandbox_cfg {
+                python = python.with_sandbox(cfg.clone());
             }
             registry.register(python)
         }

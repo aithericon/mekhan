@@ -88,3 +88,8 @@ async-trait = { workspace = true }
 aithericon-secrets = { workspace = true }
 mailparse = "0.15"
 reqwest = { workspace = true }
+# Sandbox e2e (tests/sandbox.rs, gated TEST_SANDBOX=1): boots the
+# Dockerfile.sandbox-test executor image via testcontainers against the shared
+# test NATS. testcontainers-modules[nats] mirrors the harness's NATS container.
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
