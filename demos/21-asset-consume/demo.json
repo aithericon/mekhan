@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000221",
+  "name": "21 · Asset Consume",
+  "description": "Binds a curated 'material' asset (docs/20) to an AutomatedStep. The asset's whole record collection is staged as `materials.json` and exposed to the step as the `materials` global; the step reports the row count and the densest material. Exercises the asset consumption path end-to-end (publish -> launch -> stage)."
+}
