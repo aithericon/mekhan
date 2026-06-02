@@ -345,6 +345,25 @@ pub async fn create_asset_type(
     user: AuthUser,
     Json(req): Json<CreateAssetTypeRequest>,
 ) -> Result<(StatusCode, Json<AssetTypeDetail>), ApiError> {
+    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
+    require_editor(&state, &user, scope_kind, scope_id).await?;
+    let principal = user.subject_as_uuid();
+    let detail = create_asset_type_internal(&state, &req, scope_kind, scope_id, principal).await?;
+    Ok((StatusCode::CREATED, Json(detail)))
+}
+
+/// Create an asset type at an ALREADY-resolved scope, bypassing the HTTP/auth
+/// layer. Shared by the `create_asset_type` handler (after `create_scope` +
+/// `require_editor`) and the demo seeder (`demos::seed_demo_assets`, which
+/// passes the demo workspace scope + seeder principal). Validates the ref-key
+/// identifier + the schema fields exactly as the handler did.
+pub(crate) async fn create_asset_type_internal(
+    state: &AppState,
+    req: &CreateAssetTypeRequest,
+    scope_kind: ScopeKind,
+    scope_id: Uuid,
+    principal: Uuid,
+) -> Result<AssetTypeDetail, ApiError> {
     if !IDENT_REGEX.is_match(&req.name) {
         return Err(ApiError::bad_request(format!(
             "name '{}' must be a snake_case identifier (e.g. `steel_grade`): \
@@ -352,12 +371,8 @@ pub async fn create_asset_type(
             req.name
         )));
     }
-    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
-    require_editor(&state, &user, scope_kind, scope_id).await?;
-
     validate_schema_fields(&req.fields)?;
 
-    let principal = user.subject_as_uuid();
     let display_name = req
         .display_name
         .clone()
@@ -396,20 +411,19 @@ pub async fn create_asset_type(
         return Err(ApiError::internal(e.to_string()));
     }
 
-    let detail = AssetTypeDetail {
+    Ok(AssetTypeDetail {
         id,
         scope_kind: scope_kind.as_db().to_string(),
         scope_id,
         name: req.name.clone(),
         display_name,
         display_path: req.display_path.clone(),
-        fields: req.fields,
+        fields: req.fields.clone(),
         cardinality: req.cardinality.as_db().to_string(),
         version: 1,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
-    };
-    Ok((StatusCode::CREATED, Json(detail)))
+    })
 }
 
 /// `GET /api/v1/asset-types/{id}` — full schema view.
@@ -619,6 +633,23 @@ pub async fn create_asset(
     user: AuthUser,
     Json(req): Json<CreateAssetRequest>,
 ) -> Result<(StatusCode, Json<AssetSummary>), ApiError> {
+    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
+    require_editor(&state, &user, scope_kind, scope_id).await?;
+    let principal = user.subject_as_uuid();
+    let summary = create_asset_internal(&state, &req, scope_kind, scope_id, principal).await?;
+    Ok((StatusCode::CREATED, Json(summary)))
+}
+
+/// Create an asset at an ALREADY-resolved scope, bypassing the HTTP/auth layer.
+/// Shared by the `create_asset` handler and the demo seeder. Validates the
+/// ref-key + that the referenced type exists.
+pub(crate) async fn create_asset_internal(
+    state: &AppState,
+    req: &CreateAssetRequest,
+    scope_kind: ScopeKind,
+    scope_id: Uuid,
+    principal: Uuid,
+) -> Result<AssetSummary, ApiError> {
     if !IDENT_REGEX.is_match(&req.ref_key) {
         return Err(ApiError::bad_request(format!(
             "ref_key '{}' must be a snake_case identifier (e.g. `steel`): \
@@ -626,8 +657,6 @@ pub async fn create_asset(
             req.ref_key
         )));
     }
-    let (scope_kind, scope_id) = create_scope(&user, req.scope_kind, req.scope_id)?;
-    require_editor(&state, &user, scope_kind, scope_id).await?;
 
     // Type must exist + be live.
     let type_exists: bool = sqlx::query_scalar(
@@ -640,7 +669,6 @@ pub async fn create_asset(
         return Err(ApiError::not_found("asset type not found"));
     }
 
-    let principal = user.subject_as_uuid();
     let display_name = req
         .display_name
         .clone()
@@ -676,7 +704,7 @@ pub async fn create_asset(
         return Err(ApiError::internal(e.to_string()));
     }
 
-    let summary = AssetSummary {
+    Ok(AssetSummary {
         id,
         scope_kind: scope_kind.as_db().to_string(),
         scope_id,
@@ -687,8 +715,18 @@ pub async fn create_asset(
         version: 1,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
-    };
-    Ok((StatusCode::CREATED, Json(summary)))
+    })
+}
+
+/// Replace an asset's records (validate against the type schema, bump version),
+/// bypassing the HTTP/auth layer. Shared by `put_asset_records` and the seeder.
+pub(crate) async fn replace_records_internal(
+    state: &AppState,
+    asset_id: Uuid,
+    records: &[Value],
+) -> Result<i32, ApiError> {
+    let row = fetch_asset(&state.db, asset_id).await?;
+    write_records(state, &row, records, false).await
 }
 
 /// `GET /api/v1/assets/{id}` — metadata + a page of the current-version records.
