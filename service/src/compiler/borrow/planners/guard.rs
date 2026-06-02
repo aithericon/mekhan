@@ -16,7 +16,7 @@ use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::compiler::token_shape::{
     analyze, collect_scope_roots, is_control_leaf, is_lease_scope_node, is_loop_node, is_map_node,
-    is_parked_producer, scalar_satisfies, scan_dotted_refs, topo_pos, LitTy, ScopeEntry,
+    is_parked_producer, scalar_satisfies, scan_dotted_refs, topo_pos, LitTy, ScalarTy, ScopeEntry,
     ShapeDiagnostic, SlugIndex, TokenShape,
 };
 use crate::models::template::{WorkflowGraph, WorkflowNode, WorkflowNodeData};
@@ -125,6 +125,18 @@ pub(crate) enum RefResolution {
     /// required `[*]` collection boundary. Carries the offending slug so the
     /// caller can raise the precise `CompileError::MapRefMissingStar`.
     MapMissingStar { map_slug: String },
+    /// A `<name>.<field>` reference whose head is a known **named global**
+    /// (workspace resource OR template-visible asset) — NOT a producer slug.
+    /// Resolved (typed, non-erroring): the `GlobalNamedSource` owns its
+    /// materialization (constant-inline literal, or — for envelope channels —
+    /// no read-arc here), so `GuardSource` must NOT synthesize a read-arc and
+    /// the diagnostics pass must NOT flag it unresolved. Precedence is
+    /// producer-slug > named-global > unresolved.
+    NamedGlobal {
+        name: String,
+        field: String,
+        kind: crate::compiler::named_global::GlobalKind,
+    },
 }
 
 /// True when some proper prefix of `path` resolves to an `Any`/`Opaque`
@@ -175,6 +187,7 @@ pub(crate) fn resolve_ref(
     in_shape: Option<&TokenShape>,
     node_out: &BTreeMap<String, TokenShape>,
     pos: &BTreeMap<String, usize>,
+    known_globals: Option<&crate::compiler::named_global::KnownGlobals>,
 ) -> RefResolution {
     match &gref.root {
         RefRoot::Input => {
@@ -209,6 +222,20 @@ pub(crate) fn resolve_ref(
                 }
             }
             let Some(prod_id) = slugs.node_for(root).map(str::to_string) else {
+                // Precedence: producer-slug > named-global > unresolved. The
+                // head isn't a slug; if it's a known named global (resource /
+                // asset), DEFER it — `GlobalNamedSource` owns its materialization
+                // (constant-inline literal or envelope), so GuardSource must not
+                // synthesize a read-arc and diagnostics must not flag it.
+                if let Some(globals) = known_globals {
+                    if let Some(g) = globals.values().find(|g| g.name == *root) {
+                        return RefResolution::NamedGlobal {
+                            name: root.clone(),
+                            field: gref.segs.join("."),
+                            kind: g.kind,
+                        };
+                    }
+                }
                 return RefResolution::Unresolved;
             };
             // Loop producers store their declared counter in a *parked*
@@ -374,6 +401,7 @@ pub(crate) fn resolve_ref(
 /// nearest-wins): distinct producers of the same key become distinct paths
 /// (`review.amount` vs `compliance.amount`), and a nearer non-parked node can
 /// never mask a farther parked one.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn reachable_scope(
     node: &WorkflowNode,
     graph: &WorkflowGraph,
@@ -382,6 +410,7 @@ pub(crate) fn reachable_scope(
     order: &[petgraph::graph::NodeIndex],
     wg: &WorkflowDiGraph,
     slugs: &SlugIndex,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
 ) -> Vec<ScopeEntry> {
     let mut by_path: BTreeMap<String, ScopeEntry> = BTreeMap::new();
 
@@ -468,7 +497,84 @@ pub(crate) fn reachable_scope(
         }
     }
 
+    // (3) Named globals — workspace resources + template-visible assets. These
+    //     are template-wide (not borrow-reachable from a producer), so they are
+    //     offered at *every* node under a synthetic "Globals" group, mirroring
+    //     the synthetic "Process" bucket above. Each NamedGlobal contributes one
+    //     `<name>.<field>` entry per typed field; the `ScopeEntry::ty` is the
+    //     field's [`FieldKind`] surfaced as a `TyDescriptor`. `resolve_ref`'s
+    //     `NamedGlobal` arm resolves the same refs at compile time, so the
+    //     picker can't drift from what binds. A named global can never collide
+    //     with a producer slug (`slug` wins discovery), so `entry().or_insert`
+    //     leaves any producer path untouched.
+    for g in known_globals.values() {
+        // The picker splits globals into separate "Resources" / "Assets" tabs by
+        // `producer_label` (credentials vs curated data are distinct surfaces),
+        // and groups the left column by `note` = the global's name so each
+        // resource/asset is its own group. `producer_node` stays empty — a
+        // global is template-wide, not borrow-reachable from a node.
+        let producer_label = match g.kind {
+            crate::compiler::named_global::GlobalKind::Resource => "Resource",
+            crate::compiler::named_global::GlobalKind::Asset => "Asset",
+        }
+        .to_string();
+        for f in &g.fields {
+            let path = format!("{}.{}", g.name, f.name);
+            by_path.entry(path.clone()).or_insert(ScopeEntry {
+                path,
+                ty: field_kind_descriptor(&f.kind),
+                producer_node: String::new(),
+                producer_label: producer_label.clone(),
+                note: g.name.clone(),
+            });
+        }
+    }
+
     by_path.into_values().collect()
+}
+
+/// A picker [`TyDescriptor`] for a named-global field's declared
+/// [`crate::models::template::FieldKind`]. Scalars surface their type name (so
+/// the editor type-checks a literal compare the same way `scalar_satisfies`
+/// does); `Json` degrades to `Any`. Kept aligned with `ScalarTy::label` /
+/// `to_field_kind` (the inverse mapping the surface uses).
+fn field_kind_descriptor(kind: &crate::models::template::FieldKind) -> crate::compiler::token_shape::TyDescriptor {
+    use crate::compiler::token_shape::TyDescriptor;
+    use crate::models::template::FieldKind;
+    // Names mirror `ScalarTy::label` verbatim (Bool, not Boolean) so a Globals
+    // entry's `ty.kind_label()` round-trips through the same picker / `.pyi`
+    // mapping (`ty_label_to_field_kind`) as a producer field.
+    let name = match kind {
+        FieldKind::Number => "Number",
+        FieldKind::Bool => "Bool",
+        FieldKind::Timestamp => "Timestamp",
+        FieldKind::File => "FileRef",
+        FieldKind::Json => return TyDescriptor::Any,
+        // Text / Textarea / Select / Signature are all string-shaped.
+        FieldKind::Text | FieldKind::Textarea | FieldKind::Select | FieldKind::Signature => "String",
+    };
+    TyDescriptor::Scalar {
+        name: name.to_string(),
+    }
+}
+
+/// The [`ScalarTy`] a named-global field's [`crate::models::template::FieldKind`]
+/// compares as — used to type-check a literal compare in a guard against a
+/// resource/asset field the same way producer-field borrows are checked. The
+/// inverse of `ScalarTy::to_field_kind`; kept local because `ScalarTy::from_kind`
+/// is `pub(super)` to the token_shape module.
+fn scalar_ty_of_kind(kind: &crate::models::template::FieldKind) -> ScalarTy {
+    use crate::models::template::FieldKind;
+    match kind {
+        FieldKind::Number => ScalarTy::Number,
+        FieldKind::Bool => ScalarTy::Bool,
+        FieldKind::Timestamp => ScalarTy::Timestamp,
+        FieldKind::File => ScalarTy::FileRef,
+        FieldKind::Json => ScalarTy::Json,
+        FieldKind::Text | FieldKind::Textarea | FieldKind::Select | FieldKind::Signature => {
+            ScalarTy::String
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -480,10 +586,20 @@ pub(crate) fn check_guard(
     in_shape: &TokenShape,
     node_out: &BTreeMap<String, TokenShape>,
     pos: &BTreeMap<String, usize>,
+    known_globals: Option<&crate::compiler::named_global::KnownGlobals>,
     out: &mut Vec<ShapeDiagnostic>,
 ) {
     for gref in guard_refs(guard) {
-        match resolve_ref(&gref, node, slugs, graph, Some(in_shape), node_out, pos) {
+        match resolve_ref(
+            &gref,
+            node,
+            slugs,
+            graph,
+            Some(in_shape),
+            node_out,
+            pos,
+            known_globals,
+        ) {
             RefResolution::Control => {
                 if let (Some((TokenShape::Scalar(ty), _)), Some(lit)) =
                     (in_shape.resolve(&gref.segs), &gref.lit)
@@ -519,6 +635,33 @@ pub(crate) fn check_guard(
                                 found: ty.label().to_string(),
                                 note: format!("compared against a {} literal", lit.label()),
                             });
+                        }
+                    }
+                }
+            }
+            // A known named global (resource public field / object-asset
+            // record field) is RESOLVED — never a false `UnresolvedGuardPath`.
+            // The constant-inline / envelope materialization happens in
+            // `GlobalNamedSource`; the editor sees it via the "Globals" scope
+            // group. A wrong-typed compare against the declared field kind still
+            // diagnoses (same `scalar_satisfies` check as the Control/Borrow
+            // arms), so `pg.port == "x"` (Number field, String literal) is
+            // flagged while `pg.port == 5432` is clean.
+            RefResolution::NamedGlobal { name, field, .. } => {
+                if let (Some(globals), Some(lit)) = (known_globals, &gref.lit) {
+                    if let Some(g) = globals.values().find(|g| g.name == name) {
+                        if let Some(pf) = g.fields.iter().find(|f| f.name == field) {
+                            let ty = scalar_ty_of_kind(&pf.kind);
+                            if !scalar_satisfies(&ty, lit) {
+                                out.push(ShapeDiagnostic::GuardTypeMismatch {
+                                    node_id: node.id.clone(),
+                                    node_label: node.data.label().to_string(),
+                                    guard: guard.to_string(),
+                                    referenced: gref.referenced.clone(),
+                                    found: ty.label().to_string(),
+                                    note: format!("compared against a {} literal", lit.label()),
+                                });
+                            }
                         }
                     }
                 }
@@ -561,8 +704,11 @@ pub(crate) struct ReadArcBind {
 /// data token holds the value and emits the `&`-borrow plan. A reference that
 /// no upstream data-yielding node produces *and* isn't on the pre-yield
 /// control token is a hard `CompileError`.
-pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBind>, CompileError> {
-    let report = analyze(graph)?;
+pub(crate) fn guard_readarc_plan(
+    graph: &WorkflowGraph,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
+) -> Result<Vec<ReadArcBind>, CompileError> {
+    let report = analyze(graph, known_globals)?;
     let BorrowContext { pos, slugs, .. } = BorrowContext::build(graph)?;
     let mut binds = Vec::new();
 
@@ -682,10 +828,23 @@ pub(crate) fn guard_readarc_plan(graph: &WorkflowGraph) -> Result<Vec<ReadArcBin
         let in_shape = report.node_in.get(&node.id);
         for guard in &guards {
             for gref in guard_refs(guard) {
-                match resolve_ref(&gref, node, &slugs, graph, in_shape, &report.node_out, &pos) {
+                match resolve_ref(
+                    &gref,
+                    node,
+                    &slugs,
+                    graph,
+                    in_shape,
+                    &report.node_out,
+                    &pos,
+                    Some(known_globals),
+                ) {
                     // Control-resident — stays on the slim control token, no
                     // read-arc.
                     RefResolution::Control => {}
+                    // A known named global — `GlobalNamedSource` owns it
+                    // (constant-inline literal or envelope). GuardSource emits
+                    // NO read-arc and does NOT error.
+                    RefResolution::NamedGlobal { .. } => {}
                     // Borrowed — synthesize the read-arc into the owner's
                     // parked data place. `referenced` is the exact source
                     // substring so `apply_control_data_foundation`'s
@@ -755,7 +914,7 @@ impl BorrowSource for GuardSource {
     }
     fn scan(&self, ctx: &PlanCtx<'_>) -> Result<Vec<Borrow>, CompileError> {
         let mut out = Vec::new();
-        for b in guard_readarc_plan(ctx.graph)? {
+        for b in guard_readarc_plan(ctx.graph, ctx.known_globals)? {
             let slug = b
                 .referenced
                 .split('.')

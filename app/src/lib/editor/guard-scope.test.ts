@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
 	buildResourceScope,
+	buildAssetScope,
 	tyDescriptorLabel,
 	tyDescriptorToFieldKind,
 	type TyDescriptor
 } from './guard-scope';
 import type { ResourceSummary, ResourceTypeInfo } from '$lib/api/resources';
+import type { AssetSummary, PortField } from '$lib/api/assets';
 
 const postgres: ResourceTypeInfo = {
 	name: 'postgres',
@@ -104,6 +106,91 @@ describe('buildResourceScope', () => {
 		expect(out[0].nodeLabel).toBe('Local Postgres');
 		// …but qualified ref uses the path (what the compiler matches).
 		expect(out[0].qualified).toBe('f/team/local_pg.host');
+	});
+
+	it('tags every entry globalKind: "resource" (drives the picker Resources tab)', () => {
+		const out = buildResourceScope([resource('local_pg', 'postgres')], [postgres]);
+		expect(out.length).toBeGreaterThan(0);
+		expect(out.every((e) => e.globalKind === 'resource')).toBe(true);
+	});
+});
+
+function field(name: string, kind: PortField['kind']): PortField {
+	return { name, kind, label: name };
+}
+
+function asset(
+	ref_key: string,
+	type_id: string,
+	overrides: Partial<AssetSummary> = {}
+): AssetSummary {
+	return {
+		id: `id-${ref_key}`,
+		ref_key,
+		type_id,
+		display_name: ref_key,
+		version: 1,
+		scope_id: '00000000-0000-0000-0000-000000000000',
+		scope_kind: 'workspace',
+		created_at: '2026-01-01T00:00:00Z',
+		updated_at: '2026-01-01T00:00:00Z',
+		...overrides
+	};
+}
+
+describe('buildAssetScope', () => {
+	const materialFields = [
+		field('name', 'text'),
+		field('density', 'number'),
+		field('datasheet', 'file')
+	];
+
+	it('returns [] when no assets exist', () => {
+		expect(buildAssetScope(undefined, new Map())).toEqual([]);
+		expect(buildAssetScope([], new Map([['t', materialFields]]))).toEqual([]);
+	});
+
+	it('emits `<ref_key>.<field>` per type field, tagged globalKind: "asset"', () => {
+		const out = buildAssetScope(
+			[asset('metals_db', 'material')],
+			new Map([['material', materialFields]])
+		);
+		expect(out.map((e) => e.qualified)).toEqual([
+			'metals_db.name',
+			'metals_db.density',
+			'metals_db.datasheet'
+		]);
+		// Field kinds come straight from the asset type's PortFields.
+		expect(out.find((e) => e.field === 'density')?.kind).toBe('number');
+		expect(out.find((e) => e.field === 'datasheet')?.kind).toBe('file');
+		expect(out.every((e) => e.globalKind === 'asset')).toBe(true);
+		expect(out.every((e) => e.nodeId === 'asset:id-metals_db')).toBe(true);
+	});
+
+	it('assets are alphabetised by ref_key for stable picker order', () => {
+		const out = buildAssetScope(
+			[asset('steel_spec', 'material'), asset('alloy_db', 'material')],
+			new Map([['material', [field('name', 'text')]]])
+		);
+		expect(out.map((e) => e.qualified)).toEqual(['alloy_db.name', 'steel_spec.name']);
+	});
+
+	it('assets whose type is missing from the field map are dropped silently', () => {
+		const out = buildAssetScope(
+			[asset('metals_db', 'material'), asset('orphan', 'unknown_type')],
+			new Map([['material', [field('name', 'text')]]])
+		);
+		expect(out.map((e) => e.qualified)).toEqual(['metals_db.name']);
+	});
+
+	it('display_name overrides ref_key as the picker label', () => {
+		const out = buildAssetScope(
+			[asset('metals_db', 'material', { display_name: 'Metals Database' })],
+			new Map([['material', [field('name', 'text')]]])
+		);
+		expect(out[0].nodeLabel).toBe('Metals Database');
+		// …but qualified ref uses ref_key (what the compiler matches).
+		expect(out[0].qualified).toBe('metals_db.name');
 	});
 });
 

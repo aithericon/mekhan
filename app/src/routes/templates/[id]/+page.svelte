@@ -391,6 +391,7 @@
 					{binding}
 					nodeId={selectedNodeId ?? undefined}
 					{templateId}
+					workspaceId={template?.workspace_id}
 					onselectnode={handleNodeSelect}
 				/>
 			{/if}

@@ -12,6 +12,7 @@
 	} from './shared/LlmCommonFields.svelte';
 	import JsonSchemaBuilder, { detectShape } from './automated/JsonSchemaBuilder.svelte';
 	import DeploymentSection from './DeploymentSection.svelte';
+	import AssetBindingsSection from './AssetBindingsSection.svelte';
 	import { sanitizeSlug } from '$lib/editor/sanitize-slug';
 	import { untrack } from 'svelte';
 
@@ -21,10 +22,12 @@
 		onchange: (data: AgentNodeData) => void;
 		binding?: YjsGraphBinding;
 		nodeId?: string;
+		templateId?: string;
 		scope?: ScopeEntry[];
 	};
 
-	let { data, readonly = false, onchange, binding, nodeId, scope = [] }: Props = $props();
+	let { data, readonly = false, onchange, binding, nodeId, templateId, scope = [] }: Props =
+		$props();
 
 	// Project the agent's nested `data.model.*` + `data.systemPrompt` +
 	// `data.userPrompt` into the shared `LlmCommonShape` and back. The
@@ -414,6 +417,14 @@
 	value={data.deploymentModel}
 	{readonly}
 	onchange={(dm) => onchange({ ...data, deploymentModel: dm })}
+/>
+
+<!-- Asset bindings: stage curated assets as ordinary inputs (docs/20 §5). -->
+<AssetBindingsSection
+	bindings={data.assetBindings}
+	{readonly}
+	{templateId}
+	onchange={(assetBindings) => onchange({ ...data, assetBindings })}
 />
 {#if deploymentRejectedForLoop}
 	<p class="text-sm text-destructive" data-testid="agent-deployment-loop-warning">

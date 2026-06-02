@@ -161,12 +161,38 @@ _RESERVED_GLOBALS = {{
     "log_artifact", "update_progress", "define_phases", "update_phase",
     "aithericon", "sys", "os", "json",
 }}
+
+# Asset File-field map, staged by the compiler as `__asset_files.json`:
+#   {{ "<asset_ref_key>": ["<file_field>", …] }}
+# — which record fields of a staged asset are File-typed. Each such field's
+# storage-path string is wrapped as an `aithericon.File` so user code can call
+# `record.<field>.retrieve()` to lazily fetch the bytes (the child has no
+# storage creds; retrieval brokers through the sidecar).
+_asset_files = inputs.get("__asset_files.json", {{}}) if isinstance(inputs, dict) else {{}}
+
+def _wrap_asset_file_fields(_value, _file_fields):
+    from aithericon import file as _mk_file
+    def _wrap_rec(_rec):
+        if isinstance(_rec, dict):
+            for _ff in _file_fields:
+                if _rec.get(_ff) is not None:
+                    _rec[_ff] = _mk_file(_rec[_ff])
+        return _rec
+    if isinstance(_value, list):
+        return [_wrap_rec(_r) for _r in _value]
+    return _wrap_rec(_value)
+
 for _name, _value in (inputs.items() if isinstance(inputs, dict) else []):
     if not isinstance(_name, str) or not _name.endswith(".json") or _name == "input.json":
         continue
+    if _name == "__asset_files.json":
+        continue  # the File-field map itself, not a producer global
     _slug = _name[:-5]
     if not _slug or not _slug.isidentifier() or _slug in _RESERVED_GLOBALS:
         continue
+    _ff = _asset_files.get(_slug)
+    if _ff:
+        _value = _wrap_asset_file_fields(_value, _ff)
     globals()[_slug] = _accessible(_value)
 
 # Auto-promote any *nested-object* control-token key as a top-level Python

@@ -39,6 +39,10 @@ pub(crate) fn apply_envelope_borrows(
         return;
     };
     let mut pushes = String::new();
+    // Per staged asset, the names of its `File`-kind fields — collected here so
+    // a single `__asset_files.json` sidecar is staged after the per-asset
+    // pushes, telling the runner which record fields to wrap as `File` objects.
+    let mut asset_file_map: Vec<(String, Vec<String>)> = Vec::new();
     for b in consumer_borrows {
         let (stage_name, value_expr) = match &b.resolution {
             BorrowResolution::PythonEnvelope => {
@@ -55,10 +59,45 @@ pub(crate) fn apply_envelope_borrows(
                 // the expression below indexes that map.
                 (name.clone(), format!(r#"__resources["{name}"]"#))
             }
+            BorrowResolution::AssetStaging {
+                alias, file_fields, ..
+            } => {
+                // Publish handler splices `let __assets = #{ ... };` at the top
+                // of this transition's logic before AIR is persisted (the asset
+                // resolver materializes the pinned records into that map). The
+                // expression below indexes it. The staged value is the asset's
+                // business data (its record rows) — it rides `job_inputs`
+                // staging, never the control token (docs/10).
+                if !file_fields.is_empty() {
+                    asset_file_map.push((alias.clone(), file_fields.clone()));
+                }
+                (alias.clone(), format!(r#"__assets["{alias}"]"#))
+            }
             _ => continue, // unreachable per `EnvelopeStageStrategy::handles`
         };
         pushes.push_str(&format!(
             r#"job_inputs.push(#{{ "name": "{stage_name}.json", "source": #{{ "type": "inline", "value": {value_expr} }} }}); "#,
+        ));
+    }
+    // Stage the File-field sidecar once for this consumer: a static
+    // `{ asset_ref_key: [file_field, …] }` map (compile-time constant from the
+    // asset type schema). The runner reads `__asset_files.json` and deep-wraps
+    // each listed field's storage-path value into an `aithericon.File`.
+    if !asset_file_map.is_empty() {
+        let entries = asset_file_map
+            .iter()
+            .map(|(alias, fields)| {
+                let arr = fields
+                    .iter()
+                    .map(|f| format!(r#""{f}""#))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(r#""{alias}": [{arr}]"#)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        pushes.push_str(&format!(
+            r#"job_inputs.push(#{{ "name": "__asset_files.json", "source": #{{ "type": "inline", "value": #{{ {entries} }} }} }}); "#,
         ));
     }
     splice_at_marker(t, &pushes);

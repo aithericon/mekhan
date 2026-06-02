@@ -452,6 +452,7 @@ mod tests {
             on_tool_error: ToolErrorPolicy::Feedback,
             retry_policy: Default::default(),
             deployment_model: Default::default(),
+            asset_bindings: Vec::new(),
         };
         let decl = lookup_by_variant(&data).expect("agent registered");
         assert_eq!(decl.wire_name, "agent");
@@ -643,6 +644,7 @@ mod tests {
             stream_output: false,
             stream_input: false,
             requirements: None,
+            asset_bindings: Vec::new(),
         };
         let decl = lookup_by_variant(&data).expect("automated_step registered");
         assert_eq!(decl.wire_name, "automated_step");
@@ -869,6 +871,7 @@ mod tests {
                 stream_output: false,
                 stream_input: false,
                 requirements: None,
+                asset_bindings: Vec::new(),
             },
             // Rhai-bearing only (no structural validate hook — covered by
             // guard_rhai_sources / validate_guards):

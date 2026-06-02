@@ -665,7 +665,7 @@ fn compile_aliased(known: &KnownResources) -> Result<Value, CompileError> {
         "",
         &HashMap::new(),
         CompileOptions {
-            known_resources: known,
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(known),
             ..Default::default()
         },
     )
@@ -834,7 +834,7 @@ fn plain_executor_is_byte_identical_regardless_of_manifest() {
         "",
         &HashMap::new(),
         CompileOptions {
-            known_resources: &known_with_prod_gpu("token_pool"),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("token_pool")),
             ..Default::default()
         },
     )
@@ -904,7 +904,7 @@ fn aliased_pool_bad_request_is_compile_error() {
         "",
         &HashMap::new(),
         CompileOptions {
-            known_resources: &known_with_prod_gpu("token_pool"),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("token_pool")),
             ..Default::default()
         },
     )
@@ -1057,7 +1057,7 @@ fn compile_leased_loop_scheduled_body(
         "",
         &files,
         CompileOptions {
-            known_resources: known,
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(known),
             ..Default::default()
         },
     )
@@ -1137,7 +1137,7 @@ fn compile_lease_scope_scheduled_body(
         "",
         &files,
         CompileOptions {
-            known_resources: known,
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(known),
             ..Default::default()
         },
     )
@@ -1488,7 +1488,7 @@ fn lease_scope_loop_counter_is_in_scope_at_end() {
         "",
         &files,
         CompileOptions {
-            known_resources: &known_with_prod_dc("datacenter"),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_dc("datacenter")),
             ..Default::default()
         },
     )
@@ -1556,7 +1556,7 @@ fn compile_lease_scope_end_borrow(expr: &str) -> Result<Value, CompileError> {
         "",
         &files,
         CompileOptions {
-            known_resources: &known_with_prod_dc("datacenter"),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_dc("datacenter")),
             ..Default::default()
         },
     )

@@ -42,6 +42,7 @@ aithericon-executor-kreuzberg = { workspace = true, optional = true }
 aithericon-executor-surya = { workspace = true, optional = true }
 aithericon-executor-smtp = { workspace = true, optional = true }
 aithericon-executor-postgres = { workspace = true, optional = true }
+aithericon-executor-loki = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
 # Shared backend metadata — drives `build_executor`'s registration loop.
 aithericon-backends = { workspace = true }
@@ -64,6 +65,7 @@ kreuzberg = ["dep:aithericon-executor-kreuzberg", "aithericon-executor-kreuzberg
 surya = ["dep:aithericon-executor-surya"]
 smtp = ["dep:aithericon-executor-smtp"]
 postgres = ["dep:aithericon-executor-postgres"]
+loki = ["dep:aithericon-executor-loki"]
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }

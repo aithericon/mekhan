@@ -18,6 +18,12 @@ import {
 	type ResourceTypeInfo,
 	type ResourceSummary
 } from '$lib/api/resources';
+import {
+	listAssets,
+	getAssetType,
+	type AssetSummary,
+	type PortField
+} from '$lib/api/assets';
 
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
 type FieldKind = components['schemas']['FieldKind'];
@@ -39,6 +45,11 @@ export type ScopeEntry = {
 	 *  Pickers drill into `ty.fields` (Object) or `ty.element` (Array) to
 	 *  surface nested + per-element refs without further round-trips. */
 	ty?: TyDescriptor;
+	/** For named-global entries (workspace resources / template assets), which
+	 *  kind this is — the RefPicker splits the two into separate "Resources" and
+	 *  "Assets" tabs. Absent for regular in-scope producer refs and for the
+	 *  client-side resource fallback (treated as `'resource'`). */
+	globalKind?: 'resource' | 'asset';
 };
 
 /** Result of one `/api/v1/analyze` round-trip. `graphOk: false` means the
@@ -47,6 +58,13 @@ export type ScopeEntry = {
  *  Picker UIs should grey themselves out and surface the diagnostic. */
 export type ScopeAnalysis = {
 	scopes: Map<string, ScopeEntry[]>;
+	/** Server-authoritative "Globals" scope — workspace resources + template
+	 *  assets resolved by the backend when `workspace_id`/`template_id` are
+	 *  present in the analyze request. Entries are deduplicated (the server
+	 *  emits the same set for every node; we keep one copy here). When the
+	 *  server has no DB context (ids absent or scope empty), this is `[]`
+	 *  and callers may fall back to client-side `buildResourceScope`. */
+	globalsScope: ScopeEntry[];
 	graphOk: boolean;
 	diagnostics: GuardDiagnosticDto[];
 	/** True when the analyzer call itself failed (network / 5xx). Distinct
@@ -105,6 +123,15 @@ export function tyDescriptorLabel(ty: TyDescriptor | undefined): string {
 	}
 }
 
+/** Template / workspace context forwarded to the analyze endpoint so the
+ *  backend can resolve workspace-scoped resources and template-visible assets
+ *  into the "Globals" scope group. Both are optional: the analyze call still
+ *  works without them — the Globals group will simply be empty. */
+export type AnalyzeContext = {
+	templateId?: string | null;
+	workspaceId?: string | null;
+};
+
 /**
  * Fetch the in-scope identifiers at every node from the backend analyzer.
  * Returns the scope map keyed by node id, plus the `graph_ok` flag and any
@@ -112,37 +139,80 @@ export function tyDescriptorLabel(ty: TyDescriptor | undefined): string {
  * itself. Best-effort: on any failure (network, 5xx) returns
  * `{ scopes: empty, graphOk: false, requestFailed: true }` — the editor
  * degrades, never throws.
+ *
+ * When `ctx` carries `templateId` / `workspaceId`, the backend resolves
+ * named globals (workspace resources + template assets) and returns them as
+ * entries with `producer_label === "Globals"`. This function separates those
+ * entries into `ScopeAnalysis.globalsScope` (deduplicated — the server emits
+ * the same set for every node) and strips them from the per-node `scopes`
+ * map so the RefPicker's "Globals" tab and "Refs" tab are disjoint.
  */
-export async function fetchNodeScopes(graph: WorkflowGraph): Promise<ScopeAnalysis> {
+export async function fetchNodeScopes(
+	graph: WorkflowGraph,
+	ctx?: AnalyzeContext
+): Promise<ScopeAnalysis> {
 	const out = new Map<string, ScopeEntry[]>();
 	try {
 		const surface = await analyzeGraph({
 			graph,
 			name: 'editor',
 			description: '',
-			files: {}
+			files: {},
+			...(ctx?.templateId ? { template_id: ctx.templateId } : {}),
+			...(ctx?.workspaceId ? { workspace_id: ctx.workspaceId } : {})
 		});
+
+		// Named-global entries are synthetic (empty `producer_node`) and labelled
+		// by kind — `producer_label === "Resource"` or `"Asset"` — with the
+		// global's name carried in `note` (so the picker groups by name). The
+		// server emits the same global set for every node; we deduplicate by
+		// `path` and keep one canonical copy in `globalsScope`, tagged with
+		// `globalKind` so the RefPicker can split Resources vs Assets into
+		// separate tabs.
+		const seenGlobalPaths = new Set<string>();
+		const globalsScope: ScopeEntry[] = [];
+
 		for (const [nodeId, entries] of Object.entries(surface.scopes ?? {})) {
-			out.set(
-				nodeId,
-				(entries ?? []).map((e) => ({
+			const regularEntries: ScopeEntry[] = [];
+			for (const e of entries ?? []) {
+				const isGlobal =
+					e.producer_node === '' &&
+					(e.producer_label === 'Resource' || e.producer_label === 'Asset');
+				const mapped: ScopeEntry = {
 					nodeId: e.producer_node,
-					nodeLabel: e.producer_label,
+					// Group globals by their own name (carried in `note`); regular
+					// entries keep their producer's label.
+					nodeLabel: isGlobal ? e.note || e.producer_label : e.producer_label,
 					field: e.path.split('.').pop() ?? e.path,
 					kind: tyDescriptorToFieldKind(e.ty),
 					qualified: e.path,
-					ty: e.ty
-				}))
-			);
+					ty: e.ty,
+					...(isGlobal
+						? { globalKind: e.producer_label === 'Asset' ? 'asset' : 'resource' }
+						: {})
+				};
+				if (isGlobal) {
+					// Deduplicate across nodes (all nodes share the same global set).
+					if (!seenGlobalPaths.has(e.path)) {
+						seenGlobalPaths.add(e.path);
+						globalsScope.push(mapped);
+					}
+				} else {
+					regularEntries.push(mapped);
+				}
+			}
+			out.set(nodeId, regularEntries);
 		}
+
 		return {
 			scopes: out,
+			globalsScope,
 			graphOk: surface.graph_ok ?? false,
 			diagnostics: surface.diagnostics ?? [],
 			requestFailed: false
 		};
 	} catch {
-		return { scopes: out, graphOk: false, diagnostics: [], requestFailed: true };
+		return { scopes: out, globalsScope: [], graphOk: false, diagnostics: [], requestFailed: true };
 	}
 }
 
@@ -257,11 +327,102 @@ export function buildResourceScope(
 				nodeLabel: resource.display_name || resource.path,
 				field,
 				kind: field === 'port' ? 'number' : 'text',
-				qualified: `${resource.path}.${field}`
+				qualified: `${resource.path}.${field}`,
+				globalKind: 'resource'
 			});
 		}
 	}
 	return out;
+}
+
+/**
+ * Project template-visible assets + their type fields into `ScopeEntry[]`
+ * for `RefPicker`'s Assets tab — the asset analogue of `buildResourceScope`.
+ *
+ * Each asset contributes one entry per field of its declared type, keyed by
+ * the asset's `ref_key` (the identifier the compiler matches `<ref_key>.<field>`
+ * against). `typesById` maps an asset's `type_id` to its ordered `PortField`
+ * list (asset type summaries don't carry fields — the caller fetches each
+ * type's detail; see `loadTemplateAssetScope`). Assets whose type is missing
+ * from the map are dropped silently.
+ *
+ * Unlike resources (workspace-scoped), assets are template-visible: the set
+ * shown depends on the template's scope chain, resolved server-side by the
+ * `/api/v1/assets?scope=template:<id>` query the loader issues.
+ */
+export function buildAssetScope(
+	assets: AssetSummary[] | undefined,
+	typesById: Map<string, PortField[]>
+): ScopeEntry[] {
+	if (!assets || assets.length === 0) return [];
+	const out: ScopeEntry[] = [];
+	// Alphabetise by `ref_key` so the picker order matches what the user types.
+	const sorted = [...assets].sort((a, b) => a.ref_key.localeCompare(b.ref_key));
+	for (const asset of sorted) {
+		const fields = typesById.get(asset.type_id);
+		if (!fields) continue;
+		for (const field of fields) {
+			out.push({
+				nodeId: `asset:${asset.id}`,
+				nodeLabel: asset.display_name || asset.ref_key,
+				field: field.name,
+				kind: field.kind,
+				qualified: `${asset.ref_key}.${field.name}`,
+				globalKind: 'asset'
+			});
+		}
+	}
+	return out;
+}
+
+/**
+ * Template-asset library for the RefPicker's Assets tab. Fetches every
+ * template-visible asset plus the field list of each distinct asset type, then
+ * projects them via `buildAssetScope`. Cached per-template (mirrors the
+ * resource caches): assets DO change at runtime, but the editor's "Refresh"
+ * affordance + a full page reload pick up changes.
+ *
+ * Resolves to `[]` (never rejects) on any failure so the picker degrades to
+ * its other tabs instead of throwing.
+ */
+const templateAssetScopeCache = new Map<string, Promise<ScopeEntry[]>>();
+
+export function loadTemplateAssetScope(templateId: string): Promise<ScopeEntry[]> {
+	const cached = templateAssetScopeCache.get(templateId);
+	if (cached) return cached;
+	const promise = (async () => {
+		const page = await listAssets({
+			scope: { kind: 'template', id: templateId },
+			perPage: 200
+		});
+		const assets = page.items;
+		const typeIds = [...new Set(assets.map((a) => a.type_id))];
+		const typesById = new Map<string, PortField[]>();
+		await Promise.all(
+			typeIds.map(async (id) => {
+				try {
+					const detail = await getAssetType(id);
+					typesById.set(id, detail.fields);
+				} catch {
+					// Skip a type we can't resolve — its assets just won't list.
+				}
+			})
+		);
+		return buildAssetScope(assets, typesById);
+	})();
+	templateAssetScopeCache.set(templateId, promise);
+	promise.catch(() => {
+		// Drop the rejected promise so the next call retries.
+		if (templateAssetScopeCache.get(templateId) === promise) {
+			templateAssetScopeCache.delete(templateId);
+		}
+	});
+	return promise;
+}
+
+/** Test/HMR helper — drops the template-asset scope cache. */
+export function _clearAssetScopeCache(): void {
+	templateAssetScopeCache.clear();
 }
 
 /**

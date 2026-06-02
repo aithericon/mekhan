@@ -25,6 +25,9 @@ from aithericon._client import init, shutdown, is_connected
 # Inputs
 from aithericon._inputs import load_inputs, token, Token
 
+# Files (lazy storage-path retrieval — asset File fields)
+from aithericon._files import File, file
+
 # Outputs
 from aithericon._outputs import set_output
 
@@ -53,6 +56,8 @@ __all__ = [
     "load_inputs",
     "token",
     "Token",
+    "File",
+    "file",
     "set_output",
     "chunks",
     "log_artifact",

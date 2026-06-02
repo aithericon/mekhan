@@ -518,6 +518,7 @@ mod tests {
                     stream_output: false,
                     stream_input: false,
                     requirements,
+                    asset_bindings: Vec::new(),
                 },
                 parent_id: None,
                 width: None,

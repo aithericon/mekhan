@@ -177,6 +177,10 @@ pub async fn test_app_with_authenticator(
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -229,6 +233,10 @@ pub async fn test_app_with_introspection(
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -278,6 +286,10 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         ),
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
+        ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 
@@ -331,6 +343,10 @@ pub async fn test_app() -> (Router, PgPool) {
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -381,6 +397,10 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         ),
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
+        ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 
@@ -434,6 +454,10 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         ),
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
+        ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 
@@ -498,6 +522,10 @@ pub async fn test_app_waiters(
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
         ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -560,6 +588,10 @@ pub async fn test_app_with_petri_url_and_triggers(
         ),
         runner_nats_signer: std::sync::Arc::new(
             mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
+        ),
+        runner_presence: mekhan_service::runners_presence::RunnerPresence::new(),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 

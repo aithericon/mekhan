@@ -161,7 +161,7 @@ fn dynamic_steps_wire_edge_plucks_from_producer_read_arc() {
 #[test]
 fn dynamic_review_output_is_opaque() {
     let g = graph();
-    let surface = surface_types(&g);
+    let surface = surface_types(&g, &Default::default());
     assert!(surface.graph_ok, "graph must type-check");
 
     let consumer_scope = surface

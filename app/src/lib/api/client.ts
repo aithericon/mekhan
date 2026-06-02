@@ -815,6 +815,8 @@ export async function getProcessLogsTail(
 		level?: string;
 		signal_key?: string;
 		q?: string;
+		/** Narrow to a single executor execution — one workflow step+iteration. */
+		execution_id?: string;
 		limit?: number;
 	}
 ): Promise<LogsTailResponse> {
@@ -824,6 +826,7 @@ export async function getProcessLogsTail(
 	if (params?.level) qs.set('level', params.level);
 	if (params?.signal_key) qs.set('signal_key', params.signal_key);
 	if (params?.q) qs.set('q', params.q);
+	if (params?.execution_id) qs.set('execution_id', params.execution_id);
 	if (params?.limit) qs.set('limit', String(params.limit));
 	const query = qs.toString();
 	return rawJson(`/processes/${processId}/logs/tail${query ? `?${query}` : ''}`);

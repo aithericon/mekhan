@@ -99,6 +99,10 @@ aithericon-backends = { path = "../shared/backends" }
 # (`POST /api/v1/resources`).
 regex = "1"
 
+# CSV parsing for the asset-import endpoint
+# (`POST /api/v1/assets/{id}/import-csv`, docs/20 §8).
+csv = "1"
+
 schemars = "0.8"
 # Publish-time validation of `resourcePool.request` against a pool kind's
 # `claim_schema`. Same crate + locked version the engine's `SchemaRegistry`

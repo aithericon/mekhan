@@ -1,0 +1,16 @@
+{
+  "asset_type": {
+    "name": "steel_grade",
+    "display_name": "Steel Grade",
+    "cardinality": "object",
+    "fields": [
+      { "name": "yield_strength", "label": "Yield Strength (MPa)", "kind": "number", "required": true },
+      { "name": "grade", "label": "Grade", "kind": "text", "required": true }
+    ]
+  },
+  "ref_key": "steel_spec",
+  "display_name": "Steel Spec",
+  "records": [
+    { "yield_strength": 355, "grade": "S355" }
+  ]
+}

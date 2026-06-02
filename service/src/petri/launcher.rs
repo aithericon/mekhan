@@ -168,7 +168,7 @@ impl<'a> InstanceLauncher<'a> {
         // byte-for-byte across both paths (the launcher's load-bearing
         // invariant — see the doc-comment above).
         let (
-            parameterized,
+            mut parameterized,
             instance_id,
             net_id,
             template_id,
@@ -258,11 +258,24 @@ impl<'a> InstanceLauncher<'a> {
             }
         };
 
+        // Asset version-pinning (docs/20 §6). The publish handler stashed the
+        // `{alias -> {asset_id, version}}` pin map as a `__asset_pins` sidecar
+        // on the AIR; capture it into `workflow_instances.asset_pins` so asset
+        // edits after launch don't retroactively change a running instance, and
+        // strip it from the AIR so the engine never sees the sidecar. Mirrors
+        // `resource_pins` — the authoritative pin is already baked into the
+        // spliced `__assets` records the AIR carries; this column is the
+        // launch-time/replay record. `{}` when the template binds no assets.
+        let asset_pins = parameterized
+            .as_object_mut()
+            .and_then(|o| o.remove("__asset_pins"))
+            .unwrap_or_else(|| serde_json::json!({}));
+
         let mode_str = mode.unwrap_or("live");
         let instance = sqlx::query_as::<_, WorkflowInstance>(
             r#"
-            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata, mode, test_id)
-            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6, $7, $8)
+            INSERT INTO workflow_instances (id, template_id, template_version, net_id, status, created_by, started_at, metadata, mode, test_id, asset_pins)
+            VALUES ($1, $2, $3, $4, 'running', $5, NOW(), $6, $7, $8, $9)
             RETURNING *
             "#,
         )
@@ -274,6 +287,7 @@ impl<'a> InstanceLauncher<'a> {
         .bind(&metadata)
         .bind(mode_str)
         .bind(test_id)
+        .bind(&asset_pins)
         .fetch_one(self.db)
         .await
         .map_err(|e| {

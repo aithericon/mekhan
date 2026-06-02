@@ -106,6 +106,7 @@ fn python_graph(step_id: &str) -> WorkflowGraph {
                     stream_output: false,
                     stream_input: false,
                     requirements: None,
+                    asset_bindings: Vec::new(),
                 },
                 parent_id: None,
                 width: None,

@@ -596,7 +596,18 @@ pub(crate) fn out_shape_passthrough(_node: &WorkflowNode, in_shape: &TokenShape)
 
 /// Compute inbound + outbound shapes for every node, then validate guards
 /// against the *real* inbound shape.
-pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
+///
+/// `known_globals` is the per-template named-global registry (resources +
+/// assets); it is threaded into `reachable_scope` (the picker offers a
+/// "Globals" group of `<name>.<field>` entries) and `check_guard` (a
+/// `<name>.<field>` ref to a known global resolves instead of flagging a false
+/// `UnresolvedGuardPath`). Pass an empty map (`&Default::default()`) on the
+/// internal compile paths that don't carry one yet — the surface degrades to
+/// the producer-only scope, exactly as before this registry existed.
+pub fn analyze(
+    graph: &WorkflowGraph,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
+) -> Result<ShapeReport, CompileError> {
     use crate::compiler::borrow::planners::guard::{check_guard, reachable_scope};
 
     let wg = WorkflowDiGraph::build(graph)?;
@@ -668,7 +679,16 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
     for node in &graph.nodes {
         scopes.insert(
             node.id.clone(),
-            reachable_scope(node, graph, &node_in, &node_out, &order, &wg, &slugs),
+            reachable_scope(
+                node,
+                graph,
+                &node_in,
+                &node_out,
+                &order,
+                &wg,
+                &slugs,
+                known_globals,
+            ),
         );
     }
 
@@ -716,6 +736,12 @@ pub fn analyze(graph: &WorkflowGraph) -> Result<ShapeReport, CompileError> {
                 in_shape,
                 &node_out,
                 &pos,
+                // The named-global registry is threaded through here so the
+                // editor analyze path defers resource/asset heads instead of
+                // flagging them unresolved; the compile-time guard pass passes
+                // the real registry via `guard_readarc_plan`. Empty on the
+                // internal compile callers that don't carry one.
+                Some(known_globals),
                 &mut diagnostics,
             );
         }

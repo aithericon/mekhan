@@ -1,3 +1,4 @@
+pub mod asset;
 pub mod auth_token;
 pub mod capability;
 pub mod error;

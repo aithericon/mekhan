@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000241",
+  "name": "24 · Asset in Python",
+  "description": "References curated assets DIRECTLY by ref-key inside a Python step body — no assetBindings, no alias. The compiler scans the body, resolves the heads against the asset library, and auto-stages each by cardinality: `steel_spec` (object) as its record dict (attribute access — `steel_spec.yield_strength`), `metals_db` (collection) as the row list (`len(metals_db)`). The unified named-global path: an asset is first-class in a Python body exactly like a resource (`pg.host`)."
+}

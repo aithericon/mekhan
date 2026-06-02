@@ -1,0 +1,8 @@
+{
+  "path": "demo_loki",
+  "resource_type": "loki",
+  "display_name": "Demo Loki (dev)",
+  "config": {
+    "base_url": "http://localhost:3100"
+  }
+}

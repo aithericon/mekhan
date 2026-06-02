@@ -231,6 +231,12 @@ export class YjsGraphBinding {
 				const requirements = config?.requirements as
 					| AutomatedStepNodeData['requirements']
 					| undefined;
+				// `assetBindings` binds scope-visible assets the node stages as
+				// inputs (docs/20 §5). Top-level node field → must round-trip here
+				// or the editor reconstruction drops the bindings.
+				const assetBindings = config?.assetBindings as
+					| AutomatedStepNodeData['assetBindings']
+					| undefined;
 				return {
 					...base,
 					type: 'automated_step',
@@ -240,7 +246,8 @@ export class YjsGraphBinding {
 					...(deploymentModel ? { deploymentModel } : {}),
 					...(streamOutput ? { streamOutput } : {}),
 					...(streamInput ? { streamInput } : {}),
-					...(requirements ? { requirements } : {})
+					...(requirements ? { requirements } : {}),
+					...(assetBindings && assetBindings.length > 0 ? { assetBindings } : {})
 				};
 			}
 			case 'decision':
@@ -410,7 +417,13 @@ export class YjsGraphBinding {
 					contextStrategy:
 						(config?.contextStrategy as AgentNodeData['contextStrategy']) ?? 'none',
 					onToolError:
-						(config?.onToolError as AgentNodeData['onToolError']) ?? 'feedback'
+						(config?.onToolError as AgentNodeData['onToolError']) ?? 'feedback',
+					...(() => {
+						// `assetBindings` — staged-asset inputs (docs/20 §5). Top-level
+						// node field → must round-trip or the editor drops the bindings.
+						const ab = config?.assetBindings as AgentNodeData['assetBindings'] | undefined;
+						return ab && ab.length > 0 ? { assetBindings: ab } : {};
+					})()
 				};
 			case 'delay':
 				return {
@@ -812,6 +825,21 @@ export class YjsGraphBinding {
 					if (reqs) config.set('requirements', reqs);
 					else config.delete('requirements');
 				}
+				// Staged-asset bindings (docs/20 §5). Only touch the Y.Map key when
+				// the incoming data EXPLICITLY carries `assetBindings` (i.e. the
+				// AssetBindingsSection emitted a change). When the field is absent
+				// from the data object — which happens whenever a different field
+				// was updated by a handler that spread a stale snapshot that didn't
+				// yet include `assetBindings` (backend-registry-before-Yjs-sync
+				// race) — we preserve whatever is currently stored rather than
+				// silently deleting the bindings.
+				if ('assetBindings' in data) {
+					if (data.assetBindings && data.assetBindings.length > 0) {
+						config.set('assetBindings', data.assetBindings);
+					} else {
+						config.delete('assetBindings');
+					}
+				}
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);
@@ -936,6 +964,17 @@ export class YjsGraphBinding {
 				}
 				config.set('contextStrategy', data.contextStrategy ?? 'none');
 				config.set('onToolError', data.onToolError ?? 'feedback');
+				// Staged-asset bindings (docs/20 §5). Symmetric with automated_step:
+				// only touch the Y.Map key when the field is explicitly present in
+				// the incoming data. See the automated_step case comment for the
+				// full rationale.
+				if ('assetBindings' in data) {
+					if (data.assetBindings && data.assetBindings.length > 0) {
+						config.set('assetBindings', data.assetBindings);
+					} else {
+						config.delete('assetBindings');
+					}
+				}
 				break;
 			case 'delay':
 				config.set('durationMsExpr', data.durationMsExpr ?? '5000');

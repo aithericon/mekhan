@@ -196,6 +196,21 @@ pub const POSTGRES_META: BackendMeta = BackendMeta {
     user_authorable: true,
 };
 
+pub const LOKI_META: BackendMeta = BackendMeta {
+    backend_type: ExecutionBackendType::Loki,
+    wire_name: "loki",
+    display_name: "Loki Query",
+    icon: "scroll-text",
+    dispatch_mode: DispatchMode::ExecutorJob,
+    // Inline-only: the backend issues an in-process HTTP request from the
+    // executor daemon (like postgres/http). No Scheduled (Nomad/Slurm) toggle.
+    schedulable: false,
+    // The bound `loki` resource (base_url/token/org_id) is overlaid into the
+    // resolved config.
+    resource_channel: ResourceChannel::ConfigOverlay,
+    user_authorable: true,
+};
+
 /// Every shipped backend. One entry per [`ExecutionBackendType`] variant;
 /// the conformance test in `mekhan-service` asserts bijection.
 pub static BACKENDS: &[&BackendMeta] = &[
@@ -210,6 +225,7 @@ pub static BACKENDS: &[&BackendMeta] = &[
     &SMTP_META,
     &CATALOGUE_QUERY_META,
     &POSTGRES_META,
+    &LOKI_META,
 ];
 
 /// Look up the cross-crate metadata for a backend. Returns `None` only if
@@ -240,6 +256,7 @@ mod tests {
             ExecutionBackendType::Smtp,
             ExecutionBackendType::CatalogueQuery,
             ExecutionBackendType::Postgres,
+            ExecutionBackendType::Loki,
         ] {
             let m = lookup(bt).unwrap_or_else(|| panic!("BACKENDS missing entry for {bt:?}"));
             assert_eq!(m.wire_name, bt.as_wire_str());

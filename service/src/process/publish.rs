@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::compiler::resource_refs::{KnownResource, KnownResources};
+use crate::compiler::named_global::GlobalKind;
 use crate::compiler::{
     compile_to_air_with_options, derive_child_io, generate_py_io_files, make_child_callable,
     node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
@@ -111,7 +111,7 @@ impl<'a> PublishService<'a> {
         // template.default_scheduler ?? workspace.default_datacenter ?? error`,
         // stamping the resolved alias into the node's own `scheduler` /
         // `lease.scheduler` field. This runs ONCE here, BEFORE
-        // `discover_known_resources`, so both resource discovery and the
+        // `discover_named_globals`, so both resource discovery and the
         // compiler lowering read the already-resolved alias from the node data
         // (single resolution site — collection and lowering cannot drift). A
         // `Lease`/`Loop.lease` that bottoms out hard-fails with
@@ -139,9 +139,9 @@ impl<'a> PublishService<'a> {
         // job-template REFERENCE against its already-resolved cluster, stamping
         // the referenced template's slug into the node's `job_template` string.
         // Runs AFTER `resolve_scheduler_defaults` (so the node's effective
-        // cluster alias is known) and BEFORE `discover_known_resources` /
-        // lowering (so they read the resolved name, single-site discipline). A
-        // `None` ref leaves the legacy bare `job_template` string untouched.
+        // cluster alias is known) and BEFORE named-global discovery / lowering
+        // (so they read the resolved name, single-site discipline). A `None`
+        // ref leaves the legacy bare `job_template` string untouched.
         // RESOLVE + VALIDATE ONLY — no `template_stagings` mutation (Phase 4).
         let compiled_graph =
             resolve_job_templates(&compiled_graph, workspace_id, &self.state.db).await?;
@@ -156,17 +156,34 @@ impl<'a> PublishService<'a> {
         // + the staging net's own retry are the backstops).
         auto_stage_templates(self.state, &compiled_graph, workspace_id).await;
 
-        // Discover workspace resources this graph touches by source-scanning
-        // Python entrypoints for `<head>.<field>` accesses and looking the
-        // heads up in the workspace's resources list. The compiler uses this
-        // map (a) to validate name/slug collisions, (b) to discriminate
-        // resource refs from slug refs in the borrow planner, and (c) to
-        // pin each ref to `(resource_id, latest_version)` in the AIR.
-        // NB: discover against the scheduler-RESOLVED graph (`compiled_graph`),
-        // not the author's original — so a node that inherits its cluster from
-        // a template/workspace default collects + resolves the stamped alias.
-        let known_resources =
-            discover_known_resources(self.state, &compiled_graph, files, workspace_id).await?;
+        // Discover every named global (workspace resource + template-visible
+        // asset) this graph references in ONE unified pass (docs/20 §5). This
+        // subsumes the three formerly-separate discovery fns
+        // (`discover_known_resources` + `discover_asset_bindings` +
+        // `inline_object_asset_refs`): resources resolve workspace-scoped
+        // (Python/config heads via `files`), assets template-visible (node
+        // bindings, control-flow Rhai heads, AND Python/config body refs);
+        // object assets / static resource fields fold into the constant-inline
+        // borrow channel inside the compiler, so the graph is no longer mutated
+        // pre-compile. NB: discover against the scheduler-RESOLVED graph
+        // (`compiled_graph`), not the author's original — so a node that
+        // inherits its cluster from a template/workspace default collects +
+        // resolves the stamped alias.
+        //
+        // `strict = true` is the publish error gate: an unresolved DECLARED
+        // resource alias / asset binding hard-fails here (symmetric with the
+        // pre-convergence behavior). The same registry then drives compile, the
+        // `__resources` / `__assets` splices (off `envelope_used`), and
+        // `__asset_pins` — there is no second, parallel discovery pass.
+        let known_globals = crate::process::discover::discover_named_globals(
+            self.state,
+            &compiled_graph,
+            Some(workspace_id),
+            Some(template_id),
+            files,
+            true,
+        )
+        .await?;
 
         // Phase 4 — validate every AutomatedStep's placement Requirements
         // against the workspace capability registry. Loaded via the SAME
@@ -226,7 +243,7 @@ impl<'a> PublishService<'a> {
             CompileOptions {
                 inline_sources: files,
                 sub_air: &sub_air,
-                known_resources: &known_resources,
+                known_globals: &known_globals,
                 config_storage,
             },
         )
@@ -235,22 +252,80 @@ impl<'a> PublishService<'a> {
             ApiError::compile(format!("compilation failed: {e}"), vec![view])
         })?;
 
-        // Resolve every known resource against the workspace + ACL, write
-        // audit rows, and splice the envelope into the AIR. The launcher
-        // never touches resources — the AIR persisted here already carries
-        // the baked-in `__resources` declarations for every prepare
-        // transition that needs them.
-        if !known_resources.is_empty() {
+        // ── Resource secret-envelope splice (`__resources`) ──────────────────
+        // Resolve every resource against the workspace + ACL, write audit rows,
+        // and splice the envelope into the AIR. The manifest is the registry's
+        // envelope-USED resources (named in Python/config or a declared alias) —
+        // a resource used only as a control-flow constant (`demo_pg.port`)
+        // carries `envelope_used = false` and gets no needless secret splice,
+        // matching the set of `ResourceEnvelope` borrows the compiler emitted.
+        // The launcher never touches resources — the persisted AIR already
+        // carries the baked-in `__resources` declarations.
+        let resource_manifest =
+            crate::compiler::named_global::splice_resources_from_globals(&known_globals);
+        if !resource_manifest.is_empty() {
             let envelope = self
                 .state
                 .resource_resolver
-                .resolve_known(workspace_id, principal_id, &known_resources, None)
+                .resolve_known(workspace_id, principal_id, &resource_manifest, None)
                 .await
                 .map_err(|e| {
                     ApiError::bad_request(format!("resource resolution failed at publish: {e}"))
                 })?;
-            let names: Vec<&str> = known_resources.keys().map(String::as_str).collect();
+            let names: Vec<&str> = resource_manifest.keys().map(String::as_str).collect();
             air_json = splice_resources_into_air(air_json, &envelope, &names);
+        }
+
+        // ── Asset staging-envelope splice (`__assets`) ───────────────────────
+        // Materialize every bound (collection) asset's pinned records and splice
+        // the `__assets` envelope into the AIR. The manifest is the registry's
+        // envelope-USED assets (a collection bound on a node), keyed by alias.
+        // Object assets inline via the constant channel and never appear here.
+        // Business data rides `job_inputs` staging, never the control token
+        // (docs/10).
+        let asset_manifest =
+            crate::compiler::named_global::splice_assets_from_globals(&known_globals);
+        if !asset_manifest.is_empty() {
+            let envelope = self
+                .state
+                .asset_resolver
+                .resolve_known(&asset_manifest)
+                .await
+                .map_err(|e| {
+                    ApiError::bad_request(format!("asset resolution failed at publish: {e}"))
+                })?;
+            let aliases: Vec<&str> = asset_manifest.keys().map(String::as_str).collect();
+            air_json = crate::petri::asset_resolver::splice_assets_into_air(
+                air_json, &envelope, &aliases,
+            );
+        }
+
+        // Stash the `{key -> {asset_id, version}}` pin map as a sidecar key on
+        // the AIR JSON for EVERY asset global in the registry — both the
+        // envelope-staged collections AND the constant-inlined objects (docs/20
+        // §5.1 / §9), so reverse lineage counts runs that *referenced* an
+        // asset's field, not just those that staged it. The launcher reads it
+        // into `workflow_instances.asset_pins` at launch (docs/20 §6) and strips
+        // it before handing the AIR to the engine.
+        let asset_pins: Vec<(String, Uuid, i32)> = known_globals
+            .iter()
+            .filter(|(_, g)| g.kind == GlobalKind::Asset)
+            .map(|(key, g)| (key.clone(), g.id, g.version))
+            .collect();
+        if !asset_pins.is_empty() {
+            if let Some(obj) = air_json.as_object_mut() {
+                let entry = obj
+                    .entry("__asset_pins")
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(pins) = entry.as_object_mut() {
+                    for (key, asset_id, ver) in &asset_pins {
+                        pins.insert(
+                            key.clone(),
+                            serde_json::json!({ "asset_id": asset_id, "version": ver }),
+                        );
+                    }
+                }
+            }
         }
 
         let graph_json = serde_json::to_value(graph)
@@ -780,200 +855,6 @@ async fn workspace_default_datacenter_alias(
     .await
     .map_err(|e| ApiError::internal(format!("workspace default datacenter lookup: {e}")))?;
     Ok(alias)
-}
-
-/// the operator chasing the compiler instead of the missing resource row.
-async fn discover_known_resources(
-    state: &AppState,
-    graph: &WorkflowGraph,
-    inline_sources: &HashMap<String, HashMap<String, String>>,
-    workspace_id: Uuid,
-) -> Result<KnownResources, ApiError> {
-    use crate::backends::ScanCtx;
-    use crate::compiler::resource_binding::{
-        collect_declared_resource_aliases, collect_resource_heads,
-    };
-    use crate::compiler::CompileError;
-    use std::collections::BTreeSet;
-
-    // Pass 1: collect every distinct `<head>` the graph references in any
-    // surface that can name a workspace resource, plus a separate map of
-    // *declared* aliases (the strict subset) so we can fail-fast on
-    // unresolved ones below.
-    let mut heads: BTreeSet<String> = BTreeSet::new();
-    let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
-    for node in &graph.nodes {
-        // A `LeaseScope` holds a datacenter lease for its whole child region
-        // (docs/17). It's a declared binding on the node data, and a LeaseScope
-        // node hits the `_ => continue` arm below — so collect its
-        // `lease.scheduler` here, or `lower_lease_scope`'s
-        // `resolve_binding(.., "datacenter")` hard-fails at publish.
-        if let WorkflowNodeData::LeaseScope { lease, .. } = &node.data {
-            let alias = lease.scheduler.trim();
-            if !alias.is_empty() {
-                heads.insert(alias.to_string());
-                declared.push((node.id.clone(), alias.to_string()));
-            }
-        }
-
-        // Single projection path: both AutomatedStep and Agent feed the
-        // same scanner with the same shape. Agent uses the central
-        // `agent_to_llm_config` so any future LLM-backend scan rules
-        // (`ref_scanner`, new `resource_alias_paths`) apply uniformly.
-        let (backend_type, config_owned, config_ref, entrypoint): (
-            crate::models::template::ExecutionBackendType,
-            Option<serde_json::Value>,
-            Option<&serde_json::Value>,
-            Option<&str>,
-        ) = match &node.data {
-            WorkflowNodeData::AutomatedStep { execution_spec, .. } => (
-                execution_spec.backend_type,
-                None,
-                Some(&execution_spec.config),
-                execution_spec.entrypoint.as_deref(),
-            ),
-            WorkflowNodeData::Agent {
-                model,
-                system_prompt,
-                user_prompt,
-                response_format,
-                images,
-                ..
-            } => (
-                crate::models::template::ExecutionBackendType::Llm,
-                Some(crate::models::template::agent_to_llm_config(
-                    model,
-                    system_prompt.as_deref(),
-                    user_prompt,
-                    response_format.as_ref(),
-                    images,
-                    &[],
-                )),
-                None,
-                None,
-            ),
-            _ => continue,
-        };
-        let config: &serde_json::Value =
-            config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
-        let ctx = ScanCtx {
-            config,
-            node_id: &node.id,
-            inline_sources,
-            entrypoint,
-        };
-        for head in collect_resource_heads(&ctx, backend_type) {
-            heads.insert(head);
-        }
-        for alias in collect_declared_resource_aliases(&ctx, backend_type) {
-            declared.push((node.id.clone(), alias));
-        }
-
-        // `Executor.pool.alias` is a declared resource binding too, but it lives
-        // on the node *data* (`deploymentModel.pool`), not inside the backend
-        // config the scanner above reads. Collect it the same way — into
-        // `heads` (so it resolves to a `KnownResource` the compiler can read)
-        // and `declared` (so a missing/unknown alias hard-fails at publish,
-        // like any other declared alias). Plain executor dispatch (no pool)
-        // contributes nothing.
-        if let WorkflowNodeData::AutomatedStep {
-            deployment_model:
-                crate::models::template::DeploymentModel::Executor {
-                    pool: Some(binding),
-                },
-            ..
-        } = &node.data
-        {
-            if !binding.alias.is_empty() {
-                heads.insert(binding.alias.clone());
-                declared.push((node.id.clone(), binding.alias.clone()));
-            }
-        }
-
-        // A `Scheduled { scheduler: Some(alias) }` step binds a datacenter
-        // directly (submit-to or lease-on a specific cluster).
-        if let WorkflowNodeData::AutomatedStep {
-            deployment_model:
-                crate::models::template::DeploymentModel::Scheduled {
-                    scheduler: Some(alias),
-                    ..
-                },
-            ..
-        } = &node.data
-        {
-            if !alias.is_empty() {
-                heads.insert(alias.clone());
-                declared.push((node.id.clone(), alias.clone()));
-            }
-        }
-    }
-
-    if heads.is_empty() {
-        return Ok(KnownResources::new());
-    }
-
-    // Pass 2: look every head up in the workspace's resources table. We
-    // query in one pass (head IN $1) to keep this O(1) round-trips
-    // regardless of how many heads the source touches. Soft-deleted
-    // resources are invisible (NULL filter on `deleted_at`).
-    let head_vec: Vec<String> = heads.into_iter().collect();
-    // Join to `resource_versions` for the pinned version's `public_config` so
-    // the compiler can inspect flavor-discriminated connection fields (e.g. a
-    // datacenter's `scheduler_flavor` + `ssh_*`/`nomad_*` presence) at publish.
-    // `LEFT JOIN` so a resource with no version row still resolves (empty
-    // config) rather than vanishing from `known`.
-    let rows: Vec<(Uuid, String, String, i32, Option<serde_json::Value>)> = sqlx::query_as(
-        "SELECT r.id, r.path, r.resource_type, r.latest_version, rv.public_config \
-         FROM resources r \
-         LEFT JOIN resource_versions rv \
-           ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.workspace_id = $1 AND r.path = ANY($2) AND r.deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .bind(&head_vec)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("workspace resource lookup: {e}")))?;
-
-    let mut known = KnownResources::new();
-    for (id, path, resource_type, latest_version, public_config) in rows {
-        known.insert(
-            path,
-            KnownResource {
-                id,
-                type_name: resource_type,
-                latest_version,
-                public_config: public_config.unwrap_or(serde_json::Value::Null),
-            },
-        );
-    }
-
-    // Hard-fail on declared aliases that didn't resolve. Emit one
-    // CompileError per (node_id, alias) so the editor can highlight every
-    // offending node — even though they all share the same root cause,
-    // the user sometimes references the same alias from multiple steps
-    // and needs to know that creating one resource will satisfy all of
-    // them at once.
-    let mut missing: Vec<CompileError> = Vec::new();
-    for (node_id, alias) in declared {
-        if !known.contains_key(&alias) {
-            missing.push(CompileError::WorkspaceResourceUnknown { node_id, alias });
-        }
-    }
-    if !missing.is_empty() {
-        let summary = missing
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
-        let views: Vec<_> = missing.iter().map(|e| e.to_view()).collect();
-        return Err(ApiError::compile(
-            format!("workspace resources missing: {summary}"),
-            views,
-        ));
-    }
-
-    Ok(known)
 }
 
 /// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated

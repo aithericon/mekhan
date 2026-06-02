@@ -173,6 +173,7 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                 stream_output: false,
                 stream_input: false,
                 requirements: None,
+                asset_bindings: Vec::new(),
                 deployment_model: DeploymentModel::Scheduled {
                     scheduler: None,
                     job_template: "mekhan-executor-worker".to_string(),

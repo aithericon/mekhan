@@ -1,0 +1,70 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Read assets in Python",
+        "initial": {
+          "id": "in",
+          "label": "Trigger",
+          "fields": [
+            { "name": "note", "label": "Note", "kind": "text", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "read",
+      "type": "automated_step",
+      "position": { "x": 320, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Read Assets",
+        "description": "Reference steel_spec (object) and metals_db (collection) directly in Python — no bindings.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Readout",
+          "fields": [
+            { "name": "yield_strength", "label": "Yield Strength", "kind": "number", "required": true },
+            { "name": "steel_grade", "label": "Steel Grade", "kind": "text", "required": true },
+            { "name": "material_count", "label": "Material Count", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 620, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "yield_strength", "expression": "read.yield_strength" },
+          { "targetField": "steel_grade", "expression": "read.steel_grade" },
+          { "targetField": "material_count", "expression": "read.material_count" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_read", "source": "start", "target": "read", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_read_end",   "source": "read",  "target": "end",  "targetHandle": "in", "type": "sequence" }
+  ]
+}

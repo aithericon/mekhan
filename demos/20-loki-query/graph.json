@@ -1,0 +1,100 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Loki Query",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": [
+            {
+              "name": "app",
+              "label": "App label",
+              "kind": "text",
+              "required": true
+            },
+            {
+              "name": "since",
+              "label": "Lookback window (e.g. 1h, 5m)",
+              "kind": "text",
+              "required": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "query_logs",
+      "type": "automated_step",
+      "slug": "query_logs",
+      "position": { "x": 300, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Query Logs",
+        "description": "Loki `query_range` backend. Runs the LogQL query `{job=\"varlogs\", app=\"{{ start.app }}\"}` against the `demo_loki` resource over the `{{ start.since }}` lookback window (range query: end defaults to now, start to now-since), with `limit: 1000` and `direction: backward`. The whole-placeholder `{{ start.app }}` is resolved from the Start producer (the compiler synthesizes a read-arc and stages `start.json`) and spliced into the LogQL double-quoted matcher string through a LogQL-escaping render — backslash and double-quote are escaped so an upstream value cannot break out of the matcher (the LogQL analog of a Postgres $1 bind). Output is the fixed Loki envelope: `entries` (array of {ts, line, labels}), `entry_count`, `series`, `result_type`, `stats`.",
+        "executionSpec": {
+          "backendType": "loki",
+          "config": {
+            "resource_alias": "demo_loki",
+            "operation": "query_range",
+            "query": "{job=\"varlogs\", app=\"{{ start.app }}\"}",
+            "since": "{{ start.since }}",
+            "limit": 1000,
+            "direction": "backward"
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Logs",
+          "fields": [
+            { "name": "entries", "label": "Entries", "kind": "json" },
+            { "name": "entry_count", "label": "Entry count", "kind": "number" },
+            { "name": "series", "label": "Series", "kind": "json" },
+            { "name": "result_type", "label": "Result type", "kind": "text" },
+            { "name": "stats", "label": "Stats", "kind": "json" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 560, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "entries", "expression": "query_logs.entries" },
+          { "targetField": "entry_count", "expression": "query_logs.entry_count" },
+          { "targetField": "result_type", "expression": "query_logs.result_type" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_query",
+      "source": "start",
+      "target": "query_logs",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_query_end",
+      "source": "query_logs",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

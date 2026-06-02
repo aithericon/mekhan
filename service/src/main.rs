@@ -284,6 +284,11 @@ async fn main() -> anyhow::Result<()> {
         account = %runner_nats_signer.account_public_key(),
         "runner NATS signer ready"
     );
+    // Asset resolver — publish-time materialization of node-bound asset records
+    // into the spliced `__assets` envelope (docs/20 §5). Same `Arc`-shared
+    // shape as `resource_resolver`.
+    let asset_resolver =
+        Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()));
 
     let state = AppState {
         db,
@@ -308,6 +313,7 @@ async fn main() -> anyhow::Result<()> {
         resource_resolver,
         runner_nats_signer,
         runner_presence,
+        asset_resolver,
     };
 
     // Seed built-in demos before the listener accepts requests. Idempotent
