@@ -124,24 +124,42 @@ sandbox-test-image:
     command -v docker >/dev/null 2>&1 || {
       echo "✗ docker not on PATH" >&2; exit 1; }
 
-    # 2. Cross-compile the executor for x86_64-unknown-linux-gnu. Mirrors the
-    #    slurm-up feature set; the sandbox path lives in executor-process /
-    #    executor-python which are pulled by the `python` feature.
-    echo "▶ cross-compiling executor for x86_64-unknown-linux-gnu (sandbox e2e features)…"
+    # 2. Pick the Linux target to MATCH the Docker engine's arch, so nsjail runs
+    #    natively (under qemu emulation its namespace/seccomp ops misbehave).
+    #    Auto-detect from the host (Docker Desktop's VM follows host arch);
+    #    override with SANDBOX_TARGET for cross-arch CI.
+    target="${SANDBOX_TARGET:-}"
+    if [ -z "$target" ]; then
+      case "$(uname -m)" in
+        arm64|aarch64) target="aarch64-unknown-linux-gnu" ;;
+        *)             target="x86_64-unknown-linux-gnu" ;;
+      esac
+    fi
+    case "$target" in
+      aarch64-*) platform="linux/arm64" ;;
+      *)         platform="linux/amd64" ;;
+    esac
+
+    # Cross-compile the executor for $target. Mirrors the slurm-up feature set;
+    # the sandbox path lives in executor-process / executor-python (python
+    # feature).
+    echo "▶ cross-compiling executor for $target (sandbox e2e features)…"
     cargo zigbuild -p aithericon-executor-service \
        --features "python,http,http-cancel,opendal-s3,url-inputs" \
-       --target x86_64-unknown-linux-gnu
-    exec_bin="target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service"
+       --target "$target"
+    exec_bin="target/$target/debug/aithericon-executor-service"
     if [ ! -f "$exec_bin" ]; then
       echo "✗ Linux executor binary not found at $exec_bin" >&2; exit 1; fi
 
-    # 3. Build the image. Build context = the executor workspace root so both
-    #    the binary (EXECUTOR_BIN) and packages/aithericon-sdk are reachable.
-    echo "▶ docker build {{sandbox_test_image}} (nsjail + python3 + nix)…"
+    # 3. Build the image for the matching platform. Build context = the executor
+    #    workspace root so both the binary (EXECUTOR_BIN) and
+    #    packages/aithericon-sdk are reachable.
+    echo "▶ docker build {{sandbox_test_image}} ($platform; nsjail + python3 + nix)…"
     docker build \
+      --platform "$platform" \
       -f Dockerfile.sandbox-test \
       --build-arg EXECUTOR_BIN="$exec_bin" \
       -t {{sandbox_test_image}} \
       .
-    echo "  ✓ {{sandbox_test_image}} built (binary: $exec_bin)"
+    echo "  ✓ {{sandbox_test_image}} built ($platform, binary: $exec_bin)"
     echo "    Run the e2e: TEST_SANDBOX=1 cargo test -p aithericon-executor-service --test sandbox"

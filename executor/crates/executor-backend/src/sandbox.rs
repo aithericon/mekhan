@@ -211,10 +211,11 @@ impl SandboxConfig {
             argv.push(format!("{store_path}:{store_path}"));
         } else {
             // No nix closure — fall back to coarse system library mounts.
-            for p in ["/usr", "/lib", "/lib64", "/bin"] {
-                argv.push("--bindmount_ro".into());
-                argv.push(format!("{p}:{p}"));
-            }
+            // Only bind dirs that actually exist: nsjail fails the whole
+            // invocation if a --bindmount_ro source is missing, and the set
+            // varies by distro/arch (e.g. /lib64 exists on x86_64 but not on
+            // arm64 Debian, where the loader lives under /lib).
+            argv.extend(coarse_ro_binds(|p| std::path::Path::new(p).exists()));
         }
 
         // Extra read-only binds.
@@ -250,7 +251,17 @@ impl SandboxConfig {
             argv.push("--keep_env".into());
         }
 
-        // cgroup resource caps — only emitted when configured.
+        // cgroup resource caps — only emitted when configured. On a cgroup v2
+        // host (the modern default, incl. recent Docker/k8s) nsjail must be told
+        // to use the v2 hierarchy with `--use_cgroupv2`; without it `--cgroup_*`
+        // targets the legacy v1 `/sys/fs/cgroup/<controller>/` tree, which does
+        // not exist under unified v2 and aborts nsjail at init. Detect v2 by the
+        // unified-hierarchy marker file.
+        let any_cgroup_cap =
+            self.memory_limit.is_some() || self.pids_max.is_some() || self.cpu_ms_per_sec.is_some();
+        if needs_cgroupv2_flag(any_cgroup_cap, |p| std::path::Path::new(p).exists()) {
+            argv.push("--use_cgroupv2".into());
+        }
         if let Some(mem) = self.memory_limit {
             argv.push("--cgroup_mem_max".into());
             argv.push(mem.to_string());
@@ -289,6 +300,31 @@ impl SandboxConfig {
 
         (self.nsjail_bin.clone(), argv)
     }
+}
+
+/// Candidate coarse system dirs bound read-only when no nix closure is present.
+/// Which ones exist is distro/arch-dependent (`/lib64` is x86_64-only), so the
+/// builder filters by existence — see [`coarse_ro_binds`].
+const COARSE_DIRS: &[&str] = &["/usr", "/lib", "/lib64", "/bin"];
+
+/// Build the `--bindmount_ro {d}:{d}` argv pairs for the coarse system dirs that
+/// exist (per the `exists` predicate). Binding a missing source path makes
+/// nsjail abort, so non-existent dirs are skipped. Pure + predicate-injected so
+/// the filtering is unit-testable off the host filesystem.
+fn coarse_ro_binds(exists: impl Fn(&str) -> bool) -> Vec<String> {
+    COARSE_DIRS
+        .iter()
+        .filter(|d| exists(d))
+        .flat_map(|d| ["--bindmount_ro".to_string(), format!("{d}:{d}")])
+        .collect()
+}
+
+/// Whether nsjail needs the `--use_cgroupv2` flag: true when at least one
+/// cgroup cap is configured AND the host runs the unified cgroup v2 hierarchy
+/// (detected by the `cgroup.controllers` marker at the cgroup mount root).
+/// Pure + predicate-injected for off-host unit testing.
+fn needs_cgroupv2_flag(any_cgroup_cap: bool, exists: impl Fn(&str) -> bool) -> bool {
+    any_cgroup_cap && exists("/sys/fs/cgroup/cgroup.controllers")
 }
 
 /// Pull `backend_state["nix"]["store_path"]` as a string, if present.
@@ -397,22 +433,55 @@ mod tests {
     }
 
     #[test]
-    fn coarse_dirs_when_no_nix_store() {
+    fn coarse_binds_filter_by_existence() {
+        // All present → every candidate bound, as RO pairs in order.
+        let all = coarse_ro_binds(|_| true);
+        assert_eq!(
+            all,
+            vec![
+                "--bindmount_ro", "/usr:/usr",
+                "--bindmount_ro", "/lib:/lib",
+                "--bindmount_ro", "/lib64:/lib64",
+                "--bindmount_ro", "/bin:/bin",
+            ]
+        );
+        // None present → no binds (nsjail would abort on a missing source).
+        assert!(coarse_ro_binds(|_| false).is_empty());
+        // Subset (e.g. arm64 Debian: no /lib64) → only existing dirs bound.
+        let arm = coarse_ro_binds(|p| p != "/lib64");
+        assert!(arm.iter().any(|a| a == "/usr:/usr"));
+        assert!(arm.iter().any(|a| a == "/lib:/lib"));
+        assert!(arm.iter().any(|a| a == "/bin:/bin"));
+        assert!(
+            !arm.iter().any(|a| a == "/lib64:/lib64"),
+            "missing /lib64 must be skipped"
+        );
+    }
+
+    #[test]
+    fn cgroupv2_flag_gated_on_caps_and_host() {
+        let v2_host = |p: &str| p == "/sys/fs/cgroup/cgroup.controllers";
+        let v1_host = |_: &str| false;
+        // v2 host + a cap → flag needed
+        assert!(needs_cgroupv2_flag(true, v2_host));
+        // v2 host but no cap → no flag (nothing to put in a cgroup)
+        assert!(!needs_cgroupv2_flag(false, v2_host));
+        // v1 host (no unified marker) + a cap → no v2 flag (legacy hierarchy)
+        assert!(!needs_cgroupv2_flag(true, v1_host));
+    }
+
+    #[test]
+    fn no_nix_store_uses_coarse_not_nix() {
         let cfg = base_config();
         let (_bin, argv) = cfg.build_nsjail_args(&proc_spec(), &run_ctx(serde_json::Value::Null));
-
         let joined = argv.join(" ");
-        assert!(joined.contains("/usr:/usr"), "expected coarse /usr mount");
-        assert!(joined.contains("/lib:/lib"), "expected coarse /lib mount");
-        assert!(
-            joined.contains("/lib64:/lib64"),
-            "expected coarse /lib64 mount"
-        );
-        assert!(joined.contains("/bin:/bin"), "expected coarse /bin mount");
+        // Without a closure we never mount /nix/store; at least /usr (which
+        // exists on every host this runs on) is bound from the coarse set.
         assert!(
             !joined.contains("/nix/store"),
             "must NOT mount /nix/store without a closure"
         );
+        assert!(joined.contains("/usr:/usr"), "expected coarse /usr mount");
     }
 
     #[test]
