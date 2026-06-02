@@ -1,0 +1,508 @@
+//! Phase 1 — Lab Runner Fleet endpoints.
+//!
+//! Three auth tiers under the `runners` tag:
+//!
+//!   - `POST /api/v1/runners/enroll` — PUBLIC (no auth gate). Authenticated by
+//!     the `rt_` registration token in the body. Mints a runner, returns its
+//!     `rnr_` credential ONCE.
+//!   - `POST /api/v1/runners/{id}/heartbeat` — runner-token authed (the
+//!     `AuthUser` resolved from the `rnr_` bearer). A runner may only heartbeat
+//!     itself.
+//!   - Management (human): list/get/revoke runners + registration-token
+//!     mint/list/revoke. Reads use the dual-use `AuthUser`; the mint route uses
+//!     [`CookieAuthUser`] — the same browser-only boundary as `auth_tokens.rs`,
+//!     so a machine token can never mint enrollment secrets.
+//!
+//! Only the SHA-256 of each secret is stored; plaintext is surfaced once.
+
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    Json,
+};
+use chrono::Utc;
+use serde::Deserialize;
+use uuid::Uuid;
+
+use crate::auth::extractor::CookieAuthUser;
+use crate::auth::runner_token::runner_subject;
+use crate::auth::AuthUser;
+use crate::models::error::{ApiError, ErrorResponse};
+use crate::models::runner::{
+    mint_token, CreateRegistrationTokenRequest, CreatedRegistrationToken, EnrollRequest,
+    EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerRegistrationTokenRow, RunnerRow,
+    RunnerSummary, REG_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX,
+};
+use crate::models::template::PaginatedResponse;
+use crate::AppState;
+
+/// Caller-implicit workspace: the principal's session workspace, falling back
+/// to `Uuid::nil()` for the legacy no-workspace dev shape. Mirrors
+/// `resources::caller_workspace`.
+fn caller_workspace(user: &AuthUser) -> Uuid {
+    user.workspace_id.unwrap_or_else(Uuid::nil)
+}
+
+// ── Query params ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListRunnersQuery {
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ListRegTokensQuery {
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+
+fn default_page() -> i64 {
+    1
+}
+fn default_per_page() -> i64 {
+    20
+}
+
+// ── a. Enroll (public) ─────────────────────────────────────────────────────
+
+/// `POST /api/v1/runners/enroll` — GitLab-style enrollment. PUBLIC: authed by
+/// the `rt_` token in the body. The enrolled runner inherits the registration
+/// token's `workspace_id` + `pool`; `enrolled_by` is the token's `created_by`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/runners/enroll",
+    request_body = EnrollRequest,
+    responses(
+        (status = 201, description = "Runner enrolled (runner_token shown once)", body = EnrolledRunner),
+        (status = 401, description = "Invalid registration token", body = ErrorResponse),
+        (status = 403, description = "Revoked / expired / exhausted registration token", body = ErrorResponse),
+        (status = 409, description = "Runner name already exists in workspace", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn enroll_runner(
+    State(state): State<AppState>,
+    Json(req): Json<EnrollRequest>,
+) -> Result<(StatusCode, Json<EnrolledRunner>), ApiError> {
+    if req.name.trim().is_empty() {
+        return Err(ApiError::bad_request("runner name must not be empty"));
+    }
+
+    // 1. Parse + look up the registration token row by its uuid prefix.
+    let (reg_id, secret) =
+        crate::models::runner::parse_token(REG_TOKEN_PREFIX, &req.registration_token).ok_or_else(
+            || ApiError::new(StatusCode::UNAUTHORIZED, "malformed registration token"),
+        )?;
+
+    let reg = sqlx::query_as::<_, RunnerRegistrationTokenRow>(
+        "SELECT * FROM runner_registration_tokens WHERE id = $1",
+    )
+    .bind(reg_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "unknown registration token"))?;
+
+    // 2. Constant-time secret verification.
+    if !crate::models::runner::verify_secret(&secret, &reg.token_hash) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "registration token mismatch",
+        ));
+    }
+
+    // 3. Validity gates → 403.
+    if reg.revoked_at.is_some() {
+        return Err(ApiError::forbidden("registration token has been revoked"));
+    }
+    if let Some(expires_at) = reg.expires_at {
+        if expires_at <= Utc::now() {
+            return Err(ApiError::forbidden("registration token has expired"));
+        }
+    }
+    if let Some(max) = reg.max_uses {
+        if reg.uses >= max {
+            return Err(ApiError::forbidden(
+                "registration token has reached its max_uses",
+            ));
+        }
+    }
+    // Non-reusable token is single-use: exhausted once it has enrolled once.
+    if !reg.reusable && reg.uses >= 1 {
+        return Err(ApiError::forbidden(
+            "single-use registration token already consumed",
+        ));
+    }
+
+    // 4. Atomically claim a use of the registration token. This guarded UPDATE
+    //    — not the friendly checks above — is the real authorization gate: the
+    //    checks at step 3 are read-then-act and thus racy, so the WHERE here
+    //    re-validates every condition while incrementing. Two concurrent
+    //    enrolls of a single-use / near-`max_uses` token therefore cannot both
+    //    succeed: at most one UPDATE matches and bumps `uses`. The secret was
+    //    already verified constant-time against the fetched row above; the
+    //    whole claim+insert runs in one transaction so a runner-name collision
+    //    rolls the claimed use back instead of burning it.
+    let mut tx = state.db.begin().await?;
+
+    let claimed = sqlx::query_as::<_, RunnerRegistrationTokenRow>(
+        "UPDATE runner_registration_tokens \
+            SET uses = uses + 1 \
+          WHERE id = $1 \
+            AND revoked_at IS NULL \
+            AND (expires_at IS NULL OR expires_at > NOW()) \
+            AND (max_uses IS NULL OR uses < max_uses) \
+            AND (reusable OR uses < 1) \
+          RETURNING *",
+    )
+    .bind(reg.id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| {
+        ApiError::forbidden("registration token is no longer usable (revoked, expired, or exhausted)")
+    })?;
+
+    // 5. Mint the runner credential + insert the row. workspace_id + pool flow
+    //    from the (re-read) registration token; enrolled_by = its created_by.
+    let runner_id = Uuid::new_v4();
+    let minted = mint_token(RUNNER_TOKEN_PREFIX, runner_id);
+
+    let insert = sqlx::query(
+        "INSERT INTO runners \
+            (id, workspace_id, name, pool, token_hash, nats_public_key, capabilities, enrolled_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(runner_id)
+    .bind(claimed.workspace_id)
+    .bind(req.name.trim())
+    .bind(&claimed.pool)
+    .bind(&minted.token_hash)
+    .bind(&req.nats_public_key)
+    .bind(&req.capabilities)
+    .bind(claimed.created_by)
+    .execute(&mut *tx)
+    .await;
+    if let Err(e) = insert {
+        // Dropping the transaction rolls back the claimed use, so a name
+        // collision (or any insert failure) doesn't consume the token.
+        drop(tx);
+        if let Some(db_err) = e.as_database_error() {
+            if db_err.is_unique_violation() {
+                return Err(ApiError::conflict(format!(
+                    "a runner named '{}' already exists in this workspace",
+                    req.name.trim()
+                )));
+            }
+        }
+        return Err(ApiError::internal(e.to_string()));
+    }
+
+    tx.commit().await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(EnrolledRunner {
+            id: runner_id,
+            runner_token: minted.full_token,
+            workspace_id: claimed.workspace_id,
+            pool: claimed.pool,
+        }),
+    ))
+}
+
+// ── b. Heartbeat (runner-token authed) ─────────────────────────────────────
+
+/// `POST /api/v1/runners/{id}/heartbeat` — bump `last_seen_at`. Authorized by
+/// the runner credential: the principal's subject MUST be `runner:{id}` so a
+/// runner can only heartbeat itself.
+#[utoipa::path(
+    post,
+    path = "/api/v1/runners/{id}/heartbeat",
+    params(("id" = Uuid, Path, description = "Runner id")),
+    responses(
+        (status = 200, description = "Heartbeat recorded"),
+        (status = 401, description = "Wrong / foreign / revoked runner token", body = ErrorResponse),
+        (status = 404, description = "Runner not found", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn heartbeat_runner(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    // A runner principal may only heartbeat itself.
+    if user.subject != runner_subject(id) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "this token may not heartbeat that runner",
+        ));
+    }
+
+    let updated =
+        sqlx::query("UPDATE runners SET last_seen_at = NOW() WHERE id = $1 AND revoked_at IS NULL")
+            .bind(id)
+            .execute(&state.db)
+            .await?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::not_found("runner not found"));
+    }
+    Ok(StatusCode::OK)
+}
+
+// ── c. Management (human) ──────────────────────────────────────────────────
+
+/// `GET /api/v1/runners` — paginated, workspace-scoped (live runners only).
+#[utoipa::path(
+    get,
+    path = "/api/v1/runners",
+    params(ListRunnersQuery),
+    responses(
+        (status = 200, description = "Paginated list of runners", body = PaginatedResponse<RunnerSummary>),
+    ),
+    tag = "runners",
+)]
+pub async fn list_runners(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(params): Query<ListRunnersQuery>,
+) -> Result<Json<PaginatedResponse<RunnerSummary>>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let offset = (params.page - 1) * params.per_page;
+
+    let rows = sqlx::query_as::<_, RunnerRow>(
+        "SELECT * FROM runners \
+         WHERE workspace_id = $1 AND revoked_at IS NULL \
+         ORDER BY enrolled_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(workspace_id)
+    .bind(params.per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runners WHERE workspace_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(PaginatedResponse {
+        items: rows.into_iter().map(RunnerSummary::from).collect(),
+        total,
+        page: params.page,
+        per_page: params.per_page,
+    }))
+}
+
+/// `GET /api/v1/runners/{id}` — admin view (workspace-scoped).
+#[utoipa::path(
+    get,
+    path = "/api/v1/runners/{id}",
+    params(("id" = Uuid, Path, description = "Runner id")),
+    responses(
+        (status = 200, description = "Runner detail", body = RunnerDetail),
+        (status = 404, description = "Runner not found", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn get_runner(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RunnerDetail>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let row = sqlx::query_as::<_, RunnerRow>(
+        "SELECT * FROM runners WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .bind(workspace_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("runner not found"))?;
+    Ok(Json(RunnerDetail::from(row)))
+}
+
+/// `DELETE /api/v1/runners/{id}` — revoke (soft delete + status='revoked').
+#[utoipa::path(
+    delete,
+    path = "/api/v1/runners/{id}",
+    params(("id" = Uuid, Path, description = "Runner id")),
+    responses(
+        (status = 204, description = "Runner revoked"),
+        (status = 404, description = "Runner not found", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn revoke_runner(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let updated = sqlx::query(
+        "UPDATE runners SET status = 'revoked', revoked_at = NOW() \
+         WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .bind(workspace_id)
+    .execute(&state.db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::not_found("runner not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/runners/registration-tokens` — mint a registration token. The
+/// `token` is returned ONCE. Cookie-only (browser human boundary), mirroring
+/// `auth_tokens.rs` so a machine token can't mint enrollment secrets.
+#[utoipa::path(
+    post,
+    path = "/api/v1/runners/registration-tokens",
+    request_body = CreateRegistrationTokenRequest,
+    responses(
+        (status = 201, description = "Registration token created (shown once)", body = CreatedRegistrationToken),
+        (status = 401, description = "No session", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn create_registration_token(
+    State(state): State<AppState>,
+    CookieAuthUser(user): CookieAuthUser,
+    Json(req): Json<CreateRegistrationTokenRequest>,
+) -> Result<(StatusCode, Json<CreatedRegistrationToken>), ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let created_by = user.subject_as_uuid();
+    let reusable = req.reusable.unwrap_or(true);
+
+    // A `max_uses` below 1 mints a token that can never enroll (the use gate is
+    // `uses < max_uses`, false from the start) — reject the footgun up front.
+    if let Some(max) = req.max_uses {
+        if max < 1 {
+            return Err(ApiError::bad_request("max_uses must be at least 1"));
+        }
+    }
+
+    let reg_id = Uuid::new_v4();
+    let minted = mint_token(REG_TOKEN_PREFIX, reg_id);
+
+    sqlx::query(
+        "INSERT INTO runner_registration_tokens \
+            (id, workspace_id, pool, token_hash, reusable, max_uses, expires_at, created_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(reg_id)
+    .bind(workspace_id)
+    .bind(&req.pool)
+    .bind(&minted.token_hash)
+    .bind(reusable)
+    .bind(req.max_uses)
+    .bind(req.expires_at)
+    .bind(created_by)
+    .execute(&state.db)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedRegistrationToken {
+            id: reg_id,
+            token: minted.full_token,
+            pool: req.pool,
+            reusable,
+            max_uses: req.max_uses,
+            expires_at: req.expires_at,
+        }),
+    ))
+}
+
+/// `GET /api/v1/runners/registration-tokens` — paginated, workspace-scoped
+/// (live tokens only). Never carries the hash.
+#[utoipa::path(
+    get,
+    path = "/api/v1/runners/registration-tokens",
+    params(ListRegTokensQuery),
+    responses(
+        (status = 200, description = "Paginated registration tokens", body = PaginatedResponse<RegistrationTokenSummary>),
+    ),
+    tag = "runners",
+)]
+pub async fn list_registration_tokens(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(params): Query<ListRegTokensQuery>,
+) -> Result<Json<PaginatedResponse<RegistrationTokenSummary>>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let offset = (params.page - 1) * params.per_page;
+
+    let rows = sqlx::query_as::<_, RunnerRegistrationTokenRow>(
+        "SELECT * FROM runner_registration_tokens \
+         WHERE workspace_id = $1 AND revoked_at IS NULL \
+         ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(workspace_id)
+    .bind(params.per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM runner_registration_tokens \
+         WHERE workspace_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(workspace_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(PaginatedResponse {
+        items: rows
+            .into_iter()
+            .map(RegistrationTokenSummary::from)
+            .collect(),
+        total,
+        page: params.page,
+        per_page: params.per_page,
+    }))
+}
+
+/// `DELETE /api/v1/runners/registration-tokens/{id}` — revoke a registration
+/// token (soft delete; existing runners keep their credentials).
+#[utoipa::path(
+    delete,
+    path = "/api/v1/runners/registration-tokens/{id}",
+    params(("id" = Uuid, Path, description = "Registration token id")),
+    responses(
+        (status = 204, description = "Registration token revoked"),
+        (status = 404, description = "Registration token not found", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn revoke_registration_token(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let updated = sqlx::query(
+        "UPDATE runner_registration_tokens SET revoked_at = NOW() \
+         WHERE id = $1 AND workspace_id = $2 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .bind(workspace_id)
+    .execute(&state.db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::not_found("registration token not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// Handler integration tests require a live DB (`just dev`) — left as TODO:
+//   TODO: enroll → heartbeat round-trip (201 + 200) against a seeded reg token.
+//   TODO: enroll with revoked/expired/exhausted reg token → 403.
+//   TODO: heartbeat with a foreign runner's token → 401.
+//   TODO: list/get/revoke workspace-scoping (cross-workspace 404).
+// Pure token mint/parse/verify unit tests live in `models::runner::tests`.

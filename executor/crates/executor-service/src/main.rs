@@ -46,6 +46,8 @@ use aithericon_executor_worker::{
 };
 use tokio_util::sync::CancellationToken;
 
+mod register;
+
 /// Connect to NATS, optionally using a credentials file.
 ///
 /// Uses `ConnectOptions` directly (rather than the apalis-nats helpers) so we can
@@ -117,13 +119,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match args.get(1).map(String::as_str) {
         #[cfg(feature = "python")]
         Some("warm-venv") => return warm_venv().await,
+        Some("register") => return register::register().await,
         Some("--help") | Some("-h") => {
-            println!("usage: aithericon-executor [warm-venv]");
+            println!("usage: aithericon-executor [warm-venv | register]");
             println!();
             println!("Without arguments, runs as a worker. With `warm-venv`,");
             println!("populates the venv cache from $EXECUTOR_WARM_REQUIREMENTS");
             println!("and exits. See [python] config / EXECUTOR_PYTHON__* env vars");
             println!("for cache_dir and prefer_uv knobs.");
+            println!();
+            println!("With `register --url <mekhan> --token rt_... --name <n>`,");
+            println!("enrolls this executor into a mekhan lab-runner fleet and");
+            println!("persists the credential under {{base_dir}}/runner/.");
             return Ok(());
         }
         Some(other) if other.starts_with("--") => {

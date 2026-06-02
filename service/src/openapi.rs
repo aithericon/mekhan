@@ -66,6 +66,17 @@ use utoipa::OpenApi;
             crate::models::job_template::CreateJobTemplateRequest,
             crate::models::job_template::UpdateJobTemplateRequest,
             crate::models::job_template::StageJobTemplateRequest,
+            // Phase 1 (Lab Runner Fleet) — runner + registration-token DTOs.
+            // The list/get bodies refer to the summaries via PaginatedResponse<_>
+            // / Vec<_>, which utoipa's auto-discovery doesn't fully walk, so
+            // register them explicitly for frontend codegen.
+            crate::models::runner::RunnerSummary,
+            crate::models::runner::RunnerDetail,
+            crate::models::runner::EnrollRequest,
+            crate::models::runner::EnrolledRunner,
+            crate::models::runner::CreateRegistrationTokenRequest,
+            crate::models::runner::CreatedRegistrationToken,
+            crate::models::runner::RegistrationTokenSummary,
             // Executor backend config DTOs — the JSON shape each AutomatedStep
             // backend's `spec.config` carries. Registered so the SPA's generic
             // schema-driven config form can read them off the OpenAPI document
@@ -151,6 +162,7 @@ use utoipa::OpenApi;
         (name = "users", description = "Directory lookups — email → OIDC subject resolver for member admin."),
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),
         (name = "clusters", description = "Multi-cluster scheduling control plane — live datacenter cluster clients (connection health, watcher state, active leases) + force-reconnect / drain (read-through of the engine `ClusterRegistry`)."),
+        (name = "runners", description = "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."),
     ),
 )]
 pub struct ApiDoc;

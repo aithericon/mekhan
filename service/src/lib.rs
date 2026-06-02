@@ -110,7 +110,12 @@ pub struct AppState {
 /// uptime monitors, or container orchestrators need to reach without a session
 /// cookie belongs here.
 fn build_public_openapi_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::<AppState>::new().routes(routes!(handlers::health::liveness))
+    OpenApiRouter::<AppState>::new()
+        .routes(routes!(handlers::health::liveness))
+        // Runner enrollment — PUBLIC by design: authed by the `rt_`
+        // registration token in the body, not the session cookie, so a fresh
+        // runner can bootstrap its `rnr_` credential before it has one.
+        .routes(routes!(handlers::runners::enroll_runner))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -264,6 +269,25 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::rotate_resource))
         .routes(routes!(handlers::resources::list_resource_audit))
+        // Runners (Phase 1, Lab Runner Fleet) — workspace-scoped runner fleet
+        // + GitLab-style enrollment. `enroll` is mounted on the PUBLIC router
+        // (authed by the `rt_` token in the body); everything here is behind
+        // the auth gate. The literal `registration-tokens` routes are
+        // registered BEFORE `{id}` so matchit prefers the literal segment over
+        // the `{id}` wildcard (same trie-ordering caveat as templates'
+        // `apply-air`). Heartbeat is runner-token authed (the `rnr_` bearer
+        // resolves to a `runner:{id}` principal via require_auth_middleware).
+        .routes(routes!(
+            handlers::runners::create_registration_token,
+            handlers::runners::list_registration_tokens
+        ))
+        .routes(routes!(handlers::runners::revoke_registration_token))
+        .routes(routes!(handlers::runners::list_runners))
+        .routes(routes!(handlers::runners::heartbeat_runner))
+        .routes(routes!(
+            handlers::runners::get_runner,
+            handlers::runners::revoke_runner
+        ))
         // Job templates (Phase 3, B-model) — versioned cluster job-spec entity
         // (flavor-tagged slurm/nomad) + staging join. Mirrors the resources
         // CRUD + versioning pattern but with NO Vault coupling. DB-only.

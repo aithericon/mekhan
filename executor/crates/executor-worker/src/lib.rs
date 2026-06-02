@@ -19,7 +19,7 @@ pub use chunks::{ChunkRegistry, NatsChunkListener};
 pub use completion::CompletionTracker;
 pub use config::{
     CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, PythonCacheConfig,
-    SandboxSettings,
+    RunnerIdentity, SandboxSettings,
 };
 pub use drain::{drain_signal, DrainConfig};
 pub use event_emitter::{EventEmitter, NatsEventEmitter, StreamContext};

@@ -257,6 +257,42 @@ pub struct ExecutorConfig {
     /// Environment variable: `EXECUTOR_TARGET_EXEC_ID=<id>`.
     #[serde(default)]
     pub target_exec_id: Option<String>,
+
+    /// Lab-fleet runner identity (Phase 1 — Lab Runner Fleet).
+    ///
+    /// When this executor was enrolled into a mekhan fleet via
+    /// `aithericon-executor register`, the enrollment persists an
+    /// `identity.json` under `{base_dir}/runner/`. `runner_id` is the
+    /// control-plane UUID for this runner; `runner_token_path` points at the
+    /// `rnr_` bearer-credential file used to authenticate heartbeat/control
+    /// calls. Both are **optional** and have **no effect on job draining in
+    /// Phase 1** — the worker still pulls from NATS with the existing
+    /// shared/anonymous credentials. They are populated either from
+    /// `EXECUTOR_RUNNER_ID` / config, or (when unset) auto-discovered from
+    /// `{base_dir}/runner/identity.json` in `normalize()`.
+    ///
+    /// Environment variable: `EXECUTOR_RUNNER_ID=<uuid>`.
+    #[serde(default)]
+    pub runner_id: Option<String>,
+
+    /// Path to the `rnr_` runner control-plane token (Phase 1 — Lab Runner
+    /// Fleet). Defaults to `{base_dir}/runner/runner.token` when a runner
+    /// identity is present. Optional; unused by job draining in Phase 1.
+    #[serde(default)]
+    pub runner_token_path: Option<std::path::PathBuf>,
+}
+
+/// On-disk runner identity persisted by `aithericon-executor register`.
+///
+/// Written to `{base_dir}/runner/identity.json` at enroll time. Read back in
+/// `ExecutorConfig::normalize()` to self-identify the daemon (Phase 1). The
+/// field names match the `register` subcommand's writer exactly.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct RunnerIdentity {
+    pub runner_id: String,
+    #[serde(default)]
+    pub pool: Option<String>,
+    pub workspace_id: String,
 }
 
 /// Configuration for the shared Python venv cache.
@@ -477,6 +513,25 @@ impl ExecutorConfig {
         // Validate max >= min when both are set
         if let (Some(max), Some(min)) = (self.max_jobs, self.min_jobs) {
             assert!(max >= min, "max_jobs ({max}) must be >= min_jobs ({min})");
+        }
+
+        // Lab-fleet self-identify (Phase 1). If no explicit runner_id was given
+        // (env/config), try to read one from the enrollment file the `register`
+        // subcommand wrote at `{base_dir}/runner/identity.json`. This is purely
+        // informational in Phase 1 — it does not change job draining. Failure to
+        // read/parse is silently ignored (a non-enrolled executor is normal).
+        let runner_dir = std::path::Path::new(&self.base_dir).join("runner");
+        if self.runner_id.is_none() {
+            let identity_path = runner_dir.join("identity.json");
+            if let Ok(bytes) = std::fs::read(&identity_path) {
+                if let Ok(identity) = serde_json::from_slice::<RunnerIdentity>(&bytes) {
+                    self.runner_id = Some(identity.runner_id);
+                }
+            }
+        }
+        // Default the token path alongside the identity when we have a runner.
+        if self.runner_id.is_some() && self.runner_token_path.is_none() {
+            self.runner_token_path = Some(runner_dir.join("runner.token"));
         }
     }
 

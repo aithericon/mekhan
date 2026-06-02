@@ -7,6 +7,9 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
         .connect(database_url)
         .await?;
 
+    // NOTE: `sqlx::migrate!` embeds the ./migrations directory at COMPILE time.
+    // Touch this line whenever a migration is added so the macro re-embeds it
+    // (latest: 20240134000000_runners.sql — Lab Runner Fleet).
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     Ok(pool)
