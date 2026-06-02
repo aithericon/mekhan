@@ -805,7 +805,12 @@ export class YjsGraphBinding {
 				// collaborative edits don't drop them on publish.
 				{
 					const reqs = (data as AutomatedStepNodeData).requirements;
+					// Delete when absent — clearing the last constraint emits node data
+					// with `requirements` stripped, and a bare `if (reqs) set()` would
+					// leave the stale key in Yjs (it would reappear on reload). Mirrors
+					// the other `config.delete(...)` clear paths in this switch.
 					if (reqs) config.set('requirements', reqs);
+					else config.delete('requirements');
 				}
 				break;
 			case 'decision':
