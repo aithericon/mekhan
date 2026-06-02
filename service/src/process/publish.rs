@@ -156,6 +156,16 @@ impl<'a> PublishService<'a> {
         // + the staging net's own retry are the backstops).
         auto_stage_templates(self.state, &compiled_graph, workspace_id).await;
 
+        // Phase 5 (container staging, docs/22): best-effort publish-time
+        // materialize. For each Scheduled step whose job template binds a
+        // `container_image` resource, ensure the `(container version × cluster)`
+        // is materialized to a `.sif`, kicking a generated materialize net for
+        // any combination not already `ready`. Same fire-and-forget contract as
+        // `auto_stage_templates` — engine-down / per-target failures are
+        // swallowed (the resolver still embeds the by-ref path; the explicit
+        // materialize endpoint + the net's own retry are the backstops).
+        auto_materialize_images(self.state, &compiled_graph, workspace_id).await;
+
         // Discover workspace resources this graph touches by source-scanning
         // Python entrypoints for `<head>.<field>` accesses and looking the
         // heads up in the workspace's resources list. The compiler uses this
@@ -178,6 +188,16 @@ impl<'a> PublishService<'a> {
             version,
             key_fn: None,
         };
+        // Resolve each Scheduled step's container spec (docs/22). For a step
+        // whose job template binds a `container_image` resource, this yields a
+        // `CompilerContainerSpec` (by-ref `.sif` path + binds + `nv`) the
+        // lowering bakes into the step's executionSpec so the engine runs the
+        // job inside the container; a step with no container contributes
+        // nothing (empty map ⇒ AIR byte-identical to native execution). Keyed
+        // by step node id, or — for a leased body — its enclosing holder, so
+        // the warm executor on the held allocation runs inside the container.
+        let container_specs =
+            resolve_container_specs(self.state, &compiled_graph, workspace_id).await?;
         let CompileArtifacts {
             air: mut air_json,
             interfaces: interface_json,
@@ -191,6 +211,7 @@ impl<'a> PublishService<'a> {
                 inline_sources: files,
                 sub_air: &sub_air,
                 known_resources: &known_resources,
+                container_specs: &container_specs,
                 config_storage,
             },
         )
@@ -663,6 +684,297 @@ async fn auto_stage_templates(state: &AppState, graph: &WorkflowGraph, workspace
     }
 }
 
+/// Resolve a per-step [`CompilerContainerSpec`] map (docs/22) for the lowering
+/// to bake into containerized scheduled steps. Returns a map keyed by the node
+/// the spec attaches to — the STEP's own id for a standalone submit, or the
+/// ENCLOSING lease HOLDER's id for a leased body (so the warm executor on the
+/// held allocation runs inside the container by containment). An empty map
+/// leaves AIR byte-identical (no node opts into a container).
+///
+/// For each `AutomatedStep` with a resolved Scheduled job-template ref:
+///   (a) load the `job_templates` row (validated to exist by
+///       `resolve_job_templates`); skip if it binds no `container_image`
+///       (`container_resource_id` is `None`);
+///   (b) resolve the bound image's `(version, image_ref)` via
+///       [`crate::petri::staging_net::resolve_container_image`]; skip+warn if
+///       the resource/image_ref is absent;
+///   (c) build the spec — by-ref `.sif` path + the fixed bind list + `nv` from
+///       the template version's GPU request.
+///
+/// Two leased steps under the SAME holder that resolve to DIFFERENT specs is a
+/// hard error (`v1` runs one image per held allocation); identical specs dedupe
+/// (same value, last-writer wins).
+async fn resolve_container_specs(
+    state: &AppState,
+    graph: &WorkflowGraph,
+    workspace_id: Uuid,
+) -> Result<HashMap<String, crate::compiler::CompilerContainerSpec>, ApiError> {
+    use crate::models::template::{DeploymentModel, TemplateRef};
+
+    let mut specs: HashMap<String, crate::compiler::CompilerContainerSpec> = HashMap::new();
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            deployment_model:
+                DeploymentModel::Scheduled {
+                    job_template_ref: Some(TemplateRef { template_id, version }),
+                    ..
+                },
+            ..
+        } = &node.data
+        else {
+            continue;
+        };
+
+        // (a) Load the logical template row; skip steps with no container.
+        let row = sqlx::query_as::<_, crate::models::job_template::JobTemplateRow>(
+            "SELECT * FROM job_templates WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(template_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("container spec: job template load: {e}")))?;
+        let Some(row) = row else { continue };
+        let Some(container_resource_id) = row.container_resource_id else {
+            continue;
+        };
+
+        // (b) Resolve the bound image's (version, image_ref).
+        let resolved =
+            crate::petri::staging_net::resolve_container_image(&state.db, workspace_id, container_resource_id)
+                .await
+                .map_err(|e| {
+                    ApiError::internal(format!("container spec: resolve container_image: {e}"))
+                })?;
+        let Some((_image_version, image_ref)) = resolved else {
+            tracing::warn!(
+                node = %node.id, %container_resource_id,
+                "container spec: bound container_image has no resolvable image_ref; skipping",
+            );
+            continue;
+        };
+
+        // (c) `nv` from the bound template version's GPU request.
+        let nv = template_version_requests_gpu(&state.db, *template_id, *version).await?;
+
+        let spec = build_container_spec(&image_ref, nv);
+
+        // (d) Key selection / hoist: leased body → enclosing holder id; else
+        //     the step's own id. A holder collision with a divergent spec is a
+        //     hard publish error.
+        let key = enclosing_lease_holder_id(node, graph).unwrap_or_else(|| node.id.clone());
+        insert_container_spec(&mut specs, key, spec).map_err(|()| {
+            let e = CompileError::Compilation(
+                "multiple container images under one lease scope is unsupported in v1".to_string(),
+            );
+            ApiError::compile(e.to_string(), vec![e.to_view()])
+        })?;
+    }
+
+    Ok(specs)
+}
+
+/// Build a [`CompilerContainerSpec`](crate::compiler::CompilerContainerSpec)
+/// from a resolved image ref + GPU flag. Pure (no DB) so the spec shape — the
+/// by-ref `.sif` path and the fixed bind list the engine consumes verbatim —
+/// is unit-testable without a live stack. The bind list MUST match the engine's
+/// expectation exactly (see `engine/core-engine/crates/api/src/slurm_allocator.rs`).
+fn build_container_spec(image_ref: &str, nv: bool) -> crate::compiler::CompilerContainerSpec {
+    use crate::compiler::container_ref;
+    crate::compiler::CompilerContainerSpec {
+        sif_path: container_ref::by_ref_sif_path(image_ref),
+        binds: vec![
+            "/opt/petri/bin".into(),
+            "/opt/petri/aithericon-sdk".into(),
+            "/opt/petri/bin/uv".into(),
+            "/tmp/petri-scratch".into(),
+            container_ref::venv_cache_bind(image_ref),
+        ],
+        nv,
+    }
+}
+
+/// Insert a resolved spec under its hoist `key`, enforcing the v1 one-image-per-
+/// holder rule. Pure (no DB / no graph) so the hoist-conflict + dedupe logic is
+/// unit-testable. `Err(())` when `key` already holds a DIFFERENT spec (two leased
+/// steps under one holder resolving to divergent images); identical specs dedupe
+/// (last-writer wins, same value).
+fn insert_container_spec(
+    specs: &mut HashMap<String, crate::compiler::CompilerContainerSpec>,
+    key: String,
+    spec: crate::compiler::CompilerContainerSpec,
+) -> Result<(), ()> {
+    if let Some(existing) = specs.get(&key) {
+        if *existing != spec {
+            return Err(());
+        }
+    }
+    specs.insert(key, spec);
+    Ok(())
+}
+
+/// The lease HOLDER node id that ENCLOSES `node` — the nearest ancestor (via the
+/// `parent_id` chain) that is a `LeaseScope`. Returns the holder's NODE id (the
+/// key the container spec hoists under for a leased body), or `None` for a
+/// standalone step. Mirrors `enclosing_leased_scope_slug` in
+/// `compiler::lower::automated_step` but returns the id instead of the slug.
+fn enclosing_lease_holder_id(
+    node: &crate::models::template::WorkflowNode,
+    graph: &WorkflowGraph,
+) -> Option<String> {
+    let mut current = node.parent_id.as_deref();
+    while let Some(pid) = current {
+        let parent = graph.nodes.iter().find(|n| n.id == pid)?;
+        match &parent.data {
+            WorkflowNodeData::LeaseScope { .. } => return Some(parent.id.clone()),
+            _ => current = parent.parent_id.as_deref(),
+        }
+    }
+    None
+}
+
+/// `true` if the job template version at `(template_id, version)` requests a GPU
+/// (its `common_spec.gpus` is `> 0`). Drives the container spec's `nv` flag
+/// (Apptainer `--nv` GPU passthrough). A missing row / absent `gpus` ⇒ `false`.
+async fn template_version_requests_gpu(
+    db: &sqlx::PgPool,
+    template_id: Uuid,
+    version: i32,
+) -> Result<bool, ApiError> {
+    let common_spec: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT common_spec FROM job_template_versions \
+         WHERE template_id = $1 AND version = $2",
+    )
+    .bind(template_id)
+    .bind(version)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiError::internal(format!("container spec: template version load: {e}")))?;
+
+    Ok(common_spec
+        .as_ref()
+        .and_then(|c| c.get("gpus"))
+        .and_then(|v| v.as_i64())
+        .map(|g| g > 0)
+        .unwrap_or(false))
+}
+
+/// Publish-time auto-materialize (docs/22 container staging). BEST-EFFORT
+/// sibling of [`auto_stage_templates`]: for each Scheduled step whose job
+/// template binds a `container_image`, ensure the bound image's
+/// `(version × datacenter)` is materialized to a `.sif` on that cluster,
+/// kicking a generated materialize net for any combination not already `ready`.
+/// Re-walks the already-validated `graph` (`resolve_job_templates` passed). ALL
+/// failures are logged + swallowed — a materialize hiccup must never fail a
+/// publish (the resolver still embeds the by-ref path; the explicit
+/// `POST .../materialize` endpoint + the net's own retry are the backstops).
+async fn auto_materialize_images(state: &AppState, graph: &WorkflowGraph, workspace_id: Uuid) {
+    use crate::models::template::{DeploymentModel, TemplateRef};
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            deployment_model:
+                DeploymentModel::Scheduled {
+                    scheduler,
+                    job_template_ref: Some(TemplateRef { template_id, .. }),
+                    ..
+                },
+            ..
+        } = &node.data
+        else {
+            continue;
+        };
+
+        // Load the template row to discover its bound container (if any).
+        let row = match sqlx::query_as::<_, crate::models::job_template::JobTemplateRow>(
+            "SELECT * FROM job_templates WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(template_id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(Some(r)) => r,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(node = %node.id, %e, "auto-materialize: template load failed");
+                continue;
+            }
+        };
+        let Some(container_resource_id) = row.container_resource_id else {
+            continue;
+        };
+
+        // Resolve the step's cluster alias → datacenter resource id.
+        let Some(alias) = resolved_cluster_alias(node, graph, scheduler.as_deref()) else {
+            continue;
+        };
+        let dc_id = match datacenter_resource_id(&state.db, workspace_id, &alias).await {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(node = %node.id, error = ?e, "auto-materialize: datacenter id lookup failed");
+                continue;
+            }
+        };
+
+        // Resolve the bound image's version (the dedupe key for the row).
+        let container_version = match crate::petri::staging_net::resolve_container_image(
+            &state.db,
+            workspace_id,
+            container_resource_id,
+        )
+        .await
+        {
+            Ok(Some((v, _image_ref))) => v,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(node = %node.id, %e, "auto-materialize: resolve container_image failed");
+                continue;
+            }
+        };
+
+        // Skip if already materialized at this exact (version × datacenter).
+        let existing: Option<String> = match sqlx::query_scalar(
+            "SELECT status FROM image_materializations \
+             WHERE container_resource_id = $1 AND container_version = $2 \
+               AND datacenter_resource_id = $3",
+        )
+        .bind(container_resource_id)
+        .bind(container_version)
+        .bind(dc_id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(node = %node.id, %e, "auto-materialize: status lookup failed");
+                continue;
+            }
+        };
+        if existing.as_deref() == Some("ready") {
+            continue;
+        }
+
+        match crate::petri::staging_net::trigger_materialize_image(
+            &state.db,
+            &state.petri,
+            workspace_id,
+            container_resource_id,
+            dc_id,
+        )
+        .await
+        {
+            Ok(row) => tracing::info!(
+                %container_resource_id, container_version, %dc_id, materialization_id = %row.id,
+                "auto-materialized image at publish"
+            ),
+            Err(e) => tracing::warn!(
+                %container_resource_id, container_version, %dc_id, %e,
+                "auto-materialize failed (swallowed)"
+            ),
+        }
+    }
+}
+
 /// Read the workspace's default-datacenter setting and map it to its resource
 /// alias (path) — the LAST rung of the multi-cluster selection chain (docs/16
 /// §6). The column stores a `resource_id`; the selection chain stamps an
@@ -1129,4 +1441,72 @@ pub async fn resolve_subworkflow_air(
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod container_spec_tests {
+    use super::{build_container_spec, insert_container_spec};
+    use std::collections::HashMap;
+
+    #[test]
+    fn spec_shape_matches_engine_contract() {
+        let spec = build_container_spec("python:3.12-slim", false);
+        assert_eq!(spec.sif_path, "/shared/sif/by-ref/python_3_12_slim.sif");
+        assert_eq!(
+            spec.binds,
+            vec![
+                "/opt/petri/bin".to_string(),
+                "/opt/petri/aithericon-sdk".to_string(),
+                "/opt/petri/bin/uv".to_string(),
+                "/tmp/petri-scratch".to_string(),
+                "/shared/venv-cache/python_3_12_slim".to_string(),
+            ]
+        );
+        assert!(!spec.nv);
+        // serde_json field names must match the engine's ContainerSpec exactly.
+        let v = serde_json::to_value(&spec).unwrap();
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["binds", "nv", "sif_path"]);
+    }
+
+    #[test]
+    fn nv_flag_propagates() {
+        assert!(build_container_spec("img", true).nv);
+    }
+
+    #[test]
+    fn standalone_steps_key_under_their_own_id() {
+        // Two unleased steps → distinct keys (each its own node id), both kept.
+        let mut specs = HashMap::new();
+        insert_container_spec(&mut specs, "step_a".into(), build_container_spec("img-a", false))
+            .unwrap();
+        insert_container_spec(&mut specs, "step_b".into(), build_container_spec("img-b", false))
+            .unwrap();
+        assert_eq!(specs.len(), 2);
+    }
+
+    #[test]
+    fn identical_specs_under_one_holder_dedupe() {
+        // Two leased steps under the SAME holder resolving to the SAME image →
+        // one entry, no error.
+        let mut specs = HashMap::new();
+        let key = "lease_holder".to_string();
+        insert_container_spec(&mut specs, key.clone(), build_container_spec("img", false)).unwrap();
+        insert_container_spec(&mut specs, key.clone(), build_container_spec("img", false)).unwrap();
+        assert_eq!(specs.len(), 1);
+    }
+
+    #[test]
+    fn divergent_specs_under_one_holder_error() {
+        // Two leased steps under the SAME holder resolving to DIFFERENT images
+        // → hard error (v1 runs one image per held allocation).
+        let mut specs = HashMap::new();
+        let key = "lease_holder".to_string();
+        insert_container_spec(&mut specs, key.clone(), build_container_spec("img-a", false))
+            .unwrap();
+        let err = insert_container_spec(&mut specs, key, build_container_spec("img-b", false));
+        assert!(err.is_err());
+    }
 }

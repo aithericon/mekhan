@@ -1,6 +1,7 @@
 pub mod backend_configs;
 pub(crate) mod borrow;
 mod compile;
+pub mod container_ref;
 mod error;
 pub(crate) mod graph;
 pub(crate) mod human_task_refs;
@@ -23,7 +24,7 @@ mod wire;
 
 pub use compile::{
     compile_to_air, compile_to_air_with_options, compile_to_scenario, CompileArtifacts,
-    CompileOptions, ResolvedChild, SubWorkflowAir,
+    CompileOptions, CompilerContainerSpec, ResolvedChild, SubWorkflowAir,
 };
 pub use error::{CompileError, CompileErrorView};
 pub use interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};

@@ -293,6 +293,13 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     /// that don't resolve resources — a pooled step then fails with
     /// `WorkspaceResourceUnknown` (no well-known-global fallback any more).
     pub(crate) known_resources: &'a crate::compiler::resource_refs::KnownResources,
+    /// Per-node container execution spec, keyed by node id. A scheduled
+    /// AutomatedStep reads its own entry to bake an Apptainer/Singularity
+    /// `.sif` into the engine's Slurm allocator (native execution when absent).
+    /// Empty for tests / previews that don't resolve container images — AIR is
+    /// then byte-identical to the no-container case.
+    pub(crate) container_specs:
+        &'a std::collections::HashMap<String, crate::compiler::compile::CompilerContainerSpec>,
 }
 
 /// Compile-time pointer set the lowering uses to mint the
@@ -399,6 +406,10 @@ pub(crate) fn expand_node<'a>(
     node_configs: &mut HashMap<String, serde_json::Value>,
     config_storage: ConfigStorage<'a>,
     known_resources: &'a crate::compiler::resource_refs::KnownResources,
+    container_specs: &'a std::collections::HashMap<
+        String,
+        crate::compiler::compile::CompilerContainerSpec,
+    >,
 ) -> Result<(), CompileError> {
     let mut cx = LoweringCtx {
         node,
@@ -418,6 +429,7 @@ pub(crate) fn expand_node<'a>(
         node_configs,
         config_storage,
         known_resources,
+        container_specs,
     };
     let decl = crate::nodes::lookup_by_variant(&node.data)
         .expect("every WorkflowNodeData variant is registered in crate::nodes::NODES");

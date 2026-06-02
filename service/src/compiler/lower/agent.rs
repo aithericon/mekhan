@@ -202,6 +202,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         node_configs: &mut *cx.node_configs,
         config_storage: cx.config_storage,
         known_resources: cx.known_resources,
+        container_specs: cx.container_specs,
     };
 
     super::automated_step::lower_automated_step(&mut virtual_cx)

@@ -281,6 +281,12 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // kicks a generated staging Petri-net per (version × datacenter).
         // Registered AFTER {id}/stagings so matchit prefers the literal path.
         .routes(routes!(handlers::job_templates::stage_job_template))
+        // Materialize a container-image version onto datacenter(s) (container
+        // staging) — kicks a generated one-shot materialize Petri-net per
+        // (version × datacenter). Explicit targets only.
+        .routes(routes!(
+            handlers::container_images::materialize_container_image
+        ))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))

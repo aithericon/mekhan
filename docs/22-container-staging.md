@@ -1,7 +1,8 @@
 # 22 — Container Staging: Materialize OCI → Apptainer `.sif`, Run the Executor Inside It on HPC Slurm
 
 Status: **PARTIALLY BUILT** (grilled + Phases 1–3 built offline-green 2026-06-02; compiler frag +
-Phase 4 live e2e pending). Extends the staging pipeline from
+materialize trigger now built offline-green; **Phase 4 live Slurm e2e pending**). Extends the staging
+pipeline from
 [20-control-plane-gaps](20-control-plane-gaps.md) to carry a *run environment* — an OCI image
 materialized to an Apptainer/Singularity `.sif` on the cluster — and to run the drain executor
 **inside** that container on its allocation. Builds on
@@ -35,11 +36,37 @@ Refinements vs. the original design, now load-bearing:
 - **`/shared/sif` + `/shared/apptainer-cache`** are hard-coded v1 conventions (`slurm_allocator.rs`
   `SHARED_SIF_ROOT`); a per-datacenter override is a later refinement.
 
+Now built (offline-green, atop Phases 1–3):
+- **Compiler frag** — `container:{sif_path,binds,nv}` is embedded into the lease-acquire claim request
+  **and** the per-job submit token. Publish-time `resolve_container_specs`
+  (`service/src/process/publish.rs`) chases `job_template → container_resource_id → image_ref →
+  by-ref sif_path` (the compiler has no DB access), threads the result through `CompileOptions.
+  container_specs → LoweringCtx`. Lease path merges into the claim `request` inside `resolve_binding`
+  (covers both `LeaseScope` and standalone Scheduled-lease via `request_rhai`, since the claim request
+  flows verbatim to `acquire_lease`'s `request.get("container")`); submit path stamps `d.container`
+  next to `ns_frag`/`job_template_frag`. `token_pool` AIR stays byte-identical (container passed only
+  for `kind == "datacenter"`). `sanitize_image_ref` is replicated byte-exactly in
+  `service/src/compiler/container_ref.rs` with a parity test against the engine vectors. Leased steps
+  hoist their spec to the **enclosing holder node id** (one executor per lease); two distinct images
+  under one lease scope → `CompileError` (v1 limit).
+- **Materialize trigger** — publish-time `auto_materialize_images` hook (beside `auto_stage_templates`)
+  + manual `POST /api/v1/container-images/{id}/materialize` endpoint
+  (`service/src/handlers/container_images.rs`). Both skip when an `image_materializations` row is
+  already `ready`.
+
 Pending:
-- **Compiler frag** — embed the `container:{sif_path,binds,nv}` blob into the lease-acquire request /
-  job token. Needs **publish-time pre-resolution** of `job_template → container_resource_id →
-  image_ref → by-ref sif_path` (the compiler reads the slug off the node but has no DB access).
-- **Materialize endpoint + publish auto-hook**; **Phase 4** apptainer-in-Slurm-Docker + live e2e.
+- **Phase 4** — apptainer-in-Slurm-Docker (`engine/infra/slurm/Dockerfile` + `/shared` dirs + `uv`) +
+  live `container_lease_slurm_e2e`.
+
+### v1 caveat — no dispatch readiness gate
+
+The compiler embeds the **by-ref symlink** path (a pure function of `image_ref`) at publish time, but
+the symlink only exists once the **async** materialize net completes. Nothing currently blocks job
+dispatch until the `image_materializations` row reaches `ready` — a job that runs before materialize
+finishes fails on a missing `.sif`. Acceptable for v1 (materializing a small image beats the lease
+acquiring in practice; publish fires the materialize hook before the run). A proper gate (hold dispatch
+until `ready`, or fail-fast with a clear error) is a follow-up — tracked alongside the public-only
+registry-creds cut.
 
 ## The ask
 

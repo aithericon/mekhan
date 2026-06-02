@@ -52,12 +52,15 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             })?;
 
             // Resolve the datacenter binding and delegate to the pooled body wrapping.
+            // A per-node container spec (if any) is merged into the lease claim
+            // `request` so the held alloc's drain executor runs in the `.sif`.
             let binding = resolve_binding(
                 &cx.node.id,
                 alias,
                 None, // Scheduled steps don't have a 'request' field
                 "datacenter",
                 cx.known_resources,
+                cx.container_specs.get(&cx.node.id),
             )?;
             return lower_pooled_body(cx, binding);
         }
@@ -187,6 +190,23 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // `logic_rhai` deferral. Empty for non-Scheduled steps / an unresolved slug —
     // then the handler's config default applies (the legacy path).
     let job_template_frag = scheduled_job_template_frag(cx.node);
+
+    // Container injection (submit path): a per-node `CompilerContainerSpec`
+    // stamps `d.container = #{ sif_path, binds, nv }` onto the job token so the
+    // engine's Slurm `submit` (which reads `token_data.get("container")`) runs
+    // the job inside the `.sif`. A static literal (no borrow ref), so it rides
+    // whichever `logic()`/`logic_rhai()` branch `ns_frag` already selected. Empty
+    // for a node with no container spec (the byte-identical no-container path).
+    let container_frag = cx
+        .container_specs
+        .get(id)
+        .map(|c| {
+            format!(
+                " d.container = {};",
+                json_to_rhai_literal(&serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
+            )
+        })
+        .unwrap_or_default();
 
     // Rust panic/Result model: a WIRED error handle (`source_handle == "error"`)
     // means a permanent failure routes to the handler (handled `Result::Err`,
@@ -326,7 +346,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             r#"["metric", "progress", "phase", "log"]"#
         };
         let prepare_logic = format!(
-            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; d.feed_chunks = {feed_chunks};{ns_frag}{job_template_frag} #{{ job: d }}"#
+            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; d.feed_chunks = {feed_chunks};{ns_frag}{job_template_frag}{container_frag} #{{ job: d }}"#
         );
         let prepare = ctx
             .transition("prepare", format!("{label} - Prepare"))
@@ -584,6 +604,7 @@ pub(super) fn resolve_binding(
     request: Option<&serde_json::Value>,
     expected_kind: &str,
     known: &crate::compiler::resource_refs::KnownResources,
+    container: Option<&crate::compiler::compile::CompilerContainerSpec>,
 ) -> Result<PoolBinding, CompileError> {
     let resource = known
         .get(alias)
@@ -637,8 +658,8 @@ pub(super) fn resolve_binding(
     // Validate `request` against the kind's claim_schema before we bake it into
     // the ClaimRequest. Same `jsonschema` crate/version the engine
     // `SchemaRegistry` uses, so compile-time and runtime agree.
-    let request_rhai = match request {
-        None => "()".to_string(),
+    let validated_req: Option<serde_json::Value> = match request {
+        None => None,
         Some(req) => {
             let claim_schema = (pool_desc.claim_schema)();
             let validator = jsonschema::validator_for(&claim_schema).map_err(|e| {
@@ -655,8 +676,41 @@ pub(super) fn resolve_binding(
                     message: err.to_string(),
                 });
             }
-            json_to_rhai_literal(req)
+            Some(req.clone())
         }
+    };
+
+    // Container injection (lease path): a `datacenter` lease whose holder step
+    // carries a `CompilerContainerSpec` gets the spec merged into the claim
+    // `request` JSON under a `container` key — the claim `request` flows VERBATIM
+    // to the engine's `acquire_lease`, which reads `request.get("container")`
+    // (slurm_allocator.rs) to wrap the held alloc's drain executor in the `.sif`.
+    // The merge happens AFTER schema validation (the container key is not part of
+    // the kind's claim_schema). When there is no container OR the kind is not a
+    // datacenter, `request_rhai` is byte-identical to the pre-container path
+    // (this is the hard token_pool / no-container invariant).
+    let request_rhai = match container.filter(|_| kind == "datacenter") {
+        Some(spec) => {
+            let mut map = match validated_req {
+                Some(serde_json::Value::Object(obj)) => obj,
+                _ => serde_json::Map::new(),
+            };
+            map.insert(
+                "container".to_string(),
+                serde_json::to_value(spec).map_err(|e| {
+                    CompileError::ResourcePoolRequestInvalid {
+                        node_id: node_id.to_string(),
+                        alias: alias.to_string(),
+                        message: format!("container spec failed to serialize: {e}"),
+                    }
+                })?,
+            );
+            json_to_rhai_literal(&serde_json::Value::Object(map))
+        }
+        None => match validated_req {
+            None => "()".to_string(),
+            Some(req) => json_to_rhai_literal(&req),
+        },
     };
 
     Ok(PoolBinding {
@@ -822,6 +876,9 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
         binding.request.as_ref(),
         "token_pool",
         cx.known_resources,
+        // token_pool is OUR worker pool, not a cluster — no container injection;
+        // `None` keeps token_pool claim AIR byte-identical (hard invariant).
+        None,
     )?;
     lower_pooled_body(cx, pool_binding)
 }
@@ -1459,5 +1516,227 @@ mod slug_forwarding_tests {
         let node = scheduled_node(r#"a"b"#);
         let frag = scheduled_job_template_frag(&node);
         assert!(frag.contains(r#"\""#), "quote must be escaped: {frag}");
+    }
+}
+
+/// Container-injection lowering: a `CompilerContainerSpec` keyed on a node id
+/// must land (a) on the submit path as `d.container = #{ … }` in the plain
+/// executor `prepare` logic, and (b) on the lease path as a `container: #{ … }`
+/// key inside the datacenter claim `request` literal. An EMPTY `container_specs`
+/// map must leave AIR byte-identical to today (no container key anywhere).
+#[cfg(test)]
+mod container_injection_tests {
+    use crate::compiler::resource_refs::{KnownResource, KnownResources};
+    use crate::compiler::{
+        compile_to_air_with_options, CompileOptions, CompilerContainerSpec,
+    };
+    use crate::models::template::WorkflowGraph;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn spec() -> CompilerContainerSpec {
+        CompilerContainerSpec {
+            sif_path: "/shared/sif/by-ref/python_3_12_slim.sif".to_string(),
+            binds: vec![
+                "/opt/petri/bin".to_string(),
+                "/shared/venv-cache/python_3_12_slim".to_string(),
+            ],
+            nv: false,
+        }
+    }
+
+    /// Pull a transition's Rhai logic source out of the compiled AIR, matching
+    /// either the utoipa-tagged (`{ "Rhai": { "source" } }`) or the serde
+    /// flat-tag (`{ "type": "rhai", "source" }`) shape.
+    fn logic_source(air: &serde_json::Value, transition_id: &str) -> String {
+        let transitions = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions array");
+        let t = transitions
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(transition_id))
+            .unwrap_or_else(|| panic!("transition {transition_id} not found"));
+        let logic = t.get("logic").expect("transition has logic");
+        logic
+            .get("Rhai")
+            .and_then(|l| l.get("source"))
+            .and_then(|s| s.as_str())
+            .or_else(|| logic.get("source").and_then(|s| s.as_str()))
+            .unwrap_or_else(|| panic!("logic source not findable for {transition_id}"))
+            .to_string()
+    }
+
+    /// A linear graph `start → <step> → end` where `<step>` is an
+    /// `executor`-mode AutomatedStep. The plain executor lowering builds the
+    /// `<id>/prepare` transition that carries `container_frag`.
+    fn executor_step_graph() -> WorkflowGraph {
+        serde_json::from_value(json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"step","type":"automated_step","slug":"step","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Step",
+                     "executionSpec":{"backendType":"docker","config":{"image":"python:3.12-slim"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"executor"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"step","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"step","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }))
+        .expect("executor graph deser")
+    }
+
+    /// A linear graph `start → <step> → end` where `<step>` is a standalone
+    /// `scheduled` AutomatedStep bound to a `datacenter` resource — it lowers
+    /// through the single-node lease lifecycle (`t_<id>_claim`).
+    fn scheduled_step_graph() -> WorkflowGraph {
+        serde_json::from_value(json!({
+          "nodes": [
+            {"id":"start","type":"start","position":{"x":0,"y":0},
+             "data":{"type":"start","label":"Start"}},
+            {"id":"step","type":"automated_step","slug":"step","position":{"x":0,"y":0},
+             "data":{"type":"automated_step","label":"Step",
+                     "executionSpec":{"backendType":"docker","config":{"image":"python:3.12-slim"}},
+                     "retryPolicy":{"maxRetries":0,"strategy":{"type":"immediate"}},
+                     "deploymentModel":{"mode":"scheduled","scheduler":"hpc","jobTemplate":"petri_demo"}}},
+            {"id":"end","type":"end","position":{"x":0,"y":0},
+             "data":{"type":"end","label":"End"}}
+          ],
+          "edges":[
+            {"id":"e1","source":"start","target":"step","targetHandle":"in","type":"sequence"},
+            {"id":"e2","source":"step","target":"end","targetHandle":"in","type":"sequence"}
+          ]
+        }))
+        .expect("scheduled graph deser")
+    }
+
+    /// A complete `slurm` datacenter resource (so `resolve_binding`'s
+    /// flavor-gated connection validation passes).
+    fn datacenter_known() -> KnownResources {
+        let mut known = KnownResources::new();
+        known.insert(
+            "hpc".to_string(),
+            KnownResource {
+                id: Uuid::new_v4(),
+                type_name: "datacenter".to_string(),
+                latest_version: 1,
+                public_config: json!({
+                    "scheduler_flavor": "slurm",
+                    "ssh_host": "login.test",
+                    "ssh_user": "runner",
+                    "template_dir": "/opt/jobs",
+                }),
+            },
+        );
+        known
+    }
+
+    #[test]
+    fn submit_path_stamps_container_onto_job_token() {
+        let graph = executor_step_graph();
+        let mut container_specs = HashMap::new();
+        container_specs.insert("step".to_string(), spec());
+
+        let crate::compiler::CompileArtifacts { air, .. } = compile_to_air_with_options(
+            &graph,
+            "container-submit",
+            "test",
+            &HashMap::new(),
+            CompileOptions {
+                container_specs: &container_specs,
+                ..Default::default()
+            },
+        )
+        .expect("compile ok");
+
+        let logic = logic_source(&air, "step/prepare");
+        assert!(
+            logic.contains("d.container = #{"),
+            "prepare must stamp d.container; got:\n{logic}"
+        );
+        assert!(
+            logic.contains("/shared/sif/by-ref/python_3_12_slim.sif"),
+            "prepare must embed the by-ref sif path; got:\n{logic}"
+        );
+    }
+
+    #[test]
+    fn lease_path_merges_container_into_claim_request() {
+        let graph = scheduled_step_graph();
+        let known = datacenter_known();
+        let mut container_specs = HashMap::new();
+        container_specs.insert("step".to_string(), spec());
+
+        let crate::compiler::CompileArtifacts { air, .. } = compile_to_air_with_options(
+            &graph,
+            "container-lease",
+            "test",
+            &HashMap::new(),
+            CompileOptions {
+                known_resources: &known,
+                container_specs: &container_specs,
+                ..Default::default()
+            },
+        )
+        .expect("compile ok");
+
+        // The single-node lease lifecycle's claim transition embeds the
+        // ClaimRequest literal (`#{ grant_id: …, request: { … } }`). The merged
+        // container rides as a `json_to_rhai_literal` map entry, whose keys are
+        // emitted quoted — so the request carries `"container": #{ … }`.
+        let logic = logic_source(&air, "t_step_claim");
+        assert!(
+            logic.contains(r#""container": #{"#),
+            "claim request must carry the container key; got:\n{logic}"
+        );
+        assert!(
+            logic.contains("/shared/sif/by-ref/python_3_12_slim.sif"),
+            "claim request container must embed the sif path; got:\n{logic}"
+        );
+    }
+
+    #[test]
+    fn empty_container_specs_is_byte_identical_no_container_key() {
+        // The hard invariant: an empty container_specs map must NOT introduce a
+        // `container` key on either path — AIR stays byte-identical to today.
+        let exec_graph = executor_step_graph();
+        let crate::compiler::CompileArtifacts { air: exec_air, .. } = compile_to_air_with_options(
+            &exec_graph,
+            "no-container-submit",
+            "test",
+            &HashMap::new(),
+            CompileOptions::default(),
+        )
+        .expect("compile ok");
+        let exec_logic = logic_source(&exec_air, "step/prepare");
+        assert!(
+            !exec_logic.contains("d.container"),
+            "empty container_specs must not stamp d.container; got:\n{exec_logic}"
+        );
+
+        let sched_graph = scheduled_step_graph();
+        let known = datacenter_known();
+        let crate::compiler::CompileArtifacts { air: sched_air, .. } = compile_to_air_with_options(
+            &sched_graph,
+            "no-container-lease",
+            "test",
+            &HashMap::new(),
+            CompileOptions {
+                known_resources: &known,
+                ..Default::default()
+            },
+        )
+        .expect("compile ok");
+        let claim_logic = logic_source(&sched_air, "t_step_claim");
+        assert!(
+            !claim_logic.contains("container"),
+            "empty container_specs must not add a container key to the claim request; got:\n{claim_logic}"
+        );
     }
 }

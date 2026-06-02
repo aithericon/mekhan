@@ -192,6 +192,21 @@ pub struct ResolvedChild {
 /// `make_child_subable`-ing each referenced child template.
 pub type SubWorkflowAir = HashMap<String, ResolvedChild>;
 
+/// Per-node container execution spec the lowering bakes into a scheduled
+/// AutomatedStep's `executionSpec` so the engine's Slurm allocator runs the
+/// job inside an Apptainer/Singularity `.sif` instead of natively. Mirrors the
+/// engine's `slurm::ContainerSpec` field-for-field (`sif_path` / `binds` / `nv`)
+/// — its `serde_json` serialization MUST match those engine field names exactly
+/// (see `engine/core-engine/crates/slurm/src/alloc.rs`). An empty `sif_path`
+/// means "no container" (native execution), so an empty `container_specs` map
+/// leaves AIR byte-identical to today.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CompilerContainerSpec {
+    pub sif_path: String,
+    pub binds: Vec<String>,
+    pub nv: bool,
+}
+
 /// Compile a WorkflowGraph to AIR JSON. Back-compat wrapper: no sub-workflow
 /// resolution (a graph containing a `SubWorkflow` node compiles to an
 /// `Unresolved` error here — callers that support sub-workflows use
@@ -248,6 +263,11 @@ pub struct CompileOptions<'a> {
     /// Workspace-resource manifest (publish-time `discover_known_resources`).
     /// Empty by default (preview / tests / analyze).
     pub known_resources: &'a KnownResources,
+    /// Per-node container execution spec, keyed by node id. Empty by default
+    /// (preview / tests / analyze / native execution). The publish path
+    /// resolves it from each scheduled AutomatedStep's `container_image` ref;
+    /// an empty map leaves AIR byte-identical (no node opts into a container).
+    pub container_specs: &'a HashMap<String, CompilerContainerSpec>,
     /// Static-config S3 key context. `ConfigStorage::ephemeral()` by default
     /// (no upload — synthetic nil template id / version 0). The per-node static
     /// config blobs that result are returned via [`CompileArtifacts::node_configs`]
@@ -267,10 +287,12 @@ impl Default for CompileOptions<'_> {
         static EMPTY_INLINE: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
         static EMPTY_SUB_AIR: OnceLock<SubWorkflowAir> = OnceLock::new();
         static EMPTY_KNOWN: OnceLock<KnownResources> = OnceLock::new();
+        static EMPTY_CONTAINERS: OnceLock<HashMap<String, CompilerContainerSpec>> = OnceLock::new();
         Self {
             inline_sources: EMPTY_INLINE.get_or_init(HashMap::new),
             sub_air: EMPTY_SUB_AIR.get_or_init(HashMap::new),
             known_resources: EMPTY_KNOWN.get_or_init(KnownResources::new),
+            container_specs: EMPTY_CONTAINERS.get_or_init(HashMap::new),
             config_storage: ConfigStorage::ephemeral(),
         }
     }
@@ -319,6 +341,7 @@ pub fn compile_to_air_with_options(
         opts.inline_sources,
         opts.sub_air,
         opts.known_resources,
+        opts.container_specs,
         opts.config_storage,
     )?;
     let air = serde_json::to_value(&scenario)
@@ -400,6 +423,7 @@ pub(crate) fn compile_to_scenario_and_interfaces(
     sub_air: &SubWorkflowAir,
     known_resources: &KnownResources,
 ) -> Result<(ScenarioDefinition, InterfaceRegistry), CompileError> {
+    let empty_container_specs: HashMap<String, CompilerContainerSpec> = HashMap::new();
     let (scenario, interfaces, _node_configs) = compile_to_scenario_and_interfaces_with_configs(
         graph,
         name,
@@ -408,6 +432,7 @@ pub(crate) fn compile_to_scenario_and_interfaces(
         inline_sources,
         sub_air,
         known_resources,
+        &empty_container_specs,
         ConfigStorage::ephemeral(),
     )?;
     Ok((scenario, interfaces))
@@ -422,6 +447,7 @@ pub(crate) fn compile_to_scenario_and_interfaces(
 /// [`ConfigStorage`]. `known_resources` carries the workspace-resource
 /// manifest collected by the publish handler (see `discover_known_resources`);
 /// tests / preview / analyze pass an empty map.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     graph: &WorkflowGraph,
     name: &str,
@@ -430,6 +456,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
     known_resources: &KnownResources,
+    container_specs: &HashMap<String, CompilerContainerSpec>,
     config_storage: ConfigStorage<'_>,
 ) -> Result<
     (
@@ -483,6 +510,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
         &mut interfaces,
         &mut node_configs,
         known_resources,
+        container_specs,
     )?;
 
     // 4b. Drain queued agent → tool-child wiring. Runs after every
@@ -682,6 +710,7 @@ fn lower_nodes_topologically<'a>(
     interfaces: &mut InterfaceRegistry,
     node_configs: &mut HashMap<String, serde_json::Value>,
     known_resources: &'a KnownResources,
+    container_specs: &'a HashMap<String, CompilerContainerSpec>,
 ) -> Result<(), CompileError> {
     // Pre-populate scope_groups: map child node_id → parent scope's group_id.
     for node in &graph.nodes {
@@ -774,6 +803,7 @@ fn lower_nodes_topologically<'a>(
             node_configs,
             config_storage,
             known_resources,
+            container_specs,
         )?;
     }
     Ok(())
@@ -3974,6 +4004,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
                 &crate::compiler::resource_refs::KnownResources::new(),
+                &std::collections::HashMap::new(),
                 ConfigStorage::ephemeral(),
             )
             .expect("compile llm-borrow graph");
@@ -4078,6 +4109,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
                 &crate::compiler::resource_refs::KnownResources::new(),
+                &std::collections::HashMap::new(),
                 ConfigStorage::ephemeral(),
             )
             .expect("compile kreuzberg-borrow graph");
@@ -4900,6 +4932,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
                 &crate::compiler::resource_refs::KnownResources::new(),
+                &std::collections::HashMap::new(),
                 config_storage,
             )
             .expect("compile must succeed even with deeply-nested response_format schema");

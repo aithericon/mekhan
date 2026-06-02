@@ -513,6 +513,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/container-images/{id}/materialize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/container-images/{id}/materialize` — pull a container-image
+         *     resource version into an Apptainer `.sif` on one or more datacenter clusters.
+         *     For each target this kicks a generated one-shot materialize Petri net
+         *     (`materialize_image` effect) and upserts its `image_materializations` row; the
+         *     rows start at `materializing` and the projection advances them to
+         *     `ready`/`failed` as the nets complete. Returns 202 with the triggered rows.
+         * @description Authority = datacenter-resource access (workspace-scoped), not an admin role:
+         *     if you can reference cluster X in your workspace, you can materialize onto it.
+         *
+         *     Target selection is **explicit only** (differs from job-template staging): an
+         *     empty `datacenter_resource_ids` is a 400, and the first incompatible /
+         *     unresolvable target fails the whole request.
+         */
+        post: operations["materialize_container_image"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
@@ -3688,6 +3718,27 @@ export interface components {
             /** @description Path to the image file (resolved from `{{input:NAME}}`). */
             path: string;
         };
+        /** @description One materialization row on the wire. */
+        ImageMaterialization: {
+            /** Format: uuid */
+            container_resource_id: string;
+            /** Format: int32 */
+            container_version: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            datacenter_resource_id: string;
+            digest?: string | null;
+            /** Format: uuid */
+            id: string;
+            last_error?: string | null;
+            sif_path?: string | null;
+            /** Format: int64 */
+            size_bytes?: number | null;
+            status: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         /**
          * @description One spawned sub-workflow child run of a parent instance, returned by
          *     `GET /api/v1/instances/{id}/children`. A SubWorkflow node runs its child as
@@ -4121,6 +4172,16 @@ export interface components {
              *     `TaskFieldConfig` shape as human-task forms.
              */
             form?: components["schemas"]["TaskFieldConfig"][];
+        };
+        /**
+         * @description Body for `POST /api/v1/container-images/{id}/materialize`.
+         *
+         *     Explicit targets only — unlike job-template staging there is no auto-enumerate
+         *     of every workspace datacenter. An empty list is a 400.
+         */
+        MaterializeRequest: {
+            /** @description Datacenter resource ids to materialize the image onto. */
+            datacenter_resource_ids: string[];
         };
         /**
          * @description How a `Join { mode: All }` merges the tokens arriving on its joined
@@ -7649,6 +7710,60 @@ export interface operations {
             };
             /** @description Compilation failed */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    materialize_container_image: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Container image resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaterializeRequest"];
+            };
+        };
+        responses: {
+            /** @description Materialization runs triggered */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageMaterialization"][];
+                };
+            };
+            /** @description No targets / incompatible target */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Container image not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

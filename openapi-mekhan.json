@@ -1041,6 +1041,83 @@
         }
       }
     },
+    "/api/v1/container-images/{id}/materialize": {
+      "post": {
+        "tags": [
+          "container-images"
+        ],
+        "summary": "`POST /api/v1/container-images/{id}/materialize` — pull a container-image\nresource version into an Apptainer `.sif` on one or more datacenter clusters.\nFor each target this kicks a generated one-shot materialize Petri net\n(`materialize_image` effect) and upserts its `image_materializations` row; the\nrows start at `materializing` and the projection advances them to\n`ready`/`failed` as the nets complete. Returns 202 with the triggered rows.",
+        "description": "Authority = datacenter-resource access (workspace-scoped), not an admin role:\nif you can reference cluster X in your workspace, you can materialize onto it.\n\nTarget selection is **explicit only** (differs from job-template staging): an\nempty `datacenter_resource_ids` is a 400, and the first incompatible /\nunresolvable target fails the whole request.",
+        "operationId": "materialize_container_image",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Container image resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaterializeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Materialization runs triggered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ImageMaterialization"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No targets / incompatible target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Container image not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
@@ -10052,6 +10129,73 @@
           }
         }
       },
+      "ImageMaterialization": {
+        "type": "object",
+        "description": "One materialization row on the wire.",
+        "required": [
+          "id",
+          "container_resource_id",
+          "container_version",
+          "datacenter_resource_id",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "container_resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "container_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "datacenter_resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sif_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "InstanceChild": {
         "type": "object",
         "description": "One spawned sub-workflow child run of a parent instance, returned by\n`GET /api/v1/instances/{id}/children`. A SubWorkflow node runs its child as\na separate engine net; the causality ingest registers each spawn as a\nfirst-class child `workflow_instances` row (see migration\n`20240130000000`). A SubWorkflow inside a Loop/Map spawns one child per\niteration, so multiple rows can share `parent_node_id` — ordered by\n`spawn_seq` (the spawn order, i.e. iteration order).",
@@ -11004,6 +11148,23 @@
               "$ref": "#/components/schemas/TaskFieldConfig"
             },
             "description": "Form schema for the \"Run with parameters\" dialog. Reuses the same\n`TaskFieldConfig` shape as human-task forms."
+          }
+        }
+      },
+      "MaterializeRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/v1/container-images/{id}/materialize`.\n\nExplicit targets only — unlike job-template staging there is no auto-enumerate\nof every workspace datacenter. An empty list is a 400.",
+        "required": [
+          "datacenter_resource_ids"
+        ],
+        "properties": {
+          "datacenter_resource_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Datacenter resource ids to materialize the image onto."
           }
         }
       },
@@ -16651,6 +16812,10 @@
     {
       "name": "job-templates",
       "description": "Versioned cluster job-spec entity (flavor-tagged `slurm`/`nomad`) — typed common spec + flavor escape hatch + declared parameters, staged onto datacenter resources. No secret coupling."
+    },
+    {
+      "name": "container-images",
+      "description": "Container image materialization onto datacenter clusters."
     },
     {
       "name": "backends",

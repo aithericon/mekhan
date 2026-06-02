@@ -66,6 +66,10 @@ use utoipa::OpenApi;
             crate::models::job_template::CreateJobTemplateRequest,
             crate::models::job_template::UpdateJobTemplateRequest,
             crate::models::job_template::StageJobTemplateRequest,
+            // Container-image materialization — per-(version × datacenter) row +
+            // the explicit-target request body.
+            crate::models::image_materialization::ImageMaterialization,
+            crate::handlers::container_images::MaterializeRequest,
             // Executor backend config DTOs — the JSON shape each AutomatedStep
             // backend's `spec.config` carries. Registered so the SPA's generic
             // schema-driven config form can read them off the OpenAPI document
@@ -142,6 +146,7 @@ use utoipa::OpenApi;
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
         (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
         (name = "job-templates", description = "Versioned cluster job-spec entity (flavor-tagged `slurm`/`nomad`) — typed common spec + flavor escape hatch + declared parameters, staged onto datacenter resources. No secret coupling."),
+        (name = "container-images", description = "Container image materialization onto datacenter clusters."),
         (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
         (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),
         (name = "health", description = "Liveness probe."),

@@ -51,6 +51,10 @@ pub(crate) fn lower_lease_scope(cx: &mut LoweringCtx) -> Result<(), CompileError
         lease.request.as_ref(),
         "datacenter",
         cx.known_resources,
+        // A container spec keyed on the LeaseScope holder id is merged into the
+        // lease claim `request` so the held alloc's persistent drain executor
+        // runs in the `.sif` (the body steps enqueue into that warm executor).
+        cx.container_specs.get(id),
     )?;
     // Record the typed-lease definition + the grant-inbox place to type while we
     // still hold `cx` (the `&mut *cx.ctx` reborrow below blocks `cx.fixups`).
