@@ -117,8 +117,11 @@ already used for ports.
   escape hatch. Flat scalar columns are the table-builder / CSV-friendly core.
 - **Records are self-contained:** there is **no `resource_ref` and no `asset_ref`
   field kind** in v1. An asset record is pure validated data, so the
-  borrow-checker never looks *inside* an asset; binding an asset is opaque
-  "inject + stage". (Composition refs are a deferred additive field kind — §9.)
+  borrow-checker never looks *inside* an asset for *composition*; binding an asset
+  is opaque "inject + stage". (Composition refs are a deferred additive field
+  kind — §9.) *Exception:* a **single-record** asset's fields are referenceable as
+  constant-valued `<ref_key>.<field>` refs (§5.1) — that lifts the opacity for
+  reads (not writes), since the field value is a compile-time constant.
 
 #### File fields are dual-source
 
@@ -191,6 +194,52 @@ compiles down to an input staging,"* riding the mature staging machinery.
 **Granularity:** v1 binds the **whole collection** (the node does its own lookup
 in code). Author-picked-row (pick "the `steel` row" at authoring time) is a thin
 additive sugar deferred to §9. Runtime filter/query is deferred (§9).
+
+### 5.1 Field-level references (constant-valued) — assets as first-class refs
+
+Staging hands a step the *whole* collection as `<alias>.json` for in-code
+processing. That is **second-class** next to producer `<slug>.<field>` references,
+which work in the variable picker, guards, Decision/Loop conditions, End
+`resultMapping`, and config fields. Assets earn **reference parity** for the case
+where it is well-defined: a **single typed record**.
+
+**Why it's clean.** An asset type's `fields_json` *is* a `Port` — the same typed
+field contract a producer emits — and the pinned records are **static at compile
+time** (materialized in the AIR `__assets` envelope at publish). So an asset field
+reference is a **compile-time constant**: it needs neither a runtime read-arc nor
+`__assets` in the guard's Rhai scope.
+
+**Shape by cardinality:**
+- **Object asset (or a G2 picked row)** → `<ref_key>.<field>` — a single typed
+  record, identical to a producer output. *The primary, shipped form.*
+- **Collection asset** → `<ref_key>[*].<field>` (projection over rows, reusing the
+  existing Map `[*]` grammar) + `<ref_key>` (the whole array). *Deferred second
+  pass.*
+
+**Scope: template-global, like resources.** Producer refs are upstream-reachable;
+resource names and asset ref-keys are **globally visible identifiers** unioned
+into the reference scope (`merged_identifier_scope`). So `steel.yield_strength` is
+referenceable from *any* node — a Decision guard, an End mapping — not just a step
+that "consumes" it, exactly like a resource. Only **scope-visible** assets (§2,
+most-specific-wins) are referenceable.
+
+**Resolution = compile-time substitution.** A new borrow planner scans guards /
+conditions / mappings / config for `<ref_key>.<field>` where `ref_key` is a
+scope-visible object asset, pins `(asset_id, version)` (into `asset_pins`, so
+lineage §9 still works), reads the field off the pinned record, and substitutes
+the Rhai literal in place via `replace_word_boundary` (the same rewrite read-arcs
+use) — `steel.yield_strength > 250` becomes `355.0 > 250`. **No read-arc, no
+engine change, no `__assets` in guard scope.**
+
+**Both modes coexist.** Field references (constant, typed, control-flow-capable)
+for small/scalar use; `<alias>.json` staging for bulk in-code processing — a node
+can use both. This **reverses the "assets are opaque" stance of §4.1 for the
+single-record case** — safe because the type is a `Port` and the value is a
+compile-time constant, so no Vault/secret or runtime machinery rides along.
+
+**Validation** mirrors producer refs: the field must exist on the asset type's
+`Port` with a compatible kind, else a compile error (mirroring `GuardUnresolved` /
+`GuardTypeMismatch`).
 
 ---
 
