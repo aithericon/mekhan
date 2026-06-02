@@ -223,6 +223,34 @@ Reuse the proven `slurm-up` cross-compile recipe. Deliverables:
 | No orphan after cancel | cancel a long sandboxed job | nsjail + grandchild both gone (PID-ns torn down) |
 | PID cap (optional) | fork-bomb-ish task | hits `pids_max`, host unaffected |
 
+### Startup-overhead benchmark
+
+`sandbox_startup_overhead_benchmark` quantifies the per-job nsjail cost: it runs
+`N` no-op (`true`) jobs through one sandboxed container and `N` through a
+sandbox-disabled one, timing each `submit → terminal`. The NATS/staging latency
+is identical both ways, so the **delta** isolates nsjail's per-job startup. It is
+**report-only** (logs mean/median/p90 + the delta; no magnitude assert, so it
+never flakes), gated behind `SANDBOX_BENCH=1` on top of the usual flags
+(`SANDBOX_BENCH_N` overrides the sample count, default 20):
+
+```
+SANDBOX_BENCH=1 TEST_SANDBOX=1 SANDBOX_IMAGE_AVAILABLE=1 \
+  cargo test -p aithericon-executor-service --test sandbox --features python \
+  sandbox_startup_overhead_benchmark -- --nocapture
+```
+
+### Known live-test findings (Docker Desktop / macOS, arm64)
+
+Running the image surfaced two real bugs the off-host unit tests can't catch
+(both fixed): coarse mounts must be **existence-filtered** (`/lib64` is absent on
+arm64 → nsjail aborts), and cgroup caps need **`--use_cgroupv2`** on a cgroup-v2
+host (the modern default; without it nsjail aborts at init). Core isolation
+(uid/fs/network) was verified live. But the full suite **must run on a real Linux
+host**: the test process self-skips off-Linux, and Docker Desktop's LinuxKit VM
+gives flaky userns/mount behavior (the same nsjail invocation works once then
+`execve` fails as bind-mounts intermittently don't apply) — it is **not** a valid
+nsjail environment.
+
 ## Phased build order
 
 1. **`SandboxConfig` + `build_nsjail_args` + `validate`** in `executor-backend`,

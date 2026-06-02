@@ -133,6 +133,10 @@ struct SandboxEnv {
     memory_limit_mb: Option<u64>,
     pids_max: Option<u64>,
     sandbox_uid: u32,
+    /// Drain cap (`EXECUTOR_MAX_JOBS`): how many jobs the container processes
+    /// before exiting. 1 for the contract probes (one job per container); the
+    /// startup-overhead benchmark raises it to run N jobs through one boot.
+    max_jobs: u64,
 }
 
 impl Default for SandboxEnv {
@@ -143,6 +147,7 @@ impl Default for SandboxEnv {
             memory_limit_mb: None,
             pids_max: None,
             sandbox_uid: SANDBOX_UID,
+            max_jobs: 1,
         }
     }
 }
@@ -255,6 +260,7 @@ impl SandboxTestEnv {
             .with_env_var("EXECUTOR_SOURCE", "nats_queue")
             .with_env_var("EXECUTOR_LIFETIME", "run_to_completion")
             .with_env_var("EXECUTOR_IDLE_TIMEOUT_SECS", "30")
+            .with_env_var("EXECUTOR_MAX_JOBS", sandbox.max_jobs.to_string())
             .with_env_var("EXECUTOR_NATS_URL", nats_url)
             .with_env_var("EXECUTOR_NAMESPACE", job_namespace)
             .with_env_var("EXECUTOR_SUBJECT_PREFIX", subject_prefix);
@@ -406,6 +412,14 @@ mod probes {
             r#"echo "UID=$(id -u)""#,
             Some(std::time::Duration::from_secs(10)),
         )
+    }
+
+    /// Minimal no-op job for the startup-overhead benchmark — the cheapest
+    /// possible workload (`true`), so the measured per-job wall time is
+    /// dominated by fixed costs (staging + the nsjail spawn when sandboxed),
+    /// not the workload itself.
+    pub fn bench_noop_probe(eid: &str) -> ExecutionJob {
+        bash_job(eid, "exit 0", Some(std::time::Duration::from_secs(15)))
     }
 
     /// Happy-path process probe: a plain echo that must complete cleanly with
@@ -978,6 +992,118 @@ fn assert_no_orphans_on_host() {
         assert!(
             !listing.contains("sleep 600"),
             "orphaned sandbox grandchild survived cancel: {listing}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Startup-overhead benchmark (the per-job nsjail cost question)
+// ---------------------------------------------------------------------------
+
+/// (mean, median, p90) of a sample set, in the input unit. Empty → all zero.
+fn stats(mut samples: Vec<f64>) -> (f64, f64, f64) {
+    if samples.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+    let median = samples[samples.len() / 2];
+    let p90_idx = (((samples.len() as f64) * 0.9) as usize).min(samples.len() - 1);
+    (mean, median, samples[p90_idx])
+}
+
+/// Push `n` trivial no-op jobs one at a time through `env`'s container,
+/// recording each job's submit→terminal wall time in milliseconds. Only
+/// `Completed` jobs are sampled. The container's NATS/staging latency is the
+/// same sandboxed vs. not, so the *difference* between two runs isolates the
+/// nsjail per-job startup cost.
+async fn bench_per_job_ms(env: &SandboxTestEnv, n: usize) -> Vec<f64> {
+    let mut samples = Vec::with_capacity(n);
+    for i in 0..n {
+        let eid = format!("bench-{i}-{}", Uuid::new_v4().simple());
+        let consumer = env.ctx.status_consumer(&format!("bench{i}"), &eid).await;
+        let t0 = std::time::Instant::now();
+        env.ctx.push_job(probes::bench_noop_probe(&eid)).await;
+        let statuses = env
+            .ctx
+            .collect_statuses(&consumer, Duration::from_secs(30))
+            .await;
+        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        if statuses
+            .last()
+            .map(|s| s.status == ExecutionStatus::Completed)
+            .unwrap_or(false)
+        {
+            samples.push(elapsed_ms);
+        }
+    }
+    samples
+}
+
+/// Quantify the sandbox's per-job startup overhead: run N no-op jobs through a
+/// sandboxed container and N through a sandbox-disabled one, and report the
+/// per-job wall-time delta. Report-only (no hard assert on the delta — absolute
+/// timings are host/CI-dependent), so it never flakes the gate.
+///
+/// Gated behind `SANDBOX_BENCH=1` (on top of the usual `TEST_SANDBOX=1` +
+/// `SANDBOX_IMAGE_AVAILABLE=1`) since it boots 2 containers and runs 2·N jobs.
+/// Override the sample count with `SANDBOX_BENCH_N` (default 20).
+#[tokio::test(flavor = "multi_thread")]
+async fn sandbox_startup_overhead_benchmark() {
+    if skip_if_disabled("startup_overhead") {
+        return;
+    }
+    if std::env::var("SANDBOX_BENCH").as_deref() != Ok("1") {
+        eprintln!("[sandbox] SKIP startup_overhead: set SANDBOX_BENCH=1 to run the benchmark");
+        return;
+    }
+    let n: usize = std::env::var("SANDBOX_BENCH_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
+
+    // Sandboxed run.
+    let on = SandboxTestEnv::new(SandboxEnv {
+        max_jobs: n as u64,
+        ..SandboxEnv::default()
+    })
+    .await;
+    let on_ms = bench_per_job_ms(&on, n).await;
+    on.ctx.cleanup().await;
+
+    // Sandbox-disabled baseline.
+    let off = SandboxTestEnv::new(SandboxEnv {
+        enabled: false,
+        max_jobs: n as u64,
+        ..SandboxEnv::default()
+    })
+    .await;
+    let off_ms = bench_per_job_ms(&off, n).await;
+    off.ctx.cleanup().await;
+
+    let (m_on, med_on, p90_on) = stats(on_ms.clone());
+    let (m_off, med_off, p90_off) = stats(off_ms.clone());
+    eprintln!(
+        "[sandbox][bench] n={n}  (sandboxed {}/{n} completed, unsandboxed {}/{n} completed)",
+        on_ms.len(),
+        off_ms.len()
+    );
+    eprintln!("[sandbox][bench] sandboxed    ms/job: mean={m_on:.1} median={med_on:.1} p90={p90_on:.1}");
+    eprintln!("[sandbox][bench] unsandboxed  ms/job: mean={m_off:.1} median={med_off:.1} p90={p90_off:.1}");
+    eprintln!(
+        "[sandbox][bench] ⇒ nsjail per-job overhead ≈ mean {:.1} ms / median {:.1} ms",
+        m_on - m_off,
+        med_on - med_off
+    );
+
+    // Only assert we actually collected data when a real image ran; never
+    // assert on the magnitude (CI timing varies).
+    if sandbox_image_available() {
+        assert!(
+            !on_ms.is_empty() && !off_ms.is_empty(),
+            "benchmark collected no completed samples (sandboxed={}, unsandboxed={})",
+            on_ms.len(),
+            off_ms.len()
         );
     }
 }
