@@ -292,6 +292,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::assets::put_asset_records))
         .routes(routes!(handlers::assets::import_asset_csv))
         .routes(routes!(handlers::assets::upload_asset_file))
+        .routes(routes!(handlers::assets::asset_usage))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))

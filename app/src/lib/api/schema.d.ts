@@ -217,6 +217,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assets/{id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/assets/{id}/usage` — **reverse lineage** (docs/20 §9): every run
+         *     (workflow instance) that pinned this asset, newest first. Answers "which runs
+         *     used asset X" straight from `workflow_instances.asset_pins` (GIN-indexed
+         *     jsonpath). Record/material-level lineage ("runs that used Copper C110") is a
+         *     deferred follow-on — see docs/20 §9.
+         */
+        get: operations["asset_usage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/tokens": {
         parameters: {
             query?: never;
@@ -2575,6 +2598,34 @@ export interface components {
             /** Format: int32 */
             version: number;
         };
+        /**
+         * @description One run (workflow instance) that pinned a given asset — a reverse-lineage
+         *     row for `GET /api/v1/assets/{id}/usage` (docs/20 §9). `alias` /
+         *     `version_used` are extracted from the instance's `asset_pins` map for the
+         *     queried asset. This is **asset-level** lineage ("runs that used asset X");
+         *     record/material-level lineage ("runs that used Copper C110") is deferred —
+         *     see docs/20 §9.
+         */
+        AssetUsageItem: {
+            /** @description The binding alias under which this run consumed the asset. */
+            alias: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            instance_id: string;
+            mode: string;
+            status: string;
+            /** Format: uuid */
+            template_id: string;
+            template_name: string;
+            /** Format: int32 */
+            template_version: number;
+            /**
+             * Format: int32
+             * @description The asset version this run pinned (immutable for the life of the run).
+             */
+            version_used: number;
+        };
         AttachTemplateRequest: {
             /**
              * Format: uuid
@@ -4138,6 +4189,34 @@ export interface components {
                 updated_at: string;
                 /** Format: int32 */
                 version: number;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_AssetUsageItem: {
+            items: {
+                /** @description The binding alias under which this run consumed the asset. */
+                alias: string;
+                /** Format: date-time */
+                created_at: string;
+                /** Format: uuid */
+                instance_id: string;
+                mode: string;
+                status: string;
+                /** Format: uuid */
+                template_id: string;
+                template_name: string;
+                /** Format: int32 */
+                template_version: number;
+                /**
+                 * Format: int32
+                 * @description The asset version this run pinned (immutable for the life of the run).
+                 */
+                version_used: number;
             }[];
             /** Format: int64 */
             page: number;
@@ -7328,6 +7407,41 @@ export interface operations {
             };
             /** @description Record validation failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    asset_usage: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runs that used this asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_AssetUsageItem"];
+                };
+            };
+            /** @description Asset not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

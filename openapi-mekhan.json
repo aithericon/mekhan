@@ -978,6 +978,67 @@
         }
       }
     },
+    "/api/v1/assets/{id}/usage": {
+      "get": {
+        "tags": [
+          "assets"
+        ],
+        "summary": "`GET /api/v1/assets/{id}/usage` — **reverse lineage** (docs/20 §9): every run\n(workflow instance) that pinned this asset, newest first. Answers \"which runs\nused asset X\" straight from `workflow_instances.asset_pins` (GIN-indexed\njsonpath). Record/material-level lineage (\"runs that used Copper C110\") is a\ndeferred follow-on — see docs/20 §9.",
+        "operationId": "asset_usage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Asset id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runs that used this asset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_AssetUsageItem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Asset not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/tokens": {
       "get": {
         "tags": [
@@ -7652,6 +7713,57 @@
           }
         }
       },
+      "AssetUsageItem": {
+        "type": "object",
+        "description": "One run (workflow instance) that pinned a given asset — a reverse-lineage\nrow for `GET /api/v1/assets/{id}/usage` (docs/20 §9). `alias` /\n`version_used` are extracted from the instance's `asset_pins` map for the\nqueried asset. This is **asset-level** lineage (\"runs that used asset X\");\nrecord/material-level lineage (\"runs that used Copper C110\") is deferred —\nsee docs/20 §9.",
+        "required": [
+          "instance_id",
+          "template_id",
+          "template_name",
+          "template_version",
+          "status",
+          "mode",
+          "alias",
+          "version_used",
+          "created_at"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string",
+            "description": "The binding alias under which this run consumed the asset."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "instance_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_name": {
+            "type": "string"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "version_used": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The asset version this run pinned (immutable for the life of the run)."
+          }
+        }
+      },
       "AttachTemplateRequest": {
         "type": "object",
         "required": [
@@ -11470,6 +11582,83 @@
                 "version": {
                   "type": "integer",
                   "format": "int32"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_AssetUsageItem": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One run (workflow instance) that pinned a given asset — a reverse-lineage\nrow for `GET /api/v1/assets/{id}/usage` (docs/20 §9). `alias` /\n`version_used` are extracted from the instance's `asset_pins` map for the\nqueried asset. This is **asset-level** lineage (\"runs that used asset X\");\nrecord/material-level lineage (\"runs that used Copper C110\") is deferred —\nsee docs/20 §9.",
+              "required": [
+                "instance_id",
+                "template_id",
+                "template_name",
+                "template_version",
+                "status",
+                "mode",
+                "alias",
+                "version_used",
+                "created_at"
+              ],
+              "properties": {
+                "alias": {
+                  "type": "string",
+                  "description": "The binding alias under which this run consumed the asset."
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "instance_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "mode": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "template_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "template_name": {
+                  "type": "string"
+                },
+                "template_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "version_used": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The asset version this run pinned (immutable for the life of the run)."
                 }
               }
             }

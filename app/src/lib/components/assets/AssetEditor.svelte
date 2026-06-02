@@ -19,13 +19,16 @@
 	import CatalogFilePicker from './CatalogFilePicker.svelte';
 	import { specFromPortField, emptyRecord, buildRecord, displayCell } from './field-spec';
 	import { fromPortFieldKind } from '$lib/fields/adapters';
+	import Activity from '@lucide/svelte/icons/activity';
 	import {
 		getAsset,
 		getAssetType,
+		getAssetUsage,
 		putAssetRecords,
 		uploadAssetFile,
 		type AssetSummary,
 		type AssetTypeDetail,
+		type PaginatedAssetUsage,
 		type PortField
 	} from '$lib/api/assets';
 
@@ -44,6 +47,10 @@
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let loadedFor = $state<string | null>(null);
+
+	// Reverse lineage (docs/20 §9): runs that pinned this asset.
+	let usage = $state<PaginatedAssetUsage | null>(null);
+	let usageOpen = $state(false);
 
 	// Catalog picker state — which (rowIndex, fieldName) is awaiting a pick.
 	let catalogOpen = $state(false);
@@ -65,9 +72,13 @@
 	async function bootstrap(a: AssetSummary) {
 		loading = true;
 		error = null;
+		usage = null;
+		usageOpen = false;
 		try {
 			const [t, detail] = await Promise.all([getAssetType(a.type_id), getAsset(a.id)]);
 			type = t;
+			// Reverse-lineage is best-effort — never block the editor on it.
+			void getAssetUsage(a.id).then((u) => (usage = u)).catch(() => {});
 			// Materialize records; seed at least one row for an object type.
 			const loaded = (detail.records as Record<string, unknown>[]) ?? [];
 			if (t.cardinality === 'object') {
@@ -160,6 +171,39 @@
 			{#if error}
 				<div class="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
 					{error}
+				</div>
+			{/if}
+
+			{#if usage && usage.total > 0}
+				<!-- Reverse lineage (docs/20 §9): runs that used this asset. -->
+				<div class="mb-4 rounded-md border border-border bg-muted/30">
+					<button
+						type="button"
+						class="flex w-full items-center gap-2 px-3 py-2 text-sm"
+						onclick={() => (usageOpen = !usageOpen)}
+					>
+						<Activity class="size-4 text-muted-foreground" />
+						<span class="font-medium">Used by {usage.total} run{usage.total === 1 ? '' : 's'}</span>
+						<span class="ml-auto text-xs text-muted-foreground">{usageOpen ? 'Hide' : 'Show'}</span>
+					</button>
+					{#if usageOpen}
+						<ul class="border-t border-border divide-y divide-border">
+							{#each usage.items as run (run.instance_id)}
+								<li class="px-3 py-2 text-sm">
+									<a
+										href={`/instances/${run.instance_id}`}
+										class="flex items-center gap-2 hover:underline"
+									>
+										<span class="truncate font-medium">{run.template_name}</span>
+										<Badge variant="outline" class="shrink-0 font-mono text-[10px]">{run.status}</Badge>
+										<span class="ml-auto shrink-0 text-xs text-muted-foreground">
+											{run.alias} · v{run.version_used}
+										</span>
+									</a>
+								</li>
+							{/each}
+						</ul>
+					{/if}
 				</div>
 			{/if}
 

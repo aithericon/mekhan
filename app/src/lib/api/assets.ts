@@ -55,6 +55,8 @@ export type Cardinality = components['schemas']['Cardinality'];
 export type ScopeKind = components['schemas']['ScopeKind'];
 export type PaginatedAssetTypes = components['schemas']['PaginatedResponse_AssetTypeSummary'];
 export type PaginatedAssets = components['schemas']['PaginatedResponse_AssetSummary'];
+export type AssetUsageItem = components['schemas']['AssetUsageItem'];
+export type PaginatedAssetUsage = components['schemas']['PaginatedResponse_AssetUsageItem'];
 
 /** A single validated asset record row (the JSONB shape is opaque to the client). */
 export type AssetRecord = Record<string, unknown>;
@@ -197,6 +199,25 @@ export async function putAssetRecords(
 ): Promise<AssetSummary> {
 	return unwrap(
 		await client.PUT('/api/v1/assets/{id}/records', { params: { path: { id } }, body })
+	);
+}
+
+/**
+ * Reverse lineage (docs/20 §9): the runs (workflow instances) that pinned this
+ * asset, newest first. Asset-level only — "which runs used asset X". Record /
+ * material-level lineage is a deferred follow-on.
+ */
+export async function getAssetUsage(
+	id: string,
+	params?: { page?: number; perPage?: number }
+): Promise<PaginatedAssetUsage> {
+	return unwrap(
+		await client.GET('/api/v1/assets/{id}/usage', {
+			params: {
+				path: { id },
+				query: { page: params?.page ?? 1, per_page: params?.perPage ?? 20 }
+			}
+		})
 	);
 }
 

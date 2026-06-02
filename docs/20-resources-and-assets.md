@@ -302,7 +302,45 @@ the existing `GET /api/v1/resources`.
 
 ---
 
-## 9. Explicitly deferred (clean additive seams)
+## 9. Reverse lineage (which runs used an asset)
+
+Three granularities, **not** equally cheap — because consumption is
+whole-collection (§5), the platform knows an asset+version was *pinned*, but not
+which *record* a run's code actually used.
+
+**Asset-level + version-level — SHIPPED.** Every instance pins
+`{alias -> {asset_id, version}}` in `workflow_instances.asset_pins` (§6). A GIN
+index (`asset_pins jsonb_path_ops`) backs **`GET /api/v1/assets/{id}/usage`**,
+which returns the runs that pinned the asset (newest first, each carrying the
+binding `alias` and `version_used`). The asset editor surfaces this as a
+**"Used by N runs"** panel linking to each instance. *"Which runs used version 3"*
+is the same query plus a `@.version == 3` predicate. Cost: one index + one read
+endpoint — the pin already carried everything.
+
+**Record / material-level ("runs that used Copper C110") — DEFERRED**, two
+complementary paths (neither invalidates the above):
+
+- **(a) Author-picked-row binding (G2).** When a run is *about* one material
+  (e.g. a simulation per material), bind a *row* rather than the whole
+  collection. The pin becomes `{asset_id, version, row_key}` and the lineage
+  query is the same `asset_pins` jsonpath with a `row_key` predicate —
+  structural, no opaque-code instrumentation. **Primary path**: it makes the run
+  *parameterized by the material*, which is usually the real intent.
+- **(b) Runtime usage reporting.** When a run reads *many* records and you want
+  the ones it actually touched, an SDK call (`aithericon.record_used(alias,
+  row_key)`) lands a row in an `asset_record_usage(instance_id, asset_id,
+  version, row_key)` projection — fed by the same causality projector that backs
+  the catalogue. Escape hatch for the read-many case; requires instrumenting node
+  code.
+
+**Rejected: one-asset-per-material.** Modeling each material as its own `object`
+asset gives record-level lineage for free (each material = an `asset_id`), but
+trades away the table/CSV authoring model (§4.2) and explodes the asset count.
+The record-addressability paths (a)/(b) keep the collection model intact.
+
+---
+
+## 10. Explicitly deferred (clean additive seams)
 
 None of these are invalidated by the above; each is a later, additive step:
 
@@ -316,14 +354,16 @@ None of these are invalidated by the above; each is a later, additive step:
 - **Per-file pre-staging** of `File` fields to a known local path at compile time
   (v1 carries the S3 storage-path inside the record JSON for the node to fetch;
   see §5).
-- **Author-picked-row binding** (G2) and **runtime filter** (G3).
+- **Author-picked-row binding** (G2) and **runtime filter** (G3) — also the
+  record-level lineage path, see §9.
+- **Record-level reverse lineage** (§9 paths a/b); asset-level usage shipped.
 - **Real folders table** (per-folder ACL, movable folder objects).
 - **Per-row schema versioning** and **breaking-change migration** of asset types.
 - **Custom resource *kinds*** (require backend integration; intentionally closed).
 
 ---
 
-## 10. Implementation order (for the build)
+## 11. Implementation order (for the build)
 
 1. **Migrations** (§7) — generalize `resources` ownership + folders; new
    `asset_types` / `assets` / `asset_records`; `asset_pins`.

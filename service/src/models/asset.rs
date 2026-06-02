@@ -380,3 +380,33 @@ fn default_cardinality() -> Cardinality {
 fn default_true() -> bool {
     true
 }
+
+/// One run (workflow instance) that pinned a given asset — a reverse-lineage
+/// row for `GET /api/v1/assets/{id}/usage` (docs/20 §9). `alias` /
+/// `version_used` are extracted from the instance's `asset_pins` map for the
+/// queried asset. This is **asset-level** lineage ("runs that used asset X");
+/// record/material-level lineage ("runs that used Copper C110") is deferred —
+/// see docs/20 §9.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct AssetUsageItem {
+    pub instance_id: Uuid,
+    pub template_id: Uuid,
+    pub template_name: String,
+    pub template_version: i32,
+    pub status: String,
+    pub mode: String,
+    /// The binding alias under which this run consumed the asset.
+    pub alias: String,
+    /// The asset version this run pinned (immutable for the life of the run).
+    pub version_used: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Pagination for `GET /api/v1/assets/{id}/usage`.
+#[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]
+pub struct AssetUsageQuery {
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}

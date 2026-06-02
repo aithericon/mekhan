@@ -36,9 +36,9 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::models::asset::{
     AssetDetail, AssetRow, AssetSummary, AssetTypeDetail, AssetTypeRow,
-    AssetTypeSummary, Cardinality, CreateAssetRequest, CreateAssetTypeRequest, GetAssetQuery,
-    ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery, ReplaceRecordsRequest, ScopeKind,
-    UpdateAssetTypeRequest,
+    AssetTypeSummary, AssetUsageItem, AssetUsageQuery, Cardinality, CreateAssetRequest,
+    CreateAssetTypeRequest, GetAssetQuery, ImportCsvParams, ListAssetTypesQuery, ListAssetsQuery,
+    ReplaceRecordsRequest, ScopeKind, UpdateAssetTypeRequest,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{PaginatedResponse, Port, PortField};
@@ -962,6 +962,118 @@ pub async fn delete_asset(
         .execute(&state.db)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Internal `FromRow` for the usage query — the instance columns plus the raw
+/// `asset_pins` map, from which we extract the matching alias + version.
+#[derive(sqlx::FromRow)]
+struct UsageRow {
+    id: Uuid,
+    template_id: Uuid,
+    template_name: String,
+    template_version: i32,
+    status: String,
+    mode: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    asset_pins: Value,
+}
+
+/// `GET /api/v1/assets/{id}/usage` — **reverse lineage** (docs/20 §9): every run
+/// (workflow instance) that pinned this asset, newest first. Answers "which runs
+/// used asset X" straight from `workflow_instances.asset_pins` (GIN-indexed
+/// jsonpath). Record/material-level lineage ("runs that used Copper C110") is a
+/// deferred follow-on — see docs/20 §9.
+#[utoipa::path(
+    get,
+    path = "/api/v1/assets/{id}/usage",
+    params(
+        ("id" = Uuid, Path, description = "Asset id"),
+        AssetUsageQuery,
+    ),
+    responses(
+        (status = 200, description = "Runs that used this asset", body = PaginatedResponse<AssetUsageItem>),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    ),
+    tag = "assets",
+)]
+pub async fn asset_usage(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path(id): Path<Uuid>,
+    Query(params): Query<AssetUsageQuery>,
+) -> Result<Json<PaginatedResponse<AssetUsageItem>>, ApiError> {
+    // 404 if the asset doesn't exist.
+    let _ = fetch_asset(&state.db, id).await?;
+
+    // Match any alias entry whose `asset_id` equals this asset. `id` is a `Uuid`
+    // so interpolating it into the jsonpath literal is injection-safe.
+    let filter = format!("$.* ? (@.asset_id == \"{id}\")");
+    let offset = (params.page - 1).max(0) * params.per_page;
+
+    let rows: Vec<UsageRow> = sqlx::query_as::<_, UsageRow>(
+        "SELECT wi.id, wi.template_id, wt.name AS template_name, wi.template_version, \
+                wi.status, wi.mode, wi.created_at, wi.asset_pins \
+         FROM workflow_instances wi \
+         JOIN workflow_templates wt \
+           ON wt.id = wi.template_id AND wt.version = wi.template_version \
+         WHERE wi.asset_pins @? $1::jsonpath \
+         ORDER BY wi.created_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(&filter)
+    .bind(params.per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let total: i64 = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM workflow_instances WHERE asset_pins @? $1::jsonpath",
+    )
+    .bind(&filter)
+    .fetch_one(&state.db)
+    .await?
+    .0;
+
+    let target = id.to_string();
+    let items = rows
+        .into_iter()
+        .map(|r| {
+            // Pull the alias + version under which this run pinned the asset.
+            let (alias, version_used) = r
+                .asset_pins
+                .as_object()
+                .and_then(|m| {
+                    m.iter().find_map(|(alias, pin)| {
+                        let aid = pin.get("asset_id").and_then(Value::as_str)?;
+                        (aid == target).then(|| {
+                            let v = pin
+                                .get("version")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0) as i32;
+                            (alias.clone(), v)
+                        })
+                    })
+                })
+                .unwrap_or_default();
+            AssetUsageItem {
+                instance_id: r.id,
+                template_id: r.template_id,
+                template_name: r.template_name,
+                template_version: r.template_version,
+                status: r.status,
+                mode: r.mode,
+                alias,
+                version_used,
+                created_at: r.created_at,
+            }
+        })
+        .collect();
+
+    Ok(Json(PaginatedResponse {
+        items,
+        total,
+        page: params.page,
+        per_page: params.per_page,
+    }))
 }
 
 // ── Multipart / query DTOs ──────────────────────────────────────────────────

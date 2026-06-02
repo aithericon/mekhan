@@ -65,6 +65,7 @@ use utoipa::OpenApi;
             crate::models::asset::AssetDetail,
             crate::models::asset::CreateAssetRequest,
             crate::models::asset::ReplaceRecordsRequest,
+            crate::models::asset::AssetUsageItem,
             crate::handlers::assets::AssetFileUploadResponse,
             crate::handlers::assets::CsvImportBody,
             crate::handlers::assets::AssetFileUpload,
