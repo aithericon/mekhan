@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use aithericon_executor_backend::SandboxConfig;
 use aithericon_executor_logs::LogsConfig;
 use aithericon_executor_metrics::MetricsConfig;
 use aithericon_executor_storage::StorageConfig;
@@ -69,6 +70,17 @@ pub struct ExecutorConfig {
     /// Apalis namespace for job streams.
     #[serde(default = "default_namespace")]
     pub namespace: String,
+
+    /// Optional subject/stream isolation prefix for status + event publishing.
+    ///
+    /// `None` (default) → the global `EXECUTOR_STATUS`/`EXECUTOR_EVENTS` streams
+    /// and bare `executor.status.>` subjects (production). `Some(pfx)` →
+    /// `STATUS_{pfx}`/`EVENTS_{pfx}` streams and `{pfx}.executor.status.>`
+    /// subjects, matching the per-test isolation `ExecutorTestContext` uses.
+    /// Set via `EXECUTOR_SUBJECT_PREFIX`; used by the sandbox e2e to point a
+    /// containerized executor at a test's UUID-prefixed streams.
+    #[serde(default)]
+    pub subject_prefix: Option<String>,
 
     /// Number of concurrent jobs this executor can handle.
     #[serde(default = "default_concurrency")]
@@ -165,6 +177,17 @@ pub struct ExecutorConfig {
     /// Config file: `[python]` section in `executor.toml`.
     #[serde(default)]
     pub python: Option<PythonCacheConfig>,
+
+    /// Process sandbox (nsjail) configuration.
+    ///
+    /// When enabled, the `process` and `python` backends run each job inside an
+    /// nsjail namespace+cgroup jail (clean env, isolated netns, resource caps).
+    /// Default OFF — `None` or `enabled = false` leaves both backends running
+    /// exactly as today. Enabling on a non-Linux host (or without `nsjail` on
+    /// PATH) is a fail-closed startup error.
+    /// Config file: `[sandbox]` section in `executor.toml`.
+    #[serde(default)]
+    pub sandbox: Option<SandboxSettings>,
 
     /// Cancellation listener configuration.
     ///
@@ -270,6 +293,103 @@ impl Default for PythonCacheConfig {
 
 fn default_prefer_uv() -> bool {
     true
+}
+
+/// Executor-wide sandbox (nsjail) settings.
+///
+/// Mirrors the `[nix]` / `[python]` config blocks: an `Option<SandboxSettings>`
+/// on [`ExecutorConfig`], deserialized from the `[sandbox]` section /
+/// `EXECUTOR_SANDBOX__*` env vars. Default OFF (`enabled = false`); when
+/// enabled it is converted to a backend-side [`SandboxConfig`] at startup via
+/// [`SandboxSettings::to_sandbox_config`].
+///
+/// Memory / fsize limits are expressed here in **MiB** (operator-friendly) and
+/// converted to bytes where nsjail wants bytes.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SandboxSettings {
+    /// Whether the sandbox is active. Default: false (preserves existing
+    /// unsandboxed process/python execution until opted in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Memory cap in MiB → nsjail `--cgroup_mem_max` (converted to bytes).
+    #[serde(default)]
+    pub memory_limit_mb: Option<u64>,
+
+    /// CPU quota in ms per wall-second → `--cgroup_cpu_ms_per_sec`.
+    #[serde(default)]
+    pub cpu_ms_per_sec: Option<u64>,
+
+    /// Max number of pids → `--cgroup_pids_max`.
+    #[serde(default)]
+    pub pids_max: Option<u64>,
+
+    /// Max file size the child may create, in MiB → `--rlimit_fsize`.
+    #[serde(default)]
+    pub rlimit_fsize_mb: Option<u64>,
+
+    /// Max open file descriptors → `--rlimit_nofile`.
+    #[serde(default)]
+    pub rlimit_nofile: Option<u64>,
+
+    /// When `false` (default), the child runs in an isolated netns. When
+    /// `true`, the host netns is shared and `/etc/resolv.conf` is bound RO.
+    #[serde(default)]
+    pub allow_network: bool,
+
+    /// Size of the private `/tmp` tmpfs, in MiB. Default: 64.
+    #[serde(default = "default_tmpfs_size_mb")]
+    pub tmpfs_size_mb: u64,
+
+    /// Unprivileged uid (and gid) the child is dropped to. Default: 99999.
+    #[serde(default = "default_sandbox_uid")]
+    pub sandbox_uid: u32,
+}
+
+impl Default for SandboxSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            memory_limit_mb: None,
+            cpu_ms_per_sec: None,
+            pids_max: None,
+            rlimit_fsize_mb: None,
+            rlimit_nofile: None,
+            allow_network: false,
+            tmpfs_size_mb: default_tmpfs_size_mb(),
+            sandbox_uid: default_sandbox_uid(),
+        }
+    }
+}
+
+impl SandboxSettings {
+    /// Convert these operator-facing settings into the backend-side
+    /// [`SandboxConfig`] that `run_process` consumes. `memory_limit_mb` is
+    /// converted MiB → bytes; `nsjail_bin` defaults to `"nsjail"`; extra
+    /// mounts are empty in v1 (see docs/sandbox.md decision #6).
+    pub fn to_sandbox_config(&self) -> SandboxConfig {
+        SandboxConfig {
+            nsjail_bin: "nsjail".into(),
+            memory_limit: self.memory_limit_mb.map(|mb| mb * 1024 * 1024),
+            cpu_ms_per_sec: self.cpu_ms_per_sec,
+            pids_max: self.pids_max,
+            rlimit_fsize_mb: self.rlimit_fsize_mb,
+            rlimit_nofile: self.rlimit_nofile,
+            allow_network: self.allow_network,
+            tmpfs_size_mb: self.tmpfs_size_mb,
+            sandbox_uid: self.sandbox_uid,
+            readonly_mounts: Vec::new(),
+            writable_mounts: Vec::new(),
+        }
+    }
+}
+
+fn default_tmpfs_size_mb() -> u64 {
+    64
+}
+
+fn default_sandbox_uid() -> u32 {
+    99999
 }
 
 /// Configuration for execution cancellation listeners.
@@ -464,6 +584,7 @@ mod tests {
             nats_creds: None,
             name: default_name(),
             namespace: default_namespace(),
+            subject_prefix: None,
             concurrency: default_concurrency(),
             default_timeout_secs: default_timeout_secs(),
             max_output_bytes: default_max_output_bytes(),
@@ -478,6 +599,7 @@ mod tests {
             logs: None,
             nix: None,
             python: None,
+            sandbox: None,
             cancel: CancelConfig::default(),
             source: JobSource::default(),
             lifetime: Lifetime::default(),

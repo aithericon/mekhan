@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use aithericon_executor_backend::traits::{ExecutionBackend, StatusCallback};
-use aithericon_executor_backend::DEFAULT_MAX_OUTPUT_BYTES;
+use aithericon_executor_backend::{SandboxConfig, DEFAULT_MAX_OUTPUT_BYTES};
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionResult, ExecutionSpec, ExecutorError, RunContext,
 };
@@ -22,6 +22,11 @@ pub use aithericon_executor_backend_configs::docker::{DockerConfig, PullPolicy, 
 pub struct DockerBackend {
     client: bollard::Docker,
     max_output_bytes: usize,
+    /// Executor-wide sandbox policy. When `Some`, its intent (network deny,
+    /// non-root, dropped caps, no-new-privileges, read-only rootfs + private
+    /// tmpfs, memory/pids caps) is mapped onto the container's native
+    /// `HostConfig` — Docker is the isolator here, not nsjail.
+    sandbox: Option<SandboxConfig>,
 }
 
 impl DockerBackend {
@@ -37,6 +42,7 @@ impl DockerBackend {
         Ok(Self {
             client,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            sandbox: None,
         })
     }
 
@@ -45,11 +51,22 @@ impl DockerBackend {
         Self {
             client,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            sandbox: None,
         }
     }
 
     pub fn with_max_output_bytes(mut self, bytes: usize) -> Self {
         self.max_output_bytes = bytes;
+        self
+    }
+
+    /// Apply the executor-wide sandbox policy to every container this backend
+    /// launches. nsjail is Linux-process isolation and does not apply to Docker
+    /// (the workload runs in the daemon's container, not as our child); instead
+    /// the same `SandboxConfig` intent is translated to Docker's native
+    /// `HostConfig` isolation in [`container::build_container_body`].
+    pub fn with_sandbox(mut self, sandbox: SandboxConfig) -> Self {
+        self.sandbox = Some(sandbox);
         self
     }
 }
@@ -93,6 +110,7 @@ impl ExecutionBackend for DockerBackend {
             self.max_output_bytes,
             &status_cb,
             cancel,
+            self.sandbox.as_ref(),
         )
         .await
     }

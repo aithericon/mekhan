@@ -12,6 +12,7 @@ use aithericon_executor_domain::{
 
 use aithericon_executor_backend::tail::TailBuffer;
 use aithericon_executor_backend::traits::StatusCallback;
+use aithericon_executor_backend::SandboxConfig;
 
 use crate::ProcessConfig;
 
@@ -19,46 +20,68 @@ use crate::ProcessConfig;
 const TERM_GRACE_SECS: u64 = 5;
 
 /// Execute a process config within a RunContext, returning the result.
+///
+/// When `sandbox` is `Some`, the command is wrapped in nsjail: the spawned
+/// process is `nsjail … -- {command} {args…}` instead of the command itself.
+/// nsjail owns the child's env (via `--env` flags) and cwd (via `--cwd`), so in
+/// the sandboxed branch we do NOT call `Command::env`/`current_dir` — doing so
+/// would re-inherit the executor's own environment into the nsjail process.
+/// When `None`, behavior is the historical unsandboxed exec, byte-for-byte.
 pub async fn run_process(
     spec: &ProcessConfig,
     run_context: &RunContext,
     max_output_bytes: usize,
     status_cb: &StatusCallback,
     cancel: CancellationToken,
+    sandbox: Option<&SandboxConfig>,
 ) -> Result<ExecutionResult, ExecutorError> {
     let start = tokio::time::Instant::now();
     let timeout = run_context.timeout;
 
-    let mut cmd = Command::new(&spec.command);
-    cmd.args(&spec.args);
+    let mut cmd = if let Some(sandbox) = sandbox {
+        // Sandboxed: build the full nsjail argv (incl. `-- command args…`).
+        // nsjail carries env via `--env` and cwd via `--cwd`, so we attach
+        // neither here — the executor's own environment must not leak in.
+        let (nsjail_bin, argv) = sandbox.build_nsjail_args(spec, run_context);
+        let mut cmd = Command::new(nsjail_bin);
+        cmd.args(argv);
+        cmd
+    } else {
+        // Unsandboxed: spawn the command directly with env + cwd as before.
+        let mut cmd = Command::new(&spec.command);
+        cmd.args(&spec.args);
+
+        if !spec.inherit_env {
+            cmd.env_clear();
+        }
+
+        // Apply spec env vars first
+        for (k, v) in &spec.env {
+            cmd.env(k, v);
+        }
+
+        // Then apply RunContext env vars (these take precedence, e.g. AITHERICON_* vars).
+        // For any env name that had a `{{secret:KEY}}` template, `resolved_env`
+        // carries the plaintext from the in-memory side-channel (never serialized
+        // to context.json). Apply `env` first then overlay `resolved_env` so the
+        // resolved values win without leaking through `env` to disk.
+        for (k, v) in &run_context.env {
+            cmd.env(k, v);
+        }
+        for (k, v) in &run_context.resolved_env {
+            cmd.env(k, v);
+        }
+
+        if let Some(dir) = &spec.working_dir {
+            cmd.current_dir(dir);
+        }
+
+        cmd
+    };
+
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
-
-    if !spec.inherit_env {
-        cmd.env_clear();
-    }
-
-    // Apply spec env vars first
-    for (k, v) in &spec.env {
-        cmd.env(k, v);
-    }
-
-    // Then apply RunContext env vars (these take precedence, e.g. AITHERICON_* vars).
-    // For any env name that had a `{{secret:KEY}}` template, `resolved_env`
-    // carries the plaintext from the in-memory side-channel (never serialized
-    // to context.json). Apply `env` first then overlay `resolved_env` so the
-    // resolved values win without leaking through `env` to disk.
-    for (k, v) in &run_context.env {
-        cmd.env(k, v);
-    }
-    for (k, v) in &run_context.resolved_env {
-        cmd.env(k, v);
-    }
-
-    if let Some(dir) = &spec.working_dir {
-        cmd.current_dir(dir);
-    }
 
     let mut child = cmd.spawn().map_err(ExecutorError::SpawnFailed)?;
 
@@ -163,6 +186,12 @@ pub async fn run_process(
 }
 
 /// Send SIGTERM, wait grace period, then SIGKILL if still alive.
+///
+/// When the job is sandboxed, `child` is the **nsjail** process, not the user
+/// command. That is exactly what we want to signal: nsjail is the PID-namespace
+/// init (pid 1 inside the sandbox), so SIGTERM is forwarded to the child and a
+/// SIGKILL tears down the whole PID namespace — no orphaned grandchildren
+/// survive the teardown.
 async fn terminate_child(child: &mut tokio::process::Child) {
     // Try SIGTERM first (Unix) or kill (Windows)
     #[cfg(unix)]
