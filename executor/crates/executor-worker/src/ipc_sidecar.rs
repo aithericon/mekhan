@@ -19,7 +19,7 @@ use aithericon_executor_ipc::proto;
 use aithericon_executor_ipc::{ExecutorSidecar, ExecutorSidecarServer};
 use aithericon_executor_logs::LogSink;
 use aithericon_executor_metrics::MetricSink;
-use aithericon_executor_storage::ArtifactStore;
+use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
 /// Max time to wait for an accepted IPC connection to drain its in-flight
 /// request handlers after the child process has exited. Bounded so a child
@@ -260,6 +260,15 @@ impl ExecutorSidecar for SidecarService {
         )))
     }
 
+    async fn retrieve_file(
+        &self,
+        request: Request<proto::RetrieveFileRequest>,
+    ) -> Result<Response<proto::RetrieveFileResponse>, Status> {
+        let req = request.into_inner();
+        let resp = handle_retrieve_file(&req, &self.artifact_store, &self.artifacts_dir).await;
+        Ok(Response::new(resp))
+    }
+
     type StreamChunksStream = ChunkStream;
 
     /// Inbound live data feed: the child opens this server-stream once and pulls
@@ -363,6 +372,88 @@ fn make_response(
     proto::SidecarResponse {
         status: status.into(),
         error_message: error_message.unwrap_or_default(),
+    }
+}
+
+/// Download a storage-path object into the run directory and return its local
+/// path. Backs `aithericon.File.retrieve()`. The child has no storage creds —
+/// the sidecar does (`artifact_store`), so retrieval is brokered here.
+///
+/// Files land under `{artifacts_dir}/retrieved/`, keyed by a hash of the full
+/// storage path so two records pointing at different keys with the same
+/// basename don't collide, while a repeat retrieve of the same key is a no-op
+/// cache hit (the local file already exists).
+async fn handle_retrieve_file(
+    req: &proto::RetrieveFileRequest,
+    artifact_store: &Option<Arc<dyn ArtifactStore>>,
+    artifacts_dir: &std::path::Path,
+) -> proto::RetrieveFileResponse {
+    fn err(status: proto::ResponseStatus, msg: impl Into<String>) -> proto::RetrieveFileResponse {
+        proto::RetrieveFileResponse {
+            status: status.into(),
+            error_message: msg.into(),
+            local_path: String::new(),
+        }
+    }
+
+    let storage_path = req.storage_path.trim();
+    if storage_path.is_empty() {
+        return err(
+            proto::ResponseStatus::InvalidArgument,
+            "retrieve_file: empty storage_path",
+        );
+    }
+    let Some(store) = artifact_store.as_ref() else {
+        return err(
+            proto::ResponseStatus::Error,
+            "retrieve_file: no artifact store configured for this executor",
+        );
+    };
+
+    // Stable per-key local filename: <hash>-<basename>, so distinct keys never
+    // collide and a repeat retrieve hits the on-disk cache.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(storage_path, &mut hasher);
+    let digest = std::hash::Hasher::finish(&hasher);
+    let basename = storage_path
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("file");
+    let dir = artifacts_dir.join("retrieved");
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        return err(
+            proto::ResponseStatus::Error,
+            format!("retrieve_file: create dir failed: {e}"),
+        );
+    }
+    let dest = dir.join(format!("{digest:016x}-{basename}"));
+
+    if tokio::fs::metadata(&dest).await.is_ok() {
+        // Cache hit — already retrieved this storage path this run.
+        return proto::RetrieveFileResponse {
+            status: proto::ResponseStatus::Ok.into(),
+            error_message: String::new(),
+            local_path: dest.to_string_lossy().into_owned(),
+        };
+    }
+
+    match store
+        .download(&StoragePath(storage_path.to_string()), &dest)
+        .await
+    {
+        Ok(()) => {
+            debug!(storage_path, dest = %dest.display(), "retrieve_file: downloaded");
+            proto::RetrieveFileResponse {
+                status: proto::ResponseStatus::Ok.into(),
+                error_message: String::new(),
+                local_path: dest.to_string_lossy().into_owned(),
+            }
+        }
+        Err(e) => err(
+            proto::ResponseStatus::Error,
+            format!("retrieve_file: download '{storage_path}' failed: {e}"),
+        ),
     }
 }
 

@@ -5,7 +5,7 @@ import warnings
 
 from aithericon._proto import executor_sidecar_pb2 as executor__sidecar__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class ExecutorSidecarStub(object):
+class ExecutorSidecarStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -84,9 +84,14 @@ class ExecutorSidecarStub(object):
                 request_serializer=executor__sidecar__pb2.StreamChunksRequest.SerializeToString,
                 response_deserializer=executor__sidecar__pb2.ChunkMessage.FromString,
                 _registered_method=True)
+        self.RetrieveFile = channel.unary_unary(
+                '/aithericon.executor.ipc.ExecutorSidecar/RetrieveFile',
+                request_serializer=executor__sidecar__pb2.RetrieveFileRequest.SerializeToString,
+                response_deserializer=executor__sidecar__pb2.RetrieveFileResponse.FromString,
+                _registered_method=True)
 
 
-class ExecutorSidecarServicer(object):
+class ExecutorSidecarServicer:
     """Missing associated documentation comment in .proto file."""
 
     def LogArtifact(self, request, context):
@@ -154,6 +159,17 @@ class ExecutorSidecarServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RetrieveFile(self, request, context):
+        """Inbound file retrieval: the child asks the sidecar (which holds storage
+        credentials — the child does not) to download a storage-path object into
+        the run directory and return its local path. Backs the Python SDK's
+        `aithericon.File.retrieve()` — e.g. lazily fetching an asset record's
+        `File`-field value (a storage path) only for the row the code selected.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ExecutorSidecarServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -207,6 +223,11 @@ def add_ExecutorSidecarServicer_to_server(servicer, server):
                     request_deserializer=executor__sidecar__pb2.StreamChunksRequest.FromString,
                     response_serializer=executor__sidecar__pb2.ChunkMessage.SerializeToString,
             ),
+            'RetrieveFile': grpc.unary_unary_rpc_method_handler(
+                    servicer.RetrieveFile,
+                    request_deserializer=executor__sidecar__pb2.RetrieveFileRequest.FromString,
+                    response_serializer=executor__sidecar__pb2.RetrieveFileResponse.SerializeToString,
+            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'aithericon.executor.ipc.ExecutorSidecar', rpc_method_handlers)
@@ -215,7 +236,7 @@ def add_ExecutorSidecarServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ExecutorSidecar(object):
+class ExecutorSidecar:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
@@ -478,6 +499,33 @@ class ExecutorSidecar(object):
             '/aithericon.executor.ipc.ExecutorSidecar/StreamChunks',
             executor__sidecar__pb2.StreamChunksRequest.SerializeToString,
             executor__sidecar__pb2.ChunkMessage.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RetrieveFile(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aithericon.executor.ipc.ExecutorSidecar/RetrieveFile',
+            executor__sidecar__pb2.RetrieveFileRequest.SerializeToString,
+            executor__sidecar__pb2.RetrieveFileResponse.FromString,
             options,
             channel_credentials,
             insecure,

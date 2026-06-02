@@ -122,6 +122,11 @@ pub(crate) enum BorrowResolution {
         type_id: Uuid,
         /// Asset version pinned at publish time.
         version: i32,
+        /// Names of the asset type's `File`-kind fields. Staged alongside the
+        /// records (as `__asset_files.json`) so the runner can deep-wrap each
+        /// File field's storage-path value into an `aithericon.File` for lazy
+        /// `.retrieve()`. Empty when the asset type has no File fields.
+        file_fields: Vec<String>,
     },
 
     /// Static **named-global** field reference substituted into control-flow
