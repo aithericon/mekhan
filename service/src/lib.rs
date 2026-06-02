@@ -20,6 +20,7 @@ pub mod petri;
 pub mod process;
 pub mod projections;
 pub mod query;
+pub mod runners_nats;
 pub mod s3;
 pub mod triggers;
 pub mod yjs;
@@ -102,6 +103,10 @@ pub struct AppState {
     /// persistence. The launcher never touches this — instances run against
     /// already-spliced AIR.
     pub resource_resolver: Arc<crate::petri::resource_resolver::ResourceResolver>,
+    /// Phase 2 (Lab Runner Fleet) — mints scoped per-runner NATS *user* JWTs
+    /// signed by the `runners`-account signing key. Always present: resolved
+    /// at startup (auto-generates + persists a stable dev seed on a miss).
+    pub runner_nats_signer: Arc<crate::runners_nats::RunnerNatsSigner>,
 }
 
 /// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
@@ -284,6 +289,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::runners::revoke_registration_token))
         .routes(routes!(handlers::runners::list_runners))
         .routes(routes!(handlers::runners::heartbeat_runner))
+        // Phase 2 — self-service NATS scoped-creds mint/rotation. Runner-token
+        // authed, self-only (subject == runner:{id}), same boundary as
+        // heartbeat. Mints a fresh user JWT from the stored nats_public_key.
+        .routes(routes!(handlers::runners::issue_runner_nats_creds))
         .routes(routes!(
             handlers::runners::get_runner,
             handlers::runners::revoke_runner

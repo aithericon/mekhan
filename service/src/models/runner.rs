@@ -161,6 +161,26 @@ pub struct EnrolledRunner {
     pub runner_token: String,
     pub workspace_id: Uuid,
     pub pool: Option<String>,
+    /// Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the
+    /// `nats_public_key` the runner sent at enrollment. `null` when no public
+    /// key was supplied OR signing was unavailable; the runner can fetch it
+    /// later via `POST /api/v1/runners/{id}/nats-creds`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nats_jwt: Option<String>,
+}
+
+/// Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted
+/// scoped NATS user JWT plus the issuing account signing key's public key. The
+/// runner assembles its own `.creds` file from this JWT and its locally-held
+/// user nkey seed.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RunnerNatsCreds {
+    /// Freshly signed scoped user JWT, bound to the runner's stored
+    /// `nats_public_key`.
+    pub nats_jwt: String,
+    /// The runners-account signing key's PUBLIC key (`A…`) — the JWT issuer and
+    /// the value the NATS server's account resolver must trust.
+    pub account_public_key: String,
 }
 
 /// Request body for `POST /api/v1/runners/registration-tokens`.

@@ -258,6 +258,16 @@ async fn main() -> anyhow::Result<()> {
     let resource_resolver =
         Arc::new(mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()));
 
+    // Phase 2 (Lab Runner Fleet) — resolve the NATS account signing key. Logs
+    // the account public key at INFO. Precedence: RUNNERS_NATS_SIGNING_SEED env
+    // → local seed file ({MEKHAN_DATA_DIR|~/.aithericon/mekhan}) → best-effort
+    // Vault → generate+persist. Never blocks startup on Vault.
+    let runner_nats_signer = Arc::new(mekhan_service::runners_nats::RunnerNatsSigner::resolve());
+    tracing::info!(
+        account = %runner_nats_signer.account_public_key(),
+        "runner NATS signer ready"
+    );
+
     let state = AppState {
         db,
         petri,
@@ -279,6 +289,7 @@ async fn main() -> anyhow::Result<()> {
         result_waiters,
         resource_store,
         resource_resolver,
+        runner_nats_signer,
     };
 
     // Seed built-in demos before the listener accepts requests. Idempotent

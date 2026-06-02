@@ -1558,6 +1558,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/{id}/nats-creds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/runners/{id}/nats-creds` — mint/rotate the runner's scoped
+         *     NATS user JWT. Runner-token authed, self-only: the principal's subject MUST
+         *     be `runner:{id}` (same boundary as heartbeat). The JWT is freshly signed
+         *     from the runner row's stored `nats_public_key`; 404 if none is stored.
+         *     Long-lived (no expiry) — calling this again rotates it.
+         */
+        post: operations["issue_runner_nats_creds"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks": {
         parameters: {
             query?: never;
@@ -3465,6 +3488,13 @@ export interface components {
         EnrolledRunner: {
             /** Format: uuid */
             id: string;
+            /**
+             * @description Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the
+             *     `nats_public_key` the runner sent at enrollment. `null` when no public
+             *     key was supplied OR signing was unavailable; the runner can fetch it
+             *     later via `POST /api/v1/runners/{id}/nats-creds`.
+             */
+            nats_jwt?: string | null;
             pool?: string | null;
             runner_token: string;
             /** Format: uuid */
@@ -5401,6 +5431,24 @@ export interface components {
             status: string;
             /** Format: uuid */
             workspace_id: string;
+        };
+        /**
+         * @description Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted
+         *     scoped NATS user JWT plus the issuing account signing key's public key. The
+         *     runner assembles its own `.creds` file from this JWT and its locally-held
+         *     user nkey seed.
+         */
+        RunnerNatsCreds: {
+            /**
+             * @description The runners-account signing key's PUBLIC key (`A…`) — the JWT issuer and
+             *     the value the NATS server's account resolver must trust.
+             */
+            account_public_key: string;
+            /**
+             * @description Freshly signed scoped user JWT, bound to the runner's stored
+             *     `nats_public_key`.
+             */
+            nats_jwt: string;
         };
         /**
          * @description Compact list-row shape. Returned by `GET /api/v1/runners` — MUST NOT carry
@@ -10201,6 +10249,47 @@ export interface operations {
                 };
             };
             /** @description Runner not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    issue_runner_nats_creds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Freshly signed scoped NATS user JWT */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerNatsCreds"];
+                };
+            };
+            /** @description Wrong / foreign / revoked runner token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Runner not found or no stored nats_public_key */
             404: {
                 headers: {
                     [name: string]: unknown;

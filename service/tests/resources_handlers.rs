@@ -89,6 +89,9 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
         resource_resolver: Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
+        runner_nats_signer: Arc::new(
+            mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
+        ),
     };
 
     (build_router(state), db, resource_store)

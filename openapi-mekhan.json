@@ -4422,6 +4422,59 @@
         }
       }
     },
+    "/api/v1/runners/{id}/nats-creds": {
+      "post": {
+        "tags": [
+          "runners"
+        ],
+        "summary": "`POST /api/v1/runners/{id}/nats-creds` — mint/rotate the runner's scoped\nNATS user JWT. Runner-token authed, self-only: the principal's subject MUST\nbe `runner:{id}` (same boundary as heartbeat). The JWT is freshly signed\nfrom the runner row's stored `nats_public_key`; 404 if none is stored.\nLong-lived (no expiry) — calling this again rotates it.",
+        "operationId": "issue_runner_nats_creds",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Runner id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Freshly signed scoped NATS user JWT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerNatsCreds"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong / foreign / revoked runner token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Runner not found or no stored nats_public_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tasks": {
       "get": {
         "tags": [
@@ -9438,6 +9491,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "nats_jwt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the runner sent at enrollment. `null` when no public\nkey was supplied OR signing was unavailable; the runner can fetch it\nlater via `POST /api/v1/runners/{id}/nats-creds`."
+          },
           "pool": {
             "type": [
               "string",
@@ -13897,6 +13957,24 @@
           "workspace_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "RunnerNatsCreds": {
+        "type": "object",
+        "description": "Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted\nscoped NATS user JWT plus the issuing account signing key's public key. The\nrunner assembles its own `.creds` file from this JWT and its locally-held\nuser nkey seed.",
+        "required": [
+          "nats_jwt",
+          "account_public_key"
+        ],
+        "properties": {
+          "account_public_key": {
+            "type": "string",
+            "description": "The runners-account signing key's PUBLIC key (`A…`) — the JWT issuer and\nthe value the NATS server's account resolver must trust."
+          },
+          "nats_jwt": {
+            "type": "string",
+            "description": "Freshly signed scoped user JWT, bound to the runner's stored\n`nats_public_key`."
           }
         }
       },

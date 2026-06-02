@@ -120,8 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         #[cfg(feature = "python")]
         Some("warm-venv") => return warm_venv().await,
         Some("register") => return register::register().await,
+        Some("refresh-creds") => return register::refresh_creds().await,
         Some("--help") | Some("-h") => {
-            println!("usage: aithericon-executor [warm-venv | register]");
+            println!("usage: aithericon-executor [warm-venv | register | refresh-creds]");
             println!();
             println!("Without arguments, runs as a worker. With `warm-venv`,");
             println!("populates the venv cache from $EXECUTOR_WARM_REQUIREMENTS");
@@ -131,6 +132,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("With `register --url <mekhan> --token rt_... --name <n>`,");
             println!("enrolls this executor into a mekhan lab-runner fleet and");
             println!("persists the credential under {{base_dir}}/runner/.");
+            println!();
+            println!("With `refresh-creds --url <mekhan>`, mints/rotates this");
+            println!("runner's scoped NATS creds and writes {{base_dir}}/runner/runner.creds.");
             return Ok(());
         }
         Some(other) if other.starts_with("--") => {

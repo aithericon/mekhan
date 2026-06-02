@@ -63,6 +63,12 @@ base64 = "0.22"
 # JWT validation (Zitadel adapter)
 jsonwebtoken = "9"
 
+# NATS user-JWT minting for the Lab Runner Fleet (Phase 2). `nats-io-jwt`
+# builds + signs scoped NATS *user* JWTs; `nkeys` (0.4.x, matching the version
+# async-nats pins transitively) provides the account signing keypair.
+nats-io-jwt = "0.1.1"
+nkeys = "0.4"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

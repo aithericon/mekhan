@@ -30,8 +30,8 @@ use crate::auth::AuthUser;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::runner::{
     mint_token, CreateRegistrationTokenRequest, CreatedRegistrationToken, EnrollRequest,
-    EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerRegistrationTokenRow, RunnerRow,
-    RunnerSummary, REG_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX,
+    EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerNatsCreds,
+    RunnerRegistrationTokenRow, RunnerRow, RunnerSummary, REG_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX,
 };
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
@@ -41,6 +41,18 @@ use crate::AppState;
 /// `resources::caller_workspace`.
 fn caller_workspace(user: &AuthUser) -> Uuid {
     user.workspace_id.unwrap_or_else(Uuid::nil)
+}
+
+/// A `pool` alias is interpolated verbatim into a NATS subject (`{pool}.claim`)
+/// in the minted runner JWT, so it must be a single safe subject token — no
+/// `.` (extra tokens), `*`/`>` (wildcards), or whitespace that would broaden
+/// the granted publish permission. Empty is rejected here; callers treat
+/// `None`/empty as "no pool" before this point.
+fn is_safe_pool(pool: &str) -> bool {
+    !pool.is_empty()
+        && pool
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 // ── Query params ───────────────────────────────────────────────────────────
@@ -203,6 +215,28 @@ pub async fn enroll_runner(
 
     tx.commit().await?;
 
+    // Phase 2 — if the runner sent a NATS user public key, mint a scoped user
+    // JWT now so the runner can connect immediately. A mint failure (e.g. a
+    // malformed public key) must NOT fail enrollment: log a warning and return
+    // `nats_jwt: None`. The runner can always fetch one later via
+    // `POST /api/v1/runners/{id}/nats-creds`.
+    let nats_jwt = req.nats_public_key.as_deref().and_then(|pubkey| {
+        match state
+            .runner_nats_signer
+            .mint_runner_jwt(pubkey, runner_id, claimed.pool.as_deref())
+        {
+            Ok(jwt) => Some(jwt),
+            Err(e) => {
+                tracing::warn!(
+                    runner_id = %runner_id,
+                    error = %e,
+                    "could not mint NATS user JWT at enrollment — runner can fetch it later"
+                );
+                None
+            }
+        }
+    });
+
     Ok((
         StatusCode::CREATED,
         Json(EnrolledRunner {
@@ -210,6 +244,7 @@ pub async fn enroll_runner(
             runner_token: minted.full_token,
             workspace_id: claimed.workspace_id,
             pool: claimed.pool,
+            nats_jwt,
         }),
     ))
 }
@@ -252,6 +287,62 @@ pub async fn heartbeat_runner(
         return Err(ApiError::not_found("runner not found"));
     }
     Ok(StatusCode::OK)
+}
+
+// ── b2. NATS scoped creds (runner-token authed, self-only) ─────────────────
+
+/// `POST /api/v1/runners/{id}/nats-creds` — mint/rotate the runner's scoped
+/// NATS user JWT. Runner-token authed, self-only: the principal's subject MUST
+/// be `runner:{id}` (same boundary as heartbeat). The JWT is freshly signed
+/// from the runner row's stored `nats_public_key`; 404 if none is stored.
+/// Long-lived (no expiry) — calling this again rotates it.
+#[utoipa::path(
+    post,
+    path = "/api/v1/runners/{id}/nats-creds",
+    params(("id" = Uuid, Path, description = "Runner id")),
+    responses(
+        (status = 200, description = "Freshly signed scoped NATS user JWT", body = RunnerNatsCreds),
+        (status = 401, description = "Wrong / foreign / revoked runner token", body = ErrorResponse),
+        (status = 404, description = "Runner not found or no stored nats_public_key", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn issue_runner_nats_creds(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RunnerNatsCreds>, ApiError> {
+    // A runner principal may only mint creds for itself.
+    if user.subject != runner_subject(id) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "this token may not mint creds for that runner",
+        ));
+    }
+
+    // Load the live runner row (revoked rows are excluded → 404).
+    let row = sqlx::query_as::<_, RunnerRow>(
+        "SELECT * FROM runners WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("runner not found"))?;
+
+    let pubkey = row
+        .nats_public_key
+        .as_deref()
+        .ok_or_else(|| ApiError::not_found("runner has no stored NATS public key"))?;
+
+    let nats_jwt = state
+        .runner_nats_signer
+        .mint_runner_jwt(pubkey, id, row.pool.as_deref())
+        .map_err(|e| ApiError::internal(format!("could not mint NATS user JWT: {e}")))?;
+
+    Ok(Json(RunnerNatsCreds {
+        nats_jwt,
+        account_public_key: state.runner_nats_signer.account_public_key().to_string(),
+    }))
 }
 
 // ── c. Management (human) ──────────────────────────────────────────────────
@@ -385,6 +476,18 @@ pub async fn create_registration_token(
     if let Some(max) = req.max_uses {
         if max < 1 {
             return Err(ApiError::bad_request("max_uses must be at least 1"));
+        }
+    }
+
+    // `pool` becomes a literal NATS subject token (`{pool}.claim`) in the minted
+    // runner JWT. Reject anything that isn't a single safe token so a token
+    // creator can't broaden the publish grant via wildcards/extra tokens
+    // (`*`, `>`, `.`, whitespace). Defended again in `mint_runner_jwt`.
+    if let Some(pool) = req.pool.as_deref() {
+        if !is_safe_pool(pool) {
+            return Err(ApiError::bad_request(
+                "pool must be a single token of [A-Za-z0-9_-] (no '.', '*', '>', or whitespace)",
+            ));
         }
     }
 

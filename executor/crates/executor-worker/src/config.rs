@@ -533,6 +533,20 @@ impl ExecutorConfig {
         if self.runner_id.is_some() && self.runner_token_path.is_none() {
             self.runner_token_path = Some(runner_dir.join("runner.token"));
         }
+
+        // Phase 2 (lab-runner NATS scoped creds): if the `register` /
+        // `refresh-creds` flow wrote a `.creds` file and the operator hasn't
+        // explicitly configured `nats_creds`, default to it so a registered
+        // runner automatically connects to NATS with its scoped credentials.
+        // Non-breaking: only fills an unset field, and a plain local dev NATS
+        // (no auth) ignores creds anyway. Independent of `runner_id` discovery
+        // so an explicitly-configured runner still gets its creds defaulted.
+        if self.nats_creds.is_none() {
+            let creds_path = runner_dir.join("runner.creds");
+            if creds_path.exists() {
+                self.nats_creds = Some(creds_path.to_string_lossy().into_owned());
+            }
+        }
     }
 
     pub fn default_timeout(&self) -> Duration {

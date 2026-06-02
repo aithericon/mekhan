@@ -74,6 +74,7 @@ use utoipa::OpenApi;
             crate::models::runner::RunnerDetail,
             crate::models::runner::EnrollRequest,
             crate::models::runner::EnrolledRunner,
+            crate::models::runner::RunnerNatsCreds,
             crate::models::runner::CreateRegistrationTokenRequest,
             crate::models::runner::CreatedRegistrationToken,
             crate::models::runner::RegistrationTokenSummary,

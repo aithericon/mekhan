@@ -83,6 +83,55 @@ struct EnrolledRunner {
     runner_token: String,
     workspace_id: String,
     pool: Option<String>,
+    /// Phase 2: a signed NATS user JWT minted by mekhan from the
+    /// `nats_public_key` we sent. `None` when no public key was sent OR mekhan's
+    /// NATS signing key is unavailable — in that case the runner can fetch creds
+    /// later via `aithericon-executor refresh-creds`.
+    #[serde(default)]
+    nats_jwt: Option<String>,
+}
+
+/// Response body of `POST /api/v1/runners/{id}/nats-creds` — shared wire
+/// contract. Mints/rotates a fresh NATS user JWT from the runner row's stored
+/// public key.
+#[derive(Debug, Deserialize)]
+struct RunnerNatsCreds {
+    /// Freshly signed NATS user JWT for this runner.
+    nats_jwt: String,
+    /// The runners-account signing key's public key (the JWT issuer). Returned
+    /// for diagnostics; the JWT itself already embeds it as `iss`.
+    #[allow(dead_code)]
+    account_public_key: String,
+}
+
+/// On-disk identity as read back by `refresh-creds` (owned, deserializing
+/// variant of [`RunnerIdentity`]).
+#[derive(Debug, Deserialize)]
+struct RunnerIdentityOwned {
+    runner_id: String,
+}
+
+/// Render the standard NATS `.creds` decorator from a user JWT and the runner's
+/// own nkey seed. `async-nats`'s `with_credentials_file` parses exactly this
+/// armored two-block layout (JWT block + IMPORTANT banner + SEED block).
+///
+/// Byte-for-byte matches the format proven in the Phase-0 minting spike.
+fn assemble_creds(user_jwt: &str, seed: &str) -> String {
+    format!(
+        "-----BEGIN NATS USER JWT-----\n\
+         {user_jwt}\n\
+         ------END NATS USER JWT------\n\
+         \n\
+         ************************* IMPORTANT *************************\n\
+         NKEY Seed printed below can be used to sign and prove identity.\n\
+         NKEYs are sensitive and should be treated as secrets.\n\
+         \n\
+         -----BEGIN USER NKEY SEED-----\n\
+         {seed}\n\
+         ------END USER NKEY SEED------\n\
+         \n\
+         *************************************************************\n"
+    )
 }
 
 /// On-disk identity persisted under `{base_dir}/runner/identity.json`.
@@ -179,11 +228,24 @@ pub async fn register() -> Result<(), BoxErr> {
     let nk_path = runner_dir.join("user.nk");
     write_secret(&nk_path, nats_seed.as_bytes())?;
 
+    // Phase 2: if mekhan returned a signed user JWT, assemble + persist the
+    // `.creds` file the daemon connects with. The seed is the one we just
+    // generated locally (it never crossed the wire).
+    let creds_path = runner_dir.join("runner.creds");
+    let creds_written = if let Some(jwt) = enrolled.nats_jwt.as_deref() {
+        let creds = assemble_creds(jwt, &nats_seed);
+        write_secret(&creds_path, creds.as_bytes())?;
+        true
+    } else {
+        false
+    };
+
     info!(
         runner_id = %enrolled.id,
         workspace_id = %enrolled.workspace_id,
         pool = ?enrolled.pool,
         dir = %runner_dir.display(),
+        nats_creds = creds_written,
         "runner enrolled"
     );
 
@@ -197,8 +259,134 @@ pub async fn register() -> Result<(), BoxErr> {
     println!("  identity     : {}", identity_path.display());
     println!("  token        : {} (mode 0600)", token_path.display());
     println!("  nats nkey    : {} (mode 0600)", nk_path.display());
+    if creds_written {
+        println!("  nats creds   : {} (mode 0600)", creds_path.display());
+    }
     println!();
+    if !creds_written {
+        println!(
+            "No NATS creds were issued at enroll time. Fetch them later with:"
+        );
+        println!("  aithericon-executor refresh-creds --url {}", args.url);
+        println!();
+    }
     println!("Next: start the daemon to begin draining jobs, e.g.");
+    println!("  aithericon-executor");
+
+    Ok(())
+}
+
+/// CLI flags for the `refresh-creds` subcommand.
+#[derive(Debug, Parser)]
+#[command(
+    name = "aithericon-executor refresh-creds",
+    about = "Mint/rotate this runner's scoped NATS creds from mekhan"
+)]
+struct RefreshCredsArgs {
+    /// Mekhan base URL (e.g. `https://mekhan.example.com`). The nats-creds
+    /// endpoint `/api/v1/runners/{id}/nats-creds` is appended to this.
+    #[arg(long, env = "MEKHAN_URL")]
+    url: String,
+
+    /// Override the executor base directory (where `runner/` lives). Defaults
+    /// to the resolved `ExecutorConfig.base_dir`.
+    #[arg(long)]
+    base_dir: Option<PathBuf>,
+}
+
+/// Entry point for the `refresh-creds` subcommand.
+///
+/// Reads the persisted runner identity + bearer token, POSTs to mekhan's
+/// self-service nats-creds endpoint, and rewrites `{base_dir}/runner/runner.creds`
+/// from the freshly-minted JWT + the seed already on disk. This is how a
+/// Phase-1-enrolled runner (no JWT yet) or a rotating runner obtains fresh creds.
+pub async fn refresh_creds() -> Result<(), BoxErr> {
+    let flags = std::env::args().skip(2);
+    let synthetic =
+        std::iter::once("aithericon-executor refresh-creds".to_string()).chain(flags);
+    let args = RefreshCredsArgs::parse_from(synthetic);
+
+    // Resolve the runner directory: explicit --base-dir wins, else config.
+    let base_dir = match args.base_dir {
+        Some(dir) => dir,
+        None => {
+            let config = ExecutorConfig::load().map_err(|e| format!("configuration error: {e}"))?;
+            PathBuf::from(config.base_dir)
+        }
+    };
+    let runner_dir = base_dir.join("runner");
+
+    let identity_path = runner_dir.join("identity.json");
+    let token_path = runner_dir.join("runner.token");
+    let nk_path = runner_dir.join("user.nk");
+
+    let identity_bytes = std::fs::read(&identity_path).map_err(|e| {
+        format!(
+            "no runner identity at {} ({e}). Enroll first with `aithericon-executor register`.",
+            identity_path.display()
+        )
+    })?;
+    let identity: RunnerIdentityOwned = serde_json::from_slice(&identity_bytes)
+        .map_err(|e| format!("failed to parse {}: {e}", identity_path.display()))?;
+
+    let token = std::fs::read_to_string(&token_path).map_err(|e| {
+        format!(
+            "no runner token at {} ({e}). Enroll first with `aithericon-executor register`.",
+            token_path.display()
+        )
+    })?;
+    let token = token.trim();
+
+    let seed = std::fs::read_to_string(&nk_path).map_err(|e| {
+        format!(
+            "no NATS nkey seed at {} ({e}). Enroll first with `aithericon-executor register`.",
+            nk_path.display()
+        )
+    })?;
+    let seed = seed.trim();
+
+    let creds_url = format!(
+        "{}/api/v1/runners/{}/nats-creds",
+        args.url.trim_end_matches('/'),
+        identity.runner_id
+    );
+
+    info!(url = %creds_url, runner_id = %identity.runner_id, "requesting NATS creds");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&creds_url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("nats-creds request to {creds_url} failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("nats-creds rejected by {creds_url}: HTTP {status}\n{text}").into());
+    }
+
+    let minted: RunnerNatsCreds = resp
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse nats-creds response: {e}"))?;
+
+    let creds = assemble_creds(&minted.nats_jwt, seed);
+    let creds_path = runner_dir.join("runner.creds");
+    write_secret(&creds_path, creds.as_bytes())?;
+
+    info!(
+        runner_id = %identity.runner_id,
+        creds = %creds_path.display(),
+        "NATS creds refreshed"
+    );
+
+    println!("NATS creds refreshed.");
+    println!("  runner_id  : {}", identity.runner_id);
+    println!("  nats creds : {} (mode 0600)", creds_path.display());
+    println!();
+    println!("Restart the daemon to pick up the new creds, e.g.");
     println!("  aithericon-executor");
 
     Ok(())
