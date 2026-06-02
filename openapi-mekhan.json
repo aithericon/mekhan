@@ -12654,9 +12654,13 @@
                 "id",
                 "name",
                 "status",
+                "capabilities",
                 "enrolled_at"
               ],
               "properties": {
+                "capabilities": {
+                  "description": "Advertised capabilities (the same `capabilities` JSON object the runner\nenrolled with). Included on the list row so the fleet UI can show a caps\nsummary inline without an extra per-runner round-trip. `{}` when none."
+                },
                 "enrolled_at": {
                   "type": "string",
                   "format": "date-time"
@@ -14441,9 +14445,13 @@
           "id",
           "name",
           "status",
+          "capabilities",
           "enrolled_at"
         ],
         "properties": {
+          "capabilities": {
+            "description": "Advertised capabilities (the same `capabilities` JSON object the runner\nenrolled with). Included on the list row so the fleet UI can show a caps\nsummary inline without an extra per-runner round-trip. `{}` when none."
+          },
           "enrolled_at": {
             "type": "string",
             "format": "date-time"

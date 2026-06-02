@@ -4741,6 +4741,12 @@ export interface components {
         };
         PaginatedResponse_RunnerSummary: {
             items: {
+                /**
+                 * @description Advertised capabilities (the same `capabilities` JSON object the runner
+                 *     enrolled with). Included on the list row so the fleet UI can show a caps
+                 *     summary inline without an extra per-runner round-trip. `{}` when none.
+                 */
+                capabilities: unknown;
                 /** Format: date-time */
                 enrolled_at: string;
                 /** Format: uuid */
@@ -5632,6 +5638,12 @@ export interface components {
          *     `token_hash`.
          */
         RunnerSummary: {
+            /**
+             * @description Advertised capabilities (the same `capabilities` JSON object the runner
+             *     enrolled with). Included on the list row so the fleet UI can show a caps
+             *     summary inline without an extra per-runner round-trip. `{}` when none.
+             */
+            capabilities: unknown;
             /** Format: date-time */
             enrolled_at: string;
             /** Format: uuid */

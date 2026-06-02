@@ -22,14 +22,17 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Terminal from '@lucide/svelte/icons/terminal';
+	import Info from '@lucide/svelte/icons/info';
 	import {
 		listRunners,
+		getRunner,
 		getRunnerPresence,
 		revokeRunner,
 		listRegistrationTokens,
 		createRegistrationToken,
 		revokeRegistrationToken,
 		type RunnerSummary,
+		type RunnerDetail,
 		type RunnerPresenceSnapshot,
 		type RegistrationTokenSummary,
 		type CreatedRegistrationToken
@@ -62,6 +65,11 @@
 
 	// Reveal-once token sheet
 	let revealed = $state<(CreatedRegistrationToken & { name: string; pool: string }) | null>(null);
+
+	// Detail drawer (full record incl. capabilities + nats_public_key)
+	let detail = $state<RunnerDetail | null>(null);
+	let detailLoading = $state(false);
+	let detailError = $state<string | null>(null);
 
 	// ── Derived ────────────────────────────────────────────────────────────────
 
@@ -207,6 +215,31 @@
 			.concat(keys.length > 4 ? ` +${keys.length - 4}` : '');
 	}
 
+	/** Open the detail drawer for a runner and fetch its full record. */
+	async function openDetail(id: string) {
+		detail = null;
+		detailError = null;
+		detailLoading = true;
+		// A non-null sentinel keeps the sheet open while the fetch is in flight.
+		detail = { id } as RunnerDetail;
+		try {
+			detail = await getRunner(id);
+		} catch (e) {
+			detailError = e instanceof Error ? e.message : String(e);
+		} finally {
+			detailLoading = false;
+		}
+	}
+
+	/** Pretty-print a capabilities object for the detail drawer. */
+	function capsPretty(caps: unknown): string {
+		try {
+			return JSON.stringify(caps ?? {}, null, 2);
+		} catch {
+			return String(caps);
+		}
+	}
+
 	/** Build the CLI enroll line shown in the reveal sheet. */
 	function cliLine(token: string, name: string, pool: string): string {
 		const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -340,6 +373,11 @@
 								{runner.id}
 							</p>
 							<p class="mt-0.5 truncate text-xs text-muted-foreground">
+								Caps: <span class="font-mono"
+									>{capsSummary(runner.capabilities as Record<string, unknown>)}</span
+								>
+							</p>
+							<p class="mt-0.5 truncate text-xs text-muted-foreground">
 								Enrolled {fmtDate(runner.enrolled_at)}
 							</p>
 						</div>
@@ -349,6 +387,16 @@
 					<div
 						class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
 					>
+						<Button
+							variant="ghost"
+							size="sm"
+							class="text-muted-foreground"
+							onclick={() => openDetail(runner.id)}
+							title="Runner details"
+						>
+							<Info class="size-3.5" />
+							Details
+						</Button>
 						<Button
 							variant="ghost"
 							size="sm"
@@ -579,6 +627,85 @@
 
 			<SheetClose>
 				<Button variant="outline" class="w-full">Done</Button>
+			</SheetClose>
+		</div>
+	</SheetContent>
+</Sheet.Root>
+
+<!-- ── Runner detail drawer ────────────────────────────────────────────────── -->
+<Sheet.Root
+	open={detail !== null}
+	onOpenChange={(o: boolean) => {
+		if (!o) {
+			detail = null;
+			detailError = null;
+		}
+	}}
+>
+	<SheetContent class="w-[520px] overflow-y-auto sm:max-w-[520px]">
+		<div class="space-y-4 p-2">
+			<div class="space-y-1">
+				<SheetTitle class="flex items-center gap-2 text-lg font-semibold">
+					<Server class="size-4" />
+					{detail?.name ?? 'Runner'}
+				</SheetTitle>
+				<SheetDescription class="font-mono text-xs">{detail?.id}</SheetDescription>
+			</div>
+
+			{#if detailError}
+				<div
+					class="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+				>
+					<TriangleAlert class="mt-0.5 size-4 shrink-0" />
+					<span>{detailError}</span>
+				</div>
+			{:else if detailLoading}
+				<p class="text-sm text-muted-foreground">Loading…</p>
+			{:else if detail}
+				{@const snap = presenceById[detail.id]}
+				<dl class="grid grid-cols-3 gap-x-3 gap-y-2 text-sm">
+					<dt class="text-muted-foreground">Status</dt>
+					<dd class="col-span-2"><Badge variant="outline">{detail.status}</Badge></dd>
+
+					<dt class="text-muted-foreground">Online</dt>
+					<dd class="col-span-2">
+						{#if snap?.present}
+							<span class="text-emerald-600"
+								>● online · {fmtMsAgo(snap.last_seen_ms_ago)}</span
+							>
+						{:else}
+							<span class="text-muted-foreground">○ offline</span>
+						{/if}
+					</dd>
+
+					<dt class="text-muted-foreground">Pool</dt>
+					<dd class="col-span-2">
+						{#if detail.pool}<Badge variant="secondary">{detail.pool}</Badge>{:else}—{/if}
+					</dd>
+
+					<dt class="text-muted-foreground">Last seen</dt>
+					<dd class="col-span-2">{fmtDate(detail.last_seen_at)}</dd>
+
+					<dt class="text-muted-foreground">Enrolled</dt>
+					<dd class="col-span-2">{fmtDate(detail.enrolled_at)}</dd>
+
+					{#if detail.nats_public_key}
+						<dt class="text-muted-foreground">NATS key</dt>
+						<dd class="col-span-2 break-all font-mono text-xs">{detail.nats_public_key}</dd>
+					{/if}
+				</dl>
+
+				<div class="space-y-1">
+					<h3 class="text-sm font-medium text-muted-foreground">Capabilities</h3>
+					<pre
+						class="max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs">{capsPretty(
+							detail.capabilities
+						)}</pre>
+				</div>
+			{/if}
+
+			<SheetClose>
+				<Button variant="outline" class="w-full">Close</Button>
 			</SheetClose>
 		</div>
 	</SheetContent>

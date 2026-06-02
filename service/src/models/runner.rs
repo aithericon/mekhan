@@ -78,6 +78,10 @@ pub struct RunnerSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool: Option<String>,
     pub status: String,
+    /// Advertised capabilities (the same `capabilities` JSON object the runner
+    /// enrolled with). Included on the list row so the fleet UI can show a caps
+    /// summary inline without an extra per-runner round-trip. `{}` when none.
+    pub capabilities: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<DateTime<Utc>>,
     pub enrolled_at: DateTime<Utc>,
@@ -90,6 +94,7 @@ impl From<RunnerRow> for RunnerSummary {
             name: r.name,
             pool: r.pool,
             status: r.status,
+            capabilities: r.capabilities,
             last_seen_at: r.last_seen_at,
             enrolled_at: r.enrolled_at,
         }
