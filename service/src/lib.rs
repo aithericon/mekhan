@@ -21,6 +21,7 @@ pub mod process;
 pub mod projections;
 pub mod query;
 pub mod runners_nats;
+pub mod runners_presence;
 pub mod s3;
 pub mod triggers;
 pub mod yjs;

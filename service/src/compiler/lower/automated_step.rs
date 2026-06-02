@@ -56,7 +56,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
                 &cx.node.id,
                 alias,
                 None, // Scheduled steps don't have a 'request' field
-                "datacenter",
+                &["datacenter"],
                 cx.known_resources,
             )?;
             return lower_pooled_body(cx, binding);
@@ -558,31 +558,44 @@ pub(super) struct PoolBinding {
     /// The validated `request` params rendered as a Rhai literal (`()` when
     /// `binding.request` is absent).
     pub(super) request_rhai: String,
+    /// The resolved kind's pool backend. The claim/register/release handshake is
+    /// backend-INDEPENDENT (same net id + inboxes + `"grant"` reply), but the
+    /// `Presence` backend additionally carries a `"fail"` reply channel on the
+    /// claim + register bridges so a `t_reap_held` "fail" reply (a runner that
+    /// vanished while holding the unit) fails the holding instance fast. The
+    /// static `Tokens` (and `Scheduler`) backends never emit `presence_expired`,
+    /// so their lowering stays byte-identical (no fail path is wired).
+    pub(super) backend: aithericon_resources::pool::PoolBackend,
 }
 
-/// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to a
-/// single `expected_kind`.
+/// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to a set
+/// of acceptable `expected_kinds`.
 ///
 /// Shared by the two claim/grant/register/release entry points — they differ
-/// ONLY in which alias they resolve and which kind they require:
-/// - `Executor { pool: { alias } }` → `expected_kind = "token_pool"` (R2/R3).
-/// - `Scheduled { scheduler: alias, .. }` → `expected_kind =
-///   "datacenter"` (R4). The downstream body-wrapping is identical; only the
-///   backing net + `Lease__<kind>` differ, which this binding carries.
+/// ONLY in which alias they resolve and which kinds they accept:
+/// - `Executor { pool: { alias } }` → `["token_pool", "presence_pool"]`. Both
+///   are platform-owned in-net capacity pools with the IDENTICAL cross-net
+///   handshake (same `pool-<id>` net id + claim/register/release inboxes +
+///   `"grant"` reply), so the downstream body-wrapping is shared; only the
+///   `Lease__<kind>` shape and the presence-only `"fail"` path differ, which the
+///   returned [`PoolBinding::backend`] discriminates.
+/// - `Scheduled { scheduler: alias, .. }` → `["datacenter"]` (R4). Same body
+///   wrapping; only the backing net + `Lease__<kind>` differ.
 ///
 /// Errors:
 /// - alias not in `known_resources` → `WorkspaceResourceUnknown` (normally
 ///   caught earlier at publish by `discover_known_resources`).
-/// - alias resolves to a kind other than `expected_kind` → a kind-specific
-///   CompileError (`ResourcePoolNotAPool` for token_pool, `SchedulerNotADatacenter`
-///   for datacenter) steering the author to the right deployment model.
+/// - alias resolves to a kind not in `expected_kinds` → a kind-specific
+///   CompileError (`ResourcePoolNotAPool` for the Executor.pool entry,
+///   `SchedulerNotADatacenter` for the Scheduled entry) steering the author to
+///   the right deployment model.
 /// - `request` fails validation against the kind's `claim_schema` →
 ///   `ResourcePoolRequestInvalid`.
 pub(super) fn resolve_binding(
     node_id: &str,
     alias: &str,
     request: Option<&serde_json::Value>,
-    expected_kind: &str,
+    expected_kinds: &[&str],
     known: &crate::compiler::resource_refs::KnownResources,
 ) -> Result<PoolBinding, CompileError> {
     let resource = known
@@ -594,11 +607,14 @@ pub(super) fn resolve_binding(
     let kind = resource.type_name.clone();
 
     // The `pool_kind` lookup gates "is it a pool kind at all"; the
-    // `== expected_kind` gate enforces the Executor/Scheduled split (a
-    // token_pool belongs under Executor.pool, a datacenter under Scheduled).
-    // A wrong/non-pool kind yields the entry-point-appropriate error.
+    // `expected_kinds.contains` gate enforces the Executor/Scheduled split
+    // (token_pool + presence_pool belong under Executor.pool, a datacenter under
+    // Scheduled). A wrong/non-pool kind yields the entry-point-appropriate error.
+    // The error variant is keyed on whether the Scheduled entry called us (its
+    // only acceptable kind is "datacenter").
+    let scheduled_entry = expected_kinds == ["datacenter"];
     let wrong_kind = || -> CompileError {
-        if expected_kind == "datacenter" {
+        if scheduled_entry {
             CompileError::SchedulerNotADatacenter {
                 node_id: node_id.to_string(),
                 alias: alias.to_string(),
@@ -613,7 +629,7 @@ pub(super) fn resolve_binding(
         }
     };
     let pool_desc = aithericon_resources::pool::pool_kind(&kind).ok_or_else(wrong_kind)?;
-    if kind != expected_kind {
+    if !expected_kinds.contains(&kind.as_str()) {
         return Err(wrong_kind());
     }
 
@@ -671,6 +687,7 @@ pub(super) fn resolve_binding(
         // no internal `$ref`/`definitions` to lift.
         lease_schema: sanitize_definition_schema((pool_desc.lease_schema)()),
         request_rhai,
+        backend: pool_desc.backend,
     })
 }
 
@@ -813,14 +830,17 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
         unreachable!("lower_automated_step_pooled only runs for Executor pool:Some")
     };
     // Resolve `Executor.pool.alias` (required) against the workspace-resource
-    // manifest: a `token_pool` resource → `{resource_id, kind}` → the deterministic
-    // backing net `pool-<resource_id>`, validated `request`, and a typed,
-    // body-visible lease (R2/R3). A non-token_pool alias is a CompileError.
+    // manifest: a `token_pool` OR `presence_pool` resource → `{resource_id, kind}`
+    // → the deterministic backing net `pool-<resource_id>`, validated `request`,
+    // and a typed, body-visible lease (R2/R3 + Phase 3). Both kinds share the
+    // IDENTICAL claim/grant/register/release handshake; the returned binding's
+    // `backend` discriminates the presence-only `"fail"` path inside
+    // `lower_pooled_body`. A non-pool / datacenter alias is a CompileError.
     let pool_binding = resolve_binding(
         &cx.node.id,
         &binding.alias,
         binding.request.as_ref(),
-        "token_pool",
+        &["token_pool", "presence_pool"],
         cx.known_resources,
     )?;
     lower_pooled_body(cx, pool_binding)
@@ -934,6 +954,22 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         pool_binding.lease_def_name.clone(),
     ));
 
+    // Presence pools (Phase 3) admit emergent capacity from runners that check
+    // in and reap it when a runner expires. A reaped HELD unit (a runner that
+    // vanished while its unit was claimed by a running instance) makes the
+    // pool's `t_reap_held` emit a `{ runner_id, unit_id }` notice on the `"fail"`
+    // reply channel — resolved from the HELD unit's carried routing — so the
+    // holding instance must fail fast (its job is enqueued in a now-dead
+    // `runner.<id>` namespace). We therefore (presence ONLY): route a `"fail"`
+    // channel on the claim bridge, register the hold over a bridge carrying ONLY
+    // that `"fail"` channel (NEVER `"grant"` — preserves the docs/14 taint rule),
+    // and emit a register-then-abort pair that throws → NetFailed.
+    //
+    // The static `Tokens` (token_pool) and `Scheduler` (datacenter) backends
+    // never emit `presence_expired`, so this whole block is skipped and their
+    // AIR is byte-identical to before.
+    let is_presence = pool_binding.backend == aithericon_resources::pool::PoolBackend::Presence;
+
     let ctx = &mut *cx.ctx;
 
     // ── Node-interface places (outside the lifecycle scope) ─────────────────
@@ -962,22 +998,67 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // (`claim_inbox` / `register_inbox` / `release_inbox`) are the shared
     // cross-net contract the `build_token_pool_net` net implements.
     let pool_net_id: &str = &pool_binding.backing_net_id;
-    // Claim bridge_out, routing the pool's "grant" reply back to p_grant_inbox.
-    let p_claim_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
-        format!("p_{id}_claim_out"),
-        format!("{label} - Claim Capacity"),
-        pool_net_id,
-        well_known::POOL_CLAIM_INBOX,
-        &[("grant", grant_inbox_place.as_str())],
-    );
-    // Register + release bridges are PLAIN (no reply routing) so the pool's
-    // recycled capacity tokens stay clean — see the taint note above.
-    let p_register_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
-        format!("p_{id}_register_out"),
-        format!("{label} - Register Hold"),
-        pool_net_id,
-        well_known::POOL_REGISTER_INBOX,
-    );
+
+    // Presence-only: the held-runner-death "fail" reply inbox. The pool's
+    // `t_reap_held` routes a `{ runner_id, unit_id }` notice here over the
+    // `"fail"` channel resolved from the HELD unit's carried routing.
+    let lease_failed_inbox_place = format!("p_{id}_lease_failed");
+    let p_lease_failed_inbox: Option<PlaceHandle<DynamicToken>> = if is_presence {
+        Some(ctx.bridge_reply_channel(
+            lease_failed_inbox_place.clone(),
+            format!("{label} - Runner-Lost Inbox"),
+            well_known::POOL_FAIL_CHANNEL,
+        ))
+    } else {
+        None
+    };
+
+    // Claim bridge_out. token_pool/datacenter route ONLY the "grant" reply
+    // (byte-identical to before). A presence pool ALSO routes the "fail" reply
+    // (held-runner death) so the death notice reaches THIS instance/holder.
+    let p_claim_out: PlaceHandle<DynamicToken> = if is_presence {
+        ctx.bridge_out_reply_channels(
+            format!("p_{id}_claim_out"),
+            format!("{label} - Claim Capacity"),
+            pool_net_id,
+            well_known::POOL_CLAIM_INBOX,
+            &[
+                ("grant", grant_inbox_place.as_str()),
+                (well_known::POOL_FAIL_CHANNEL, lease_failed_inbox_place.as_str()),
+            ],
+        )
+    } else {
+        ctx.bridge_out_reply_channels(
+            format!("p_{id}_claim_out"),
+            format!("{label} - Claim Capacity"),
+            pool_net_id,
+            well_known::POOL_CLAIM_INBOX,
+            &[("grant", grant_inbox_place.as_str())],
+        )
+    };
+    // Register bridge. token_pool/datacenter register over a PLAIN bridge (no
+    // reply routing) so recycled capacity tokens stay clean (docs/14 taint).
+    // A presence pool registers the hold over a bridge carrying ONLY the "fail"
+    // channel — NEVER "grant" — so `t_reap_held` can resolve the holder's fail
+    // address from the in_use hold's routing, while the recycled unit (rebuilt
+    // by the pool's own `t_release`/`t_reap_free` from clean data) never carries
+    // stale "grant" routing that could wedge the pool.
+    let p_register_out: PlaceHandle<DynamicToken> = if is_presence {
+        ctx.bridge_out_reply_channels(
+            format!("p_{id}_register_out"),
+            format!("{label} - Register Hold"),
+            pool_net_id,
+            well_known::POOL_REGISTER_INBOX,
+            &[(well_known::POOL_FAIL_CHANNEL, lease_failed_inbox_place.as_str())],
+        )
+    } else {
+        ctx.bridge_out(
+            format!("p_{id}_register_out"),
+            format!("{label} - Register Hold"),
+            pool_net_id,
+            well_known::POOL_REGISTER_INBOX,
+        )
+    };
     let p_release_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
         format!("p_{id}_release_out"),
         format!("{label} - Release Capacity"),
@@ -1171,6 +1252,56 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         )
         .auto_input("panic", &p_panic_in)
         .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
+        .done();
+    }
+
+    // ── Presence-only: fail-fast on held-runner death (Phase 3) ─────────────
+    // Symmetric with `lease_bridge`'s `t_lease_failed_register` + `t_lease_abort`
+    // (held-allocation death), but for a presence-pool hold: the pool's
+    // `t_reap_held` emitted a `{ runner_id, unit_id }` notice on the "fail"
+    // channel carried by the in_use hold's routing, landing in
+    // `p_{id}_lease_failed`. A register parks the death flag write-once; the
+    // abort then CONSUMES `p_held` (so neither `t_to_output` nor `t_to_error`
+    // can still fire — the holder can NEVER complete normally once its runner is
+    // gone) and read-arcs the flag, then `throw`s → ErrorOccurred + NetFailed,
+    // which the existing panic-on-unconnected-failure / subworkflow-failure
+    // machinery carries to the caller (the dead-while-running path). No release
+    // is bridged: `t_reap_held` already dropped the hold from the pool's
+    // `in_use`, so a release-by-grant_id would have nothing to correlate.
+    //
+    // Skipped entirely for token_pool/datacenter (no `presence_expired` exists),
+    // keeping their AIR byte-identical.
+    if let Some(p_lease_failed_inbox) = &p_lease_failed_inbox {
+        let p_lease_failed: PlaceHandle<DynamicToken> = ctx.state(
+            format!("p_{id}_lease_failed_parked"),
+            format!("{label} - Runner Lost (parked)"),
+        );
+        // Register the death notice write-once so the abort can fire even mid-run
+        // (the runner can vanish while the job is still executing).
+        ctx.transition(
+            format!("t_{id}_lease_failed_register"),
+            format!("{label} - Register Runner Loss"),
+        )
+        .auto_input("fail", p_lease_failed_inbox)
+        .auto_output("flag", &p_lease_failed)
+        .logic_rhai("#{ flag: #{ unit_id: fail.unit_id, failed: true } }")
+        .done();
+
+        let df = format!("df_{}", id.replace('-', "_"));
+        let abort_msg = format!(
+            "pooled step '{label}': the runner holding this unit went away mid-run \
+             (its drain executor is gone; the enqueued job would hang in a dead namespace) \
+             — failing fast"
+        );
+        ctx.transition(
+            format!("t_{id}_lease_abort"),
+            format!("{label} - Runner Lost (abort)"),
+        )
+        .auto_input("held", &p_held)
+        .read_input(df.clone(), &p_lease_failed)
+        .guard_rhai(format!("{df}.failed == true"))
+        .priority("100")
+        .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&abort_msg)))
         .done();
     }
 

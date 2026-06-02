@@ -722,6 +722,9 @@ pub(crate) async fn create_resource_internal(
 ///   (`allocator_url` from `public_config`; the token as a
 ///   `{{secret:<vault_path>#token}}` template the engine resolves at fire time —
 ///   `vault_path` from `(workspace_id, resource_id, version)`).
+/// - `presence_pool` → [`crate::petri::presence_pool_net::ensure_presence_pool_net_deployed`]
+///   (Phase 3; capacity-less — the net seeds nothing, so no config is read; the
+///   presence controller injects/expires units at runtime).
 async fn ensure_pool_net_for_kind(
     state: &AppState,
     resource_type: &str,
@@ -779,6 +782,18 @@ async fn ensure_pool_net_for_kind(
             };
 
             crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
+        }
+        "presence_pool" => {
+            // Phase 3: a presence pool is capacity-LESS — its backing net seeds
+            // nothing and reads no config. mekhan's presence controller injects
+            // one unit per live runner (presence_acquire) and reaps it on
+            // presence-lease expiry (presence_expired). Deploy is idempotent +
+            // engine-down-tolerant, exactly like the token_pool path.
+            crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
+                &state.petri,
+                resource_id,
+            )
+            .await;
         }
         _ => {}
     }

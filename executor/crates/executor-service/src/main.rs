@@ -39,10 +39,10 @@ use aithericon_executor_storage::OpenDalArtifactStore;
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 use aithericon_executor_worker::{
-    drain_signal, handle_execution, BackendRegistry, BatchRunner, CancellationRegistry,
-    ChunkRegistry, CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource,
-    Lifetime, NatsCancelListener, NatsChunkListener, NixEnvironmentHook, SidecarLogConfig,
-    StatusReporter,
+    drain_signal, handle_execution, spawn_presence_task, BackendRegistry, BatchRunner,
+    CancellationRegistry, ChunkRegistry, CompletionTracker, DrainConfig, ExecutorConfig,
+    JobExecutor, JobSource, Lifetime, NatsCancelListener, NatsChunkListener, NixEnvironmentHook,
+    SidecarLogConfig, StatusReporter,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -196,6 +196,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cancel_http = config.cancel.http,
         target_exec_id = ?config.target_exec_id,
         consumer_mode = if config.target_exec_id.is_some() { "PerJob" } else { "Pool" },
+        runner_id = ?config.runner_id,
+        presence_interval_secs = config.presence_interval_secs,
         "configuration loaded"
     );
 
@@ -308,6 +310,25 @@ async fn run_nats_daemon(
     )
     .await?;
     info!("NATS chunk listener started");
+
+    // Phase 3 (presence-lease pool capacity): a registered runner advertises
+    // liveness so mekhan keeps its presence-pool unit alive. Reuses the daemon's
+    // already-connected, runner-scoped NATS client (no second connection) and
+    // the cancel/chunk-listener shutdown token. No-op for a non-enrolled daemon
+    // (no runner identity → no presence task), so behavior is unchanged there.
+    if let Some(runner_id) = config.runner_id.clone() {
+        spawn_presence_task(
+            nats_client_for_cancel.clone(),
+            runner_id.clone(),
+            config.presence_interval(),
+            cancel_shutdown.clone(),
+        );
+        info!(
+            %runner_id,
+            interval_secs = config.presence_interval_secs,
+            "runner presence heartbeat started"
+        );
+    }
 
     // Build the JobExecutor
     let executor = Arc::new(build_executor(

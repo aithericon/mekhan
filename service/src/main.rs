@@ -183,6 +183,19 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // Presence controller (Phase 3 — presence-lease pool capacity). Subscribes
+    // to `runner.*.presence` and drives every `presence_pool` net: admits one
+    // pool unit per live runner via the `presence_acquire` bridge on the
+    // absent→present edge, and a background sweep injects a bare
+    // `presence_expired` signal on a TTL miss. NATS is always connected here
+    // (mekhan can't boot without it), so this is unconditional like the other
+    // NATS-backed background tasks.
+    mekhan_service::runners_presence::spawn_presence_controller(
+        mekhan_nats.clone(),
+        db.clone(),
+        petri.clone(),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder

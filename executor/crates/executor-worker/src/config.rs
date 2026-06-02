@@ -280,6 +280,17 @@ pub struct ExecutorConfig {
     /// identity is present. Optional; unused by job draining in Phase 1.
     #[serde(default)]
     pub runner_token_path: Option<std::path::PathBuf>,
+
+    /// Interval in seconds between runner presence heartbeats (Phase 3 —
+    /// presence-lease pool capacity). When a runner identity is present the
+    /// daemon spawns a background task that publishes to
+    /// `runner.{runner_id}.presence` on this interval so mekhan can keep the
+    /// presence-pool unit alive (and expire it when heartbeats stop). Only
+    /// meaningful when `runner_id` is set; ignored otherwise.
+    ///
+    /// Environment variable: `EXECUTOR_PRESENCE_INTERVAL_SECS=10`.
+    #[serde(default = "default_presence_interval_secs")]
+    pub presence_interval_secs: u64,
 }
 
 /// On-disk runner identity persisted by `aithericon-executor register`.
@@ -534,6 +545,22 @@ impl ExecutorConfig {
             self.runner_token_path = Some(runner_dir.join("runner.token"));
         }
 
+        // Phase 3 (presence-lease pool capacity): a registered runner drains
+        // its own per-runner namespace so presence-pool grants — which stamp
+        // `executor_namespace = "runner.{runner_id}"` — route to exactly this
+        // daemon. Default the drain namespace to `runner.{runner_id}` only when
+        // the operator hasn't explicitly set one. This matches the runner's JWT
+        // sub-allow (`runner.{id}.>`) and the grant's stamped namespace. The
+        // apalis subject becomes `runner.{id}.{prio}.{exec}`. Non-breaking: an
+        // explicit `EXECUTOR_NAMESPACE` / config value still wins (we only fill
+        // the field when it's still at its `default_namespace()` sentinel), and
+        // a non-enrolled daemon keeps the historical `executor_jobs` namespace.
+        if let Some(runner_id) = &self.runner_id {
+            if self.namespace == default_namespace() {
+                self.namespace = format!("runner.{runner_id}");
+            }
+        }
+
         // Phase 2 (lab-runner NATS scoped creds): if the `register` /
         // `refresh-creds` flow wrote a `.creds` file and the operator hasn't
         // explicitly configured `nats_creds`, default to it so a registered
@@ -567,6 +594,10 @@ impl ExecutorConfig {
 
     pub fn idle_timeout(&self) -> Duration {
         Duration::from_secs(self.idle_timeout_secs)
+    }
+
+    pub fn presence_interval(&self) -> Duration {
+        Duration::from_secs(self.presence_interval_secs)
     }
 }
 
@@ -630,6 +661,10 @@ fn default_idle_timeout_secs() -> u64 {
     30
 }
 
+fn default_presence_interval_secs() -> u64 {
+    10
+}
+
 fn default_cancel_nats() -> bool {
     true
 }
@@ -679,6 +714,9 @@ mod tests {
             idle_timeout_secs: default_idle_timeout_secs(),
             nats_ping_interval_secs: default_nats_ping_interval_secs(),
             target_exec_id: None,
+            runner_id: None,
+            runner_token_path: None,
+            presence_interval_secs: default_presence_interval_secs(),
         }
     }
 
@@ -762,6 +800,34 @@ mod tests {
 
         assert_eq!(config.lifetime, Lifetime::RunToCompletion);
         assert_eq!(config.max_jobs, Some(1));
+    }
+
+    #[test]
+    fn normalize_defaults_namespace_to_runner_when_identity_present() {
+        let mut config = test_config();
+        config.runner_id = Some("rnr-123".into());
+        assert_eq!(config.namespace, default_namespace());
+        config.normalize();
+        assert_eq!(config.namespace, "runner.rnr-123");
+    }
+
+    #[test]
+    fn normalize_keeps_explicit_namespace_over_runner_default() {
+        let mut config = test_config();
+        config.runner_id = Some("rnr-123".into());
+        config.namespace = "custom_ns".into();
+        config.normalize();
+        assert_eq!(
+            config.namespace, "custom_ns",
+            "an explicitly-set namespace wins over the runner.{{id}} default"
+        );
+    }
+
+    #[test]
+    fn normalize_namespace_unchanged_without_runner_identity() {
+        let mut config = test_config();
+        config.normalize();
+        assert_eq!(config.namespace, default_namespace());
     }
 
     #[test]

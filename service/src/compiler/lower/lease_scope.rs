@@ -49,7 +49,7 @@ pub(crate) fn lower_lease_scope(cx: &mut LoweringCtx) -> Result<(), CompileError
         id,
         alias,
         lease.request.as_ref(),
-        "datacenter",
+        &["datacenter"],
         cx.known_resources,
     )?;
     // Record the typed-lease definition + the grant-inbox place to type while we

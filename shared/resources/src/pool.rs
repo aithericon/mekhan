@@ -37,6 +37,11 @@ use serde_json::Value as JsonValue;
 pub enum PoolBackend {
     Tokens,
     Scheduler,
+    /// Presence-driven capacity (Phase 3): units are admitted/reaped by mekhan's
+    /// presence controller as runners check in / expire. Same in-net pool
+    /// substrate as `Tokens`, but capacity is emergent (no seed) rather than a
+    /// configured count.
+    Presence,
 }
 
 // ─── token_pool — Tokens backend ─────────────────────────────────────────────
@@ -57,6 +62,42 @@ pub struct TokenPoolClaim {
 pub struct TokenPoolLease {
     /// Identity of the granted capacity unit.
     pub unit_id: String,
+}
+
+// ─── presence_pool — Presence backend ────────────────────────────────────────
+
+/// Request params for a claim against a [`crate::types::PresencePool`]. v1 admits
+/// a single unit per claim; `units` is reserved for weighted claims. Symmetric
+/// with [`TokenPoolClaim`] — a pooled step claims a presence pool exactly as it
+/// claims a token pool (the cross-net handshake is identical; only the backend
+/// that services the claim differs).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PresencePoolClaim {
+    /// Capacity weight of this claim. Absent ⇒ 1 unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub units: Option<u32>,
+}
+
+/// The lease a granted `presence_pool` claim holds: the identity of the admitted
+/// runner unit (`unit_id == runner_id`) plus the runner's drain
+/// `executor_namespace` (`runner.<runner_id>`) and its `caps`. Staged into the
+/// step body so downstream `<slug>.lease.<field>` borrows resolve (R2). The
+/// `executor_namespace` is load-bearing: a leased body enqueues its job into that
+/// namespace and the warm runner-side executor pulls + runs it.
+///
+/// `caps` is an open object (the runner's advertised capabilities, looked up by
+/// mekhan from the runners DB row — never trusted from the wire); it is typed as
+/// a free-form JSON object so the schema validates any cap set without a service
+/// rebuild.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PresencePoolLease {
+    /// Identity of the granted runner unit (`== runner_id`).
+    pub unit_id: String,
+    /// The runner's lease-scoped NATS drain namespace (`runner.<runner_id>`) the
+    /// leased body enqueues its job into.
+    pub executor_namespace: String,
+    /// The runner's advertised capabilities (free-form object).
+    pub caps: serde_json::Map<String, JsonValue>,
 }
 
 // ─── datacenter — Scheduler backend ──────────────────────────────────────────
@@ -219,6 +260,12 @@ static POOL_KINDS: &[PoolKindDescriptor] = &[
         backend: PoolBackend::Scheduler,
         claim_schema: schema_value::<DatacenterClaim>,
         lease_schema: schema_value::<DatacenterLease>,
+    },
+    PoolKindDescriptor {
+        kind_name: "presence_pool",
+        backend: PoolBackend::Presence,
+        claim_schema: schema_value::<PresencePoolClaim>,
+        lease_schema: schema_value::<PresencePoolLease>,
     },
 ];
 

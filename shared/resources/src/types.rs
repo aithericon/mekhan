@@ -338,6 +338,29 @@ pub enum Datacenter {
     },
 }
 
+/// Presence-driven capacity pool (Phase 3). Like [`TokenPool`] it is a
+/// platform-owned, credential-less *contended-capacity* kind — but its capacity
+/// is NOT a configured count. Instead it is driven by **runner presence**: each
+/// live runner that checks in is admitted as one pool unit, and its unit is
+/// reaped when the runner's presence lease lapses. The backing net
+/// (`build_presence_pool_net`) seeds NOTHING; mekhan's presence controller
+/// injects/expires units. Therefore there is deliberately **no `capacity`
+/// field** — capacity is emergent, not declared. See `docs/20` + the Phase-3
+/// presence-lease design.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "presence_pool",
+    display_name = "Presence Pool",
+    icon = "lucide-radio-tower"
+)]
+pub struct PresencePool {
+    /// Optional human label for one unit (e.g. `"runner"`, `"GPU node"`).
+    /// Cosmetic — drives dashboard / picker copy, never admission (admission is
+    /// presence-driven). Symmetric with [`TokenPool::unit_label`].
+    #[serde(default)]
+    pub unit_label: Option<String>,
+}
+
 // ─── Kv — the dynamic-fields escape hatch ────────────────────────────────────
 //
 // The 5 typed resources above cover the common credential surfaces. `kv`
