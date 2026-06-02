@@ -204,7 +204,7 @@ fn type_surface_still_works_before_publish() {
         compile_to_air(&graph, "i", "d", &HashMap::new()).is_err(),
         "unstaged python draft must fail full compile"
     );
-    let surface = surface_types(&graph);
+    let surface = surface_types(&graph, &Default::default());
     assert!(surface.graph_ok && !surface.scopes.is_empty());
 
     // Reconciled (Task #20/#22): `check-amount` sits after the token-replacing
@@ -228,7 +228,7 @@ fn type_surface_still_works_before_publish() {
 
     // The drop diagnostic must no longer contradict the read-arc synthesis:
     // a borrow-reachable reference is neither dropped nor unresolved.
-    let report = analyze_token_shapes(&graph).expect("analyze");
+    let report = analyze_token_shapes(&graph, &Default::default()).expect("analyze");
     assert!(
         !report.diagnostics.iter().any(|d| matches!(
             d,
@@ -329,7 +329,7 @@ fn surface_types_emits_nested_tree_for_file_envelope() {
       ]
     }"#;
     let graph: WorkflowGraph = serde_json::from_str(json).expect("deser graph");
-    let surface = surface_types(&graph);
+    let surface = surface_types(&graph, &Default::default());
     assert!(surface.graph_ok, "graph must analyze");
     let ocr_scope = surface.scopes.get("ocr").expect("ocr scope");
 

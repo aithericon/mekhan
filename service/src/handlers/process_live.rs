@@ -358,6 +358,15 @@ pub struct LogsTailQuery {
     pub level: Option<String>,
     pub signal_key: Option<String>,
     pub q: Option<String>,
+    /// Narrow to a single executor execution. Each executor job maps 1:1 to a
+    /// workflow step+iteration, so this is the reliable key for scoping logs to
+    /// a particular step in the instance view (the `StepExecution` row has no
+    /// execution_id of its own — it lives on the parked output envelope and on
+    /// every log line's `detail.fields.execution_id`, stamped by the executor's
+    /// `enrich_log_fields`). Matched against `detail.fields.execution_id` with a
+    /// fallback to a top-level `detail.execution_id` to mirror the frontend's
+    /// historical client-side filter.
+    pub execution_id: Option<String>,
     #[serde(default = "default_log_limit")]
     pub limit: i64,
 }
@@ -404,8 +413,11 @@ pub async fn logs_tail(
                  AND ($4::text IS NULL OR level = $4) \
                  AND ($5::text IS NULL OR signal_key = $5) \
                  AND ($6::text IS NULL OR message ILIKE '%' || $6 || '%') \
+                 AND ($7::text IS NULL \
+                      OR detail->'fields'->>'execution_id' = $7 \
+                      OR detail->>'execution_id' = $7) \
                ORDER BY timestamp DESC \
-               LIMIT $7";
+               LIMIT $8";
 
     let rows: Result<Vec<LogRow>, sqlx::Error> = sqlx::query_as::<_, LogRow>(sql)
         .bind(&process_id)
@@ -414,6 +426,7 @@ pub async fn logs_tail(
         .bind(qp.level.as_deref())
         .bind(qp.signal_key.as_deref())
         .bind(qp.q.as_deref())
+        .bind(qp.execution_id.as_deref())
         .bind(qp.limit.clamp(1, 5000))
         .fetch_all(&state.db)
         .await;

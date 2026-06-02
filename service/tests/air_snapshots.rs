@@ -311,6 +311,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
     // bare `compile_to_air` has no KnownResources to resolve it; its compile is
     // pinned by `demos::tests::postgres_node_demo_loads_and_compiles_with_resource`
     // (which passes a known `demo_pg`) and the live seed proves the publish path.
+    // 21-asset-consume / 22-asset-ref / 23-resource-ref / 24-asset-python-ref are the
+    // named-global demos: each references a scope-visible asset/resource by ref-key
+    // that only the publish handler's `discover_named_globals` resolver can supply
+    // (bare `compile_to_air` has an empty KnownGlobals, so the asset staging /
+    // object-asset constant-inline / resource public-field constant-inline can't
+    // resolve). Their compile + inline behavior is proven live by the publish path +
+    // `mekhan test`.
     let documented_skip: std::collections::HashSet<&str> = [
         "06-subworkflow",
         "09-agent-tool-loop",
@@ -318,6 +325,10 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         "12a-bo-catalog-trigger",
         "16-leased-gpu",
         "19-postgres-node",
+        "21-asset-consume",
+        "22-asset-ref",
+        "23-resource-ref",
+        "24-asset-python-ref",
     ]
     .into_iter()
     .collect();

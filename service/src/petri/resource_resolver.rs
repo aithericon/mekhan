@@ -246,7 +246,8 @@ impl ResourceResolver {
         // "doesn't exist" at the API surface.
         let resource: Option<ResourceRow> = sqlx::query_as::<_, ResourceRow>(
             "SELECT id, workspace_id, path, resource_type, display_name, \
-                    latest_version, deleted_at, created_by, created_at, updated_at \
+                    latest_version, deleted_at, created_by, created_at, updated_at, \
+                    scope_kind, scope_id, display_path \
              FROM resources \
              WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL",
         )
@@ -597,7 +598,7 @@ fn build_resources_decl(envelope: &JsonValue, names: &[&str]) -> String {
 /// `build_resources_decl` filters nulls before calling here; this function
 /// only sees nulls inside nested arrays / objects, where it emits `()` so the
 /// surrounding positions stay correct.
-fn json_to_rhai_literal(v: &JsonValue) -> String {
+pub(crate) fn json_to_rhai_literal(v: &JsonValue) -> String {
     match v {
         JsonValue::Null => "()".to_string(),
         JsonValue::Bool(b) => b.to_string(),

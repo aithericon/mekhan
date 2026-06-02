@@ -35,7 +35,7 @@ pub(crate) use apply::apply_borrows;
 pub(crate) use shape::BORROW_MARKER;
 pub(crate) use shape::{Borrow, BorrowResolution};
 
-use crate::compiler::resource_refs::KnownResources;
+use crate::compiler::named_global::KnownGlobals;
 use crate::compiler::CompileError;
 use crate::models::template::WorkflowGraph;
 
@@ -43,19 +43,19 @@ use source::{PlanCtx, SOURCES};
 
 /// Drive every [`source::BorrowSource`] in [`SOURCES`] and flatten their
 /// emissions into a single `Vec<Borrow>`. Order matches the per-source
-/// declaration order in [`SOURCES`] (guard → automated_step → resource →
+/// declaration order in [`SOURCES`] (guard → automated_step → global_named →
 /// human_task). The apply step groups by consumer and dispatches on
 /// [`BorrowResolution`]; this list's order only matters for staging
 /// determinism within a single consumer's group.
 pub(crate) fn collect_borrows(
     graph: &WorkflowGraph,
     inline_sources: &HashMap<String, HashMap<String, String>>,
-    known_resources: &KnownResources,
+    known_globals: &KnownGlobals,
 ) -> Result<Vec<Borrow>, CompileError> {
     let ctx = PlanCtx {
         graph,
         inline_sources,
-        known_resources,
+        known_globals,
     };
     let mut out = Vec::new();
     for src in SOURCES {
@@ -70,9 +70,9 @@ mod tests {
     use crate::compiler::borrow::planners::automated_step::automated_step_borrow_plan;
     use crate::compiler::borrow::planners::guard::guard_readarc_plan;
     use crate::compiler::borrow::planners::human_task::human_task_borrow_plan;
-    use crate::compiler::borrow::planners::resource::automated_step_resource_borrow_plan;
+    use crate::compiler::named_global::NamedGlobal;
     use crate::demos::load_demo;
-    use crate::models::template::FieldKind;
+    use crate::models::template::{FieldKind, PortField};
     use std::path::PathBuf;
     use uuid::Uuid;
 
@@ -94,8 +94,9 @@ mod tests {
     fn collect_borrows_covers_ocr_demo_surface() {
         let root = repo_root().join("demos").join("07-ocr-classify-extract");
         let demo = load_demo(&root).expect("07-ocr-classify-extract loads");
-        let known = KnownResources::new();
-        let borrows = collect_borrows(&demo.graph, &demo.files, &known).expect("collect_borrows");
+        let known = KnownGlobals::new();
+        let borrows =
+            collect_borrows(&demo.graph, &demo.files, &known).expect("collect_borrows");
 
         // Kreuzberg consumer 'extract_text' borrows start.document (File kind)
         let kreuzberg = borrows
@@ -135,8 +136,6 @@ mod tests {
     }
 
     // ── Resource-envelope borrows (post-alias-drop) ───────────────────────
-
-    use crate::compiler::resource_refs::KnownResource;
 
     /// Build a minimal `Start → AutomatedStep(python) → End` graph plus an
     /// inline-source map for the step. Used by the resource-envelope tests
@@ -196,17 +195,22 @@ mod tests {
         (g, inline)
     }
 
-    fn known(entries: &[(&str, &str)]) -> KnownResources {
-        let mut k = KnownResources::new();
+    /// Build a [`KnownGlobals`] of resource entries via the Phase-1 ctor. The
+    /// `public_config` is `Null` (no inline channel) so each resource rides the
+    /// envelope channel only — matching the pre-convergence resource tests.
+    fn known(entries: &[(&str, &str)]) -> KnownGlobals {
+        let mut k = KnownGlobals::new();
         for (name, type_name) in entries {
             k.insert(
                 (*name).to_string(),
-                KnownResource {
-                    id: Uuid::new_v4(),
-                    type_name: (*type_name).to_string(),
-                    latest_version: 1,
-                    public_config: serde_json::Value::Null,
-                },
+                NamedGlobal::from_resource(
+                    (*name).to_string(),
+                    Uuid::new_v4(),
+                    1,
+                    (*type_name).to_string(),
+                    Vec::new(),
+                    Some(serde_json::Value::Null),
+                ),
             );
         }
         k
@@ -321,6 +325,147 @@ mod tests {
         );
     }
 
+    // ── Asset-staging borrows (docs/20 §5) ────────────────────────────────
+
+    /// Build a `Start → AutomatedStep(python, assetBindings=[{alias,refKey}]) →
+    /// End` graph. The asset binding is a node-DATA selection (no Python source
+    /// needed — assets are opaque), so the body's source is irrelevant.
+    fn make_asset_bound_step_graph(
+        alias: &str,
+        ref_key: &str,
+    ) -> crate::models::template::WorkflowGraph {
+        let nodes = format!(
+            r#"{{"id":"start","type":"start","position":{{"x":0,"y":0}},
+                 "data":{{"type":"start","label":"Start"}}}},
+                {{"id":"step","type":"automated_step","slug":"step","position":{{"x":0,"y":0}},
+                 "data":{{"type":"automated_step","label":"Step",
+                         "executionSpec":{{"backendType":"python","entrypoint":"main.py","config":{{"entrypoint":"main.py","python":"python3","sdk":true}}}},
+                         "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                         "deploymentModel":{{"mode":"executor"}},
+                         "assetBindings":[{{"alias":"{alias}","refKey":"{ref_key}"}}]}}}},
+                {{"id":"end","type":"end","position":{{"x":0,"y":0}},
+                 "data":{{"type":"end","label":"End"}}}}"#,
+        );
+        let edges = r#"{"id":"e_start_step","source":"start","target":"step","type":"sequence"},
+                {"id":"e_step_end","source":"step","target":"end","type":"sequence"}"#;
+        let full = format!(r#"{{"nodes":[{nodes}],"edges":[{edges}]}}"#);
+        serde_json::from_str(&full).expect("deser asset-bound graph")
+    }
+
+    /// Build a [`KnownGlobals`] of COLLECTION asset entries (no row-0 record →
+    /// envelope channel only), keyed by binding alias. `record = None` gives a
+    /// staging-channel asset matching the pre-convergence asset tests.
+    fn known_assets(entries: &[(&str, &str)]) -> KnownGlobals {
+        let mut k = KnownGlobals::new();
+        for (alias, ref_key) in entries {
+            k.insert(
+                (*alias).to_string(),
+                NamedGlobal::from_asset(
+                    (*ref_key).to_string(),
+                    Uuid::new_v4(),
+                    3,
+                    Uuid::new_v4(),
+                    crate::models::asset::Cardinality::Collection,
+                    Vec::<PortField>::new(),
+                    None,
+                ),
+            );
+        }
+        k
+    }
+
+    /// A node binding asset `steel` (alias `steel`) against a `KnownAssets` map
+    /// produces exactly one `AssetStaging` borrow keyed by the alias.
+    #[test]
+    fn asset_staging_borrow_for_bound_step() {
+        let graph = make_asset_bound_step_graph("steel", "steel");
+        let files = std::collections::HashMap::new();
+        let assets = known_assets(&[("steel", "steel")]);
+
+        let borrows = collect_borrows(&graph, &files, &assets).expect("collect_borrows");
+        let staging: Vec<&Borrow> = borrows
+            .iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::AssetStaging { .. }))
+            .collect();
+        assert_eq!(
+            staging.len(),
+            1,
+            "expected exactly one AssetStaging borrow; got: {borrows:?}"
+        );
+        match &staging[0].resolution {
+            BorrowResolution::AssetStaging {
+                alias, version, ..
+            } => {
+                assert_eq!(alias, "steel");
+                assert_eq!(*version, 3);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(staging[0].consumer_node_id, "step");
+        assert_eq!(staging[0].slug, "steel");
+    }
+
+    /// The apply step rewrites the prepare transition's `BORROW_MARKER` into a
+    /// `job_inputs.push(...)` reading `__assets["steel"]` — the publish-time
+    /// asset resolver splices the `__assets` declaration separately. This
+    /// proves the asset's business data rides `job_inputs` staging, never the
+    /// control token (docs/10).
+    #[test]
+    fn asset_staging_apply_emits_job_inputs_push() {
+        use crate::compiler::borrow::apply::apply_borrows;
+        use crate::compiler::interface::InterfaceRegistry;
+        use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioTransition, TransitionLogic};
+
+        let graph = make_asset_bound_step_graph("steel", "steel");
+        let files = std::collections::HashMap::new();
+        let assets = known_assets(&[("steel", "steel")]);
+        let borrows = collect_borrows(&graph, &files, &assets).expect("collect_borrows");
+
+        let mut scenario = ScenarioDefinition::new("test");
+        scenario.transitions.push(ScenarioTransition {
+            id: "step/prepare".to_string(),
+            name: "prepare".to_string(),
+            group_id: None,
+            input_ports: vec![],
+            output_ports: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            guard: None,
+            priority: None,
+            logic: TransitionLogic::Rhai {
+                source: format!("let job_inputs = []; {BORROW_MARKER} job_inputs"),
+            },
+            effect_config: None,
+            caused_signals: vec![],
+            input_schema: None,
+            output_schema: None,
+            process_step_started: None,
+            process_step_completed: None,
+        });
+
+        let asset_borrows: Vec<Borrow> = borrows
+            .into_iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::AssetStaging { .. }))
+            .collect();
+        assert!(!asset_borrows.is_empty(), "fixture must have an asset borrow");
+
+        let interfaces = InterfaceRegistry::new();
+        let mut node_configs = std::collections::HashMap::new();
+        apply_borrows(&mut scenario, &interfaces, asset_borrows, &mut node_configs);
+
+        let TransitionLogic::Rhai { source } = &scenario.transitions[0].logic else {
+            panic!("prepare transition must remain Rhai")
+        };
+        assert!(
+            source.contains(r#"job_inputs.push(#{ "name": "steel.json", "source": #{ "type": "inline", "value": __assets["steel"] } });"#),
+            "spliced source missing the expected asset job_inputs.push; got: {source}"
+        );
+        assert!(
+            !source.contains(BORROW_MARKER),
+            "BORROW_MARKER must be stripped from final AIR; got: {source}"
+        );
+    }
+
     /// Python source touching both a workspace-known resource (`local_pg`)
     /// AND an upstream producer slug (`prev`) must discriminate cleanly:
     /// `local_pg` resolves to a `ResourceEnvelope`, `prev` to the existing
@@ -385,7 +530,7 @@ mod tests {
     #[test]
     fn unknown_head_emits_no_resource_borrow() {
         let (graph, files) = make_python_step_graph("", "", "x = something_unknown.field\n");
-        let known = KnownResources::new();
+        let known = KnownGlobals::new();
 
         let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
         let resource_borrows: Vec<&Borrow> = borrows
@@ -429,7 +574,7 @@ mod tests {
             serde_json::from_str(&full).expect("deser http-step graph");
 
         let files = std::collections::HashMap::new();
-        let known = KnownResources::new();
+        let known = KnownGlobals::new();
         let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
 
         let envelope: Vec<&Borrow> = borrows
@@ -451,7 +596,9 @@ mod tests {
     /// would see today (sanity check against silent loss in conversion).
     #[test]
     fn collect_borrows_count_matches_per_planner_sums() {
-        let known = KnownResources::new();
+        // No named globals in these demos, so the global_named source
+        // contributes zero — the unified count equals guard + auto + ht.
+        let known = KnownGlobals::new();
         for dir in &[
             "01-hello-world",
             "02-human-form",
@@ -462,21 +609,18 @@ mod tests {
             let root = repo_root().join("demos").join(dir);
             let demo = load_demo(&root).unwrap_or_else(|e| panic!("{dir} loads: {e}"));
 
-            let guard_n = guard_readarc_plan(&demo.graph).unwrap().len();
+            let guard_n = guard_readarc_plan(&demo.graph, &known).unwrap().len();
             let auto_n = automated_step_borrow_plan(&demo.graph, &demo.files)
                 .unwrap()
                 .len();
             let ht_n = human_task_borrow_plan(&demo.graph).unwrap().len();
-            let res_n = automated_step_resource_borrow_plan(&demo.graph, &demo.files, &known)
-                .unwrap()
-                .len();
-            let expected = guard_n + auto_n + ht_n + res_n;
+            let expected = guard_n + auto_n + ht_n;
 
             let unified = collect_borrows(&demo.graph, &demo.files, &known).unwrap();
             assert_eq!(
                 unified.len(),
                 expected,
-                "{dir}: unified count {} != per-planner sum {} (g={guard_n}, auto={auto_n}, ht={ht_n}, res={res_n})",
+                "{dir}: unified count {} != per-planner sum {} (g={guard_n}, auto={auto_n}, ht={ht_n})",
                 unified.len(),
                 expected,
             );

@@ -68,6 +68,178 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/asset-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/asset-types` — scope-resolved, folder-aware list. */
+        get: operations["list_asset_types"];
+        put?: never;
+        /** `POST /api/v1/asset-types` — define a new schema. Editor-or-above gated. */
+        post: operations["create_asset_type"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/asset-types/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/asset-types/{id}` — full schema view. */
+        get: operations["get_asset_type"];
+        /**
+         * `PUT /api/v1/asset-types/{id}` — additive-only schema update (docs/20 §4.3).
+         *     A `fields` change bumps `version` only after passing the additive gate.
+         */
+        put: operations["update_asset_type"];
+        post?: never;
+        /**
+         * `DELETE /api/v1/asset-types/{id}` — soft delete. Rejected when any live
+         *     asset still references the type (cascade-guard, docs/20 §8).
+         */
+        delete: operations["delete_asset_type"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/assets?type_id=&scope=&folder=` — scope-resolved list. */
+        get: operations["list_assets"];
+        put?: never;
+        /**
+         * `POST /api/v1/assets` — create an empty asset of a given type. Records are
+         *     written separately via `PUT /records` or `POST /import-csv`.
+         */
+        post: operations["create_asset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/assets/{id}` — metadata + a page of the current-version records. */
+        get: operations["get_asset"];
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/assets/{id}` — soft delete. Records stay (CASCADE only on
+         *     hard delete) so already-pinned instances keep resolving.
+         */
+        delete: operations["delete_asset"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets/{id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/assets/{id}/files` — upload a file for a `File` field → S3,
+         *     returns the storage path to embed in a record's JSONB (docs/20 §4.1). The
+         *     dual-source File model also accepts a catalogue-entry `storage_path` as a
+         *     bare string; that path is reused verbatim (no copy) so this endpoint is only
+         *     for fresh uploads.
+         */
+        post: operations["upload_asset_file"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets/{id}/import-csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/assets/{id}/import-csv` — parse a CSV multipart body, map
+         *     columns to the type's fields, coerce per `FieldKind`, validate, and write a
+         *     new version (replace or append per `?append=`).
+         */
+        post: operations["import_asset_csv"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets/{id}/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * `PUT /api/v1/assets/{id}/records` — replace (or append) records. Validates
+         *     every row against the type schema, then writes a new version atomically.
+         */
+        put: operations["put_asset_records"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assets/{id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/assets/{id}/usage` — **reverse lineage** (docs/20 §9): every run
+         *     (workflow instance) that pinned this asset, newest first. Answers "which runs
+         *     used asset X" straight from `workflow_instances.asset_pins` (GIN-indexed
+         *     jsonpath). Record/material-level lineage ("runs that used Copper C110") is a
+         *     deferred follow-on — see docs/20 §9.
+         */
+        get: operations["asset_usage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/tokens": {
         parameters: {
             query?: never;
@@ -2578,6 +2750,164 @@ export interface components {
              */
             value?: unknown;
         };
+        /**
+         * @description A node-level asset binding (docs/20 §5). Analogous to `resource_alias`:
+         *     the author picks an asset by its scope-resolved `ref_key`, and the compiler
+         *     stages the asset's whole record collection as an ordinary input the node
+         *     reads under `alias` (`<alias>.json`). Business data never enters the control
+         *     token — the records ride the same staging machinery as file inputs.
+         *
+         *     Whole-collection granularity only in v1 (the node does its own lookup in
+         *     code). Author-picked-row / runtime-filter are deferred (docs/20 §9).
+         */
+        AssetBinding: {
+            /**
+             * @description The staged-input name the node code reads (`<alias>.json`). Must be a
+             *     flat identifier so it doesn't collide with a producer slug / resource
+             *     name / control-token field. Defaults to `ref_key` when the author
+             *     doesn't override it.
+             */
+            alias: string;
+            /**
+             * @description The asset's scope-resolved flat ref-key (`steel`, `materials_db`).
+             *     Resolved at publish time through the scope resolver to a stable
+             *     `(asset_id, version)` pin baked into the AIR.
+             */
+            refKey: string;
+        };
+        /** @description Full view for `GET /api/v1/assets/{id}` — metadata + a page of records. */
+        AssetDetail: {
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            display_path?: string | null;
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: int64
+             * @description Total record count for the current version (for pagination).
+             */
+            record_count: number;
+            /** @description The current-version records (paged). Each is a validated JSONB row. */
+            records: unknown[];
+            ref_key: string;
+            /** Format: uuid */
+            scope_id: string;
+            scope_kind: string;
+            /** Format: uuid */
+            type_id: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description Spec-only multipart wrapper for an asset File-field upload. */
+        AssetFileUpload: {
+            /**
+             * Format: binary
+             * @description Binary file contents.
+             */
+            file: string;
+        };
+        /**
+         * @description Response of `POST /api/v1/assets/{id}/files` — the storage path to drop into
+         *     a record's `File` field value.
+         */
+        AssetFileUploadResponse: {
+            content_type: string;
+            filename: string;
+            size: number;
+            /** @description The S3 storage key (`InputSource::StoragePath`). */
+            storage_path: string;
+        };
+        /** @description Compact list-row for `GET /api/v1/assets`. */
+        AssetSummary: {
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            display_path?: string | null;
+            /** Format: uuid */
+            id: string;
+            ref_key: string;
+            /** Format: uuid */
+            scope_id: string;
+            scope_kind: string;
+            /** Format: uuid */
+            type_id: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description Full view for `GET /api/v1/asset-types/{id}` — carries the schema. */
+        AssetTypeDetail: {
+            cardinality: string;
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            display_path?: string | null;
+            /** @description The schema: an ordered list of [`PortField`]s. */
+            fields: components["schemas"]["PortField"][];
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            scope_id: string;
+            scope_kind: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /**
+         * @description Compact list-row for `GET /api/v1/asset-types` — omits `fields_json` so the
+         *     list stays cheap.
+         */
+        AssetTypeSummary: {
+            cardinality: string;
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            display_path?: string | null;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            scope_id: string;
+            scope_kind: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: int32 */
+            version: number;
+        };
+        /**
+         * @description One run (workflow instance) that pinned a given asset — a reverse-lineage
+         *     row for `GET /api/v1/assets/{id}/usage` (docs/20 §9). `alias` /
+         *     `version_used` are extracted from the instance's `asset_pins` map for the
+         *     queried asset. This is **asset-level** lineage ("runs that used asset X");
+         *     record/material-level lineage ("runs that used Copper C110") is deferred —
+         *     see docs/20 §9.
+         */
+        AssetUsageItem: {
+            /** @description The binding alias under which this run consumed the asset. */
+            alias: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            instance_id: string;
+            mode: string;
+            status: string;
+            /** Format: uuid */
+            template_id: string;
+            template_name: string;
+            /** Format: int32 */
+            template_version: number;
+            /**
+             * Format: int32
+             * @description The asset version this run pinned (immutable for the life of the run).
+             */
+            version_used: number;
+        };
         AttachTemplateRequest: {
             /**
              * Format: uuid
@@ -2708,6 +3038,13 @@ export interface components {
          * @enum {string}
          */
         CalloutSeverity: "info" | "warning" | "error" | "success";
+        /**
+         * @description Cardinality of an asset type (docs/20 §4.2). `Object` is the 1-row
+         *     degenerate case (the builder renders a single-row form instead of a grid);
+         *     `Collection` is a many-row table.
+         * @enum {string}
+         */
+        Cardinality: "object" | "collection";
         CatalogTrigger: {
             /**
              * @description If true, the dispatcher walks existing catalogue entries matching the
@@ -2971,6 +3308,22 @@ export interface components {
             };
             graph: components["schemas"]["WorkflowGraph"];
             name: string;
+            /**
+             * Format: uuid
+             * @description Template the draft belongs to. When present, `/api/v1/analyze` resolves
+             *     template-visible **assets** referenced by the graph (`<asset>.<field>`)
+             *     into the same "Globals" scope.
+             */
+            template_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Workspace the draft belongs to. When present, `POST /api/v1/analyze`
+             *     resolves workspace-scoped **resources** referenced by the graph so the
+             *     editor picker / diagnostics see resource public fields (`<resource>.<field>`)
+             *     as a known "Globals" scope instead of a false unresolved. Absent on the
+             *     stateless `/api/v1/compile` path (which has no DB context).
+             */
+            workspace_id?: string | null;
         };
         /** @enum {string} */
         CompletionStatus: "success" | "failure" | "cancelled" | "any";
@@ -3004,6 +3357,39 @@ export interface components {
             destination_storage?: null | components["schemas"]["StorageConfig"];
             source: string;
             source_storage: components["schemas"]["StorageConfig"];
+        };
+        /** @description Request body for `POST /api/v1/assets`. */
+        CreateAssetRequest: {
+            display_name?: string | null;
+            display_path?: string | null;
+            /** @description Flat identifier, `^[a-z][a-z0-9_]*$`. */
+            ref_key: string;
+            /** Format: uuid */
+            scope_id?: string | null;
+            scope_kind?: null | components["schemas"]["ScopeKind"];
+            /** Format: uuid */
+            type_id: string;
+        };
+        /**
+         * @description Request body for `POST /api/v1/asset-types`. Validates the schema +
+         *     ident-grammar `name`.
+         */
+        CreateAssetTypeRequest: {
+            /** @description `object` | `collection`. Defaults to `collection`. */
+            cardinality?: components["schemas"]["Cardinality"];
+            display_name?: string | null;
+            /** @description Virtual folder prefix (e.g. `materials/metals`). */
+            display_path?: string | null;
+            /** @description The schema — an ordered list of [`PortField`]s. */
+            fields: components["schemas"]["PortField"][];
+            /** @description Flat identifier ref-key, `^[a-z][a-z0-9_]*$`. */
+            name: string;
+            /**
+             * Format: uuid
+             * @description Owner scope id. For `workspace`, defaults to the caller's workspace.
+             */
+            scope_id?: string | null;
+            scope_kind?: null | components["schemas"]["ScopeKind"];
         };
         CreateInstanceRequest: {
             /**
@@ -3183,6 +3569,14 @@ export interface components {
             ingress_seq: number;
             link_type: string;
             signal_key: string;
+        };
+        /** @description Spec-only multipart wrapper for the CSV import body. */
+        CsvImportBody: {
+            /**
+             * Format: binary
+             * @description The CSV file contents.
+             */
+            file: string;
         };
         DeleteConfig: {
             ignore_missing?: boolean;
@@ -4343,6 +4737,85 @@ export interface components {
          * @enum {string}
          */
         OutputAuthoring: "free" | "fixed" | "derived";
+        PaginatedResponse_AssetSummary: {
+            items: {
+                /** Format: date-time */
+                created_at: string;
+                display_name: string;
+                display_path?: string | null;
+                /** Format: uuid */
+                id: string;
+                ref_key: string;
+                /** Format: uuid */
+                scope_id: string;
+                scope_kind: string;
+                /** Format: uuid */
+                type_id: string;
+                /** Format: date-time */
+                updated_at: string;
+                /** Format: int32 */
+                version: number;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_AssetTypeSummary: {
+            items: {
+                cardinality: string;
+                /** Format: date-time */
+                created_at: string;
+                display_name: string;
+                display_path?: string | null;
+                /** Format: uuid */
+                id: string;
+                name: string;
+                /** Format: uuid */
+                scope_id: string;
+                scope_kind: string;
+                /** Format: date-time */
+                updated_at: string;
+                /** Format: int32 */
+                version: number;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_AssetUsageItem: {
+            items: {
+                /** @description The binding alias under which this run consumed the asset. */
+                alias: string;
+                /** Format: date-time */
+                created_at: string;
+                /** Format: uuid */
+                instance_id: string;
+                mode: string;
+                status: string;
+                /** Format: uuid */
+                template_id: string;
+                template_name: string;
+                /** Format: int32 */
+                template_version: number;
+                /**
+                 * Format: int32
+                 * @description The asset version this run pinned (immutable for the life of the run).
+                 */
+                version_used: number;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
         PaginatedResponse_InstanceListItem: {
             items: {
                 /** Format: date-time */
@@ -4962,6 +5435,23 @@ export interface components {
             /** @description Working directory (defaults to run_dir root). */
             working_dir?: string | null;
         };
+        /**
+         * @description Request body for `PUT /api/v1/assets/{id}/records`. Replaces (or appends to)
+         *     the record set; bumps `version` and validates each row against the type's
+         *     schema.
+         */
+        ReplaceRecordsRequest: {
+            /**
+             * @description When `true`, append to the current version's records instead of
+             *     replacing them. Default `false` = replace.
+             */
+            append?: boolean;
+            /**
+             * @description The new record rows. Each is validated against the asset type's
+             *     `fields_json` via `Port::json_schema`.
+             */
+            records: unknown[];
+        };
         ResolveEmailRequest: {
             email: string;
         };
@@ -5259,6 +5749,13 @@ export interface components {
              */
             ty: components["schemas"]["TyDescriptor"];
         };
+        /**
+         * @description Polymorphic owner discriminator. A resource/asset/asset-type is owned by
+         *     **exactly one** scope; visibility flows downward (template ⊃ project ⊃
+         *     workspace) with most-specific-wins. See [`crate::scope`].
+         * @enum {string}
+         */
+        ScopeKind: "workspace" | "project" | "template";
         /** @description One identifier available to a trigger's payload-mapping expressions. */
         ScopeVar: {
             /**
@@ -6120,6 +6617,20 @@ export interface components {
             };
         };
         /**
+         * @description Request body for `PUT /api/v1/asset-types/{id}`. Schema updates must be
+         *     **additive-only** (docs/20 §4.3): add optional fields or widen; rename /
+         *     remove / retype / newly-require is rejected server-side.
+         */
+        UpdateAssetTypeRequest: {
+            display_name?: string | null;
+            display_path?: string | null;
+            /**
+             * @description New schema. When present it is validated additive-only against the
+             *     current schema and bumps `version`.
+             */
+            fields?: components["schemas"]["PortField"][] | null;
+        };
+        /**
          * @description Request body for `PUT /api/v1/job-templates/{id}`. A change to any of
          *     `common_spec` / `escape_hatch` / `parameters` BUMPS a new version;
          *     metadata-only changes (`display_name` / `visibility` / `consumer_locked`)
@@ -6418,6 +6929,14 @@ export interface components {
             type: "human_task";
         } | {
             /**
+             * @description Node-level asset bindings (docs/20 §5). Each entry stages an asset's
+             *     whole record collection as an ordinary input (`<alias>.json`) the
+             *     node code reads. `#[serde(default)]` ⇒ existing templates (field
+             *     absent → empty) round-trip unchanged (same precedent as
+             *     `deployment_model`/`stream_output`).
+             */
+            assetBindings?: components["schemas"]["AssetBinding"][];
+            /**
              * @description Where/how the job is dispatched. `Executor` (default) = our executor
              *     daemon pool over the NATS work queue, optionally under a `token_pool`
              *     admission (`Executor.pool`). `Scheduled` = lease through an external
@@ -6698,6 +7217,12 @@ export interface components {
             /** @enum {string} */
             type: "trigger";
         } | {
+            /**
+             * @description Node-level asset bindings (docs/20 §5) — same field, defaults and
+             *     semantics as `AutomatedStep::asset_bindings`. The agent's inference
+             *     turns read the staged asset(s) as ordinary inputs.
+             */
+            assetBindings?: components["schemas"]["AssetBinding"][];
             /**
              * @description Context-window management strategy. Defaults to `None` (no
              *     compaction). Inert in the degenerate path.
@@ -6993,6 +7518,645 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TypeSurfaceResponse"];
+                };
+            };
+        };
+    };
+    list_asset_types: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+                /**
+                 * @description Scope context for downward-visibility resolution. `workspace` (the
+                 *     caller's workspace) when omitted. Format: `workspace`, `project:<uuid>`,
+                 *     or `template:<uuid>`.
+                 */
+                scope?: string | null;
+                /** @description Optional virtual-folder prefix filter on `display_path`. */
+                folder?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Visible asset types (most-specific-wins) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_AssetTypeSummary"];
+                };
+            };
+            /** @description Bad scope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Ambiguous ref-key across incomparable scopes */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_asset_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAssetTypeRequest"];
+            };
+        };
+        responses: {
+            /** @description Asset type created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetTypeDetail"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already exists in scope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_asset_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Asset type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asset type detail (incl. fields) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetTypeDetail"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_asset_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Asset type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAssetTypeRequest"];
+            };
+        };
+        responses: {
+            /** @description Asset type updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetTypeDetail"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Non-additive schema change */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_asset_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Asset type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asset type soft-deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Type still has assets */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_assets: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+                /** @description Only assets of this type. */
+                type_id?: string | null;
+                /**
+                 * @description Scope context for downward-visibility resolution (see
+                 *     [`ListAssetTypesQuery::scope`]).
+                 */
+                scope?: string | null;
+                /** @description Optional virtual-folder prefix filter on `display_path`. */
+                folder?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Visible assets (most-specific-wins) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_AssetSummary"];
+                };
+            };
+            /** @description Bad scope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Ambiguous ref-key across incomparable scopes */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAssetRequest"];
+            };
+        };
+        responses: {
+            /** @description Asset created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Asset type not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description ref_key already exists in scope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_asset: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asset detail + paged records */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetDetail"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_asset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asset soft-deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    upload_asset_file: {
+        parameters: {
+            query: {
+                /** @description The File field name this upload is for */
+                field: string;
+            };
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["AssetFileUpload"];
+            };
+        };
+        responses: {
+            /** @description File uploaded; returns storage path */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetFileUploadResponse"];
+                };
+            };
+            /** @description Bad multipart / unsupported content type */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    import_asset_csv: {
+        parameters: {
+            query?: {
+                /**
+                 * @description When `true`, the first CSV row is treated as a header row whose cells are
+                 *     field names. When `false`, columns map positionally to the type's field
+                 *     order. Default `true`.
+                 */
+                has_header?: boolean;
+                /**
+                 * @description When `true`, append the imported rows to the current version; default
+                 *     `false` = replace.
+                 */
+                append?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["CsvImportBody"];
+            };
+        };
+        responses: {
+            /** @description CSV imported; version bumped */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetSummary"];
+                };
+            };
+            /** @description Bad CSV / multipart */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Record validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    put_asset_records: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceRecordsRequest"];
+            };
+        };
+        responses: {
+            /** @description Records written; version bumped */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetSummary"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Record validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    asset_usage: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Asset id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runs that used this asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_AssetUsageItem"];
+                };
+            };
+            /** @description Asset not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };
@@ -8945,6 +10109,17 @@ export interface operations {
                 level?: string | null;
                 signal_key?: string | null;
                 q?: string | null;
+                /**
+                 * @description Narrow to a single executor execution. Each executor job maps 1:1 to a
+                 *     workflow step+iteration, so this is the reliable key for scoping logs to
+                 *     a particular step in the instance view (the `StepExecution` row has no
+                 *     execution_id of its own — it lives on the parked output envelope and on
+                 *     every log line's `detail.fields.execution_id`, stamped by the executor's
+                 *     `enrich_log_fields`). Matched against `detail.fields.execution_id` with a
+                 *     fallback to a top-level `detail.execution_id` to mirror the frontend's
+                 *     historical client-side filter.
+                 */
+                execution_id?: string | null;
                 limit?: number;
             };
             header?: never;
@@ -9466,6 +10641,16 @@ export interface operations {
                  *     layer fills this in.
                  */
                 workspace_id?: string | null;
+                /**
+                 * @description Scope context for downward-visibility resolution (docs/20 §2). Format:
+                 *     `workspace`, `project:<uuid>`, or `template:<uuid>`. When present it
+                 *     overrides `workspace_id`: the list returns the most-specific-wins
+                 *     visible set for the binding context. When absent, the legacy flat
+                 *     `workspace_id` filter applies.
+                 */
+                scope?: string | null;
+                /** @description Optional virtual-folder prefix filter on `display_path` (docs/20 §3). */
+                folder?: string | null;
             };
             header?: never;
             path?: never;

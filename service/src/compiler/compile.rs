@@ -245,9 +245,14 @@ pub struct CompileOptions<'a> {
     pub inline_sources: &'a HashMap<String, HashMap<String, String>>,
     /// Resolved child AIR per `SubWorkflow` node. Empty by default.
     pub sub_air: &'a SubWorkflowAir,
-    /// Workspace-resource manifest (publish-time `discover_known_resources`).
-    /// Empty by default (preview / tests / analyze).
-    pub known_resources: &'a KnownResources,
+    /// Unified named-global manifest (publish-time `discover_named_globals`):
+    /// every workspace resource + template-visible asset this graph references,
+    /// keyed by reference name. Subsumes the former `known_resources` +
+    /// `known_assets`. Empty by default (preview / tests / analyze). The borrow
+    /// source reads it directly; the internal validation/lowering pipeline
+    /// derives the legacy `KnownResources` view via
+    /// [`crate::compiler::named_global::resources_from_globals`].
+    pub known_globals: &'a crate::compiler::named_global::KnownGlobals,
     /// Static-config S3 key context. `ConfigStorage::ephemeral()` by default
     /// (no upload — synthetic nil template id / version 0). The per-node static
     /// config blobs that result are returned via [`CompileArtifacts::node_configs`]
@@ -266,11 +271,13 @@ impl Default for CompileOptions<'_> {
         use std::sync::OnceLock;
         static EMPTY_INLINE: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
         static EMPTY_SUB_AIR: OnceLock<SubWorkflowAir> = OnceLock::new();
-        static EMPTY_KNOWN: OnceLock<KnownResources> = OnceLock::new();
+        static EMPTY_GLOBALS: OnceLock<crate::compiler::named_global::KnownGlobals> =
+            OnceLock::new();
         Self {
             inline_sources: EMPTY_INLINE.get_or_init(HashMap::new),
             sub_air: EMPTY_SUB_AIR.get_or_init(HashMap::new),
-            known_resources: EMPTY_KNOWN.get_or_init(KnownResources::new),
+            known_globals: EMPTY_GLOBALS
+                .get_or_init(crate::compiler::named_global::KnownGlobals::new),
             config_storage: ConfigStorage::ephemeral(),
         }
     }
@@ -318,7 +325,7 @@ pub fn compile_to_air_with_options(
         files,
         opts.inline_sources,
         opts.sub_air,
-        opts.known_resources,
+        opts.known_globals,
         opts.config_storage,
     )?;
     let air = serde_json::to_value(&scenario)
@@ -400,6 +407,10 @@ pub(crate) fn compile_to_scenario_and_interfaces(
     sub_air: &SubWorkflowAir,
     known_resources: &KnownResources,
 ) -> Result<(ScenarioDefinition, InterfaceRegistry), CompileError> {
+    // These back-compat wrappers carry only a `KnownResources` (no assets / no
+    // constant-inline); lift it into a resource-only registry for the unified
+    // `_with_configs` entry.
+    let known_globals = crate::compiler::named_global::globals_from_resources(known_resources);
     let (scenario, interfaces, _node_configs) = compile_to_scenario_and_interfaces_with_configs(
         graph,
         name,
@@ -407,7 +418,7 @@ pub(crate) fn compile_to_scenario_and_interfaces(
         files,
         inline_sources,
         sub_air,
-        known_resources,
+        &known_globals,
         ConfigStorage::ephemeral(),
     )?;
     Ok((scenario, interfaces))
@@ -429,7 +440,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     files: &NodeFiles,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
-    known_resources: &KnownResources,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
     config_storage: ConfigStorage<'_>,
 ) -> Result<
     (
@@ -439,6 +450,12 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     ),
     CompileError,
 > {
+    // The internal validation/lowering pipeline still threads the legacy
+    // `KnownResources` view (resource-ref + lease-field validation, lowering);
+    // derive it from the unified registry. The borrow phase reads
+    // `known_globals` directly (resources + assets + constant-inline).
+    let known_resources = crate::compiler::named_global::resources_from_globals(known_globals);
+    let known_resources = &known_resources;
     // 0. Normalize Agent `response_format` `$ref`s against the workflow
     //    `definitions` up front. An Agent's output is DERIVED from its
     //    response_format (no cached output port), and the derivation /
@@ -457,7 +474,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     // 2. Pre-lowering validations (edges, guards, triggers, resources,
     //    schema refs, repeaters). See `run_validations` for the per-phase
     //    rationale.
-    run_validations(graph, &wg, inline_sources, known_resources)?;
+    run_validations(graph, &wg, inline_sources, known_resources, known_globals)?;
 
     // 3. Topological sort (on DAG — loop_back edges excluded)
     let sorted = topo_order(&wg)?;
@@ -585,7 +602,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
         &mut scenario,
         &interfaces,
         inline_sources,
-        known_resources,
+        known_globals,
         &mut node_configs,
     )?;
 
@@ -627,6 +644,7 @@ fn run_validations(
     wg: &WorkflowDiGraph<'_>,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     known_resources: &KnownResources,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
 ) -> Result<(), CompileError> {
     validate(graph, wg)?;
     validate_edges_typed(graph)?;
@@ -638,7 +656,7 @@ fn run_validations(
     // is NOT caught by the guard pass at all — it resolves any field, array or
     // not). It still needs the per-node shapes from `analyze`, available here.
     validate_maps(graph)?;
-    validate_guards(graph, wg)?;
+    validate_guards(graph, wg, known_globals)?;
     validate_triggers(graph)?;
     crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;
     validate_schema_refs(graph)?;
@@ -1031,10 +1049,10 @@ fn apply_control_data_foundation(
     scenario: &mut aithericon_sdk::scenario::ScenarioDefinition,
     interfaces: &InterfaceRegistry,
     inline_sources: &HashMap<String, HashMap<String, String>>,
-    known_resources: &KnownResources,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
     node_configs: &mut HashMap<String, serde_json::Value>,
 ) -> Result<(), CompileError> {
-    let report = crate::compiler::token_shape::analyze(graph)?;
+    let report = crate::compiler::token_shape::analyze(graph, known_globals)?;
 
     // Parked-producer nodes: those whose interface published a `data_port`.
     let parked: Vec<(&str, &str)> = interfaces
@@ -1054,7 +1072,7 @@ fn apply_control_data_foundation(
     // walker, Rhai AST guard walker) stay per-surface; the rewrite
     // dispatch is unified inside `apply_borrows`.
     let unified_borrows =
-        crate::compiler::borrow::collect_borrows(graph, inline_sources, known_resources)?;
+        crate::compiler::borrow::collect_borrows(graph, inline_sources, known_globals)?;
 
     validate_python_output_fields(graph, &unified_borrows)?;
 
@@ -2263,6 +2281,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -2395,6 +2414,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -2461,6 +2481,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -3003,6 +3024,7 @@ mod tests {
             },
         );
 
+        let known_globals = crate::compiler::named_global::globals_from_resources(&known_resources);
         let crate::compiler::CompileArtifacts { air, .. } =
             crate::compiler::compile_to_air_with_options(
                 &graph,
@@ -3011,7 +3033,7 @@ mod tests {
                 &files,
                 crate::compiler::CompileOptions {
                     inline_sources: &inline_sources,
-                    known_resources: &known_resources,
+                    known_globals: &known_globals,
                     ..Default::default()
                 },
             )
@@ -3415,6 +3437,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -3973,7 +3996,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
-                &crate::compiler::resource_refs::KnownResources::new(),
+                &crate::compiler::named_global::KnownGlobals::new(),
                 ConfigStorage::ephemeral(),
             )
             .expect("compile llm-borrow graph");
@@ -4077,7 +4100,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
-                &crate::compiler::resource_refs::KnownResources::new(),
+                &crate::compiler::named_global::KnownGlobals::new(),
                 ConfigStorage::ephemeral(),
             )
             .expect("compile kreuzberg-borrow graph");
@@ -4686,6 +4709,7 @@ mod tests {
                         deployment_model: Default::default(),
                         stream_output: false,
                         stream_input: false,
+                        asset_bindings: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -4753,6 +4777,7 @@ mod tests {
                         deployment_model: Default::default(),
                         stream_output: false,
                         stream_input: false,
+                        asset_bindings: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -4872,6 +4897,7 @@ mod tests {
                         deployment_model: Default::default(),
                         stream_output: false,
                         stream_input: false,
+                        asset_bindings: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -4899,7 +4925,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
-                &crate::compiler::resource_refs::KnownResources::new(),
+                &crate::compiler::named_global::KnownGlobals::new(),
                 config_storage,
             )
             .expect("compile must succeed even with deeply-nested response_format schema");

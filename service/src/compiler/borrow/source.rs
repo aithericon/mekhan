@@ -12,19 +12,20 @@
 use std::collections::HashMap;
 
 use crate::compiler::error::CompileError;
-use crate::compiler::resource_refs::KnownResources;
+use crate::compiler::named_global::KnownGlobals;
 use crate::models::template::WorkflowGraph;
 
 use super::shape::Borrow;
 
-/// Bundle of inputs every borrow planner reads. `known_resources` is
-/// only consumed by [`super::planners::resource::ResourceSource`] — other
-/// sources ignore it. Kept in the shared ctx so source impls have a
-/// single dispatch shape rather than per-source argument lists.
+/// Bundle of inputs every borrow planner reads. `known_globals` is only
+/// consumed by [`super::planners::global_named::GlobalNamedSource`] (the
+/// unified resource + asset + constant-inline source) — other sources ignore
+/// it. Kept in the shared ctx so source impls have a single dispatch shape
+/// rather than per-source argument lists.
 pub(crate) struct PlanCtx<'a> {
     pub graph: &'a WorkflowGraph,
     pub inline_sources: &'a HashMap<String, HashMap<String, String>>,
-    pub known_resources: &'a KnownResources,
+    pub known_globals: &'a KnownGlobals,
 }
 
 /// One borrow-emission surface — guard / automated-step / resource /
@@ -49,6 +50,6 @@ pub(crate) trait BorrowSource: Sync {
 pub(crate) const SOURCES: &[&(dyn BorrowSource + Sync)] = &[
     &super::planners::guard::GuardSource,
     &super::planners::automated_step::AutomatedStepSource,
-    &super::planners::resource::ResourceSource,
+    &super::planners::global_named::GlobalNamedSource,
     &super::planners::human_task::HumanTaskSource,
 ];

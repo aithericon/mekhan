@@ -31,7 +31,7 @@ pub fn compile_to_air_with_shapes(
     files: &crate::compiler::lower::NodeFiles,
 ) -> Result<(Value, ShapeReport), CompileError> {
     let mut air = crate::compiler::compile_to_air(graph, name, description, files)?;
-    let report = analyze(graph)?;
+    let report = analyze(graph, &Default::default())?;
     annotate_air(&mut air, &report);
     Ok((air, report))
 }

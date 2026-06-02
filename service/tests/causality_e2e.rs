@@ -313,6 +313,9 @@ async fn causality_full_pipeline() {
         resource_resolver: Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
+        asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
+            db.clone(),
+        )),
     });
 
     // ── 2. Spawn Mekhan consumers ────────────────────────────────────────

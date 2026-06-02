@@ -110,6 +110,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
         images,
         retry_policy,
         deployment_model,
+        asset_bindings,
         ..
     } = &cx.node.data
     else {
@@ -124,6 +125,10 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // reborrows).
     let retry_policy = *retry_policy;
     let deployment_model = deployment_model.clone();
+    // Forward the agent's asset bindings so a single-shot agent stages its
+    // bound asset(s) through the synthesized AutomatedStep body, exactly like a
+    // hand-authored Python/LLM step (docs/20 §5).
+    let asset_bindings = asset_bindings.clone();
 
     let llm_config = crate::models::template::agent_to_llm_config(
         model,
@@ -178,6 +183,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             // prototype streaming side-channel.
             stream_output: false,
             stream_input: false,
+            asset_bindings,
         },
         parent_id: cx.node.parent_id.clone(),
         width: cx.node.width,

@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000222",
+  "name": "22 · Asset Reference",
+  "description": "A Decision routes on `steel_spec.yield_strength` — a field of a single-record (object) asset. The reference is a compile-time constant (docs/20 §5.1): publish inlines it into the guard (`355 >= 300`), so an asset's value drives control flow with no staging and no node binding."
+}

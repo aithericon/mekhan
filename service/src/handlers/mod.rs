@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod auth_tokens;
 pub mod backends;
 pub mod cloud_layer_proxy;

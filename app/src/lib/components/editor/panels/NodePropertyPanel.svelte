@@ -13,6 +13,7 @@
 		fetchNodeScopes,
 		loadResourceTypes,
 		loadWorkspaceResources,
+		loadTemplateAssetScope,
 		buildResourceScope,
 		type ScopeEntry
 	} from '$lib/editor/guard-scope';
@@ -32,6 +33,11 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		templateId?: string;
+		/** Workspace the template lives in. When provided, the analyze request
+		 *  carries it so the backend can resolve workspace-scoped resources into
+		 *  the "Globals" scope group (replacing the client-side buildResourceScope
+		 *  projection). */
+		workspaceId?: string;
 		/// Select a different node by id (swaps the property panel to it).
 		/// Used by the Start section's "Add trigger" affordance to jump to
 		/// the freshly-created Trigger node.
@@ -47,6 +53,7 @@
 		binding,
 		nodeId,
 		templateId,
+		workspaceId,
 		onselectnode
 	}: Props = $props();
 
@@ -91,14 +98,24 @@
 	$effect(() => {
 		const g = binding?.graph;
 		const id = nodeId;
+		// Read workspaceId and templateId synchronously so this effect
+		// re-runs when either changes (e.g. when the template finishes
+		// loading and workspace_id becomes available). Without this read
+		// the effect body only tracks `binding?.graph` and `nodeId`, so
+		// the first analyze call runs without workspace context and the
+		// per-node diagnostics never see resolved globals.
+		const wid = workspaceId;
+		const tid = templateId;
 		if (!g || !id) {
 			scope = [];
 			return;
 		}
 		let cancelled = false;
 		const timer = setTimeout(async () => {
-			const result = await fetchNodeScopes(g);
-			if (!cancelled) scope = result.scopes.get(id) ?? [];
+			const result = await fetchNodeScopes(g, { templateId: tid, workspaceId: wid });
+			if (!cancelled) {
+				scope = result.scopes.get(id) ?? [];
+			}
 		}, 250);
 		return () => {
 			cancelled = true;
@@ -132,14 +149,16 @@
 		binding && nodeId ? binding.graph.edges.filter((e) => e.target === nodeId).length : 0
 	);
 
-	// Workspace resources for the RefPicker's Resources tab. Direct-mode
-	// resources are workspace-scoped (no per-workflow alias layer) so the
-	// list is the same for every node and every workflow — one
-	// module-cached fetch covers the whole session. The type registry is
-	// fetched the same way; both run in parallel on mount, the picker
-	// degrades to a single-pane mode while either is pending.
+	// The RefPicker is a LIBRARY BROWSER: its Resources and Assets tabs list
+	// everything the user can select from their global libraries — the full
+	// workspace resource set and the full template-visible asset set — NOT
+	// only what the current graph happens to reference. So we load both
+	// libraries client-side and feed their union to the picker, regardless of
+	// what the analyzer discovered. (The analyzer's per-node `scope` above
+	// still drives diagnostics; it is not the picker's source of truth.)
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
 	let workspaceResources = $state<ResourceSummary[]>([]);
+	let assetScope = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		void loadResourceTypes()
 			.then((types) => {
@@ -152,7 +171,26 @@
 			})
 			.catch(() => {});
 	});
-	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
+	$effect(() => {
+		const tid = templateId;
+		if (!tid) {
+			assetScope = [];
+			return;
+		}
+		let cancelled = false;
+		void loadTemplateAssetScope(tid)
+			.then((entries) => {
+				if (!cancelled) assetScope = entries;
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+	const resourceScope = $derived([
+		...buildResourceScope(workspaceResources, resourceTypes),
+		...assetScope
+	]);
 
 	// Single exhaustive dispatch: pick the section component for this node kind.
 	// Capitalized so the template treats it as a component. The registry's

@@ -12,6 +12,7 @@
 	import {
 		loadResourceTypes,
 		loadWorkspaceResources,
+		loadTemplateAssetScope,
 		buildResourceScope,
 		type ScopeEntry
 	} from '$lib/editor/guard-scope';
@@ -27,6 +28,10 @@
 		 *  Inputs-in-scope picker and every nested section that embeds a
 		 *  RefPicker (Decision, Loop, AutomatedStep, HumanTask). */
 		scope?: ScopeEntry[];
+		/** Template this node belongs to. Drives the Assets tab of RefPicker:
+		 *  the picker lists every template-visible asset so the user can browse
+		 *  and select from their asset library. */
+		templateId?: string | null;
 		scopeBusy?: boolean;
 		onRefreshScope?: () => void;
 		/** Insert a snippet at the active code editor's cursor. When
@@ -39,17 +44,19 @@
 		nodeId,
 		readonly = false,
 		scope = [],
+		templateId = null,
 		scopeBusy = false,
 		onRefreshScope,
 		oninsertref
 	}: Props = $props();
 
-	// Workspace resources for the RefPicker's Resources tab. Same
-	// module-cached fetch + derivation as the canvas-side panel; the
-	// caches are shared so opening the IDE on top of the canvas doesn't
-	// double up the network calls.
+	// The RefPicker is a LIBRARY BROWSER: its Resources and Assets tabs list
+	// everything the user can select — the full workspace resource set and the
+	// full template-visible asset set — not only what the graph references. We
+	// load both libraries client-side and feed their union to the picker.
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
 	let workspaceResources = $state<ResourceSummary[]>([]);
+	let assetScope = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		void loadResourceTypes()
 			.then((types) => {
@@ -62,7 +69,26 @@
 			})
 			.catch(() => {});
 	});
-	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
+	$effect(() => {
+		const tid = templateId;
+		if (!tid) {
+			assetScope = [];
+			return;
+		}
+		let cancelled = false;
+		void loadTemplateAssetScope(tid)
+			.then((entries) => {
+				if (!cancelled) assetScope = entries;
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+	const resourceScope = $derived([
+		...buildResourceScope(workspaceResources, resourceTypes),
+		...assetScope
+	]);
 
 	const nodeData = $derived(
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null

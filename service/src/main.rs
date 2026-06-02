@@ -258,6 +258,12 @@ async fn main() -> anyhow::Result<()> {
     let resource_resolver =
         Arc::new(mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()));
 
+    // Asset resolver — publish-time materialization of node-bound asset records
+    // into the spliced `__assets` envelope (docs/20 §5). Same `Arc`-shared
+    // shape as `resource_resolver`.
+    let asset_resolver =
+        Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()));
+
     let state = AppState {
         db,
         petri,
@@ -279,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
         result_waiters,
         resource_store,
         resource_resolver,
+        asset_resolver,
     };
 
     // Seed built-in demos before the listener accepts requests. Idempotent

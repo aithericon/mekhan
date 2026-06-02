@@ -51,6 +51,30 @@ use utoipa::OpenApi;
             crate::models::resource::UpdateResourceRequest,
             crate::models::resource::RotateResourceRequest,
             crate::models::resource::ResourceAuditEntry,
+            // docs/20 — Asset layer DTOs. Request/response shapes for asset
+            // types + assets + records. Several appear only inside `Vec<_>` or
+            // as request bodies, so register them explicitly for frontend
+            // codegen. The schema field language reuses `PortField` wholesale.
+            crate::models::asset::ScopeKind,
+            crate::models::asset::Cardinality,
+            crate::models::asset::AssetTypeSummary,
+            crate::models::asset::AssetTypeDetail,
+            crate::models::asset::CreateAssetTypeRequest,
+            crate::models::asset::UpdateAssetTypeRequest,
+            crate::models::asset::AssetSummary,
+            crate::models::asset::AssetDetail,
+            crate::models::asset::CreateAssetRequest,
+            crate::models::asset::ReplaceRecordsRequest,
+            crate::models::asset::AssetUsageItem,
+            crate::handlers::assets::AssetFileUploadResponse,
+            crate::handlers::assets::CsvImportBody,
+            crate::handlers::assets::AssetFileUpload,
+            // The shared field language assets reuse — registered here because
+            // the asset DTOs are the first explicit referents (ports reach
+            // these transitively via template handler signatures).
+            crate::models::template::PortField,
+            crate::models::template::FieldKind,
+            crate::models::template::SelectOption,
             // Phase 3 (B-model) — Job-template CRUD DTOs. Nested types
             // (CommonSpec / EscapeHatch / TemplateParameter inside the version
             // shapes; TemplateStaging inside the detail + Vec<_> response) are
@@ -144,6 +168,7 @@ use utoipa::OpenApi;
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
         (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
+        (name = "assets", description = "User-typed, curated static content (docs/20). Asset types are user-defined `PortField` schemas; assets are version-pinned, scope-owned collections of schema-validated JSONB records (+ S3 for File fields), consumed by nodes as staged inputs."),
         (name = "job-templates", description = "Versioned cluster job-spec entity (flavor-tagged `slurm`/`nomad`) — typed common spec + flavor escape hatch + declared parameters, staged onto datacenter resources. No secret coupling."),
         (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
         (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),

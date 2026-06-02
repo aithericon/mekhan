@@ -3,6 +3,6 @@
 //! chains them.
 
 pub(crate) mod automated_step;
+pub(crate) mod global_named;
 pub(crate) mod guard;
 pub(crate) mod human_task;
-pub(crate) mod resource;
