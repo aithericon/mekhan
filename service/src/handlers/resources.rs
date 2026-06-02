@@ -326,6 +326,19 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    // Record which secret fields actually got a value, so the resolver only
+    // emits `{{secret:…#field}}` templates for secrets that exist in Vault.
+    // Without this an optional secret left unset (e.g. a `loki` token) would
+    // be templated and fail firing-time resolution. See
+    // [`crate::petri::resource_resolver::SECRET_KEYS_MARKER`].
+    let mut public_config = public.clone();
+    let mut secret_keys: Vec<String> = secret.keys().cloned().collect();
+    secret_keys.sort();
+    public_config.insert(
+        crate::petri::resource_resolver::SECRET_KEYS_MARKER.to_string(),
+        Value::Array(secret_keys.into_iter().map(Value::String).collect()),
+    );
+
     let insert_version = sqlx::query(
         "INSERT INTO resource_versions \
             (resource_id, version, vault_path, public_config, created_by) \
@@ -334,7 +347,7 @@ where
     .bind(resource_id)
     .bind(version)
     .bind(vault_path)
-    .bind(Value::Object(public.clone()))
+    .bind(Value::Object(public_config))
     .bind(principal_id)
     .execute(db)
     .await;
