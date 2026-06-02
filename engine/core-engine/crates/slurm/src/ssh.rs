@@ -114,17 +114,31 @@ impl SshSession {
     /// case we map to `SshError::Connection(Disconnected)` so the caller's
     /// reconnect path runs).
     pub async fn exec(&self, command: &str) -> Result<String, SshError> {
+        self.exec_with_timeout(command, self.command_timeout).await
+    }
+
+    /// As [`Self::exec`], but with an explicit per-call timeout overriding the
+    /// session default. Long-running remote operations (e.g. an `apptainer pull`
+    /// that downloads + converts an OCI image to a `.sif`, which routinely
+    /// exceeds the ~60s default tuned for quick `salloc`/`squeue` commands) pass
+    /// a generous deadline so a legitimately slow command is not mistaken for a
+    /// dead multiplex and torn down mid-flight.
+    pub async fn exec_with_timeout(
+        &self,
+        command: &str,
+        timeout: std::time::Duration,
+    ) -> Result<String, SshError> {
         tracing::debug!(command = %command, "Executing remote command");
 
         let mut cmd = self.session.command("bash");
         cmd.arg("-c").arg(command);
 
-        let output = match tokio::time::timeout(self.command_timeout, cmd.output()).await {
+        let output = match tokio::time::timeout(timeout, cmd.output()).await {
             Ok(res) => res?,
             Err(_) => {
                 tracing::warn!(
                     command = %command,
-                    timeout_secs = self.command_timeout.as_secs(),
+                    timeout_secs = timeout.as_secs(),
                     "SSH command exceeded timeout — likely dead multiplex; signalling reconnect"
                 );
                 return Err(SshError::Connection(openssh::Error::Disconnected));

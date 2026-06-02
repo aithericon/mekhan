@@ -146,6 +146,37 @@ impl SlurmAllocatorClient {
         }
     }
 
+    /// As [`Self::exec`] but with an explicit per-call timeout. The session's
+    /// default `command_timeout_secs` (~60s) is tuned for quick allocator
+    /// commands (`salloc`/`squeue`/`scancel`) and is too short for an
+    /// `apptainer pull` that downloads + converts a multi-hundred-MB OCI image
+    /// to a `.sif` — see `materialize_image`.
+    async fn exec_with_timeout(
+        &self,
+        command: &str,
+        timeout: std::time::Duration,
+    ) -> Result<String, SshError> {
+        let mut guard = self.ssh.lock().await;
+
+        if guard.is_none() {
+            *guard = Some(SshSession::connect(&self.config).await?);
+        }
+
+        match guard.as_ref().unwrap().exec_with_timeout(command, timeout).await {
+            Ok(output) => Ok(output),
+            Err(SshError::Connection(_)) => {
+                tracing::warn!("Slurm allocator SSH connection lost, reconnecting for retry");
+                *guard = Some(SshSession::connect(&self.config).await?);
+                guard
+                    .as_ref()
+                    .unwrap()
+                    .exec_with_timeout(command, timeout)
+                    .await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Acquire (or reuse) a held allocation, resolve its node, launch ONE
     /// persistent drain executor on it (Pool mode, lease-scoped namespace), and
     /// return the lease JSON (`alloc_id`/`node?`/`expiry?`/`executor_namespace`/`scheduler`)
@@ -344,8 +375,13 @@ impl SlurmAllocatorClient {
             SHARED_SIF_ROOT,
             SHARED_APPTAINER_CACHE,
         );
-        // `exec` captures stdout and reconnects on a dropped session.
-        let stdout = self.exec(&script).await?;
+        // Image pulls are slow (download + squashfs conversion); use a generous
+        // timeout, NOT the ~60s default tuned for quick allocator commands — a
+        // first pull of even a small image (e.g. python:3.12-slim, ~70s)
+        // otherwise trips the default and the SSH session is torn down.
+        let stdout = self
+            .exec_with_timeout(&script, std::time::Duration::from_secs(MATERIALIZE_PULL_TIMEOUT_SECS))
+            .await?;
         let (digest, sif_path, size_bytes) = alloc::parse_materialize_output(&stdout)
             .ok_or_else(|| SlurmAllocError::BadOutput(format!(
                 "apptainer pull produced no PETRI_MATERIALIZE line: {stdout}"
@@ -369,6 +405,11 @@ impl SlurmAllocatorClient {
 /// two in sync. A per-datacenter override is a later refinement.
 pub const SHARED_SIF_ROOT: &str = "/shared/sif";
 pub const SHARED_APPTAINER_CACHE: &str = "/shared/apptainer-cache";
+
+/// SSH timeout for an `apptainer pull` (download + squashfs conversion). Far
+/// longer than the default `command_timeout_secs` (~60s) because a real image
+/// pull legitimately takes minutes; a large image on a cold cache can be slow.
+pub const MATERIALIZE_PULL_TIMEOUT_SECS: u64 = 1800;
 
 #[cfg(feature = "slurm")]
 #[async_trait::async_trait]
