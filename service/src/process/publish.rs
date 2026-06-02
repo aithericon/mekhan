@@ -122,7 +122,7 @@ impl<'a> PublishService<'a> {
         // only in the compiled artifact.
         let workspace_default =
             workspace_default_datacenter_alias(self.state, workspace_id).await?;
-        let compiled_graph = crate::compiler::scheduler_select::resolve_scheduler_defaults(
+        let mut compiled_graph = crate::compiler::scheduler_select::resolve_scheduler_defaults(
             &compiled_graph,
             workspace_default.as_deref(),
         )
@@ -158,6 +158,16 @@ impl<'a> PublishService<'a> {
         // into an already-published workflow.
         let known_assets =
             discover_asset_bindings(self.state, &compiled_graph, template_id, workspace_id).await?;
+
+        // Inline single-record (object) asset field references as compile-time
+        // constants (docs/20 §5.1). A `<ref_key>.<field>` in a Decision guard /
+        // Loop condition / End or Failure result mapping is static (the object
+        // asset's pinned record never changes), so we substitute the Rhai literal
+        // in place BEFORE compile — no read-arc, no `__assets` in guard scope, no
+        // engine change. Returns the `(asset_id, version)` pins for lineage.
+        let asset_const_pins =
+            inline_object_asset_refs(self.state, &mut compiled_graph, template_id, workspace_id)
+                .await?;
 
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
@@ -254,6 +264,25 @@ impl<'a> PublishService<'a> {
                     "__asset_pins".to_string(),
                     serde_json::Value::Object(pins),
                 );
+            }
+        }
+
+        // Merge object-asset-reference pins (docs/20 §5.1) into `__asset_pins`,
+        // so reverse lineage (§9) counts runs that *referenced* an asset's field
+        // — not just those that staged it. Creates the map if no node binding did.
+        if !asset_const_pins.is_empty() {
+            if let Some(obj) = air_json.as_object_mut() {
+                let entry = obj
+                    .entry("__asset_pins")
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(pins) = entry.as_object_mut() {
+                    for (ref_key, (asset_id, ver)) in &asset_const_pins {
+                        pins.insert(
+                            ref_key.clone(),
+                            serde_json::json!({ "asset_id": asset_id, "version": ver }),
+                        );
+                    }
+                }
             }
         }
 
@@ -743,6 +772,164 @@ async fn discover_asset_bindings(
     }
 
     Ok(known)
+}
+
+/// Inline single-record (object) asset **field references** as compile-time
+/// constants (docs/20 §5.1). Scans Decision guards / Loop conditions / End +
+/// Failure result mappings for `<ref_key>.<field>` heads that resolve to a
+/// scope-visible OBJECT asset, substitutes the Rhai literal in place (mutating
+/// `graph`), and returns the `(asset_id, version)` pins for reverse lineage.
+///
+/// Heads that are producer slugs are left alone (normal references win); heads
+/// that resolve to a *collection* asset are not inlined (a collection has no
+/// single field value) and fall through to ordinary resolution.
+async fn inline_object_asset_refs(
+    state: &AppState,
+    graph: &mut WorkflowGraph,
+    template_id: Uuid,
+    workspace_id: Uuid,
+) -> Result<std::collections::BTreeMap<String, (Uuid, i32)>, ApiError> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::compiler::asset_const::{inline_asset_constants, ObjectAssetConsts};
+    use crate::compiler::token_shape::{scan_dotted_refs, slug_index};
+    use crate::models::asset::ScopeKind;
+    use crate::scope::{resolve_one, visible_scopes_for, Scope, ScopedItem};
+
+    fn collect_heads(src: &str, heads: &mut BTreeSet<String>) {
+        for (root, segs, _lit) in scan_dotted_refs(src) {
+            if !segs.is_empty() && segs[0] != "[*]" && root != "input" {
+                heads.insert(root);
+            }
+        }
+    }
+
+    // 1. Candidate heads from every control-flow Rhai source.
+    let mut heads: BTreeSet<String> = BTreeSet::new();
+    for node in &graph.nodes {
+        match &node.data {
+            WorkflowNodeData::Decision { conditions, .. } => {
+                for c in conditions {
+                    collect_heads(&c.guard, &mut heads);
+                }
+            }
+            WorkflowNodeData::Loop { loop_condition, .. } => collect_heads(loop_condition, &mut heads),
+            WorkflowNodeData::End { result_mapping, .. } => {
+                for m in result_mapping {
+                    collect_heads(&m.expression, &mut heads);
+                }
+            }
+            WorkflowNodeData::Failure {
+                error_result_mapping,
+                ..
+            } => {
+                for m in error_result_mapping {
+                    collect_heads(&m.expression, &mut heads);
+                }
+            }
+            _ => {}
+        }
+    }
+    if heads.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    // 2. Drop heads that are producer slugs — a real upstream reference wins.
+    let slugs = slug_index(graph)
+        .map_err(|e| ApiError::compile(format!("compilation failed: {e}"), vec![e.to_view()]))?;
+    heads.retain(|h| slugs.node_for(h).is_none());
+    if heads.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    // 3. Gather scope-visible OBJECT assets matching those heads (mirrors
+    //    `discover_asset_bindings`, restricted to `cardinality = 'object'`).
+    let visible = visible_scopes_for(&state.db, ScopeKind::Template, template_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("asset scope resolution: {e}")))?;
+    let mut scope_kinds: Vec<String> = Vec::new();
+    let mut scope_ids: Vec<Uuid> = Vec::new();
+    if let Some(ws) = visible.workspace {
+        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
+        scope_ids.push(ws);
+    }
+    for p in &visible.projects {
+        scope_kinds.push(ScopeKind::Project.as_db().to_string());
+        scope_ids.push(*p);
+    }
+    if let Some(t) = visible.template {
+        scope_kinds.push(ScopeKind::Template.as_db().to_string());
+        scope_ids.push(t);
+    }
+    if visible.workspace.is_none() {
+        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
+        scope_ids.push(workspace_id);
+    }
+    let ref_keys: Vec<String> = heads.iter().cloned().collect();
+
+    let rows: Vec<(Uuid, i32, String, Uuid, String)> = sqlx::query_as(
+        "SELECT a.id, a.version, a.ref_key, a.scope_id, a.scope_kind \
+         FROM assets a \
+         JOIN asset_types t ON t.id = a.type_id \
+         JOIN UNNEST($1::text[], $2::uuid[]) AS s(scope_kind, scope_id) \
+           ON a.scope_kind = s.scope_kind AND a.scope_id = s.scope_id \
+         WHERE a.ref_key = ANY($3) AND a.deleted_at IS NULL AND t.cardinality = 'object'",
+    )
+    .bind(&scope_kinds)
+    .bind(&scope_ids)
+    .bind(&ref_keys)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("asset field-ref lookup: {e}")))?;
+    if rows.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let candidates: Vec<ScopedItem<(Uuid, i32)>> = rows
+        .into_iter()
+        .filter_map(|(id, version, ref_key, scope_id, scope_kind)| {
+            ScopeKind::from_db(&scope_kind).map(|kind| ScopedItem {
+                scope: Scope { kind, id: scope_id },
+                ref_key,
+                item: (id, version),
+            })
+        })
+        .collect();
+
+    // 4. Resolve each head most-specific-wins; fetch its single record (row 0).
+    let mut consts = ObjectAssetConsts::new();
+    let mut pins: BTreeMap<String, (Uuid, i32)> = BTreeMap::new();
+    for head in &heads {
+        let resolved = resolve_one(head, candidates.clone()).map_err(|clash| {
+            let view = CompileError::AssetBindingAmbiguous {
+                node_id: String::new(),
+                ref_key: head.clone(),
+                detail: clash.to_string(),
+            };
+            ApiError::compile(
+                format!("asset field reference ambiguous: {view}"),
+                vec![view.to_view()],
+            )
+        })?;
+        let Some(item) = resolved else { continue };
+        let (asset_id, version) = item.item;
+        let record: Option<(serde_json::Value,)> = sqlx::query_as(
+            "SELECT data FROM asset_records WHERE asset_id = $1 AND version = $2 AND row_idx = 0",
+        )
+        .bind(asset_id)
+        .bind(version)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("asset record fetch: {e}")))?;
+        if let Some((data,)) = record {
+            consts.insert(head.clone(), data);
+            pins.insert(head.clone(), (asset_id, version));
+        }
+    }
+
+    // 5. Rewrite the graph's control-flow sources in place.
+    inline_asset_constants(graph, &consts);
+    Ok(pins)
 }
 
 /// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated
