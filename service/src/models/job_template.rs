@@ -37,6 +37,10 @@ pub struct JobTemplateRow {
     pub updated_at: DateTime<Utc>,
     /// `Some(_)` means soft-deleted.
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Optional `container_image` resource bound to this template (docs/22).
+    /// Appended last to match the `ALTER ADD COLUMN` physical order so
+    /// `SELECT *` → `FromRow` reads it back without reordering.
+    pub container_resource_id: Option<Uuid>,
 }
 
 /// One row from the `job_template_versions` table. Immutable once written; a
@@ -141,6 +145,8 @@ pub struct JobTemplateSummary {
     pub latest_version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_resource_id: Option<Uuid>,
 }
 
 impl From<JobTemplateRow> for JobTemplateSummary {
@@ -155,6 +161,7 @@ impl From<JobTemplateRow> for JobTemplateSummary {
             latest_version: r.latest_version,
             created_at: r.created_at,
             updated_at: r.updated_at,
+            container_resource_id: r.container_resource_id,
         }
     }
 }
@@ -220,6 +227,9 @@ pub struct JobTemplateDetail {
     pub latest_version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Optional `container_image` resource bound to this template (docs/22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_resource_id: Option<Uuid>,
     /// All versions, newest first.
     pub versions: Vec<JobTemplateVersion>,
     /// Current stagings across every datacenter.
@@ -246,6 +256,10 @@ pub struct CreateJobTemplateRequest {
     pub escape_hatch: Option<EscapeHatch>,
     #[serde(default)]
     pub parameters: Option<Vec<TemplateParameter>>,
+    /// Optional `container_image` resource to run this template's job inside
+    /// (docs/22). Metadata on the template, not a versioned field.
+    #[serde(default)]
+    pub container_resource_id: Option<Uuid>,
     /// Optional workspace scoping. `None` resolves to the caller's workspace.
     #[serde(default)]
     pub workspace_id: Option<Uuid>,
@@ -269,6 +283,11 @@ pub struct UpdateJobTemplateRequest {
     pub escape_hatch: Option<EscapeHatch>,
     #[serde(default)]
     pub parameters: Option<Vec<TemplateParameter>>,
+    /// Bind/rebind the `container_image` resource (docs/22). `Some` sets it;
+    /// absent leaves it unchanged (same metadata convention as the fields
+    /// above — v1 has no explicit "clear" path).
+    #[serde(default)]
+    pub container_resource_id: Option<Uuid>,
 }
 
 /// Request body for `POST /api/v1/job-templates/{id}/stage` (B-staging, Phase 4).

@@ -282,15 +282,153 @@ pub fn srun_lease_executor_command(
     namespace: &str,
     max_jobs: u64,
     idle_secs: u64,
+    container: Option<&ContainerSpec>,
 ) -> String {
+    // The drain executor runs INSIDE the container when one is bound (docs/22):
+    // `srun … apptainer exec --nv --bind … <sif> /bin/bash <template>`. Apptainer
+    // inherits the host env by default, so the `--export`ed LEASE_* vars are
+    // visible to the template script inside the container. With no container the
+    // trailing target is the bare template path (byte-identical to the original).
+    let target = match container {
+        Some(c) if !c.sif_path.is_empty() => c.wrap_script(template_path),
+        _ => template_path.to_string(),
+    };
     format!(
         "srun --jobid='{}' --export=ALL,LEASE_NAMESPACE='{}',LEASE_MAX_JOBS='{}',LEASE_IDLE_TIMEOUT='{}' {}",
         sq(alloc_id),
         sq(namespace),
         max_jobs,
         idle_secs,
-        template_path,
+        target,
     )
+}
+
+/// A resolved container binding for `apptainer exec` (docs/22 container staging).
+/// mekhan resolves the bound `container_image` resource + its materialized `.sif`
+/// into this blob and threads it through the lease-acquire request / job token;
+/// the engine wraps the executor launch line with it. An empty `sif_path` means
+/// "no container" (native execution).
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct ContainerSpec {
+    /// Absolute `.sif` path on the cluster (the stable by-ref symlink mekhan
+    /// embeds, or a content-addressed path).
+    #[serde(default)]
+    pub sif_path: String,
+    /// `--bind src[:dst]` mounts (executor binary, SDK, uv, scratch, venv cache).
+    #[serde(default)]
+    pub binds: Vec<String>,
+    /// Bind the host NVIDIA stack (`--nv`) — set for GPU jobs.
+    #[serde(default)]
+    pub nv: bool,
+}
+
+impl ContainerSpec {
+    /// Build `apptainer exec [--nv] [--bind …] '<sif>' /bin/bash '<script>'` for
+    /// running `script_path` (a bash entry script) inside the image. Caller
+    /// guarantees `sif_path` is non-empty.
+    pub fn wrap_script(&self, script_path: &str) -> String {
+        let nv = if self.nv { " --nv" } else { "" };
+        let binds: String = self
+            .binds
+            .iter()
+            .filter(|b| !b.is_empty())
+            .map(|b| format!("--bind '{}' ", sq(b)))
+            .collect();
+        format!(
+            "apptainer exec{nv} {binds}'{}' /bin/bash '{}'",
+            sq(&self.sif_path),
+            sq(script_path),
+        )
+    }
+}
+
+/// Sanitize a registry image reference into a filesystem-safe stem for the stable
+/// by-ref symlink path (docs/22). Every non-alphanumeric run collapses to `_` so
+/// `ghcr.io/org/img:tag` → `ghcr_io_org_img_tag`. The compiler computes the SAME
+/// stem (pure function of `image_ref`) so it can embed the by-ref path before the
+/// async materialize finishes.
+pub fn sanitize_image_ref(image_ref: &str) -> String {
+    let mut out = String::with_capacity(image_ref.len());
+    let mut prev_us = false;
+    for ch in image_ref.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_us = false;
+        } else if !prev_us {
+            out.push('_');
+            prev_us = true;
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+/// Render the remote bash that pulls an OCI image to a content-addressed `.sif`
+/// and atomically points the stable by-ref symlink at it (docs/22).
+///
+/// Runs on the login node (compute nodes often lack registry egress). Pulls to a
+/// temp file, content-addresses by the `.sif`'s sha256, `mv`s to
+/// `<sif_root>/<digest>.sif`, repoints `<sif_root>/by-ref/<stem>.sif`, and prints
+/// a single `PETRI_MATERIALIZE digest=… sif=… size=…` line parsed by
+/// [`parse_materialize_output`]. Pure render (no SSH) so it is unit-testable.
+pub fn render_apptainer_pull_script(
+    image_ref: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    sif_root: &str,
+    cache_dir: &str,
+) -> String {
+    let root = sif_root.trim_end_matches('/');
+    let stem = sanitize_image_ref(image_ref);
+    let creds = match (username, password) {
+        (Some(u), Some(p)) if !u.is_empty() => format!(
+            "export APPTAINER_DOCKER_USERNAME='{}'\nexport APPTAINER_DOCKER_PASSWORD='{}'\n",
+            sq(u),
+            sq(p),
+        ),
+        _ => String::new(),
+    };
+    format!(
+        "set -e\n\
+         export APPTAINER_CACHEDIR='{cache}'\n\
+         {creds}\
+         mkdir -p '{root}/by-ref' '{cache}'\n\
+         tmp=$(mktemp '{root}/.pull.XXXXXX.sif')\n\
+         apptainer pull --force \"$tmp\" 'docker://{image}'\n\
+         digest=$(sha256sum \"$tmp\" | cut -c1-64)\n\
+         final='{root}/'\"$digest\"'.sif'\n\
+         mv -f \"$tmp\" \"$final\"\n\
+         ln -sfn \"$final\" '{root}/by-ref/{stem}.sif'\n\
+         size=$(stat -c%s \"$final\" 2>/dev/null || echo 0)\n\
+         echo \"PETRI_MATERIALIZE digest=$digest sif=$final size=$size\"\n",
+        cache = sq(cache_dir.trim_end_matches('/')),
+        creds = creds,
+        root = sq(root),
+        image = image_ref,
+        stem = stem,
+    )
+}
+
+/// Parse the `PETRI_MATERIALIZE digest=… sif=… size=…` line emitted by
+/// [`render_apptainer_pull_script`] out of the command stdout. Returns
+/// `(digest, sif_path, size_bytes)`.
+pub fn parse_materialize_output(stdout: &str) -> Option<(String, String, Option<i64>)> {
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.contains("PETRI_MATERIALIZE"))?;
+    let mut digest = None;
+    let mut sif = None;
+    let mut size = None;
+    for tok in line.split_whitespace() {
+        if let Some(v) = tok.strip_prefix("digest=") {
+            digest = Some(v.to_string());
+        } else if let Some(v) = tok.strip_prefix("sif=") {
+            sif = Some(v.to_string());
+        } else if let Some(v) = tok.strip_prefix("size=") {
+            size = v.parse::<i64>().ok();
+        }
+    }
+    Some((digest?, sif?, size))
 }
 
 /// Wrap a command for fire-and-forget detached execution over SSH.
@@ -320,9 +458,16 @@ pub async fn srun_lease_executor(
     namespace: &str,
     max_jobs: u64,
     idle_secs: u64,
+    container: Option<&ContainerSpec>,
 ) -> Result<(), AllocError> {
-    let command =
-        srun_lease_executor_command(alloc_id, template_path, namespace, max_jobs, idle_secs);
+    let command = srun_lease_executor_command(
+        alloc_id,
+        template_path,
+        namespace,
+        max_jobs,
+        idle_secs,
+        container,
+    );
     let detached = detached_launch(&command, alloc_id);
     ssh.exec(&detached).await?;
     Ok(())
@@ -628,6 +773,7 @@ mod tests {
             "lease-inst-1:node-2",
             8,
             300,
+            None,
         );
         assert!(cmd.starts_with("srun --jobid='12345'"), "{}", cmd);
         assert!(
@@ -647,9 +793,54 @@ mod tests {
     #[test]
     fn test_srun_lease_executor_command_escapes() {
         // A namespace/alloc with a quote must not break out of the quoted arg.
-        let cmd = srun_lease_executor_command("a'b", "/t.sh", "lease-x'y", 1, 60);
+        let cmd = srun_lease_executor_command("a'b", "/t.sh", "lease-x'y", 1, 60, None);
         assert!(cmd.contains("--jobid='a'\\''b'"), "{}", cmd);
         assert!(cmd.contains("LEASE_NAMESPACE='lease-x'\\''y'"), "{}", cmd);
+    }
+
+    #[test]
+    fn test_srun_lease_executor_command_apptainer_wrap() {
+        // With a container bound, the trailing target is an `apptainer exec` of
+        // the template script (docs/22). LEASE_* still ride --export (apptainer
+        // inherits host env by default).
+        let container = ContainerSpec {
+            sif_path: "/shared/sif/by-ref/python_3_12_slim.sif".into(),
+            binds: vec!["/opt/petri/bin".into(), "/shared/venv-cache/x".into()],
+            nv: true,
+        };
+        let cmd = srun_lease_executor_command(
+            "12345",
+            "/opt/petri/templates/mekhan-lease-executor.sh",
+            "lease-1",
+            8,
+            300,
+            Some(&container),
+        );
+        assert!(cmd.contains("apptainer exec --nv "), "{}", cmd);
+        assert!(cmd.contains("--bind '/opt/petri/bin'"), "{}", cmd);
+        assert!(cmd.contains("--bind '/shared/venv-cache/x'"), "{}", cmd);
+        assert!(
+            cmd.ends_with("'/shared/sif/by-ref/python_3_12_slim.sif' /bin/bash '/opt/petri/templates/mekhan-lease-executor.sh'"),
+            "{}",
+            cmd
+        );
+    }
+
+    #[test]
+    fn test_sanitize_image_ref() {
+        assert_eq!(sanitize_image_ref("ghcr.io/org/img:tag"), "ghcr_io_org_img_tag");
+        assert_eq!(sanitize_image_ref("python:3.12-slim"), "python_3_12_slim");
+        assert_eq!(sanitize_image_ref("a@@b"), "a_b");
+    }
+
+    #[test]
+    fn test_parse_materialize_output() {
+        let out = "some noise\nPETRI_MATERIALIZE digest=abc123 sif=/shared/sif/abc123.sif size=42\n";
+        let (d, s, sz) = parse_materialize_output(out).unwrap();
+        assert_eq!(d, "abc123");
+        assert_eq!(s, "/shared/sif/abc123.sif");
+        assert_eq!(sz, Some(42));
+        assert!(parse_materialize_output("nothing here").is_none());
     }
 
     #[test]

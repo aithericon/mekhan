@@ -338,6 +338,35 @@ pub enum Datacenter {
     },
 }
 
+/// Container image reference + optional registry pull credentials. For the
+/// container-staging pipeline (docs/22): a `Scheduled` job template binds a
+/// `container_image` resource; mekhan materializes `image_ref` to an Apptainer
+/// `.sif` on the cluster and runs the executor inside it. `image_ref` is a
+/// registry reference WITHOUT the transport prefix (e.g. `ghcr.io/org/img:tag`)
+/// — the engine prepends `docker://` when it pulls. The credential fields are
+/// Vault-stored and fed to `apptainer pull` via `--docker-login`
+/// (`APPTAINER_DOCKER_USERNAME` / `_PASSWORD`); both optional for public images.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "container_image",
+    display_name = "Container Image",
+    icon = "lucide-package"
+)]
+pub struct ContainerImage {
+    /// Registry image reference without transport prefix, e.g.
+    /// `ghcr.io/org/img:tag` or `python:3.12-slim`. The engine pulls
+    /// `docker://<image_ref>`.
+    pub image_ref: String,
+    /// Registry username for private pulls. Vault-stored. Optional (public).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[resource(secret)]
+    pub registry_username: Option<String>,
+    /// Registry password / token for private pulls. Vault-stored. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[resource(secret)]
+    pub registry_password: Option<String>,
+}
+
 // ─── Kv — the dynamic-fields escape hatch ────────────────────────────────────
 //
 // The 5 typed resources above cover the common credential surfaces. `kv`

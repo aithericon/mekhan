@@ -35,6 +35,7 @@
 		type UpdateJobTemplateRequest,
 		type CommonSpec
 	} from '$lib/api/job-templates';
+	import { listResources, type ResourceSummary } from '$lib/api/resources';
 
 	type Props = {
 		/** Cluster flavor (`slurm` | `nomad`). Null when unknown — shows all templates. */
@@ -63,6 +64,14 @@
 		try {
 			const page = await listJobTemplates({ flavor: flavor ?? undefined, perPage: 200 });
 			templates = page.items;
+			// Container-image resources for the picker (best-effort — an empty list
+			// just means the dropdown only offers "none").
+			try {
+				const imgs = await listResources({ resource_type: 'container_image', perPage: 200 });
+				containerImages = imgs.items;
+			} catch {
+				containerImages = [];
+			}
 			// Load stagings in parallel for all templates, best-effort.
 			if (clusterId) {
 				await loadAllStagings(page.items.map((t) => t.id));
@@ -149,6 +158,11 @@
 	let fEntrypoint = $state('');
 	let fConsumerLocked = $state(false);
 	let fEscapeHatch = $state('');
+	// Container-image resource binding (docs/22). Empty string = no container
+	// (native execution). Populated from the workspace's `container_image`
+	// resources in `load()`.
+	let fContainerResourceId = $state('');
+	let containerImages = $state<ResourceSummary[]>([]);
 
 	function resetForm() {
 		fSlug = '';
@@ -164,6 +178,7 @@
 		fEntrypoint = '';
 		fConsumerLocked = false;
 		fEscapeHatch = '';
+		fContainerResourceId = '';
 		formError = null;
 	}
 
@@ -178,6 +193,7 @@
 		fDisplayName = t.display_name;
 		fFlavor = t.flavor;
 		fConsumerLocked = t.consumer_locked;
+		fContainerResourceId = t.container_resource_id ?? '';
 		// NOTE: CommonSpec fields are not available on the summary — the user
 		// can edit them; they load blank (update merges, not replaces, optional fields).
 		formMode = { editing: t.id };
@@ -225,7 +241,8 @@
 				flavor: fFlavor,
 				common_spec: buildCommonSpec(),
 				consumer_locked: fConsumerLocked,
-				escape_hatch: buildEscapeHatch()
+				escape_hatch: buildEscapeHatch(),
+				container_resource_id: fContainerResourceId || undefined
 			};
 			await createJobTemplate(body);
 			closeForm();
@@ -245,7 +262,8 @@
 				display_name: fDisplayName.trim() || undefined,
 				common_spec: buildCommonSpec(),
 				consumer_locked: fConsumerLocked,
-				escape_hatch: buildEscapeHatch()
+				escape_hatch: buildEscapeHatch(),
+				container_resource_id: fContainerResourceId || undefined
 			};
 			await updateJobTemplate(id, body);
 			closeForm();
@@ -370,6 +388,19 @@
 						placeholder="registry.example.com/mumax3:latest"
 						oninput={(e) => (fImage = (e.currentTarget as HTMLInputElement).value)}
 					/>
+				</FormField>
+				<FormField label="Container image (Apptainer)" for="tpl-container">
+					<select
+						id="tpl-container"
+						class="border-input bg-background ring-offset-background focus-visible:ring-ring flex h-10 w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+						value={fContainerResourceId}
+						onchange={(e) => (fContainerResourceId = (e.currentTarget as HTMLSelectElement).value)}
+					>
+						<option value="">None (native execution)</option>
+						{#each containerImages as img (img.id)}
+							<option value={img.id}>{img.display_name || img.path}</option>
+						{/each}
+					</select>
 				</FormField>
 				<FormField label="Entrypoint" for="tpl-entrypoint">
 					<Input

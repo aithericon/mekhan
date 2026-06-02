@@ -3034,6 +3034,12 @@ export interface components {
         CreateJobTemplateRequest: {
             common_spec: components["schemas"]["CommonSpec"];
             consumer_locked?: boolean | null;
+            /**
+             * Format: uuid
+             * @description Optional `container_image` resource to run this template's job inside
+             *     (docs/22). Metadata on the template, not a versioned field.
+             */
+            container_resource_id?: string | null;
             display_name: string;
             escape_hatch?: null | components["schemas"]["EscapeHatch"];
             /** @description `slurm` | `nomad`. */
@@ -3796,6 +3802,11 @@ export interface components {
          */
         JobTemplateDetail: {
             consumer_locked: boolean;
+            /**
+             * Format: uuid
+             * @description Optional `container_image` resource bound to this template (docs/22).
+             */
+            container_resource_id?: string | null;
             /** Format: date-time */
             created_at: string;
             display_name: string;
@@ -3819,6 +3830,8 @@ export interface components {
          */
         JobTemplateSummary: {
             consumer_locked: boolean;
+            /** Format: uuid */
+            container_resource_id?: string | null;
             /** Format: date-time */
             created_at: string;
             display_name: string;
@@ -4294,6 +4307,8 @@ export interface components {
         PaginatedResponse_JobTemplateSummary: {
             items: {
                 consumer_locked: boolean;
+                /** Format: uuid */
+                container_resource_id?: string | null;
                 /** Format: date-time */
                 created_at: string;
                 display_name: string;
@@ -6044,6 +6059,13 @@ export interface components {
         UpdateJobTemplateRequest: {
             common_spec?: null | components["schemas"]["CommonSpec"];
             consumer_locked?: boolean | null;
+            /**
+             * Format: uuid
+             * @description Bind/rebind the `container_image` resource (docs/22). `Some` sets it;
+             *     absent leaves it unchanged (same metadata convention as the fields
+             *     above — v1 has no explicit "clear" path).
+             */
+            container_resource_id?: string | null;
             display_name?: string | null;
             escape_hatch?: null | components["schemas"]["EscapeHatch"];
             parameters?: components["schemas"]["TemplateParameter"][] | null;

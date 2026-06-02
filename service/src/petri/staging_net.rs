@@ -289,3 +289,185 @@ pub async fn trigger_staging(
     );
     Ok(staging_row)
 }
+
+// ─── Image materialization (docs/22 container staging) ───────────────────────
+//
+// Symmetric with staging, one layer down: a one-shot `materialize-<row>` net
+// fires the engine's `materialize_image` inline effect, which pulls an OCI image
+// to an Apptainer `.sif` on the datacenter's login node. The effect_result's
+// echoed `materialize_id` correlates back to the `image_materializations` row the
+// projection updates. v1 supports PUBLIC images; private-registry credentials are
+// a documented later refinement (the engine resolves `{{secret:…}}` only in
+// effect_config, and detecting cred presence per resource is deferred).
+
+use crate::models::image_materialization::ImageMaterializationRow;
+
+/// Build the AIR for a one-shot image-materialization run. `effect_config` is the
+/// datacenter connection (where to SSH/pull) MERGED with the non-secret
+/// `image_ref` — the `materialize_image` handler reads both from the resolved
+/// config. The seeded request token carries only the correlation id.
+pub fn build_materialize_image_net(
+    materialize_id: Uuid,
+    image_ref: &str,
+    conn: &DatacenterConnection,
+) -> ScenarioDefinition {
+    let net_id = well_known::materialize_net_id(materialize_id);
+    let flavor = conn.scheduler_flavor.as_str();
+    let mut ctx = Context::new(net_id).description(format!(
+        "Materialize run {materialize_id}: pull image '{image_ref}' to a .sif on \
+         datacenter resource {} (flavor {flavor}) via the materialize_image engine effect.",
+        conn.resource_id
+    ));
+
+    // datacenter connection + image_ref on the effect transition. (Registry
+    // credentials would be merged here as `{{secret:…}}` refs — deferred in v1.)
+    let mut effect_config = conn.effect_config();
+    if let Some(obj) = effect_config.as_object_mut() {
+        obj.insert("image_ref".to_string(), json!(image_ref));
+    }
+
+    let start: aithericon_sdk::PlaceHandle<DynamicToken> = ctx.state("start", "Materialize Request");
+    let materialized: aithericon_sdk::PlaceHandle<DynamicToken> =
+        ctx.terminal("materialized", "Materialized");
+    let failed: aithericon_sdk::PlaceHandle<DynamicToken> =
+        ctx.terminal("failed", "Materialize Failed (fatal)");
+
+    ctx.transition("t_materialize", "Materialize Image")
+        .auto_input("request", &start)
+        .auto_output("materialized", &materialized)
+        .auto_output("_error", &failed)
+        .effect_with_config(effects::MATERIALIZE_IMAGE.handler_id, effect_config);
+
+    ctx.seed_one(
+        &start,
+        DynamicToken(json!({ "materialize_id": materialize_id.to_string() })),
+    );
+
+    ctx.build()
+}
+
+/// Resolve a `container_image` resource id to `(version, image_ref)` from its
+/// latest version's `public_config`. Workspace-scoped + soft-delete aware.
+/// `Ok(None)` when absent / not a container_image / missing `image_ref`.
+pub async fn resolve_container_image(
+    db: &PgPool,
+    workspace_id: Uuid,
+    resource_id: Uuid,
+) -> Result<Option<(i32, String)>, sqlx::Error> {
+    let row: Option<(i32, Value)> = sqlx::query_as(
+        "SELECT rv.version, rv.public_config \
+         FROM resources r \
+         JOIN resource_versions rv ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.id = $1 AND r.workspace_id = $2 \
+           AND r.resource_type = 'container_image' AND r.deleted_at IS NULL",
+    )
+    .bind(resource_id)
+    .bind(workspace_id)
+    .fetch_optional(db)
+    .await?;
+
+    let Some((version, public_config)) = row else {
+        return Ok(None);
+    };
+    let image_ref = public_config
+        .get("image_ref")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    Ok(image_ref.map(|r| (version, r.to_string())))
+}
+
+/// Trigger one image-materialization run: upsert the `image_materializations` row
+/// to `materializing`, generate + deploy the one-shot materialize net, return the
+/// row. Dual-triggered (explicit endpoint + publish-time auto hook), idempotent
+/// on the row (re-materializing reuses the row id → replaces the net).
+///
+/// A *deploy* failure flips the row to `failed` and returns it (never strands the
+/// caller); a clean deploy leaves it at `materializing` for the projection to
+/// advance to `ready`/`failed` from the effect result.
+pub async fn trigger_materialize_image(
+    db: &PgPool,
+    petri: &PetriClient,
+    workspace_id: Uuid,
+    container_resource_id: Uuid,
+    datacenter_resource_id: Uuid,
+) -> Result<ImageMaterializationRow, StageTriggerError> {
+    let err = |m: String| StageTriggerError { message: m };
+
+    // (a) Resolve the container image (version + image_ref).
+    let (container_version, image_ref) =
+        resolve_container_image(db, workspace_id, container_resource_id)
+            .await
+            .map_err(|e| err(format!("resolve container_image: {e}")))?
+            .ok_or_else(|| {
+                err(format!(
+                    "container_image resource {container_resource_id} not found in workspace, \
+                     or missing image_ref"
+                ))
+            })?;
+
+    // (b) Resolve the target cluster connection.
+    let conn = resolve_datacenter_connection(db, workspace_id, datacenter_resource_id)
+        .await
+        .map_err(|e| err(format!("resolve datacenter connection: {e}")))?
+        .ok_or_else(|| {
+            err(format!(
+                "datacenter resource {datacenter_resource_id} not found in workspace, or missing \
+                 its flavor's required connection field"
+            ))
+        })?;
+
+    // (c) Upsert the materialization row → `materializing`.
+    let row = sqlx::query_as::<_, ImageMaterializationRow>(
+        "INSERT INTO image_materializations \
+            (container_resource_id, container_version, datacenter_resource_id, status) \
+         VALUES ($1, $2, $3, 'materializing') \
+         ON CONFLICT (container_resource_id, container_version, datacenter_resource_id) DO UPDATE SET \
+            status = 'materializing', last_error = NULL, updated_at = NOW() \
+         RETURNING *",
+    )
+    .bind(container_resource_id)
+    .bind(container_version)
+    .bind(datacenter_resource_id)
+    .fetch_one(db)
+    .await
+    .map_err(|e| err(format!("upsert materialization row: {e}")))?;
+
+    // (d) Generate + deploy the one-shot materialize net.
+    let air = serde_json::to_value(build_materialize_image_net(row.id, &image_ref, &conn))
+        .map_err(|e| err(format!("serialize materialize net AIR: {e}")))?;
+    let net_id = well_known::materialize_net_id(row.id);
+
+    if let Err(e) = crate::petri::instance::deploy_instance(
+        petri,
+        &net_id,
+        &air,
+        petri_api_types::DispatchOptions::default(),
+        None,
+    )
+    .await
+    {
+        tracing::warn!(
+            %net_id, %e,
+            "failed to deploy materialize net; recording row as failed"
+        );
+        let failed = sqlx::query_as::<_, ImageMaterializationRow>(
+            "UPDATE image_materializations SET status = 'failed', last_error = $2, updated_at = NOW() \
+             WHERE id = $1 RETURNING *",
+        )
+        .bind(row.id)
+        .bind(format!("materialize net deploy failed: {e}"))
+        .fetch_one(db)
+        .await
+        .map_err(|e| err(format!("record materialize deploy failure: {e}")))?;
+        return Ok(failed);
+    }
+
+    tracing::info!(
+        %net_id,
+        %container_resource_id,
+        image_ref = %image_ref,
+        %datacenter_resource_id,
+        "deployed materialize net"
+    );
+    Ok(row)
+}

@@ -398,6 +398,21 @@ pub const STAGE_TEMPLATE: EffectDescriptor = EffectDescriptor {
     default_output_schema: None,
 };
 
+/// `materialize_image` — pull an OCI image to an Apptainer `.sif` on the cluster
+/// (docs/22 container staging). Structurally symmetric with [`STAGE_TEMPLATE`]:
+/// inline `Scheduler`-category effect, returns `status:"ready"|"failed"` DATA on
+/// BOTH success and cluster failure (a pull failure is recorded data, NOT a
+/// `NetFailed`); only truly-fatal config/parse errors return `Err`. `replay()`
+/// is a no-op (stateless — the cluster is not re-pulled on replay).
+pub const MATERIALIZE_IMAGE: EffectDescriptor = EffectDescriptor {
+    handler_id: "materialize_image",
+    default_input_port: "request",
+    default_output_port: "materialized",
+    category: ServiceCategory::Scheduler,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
 /// All built-in effect descriptors.
 pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &SCHEDULER_SUBMIT,
@@ -425,6 +440,7 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &RESOURCE_LEASE_ACQUIRE,
     &RESOURCE_LEASE_RELEASE,
     &STAGE_TEMPLATE,
+    &MATERIALIZE_IMAGE,
 ];
 
 /// Look up a built-in descriptor by handler_id.

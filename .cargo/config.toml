@@ -31,6 +31,21 @@ rustflags = [
     "-C", "target-cpu=neoverse-n1",
 ]
 
+# x86_64 musl — the container-staging executor (docs/22). Built static so the
+# bind-mounted binary runs inside ANY apptainer image regardless of the image's
+# glibc. Mirrors the aarch64 block (rust-lld + self-contained musl runtime),
+# minus the Ampere `target-cpu` (x86_64 generic). For the `slurm-up` build this
+# is driven by cargo-zigbuild, which sets its own linker env (overriding the
+# `linker` here); the block still makes a plain `cargo build --target
+# x86_64-unknown-linux-musl` produce a fully static binary.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = [
+    "-C", "link-self-contained=yes",
+    "-C", "linker=rust-lld",
+    "-C", "target-feature=+crt-static",
+]
+
 [env]
 SQLX_OFFLINE = "true"
 

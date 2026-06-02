@@ -1,5 +1,6 @@
 pub mod auth_token;
 pub mod error;
+pub mod image_materialization;
 pub mod instance;
 pub mod job_template;
 pub mod resource;

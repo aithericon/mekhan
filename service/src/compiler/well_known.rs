@@ -30,6 +30,17 @@ pub fn staging_net_id(staging_id: uuid::Uuid) -> String {
     format!("staging-{staging_id}")
 }
 
+/// Net id for a one-shot image-materialization run (docs/22 container staging).
+/// mekhan generates a short-lived net (`build_materialize_image_net`) that fires
+/// the `materialize_image` engine effect once and completes. Keyed by the
+/// `image_materializations` row id so each (container_image × datacenter) pull is
+/// its own drill-in-able instance, and so the effect_result's echoed
+/// `materialize_id` correlates back to the row the `image_materializations`
+/// projection updates. Pure function of the row id ⇒ replay-safe + unique.
+pub fn materialize_net_id(materialize_id: uuid::Uuid) -> String {
+    format!("materialize-{materialize_id}")
+}
+
 /// The pool net's claim queue (`bridge_in::<ClaimRequest>("claim_inbox", …)`).
 /// A `ClaimRequest { grant_id }` deposited here is matched against a free
 /// capacity token by `t_grant`, which replies a `Grant { grant_id, gpu_id }`

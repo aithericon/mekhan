@@ -46,7 +46,8 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use petri_application::resource_lease_handlers::{
-    AllocatorClient, AllocatorError, StageOutcome, StageTemplateArgs,
+    AllocatorClient, AllocatorError, MaterializeImageArgs, MaterializeOutcome, StageOutcome,
+    StageTemplateArgs,
 };
 
 #[cfg(feature = "slurm")]
@@ -69,6 +70,8 @@ pub enum SlurmAllocError {
     Alloc(#[from] alloc::AllocError),
     #[error("salloc returned no alloc id: {0}")]
     NoAllocId(String),
+    #[error("unparseable command output: {0}")]
+    BadOutput(String),
 }
 
 #[cfg(feature = "slurm")]
@@ -221,6 +224,15 @@ impl SlurmAllocatorClient {
             "{}/mekhan-lease-executor.sh",
             self.config.template_dir.trim_end_matches('/'),
         );
+        // Container binding (docs/22): mekhan threads a `container` blob in the
+        // claim request when the step's job template binds a `container_image`
+        // resource. Absent / unparseable → native execution (no wrap). A
+        // malformed blob is logged and dropped rather than failing the lease.
+        let container: Option<alloc::ContainerSpec> = request.get("container").and_then(|v| {
+            serde_json::from_value::<alloc::ContainerSpec>(v.clone())
+                .map_err(|e| tracing::warn!(error = %e, "slurm lease: ignoring malformed container spec"))
+                .ok()
+        });
         alloc::srun_lease_executor(
             session,
             &alloc_id,
@@ -228,6 +240,7 @@ impl SlurmAllocatorClient {
             &executor_namespace,
             max_jobs,
             idle_secs,
+            container.as_ref(),
         )
         .await?;
         tracing::info!(
@@ -313,7 +326,49 @@ impl SlurmAllocatorClient {
         );
         Ok(json!({ "remote_ref": remote_path }))
     }
+
+    /// Pull an OCI image to a content-addressed Apptainer `.sif` on the login node
+    /// and repoint the stable by-ref symlink (docs/22). Returns the digest +
+    /// `.sif` path. Uses the v1 shared-FS convention `/shared/sif` (+ a shared
+    /// `APPTAINER_CACHEDIR`) — the compiler embeds the matching
+    /// `/shared/sif/by-ref/<stem>.sif` path. Both are hard-coded conventions in
+    /// v1; a per-datacenter override is a later refinement.
+    async fn materialize_image(
+        &self,
+        args: &MaterializeImageArgs,
+    ) -> Result<MaterializeOutcome, SlurmAllocError> {
+        let script = alloc::render_apptainer_pull_script(
+            &args.image_ref,
+            args.registry_username.as_deref(),
+            args.registry_password.as_deref(),
+            SHARED_SIF_ROOT,
+            SHARED_APPTAINER_CACHE,
+        );
+        // `exec` captures stdout and reconnects on a dropped session.
+        let stdout = self.exec(&script).await?;
+        let (digest, sif_path, size_bytes) = alloc::parse_materialize_output(&stdout)
+            .ok_or_else(|| SlurmAllocError::BadOutput(format!(
+                "apptainer pull produced no PETRI_MATERIALIZE line: {stdout}"
+            )))?;
+        tracing::info!(
+            image_ref = %args.image_ref,
+            digest = %digest,
+            sif_path = %sif_path,
+            "slurm materialize_image: pulled image to .sif",
+        );
+        Ok(MaterializeOutcome {
+            digest,
+            sif_path,
+            size_bytes,
+        })
+    }
 }
+
+/// v1 shared-FS conventions for container materialization (docs/22). The
+/// compiler embeds the matching by-ref path under [`SHARED_SIF_ROOT`]; keep the
+/// two in sync. A per-datacenter override is a later refinement.
+pub const SHARED_SIF_ROOT: &str = "/shared/sif";
+pub const SHARED_APPTAINER_CACHE: &str = "/shared/apptainer-cache";
 
 #[cfg(feature = "slurm")]
 #[async_trait::async_trait]
@@ -361,6 +416,17 @@ impl AllocatorClient for SlurmAllocatorClient {
             .ok_or_else(|| AllocatorError::BadResponse("slurm stage returned no remote_ref".into()))?
             .to_string();
         Ok(StageOutcome { remote_ref })
+    }
+
+    async fn materialize_image_with_connection(
+        &self,
+        _config: &JsonValue,
+        args: &MaterializeImageArgs,
+    ) -> Result<MaterializeOutcome, AllocatorError> {
+        // Slurm uses its own held SlurmConfig (the registry built THIS client
+        // from the connection in `config`); the config arg is ignored, symmetric
+        // with stage_template_with_connection.
+        Ok(self.materialize_image(args).await?)
     }
 }
 
@@ -486,6 +552,23 @@ impl AllocatorClient for FlavorDispatchAllocatorClient {
             .unwrap_or("http");
         self.leg(flavor)?
             .stage_template_with_connection(config, args)
+            .await
+    }
+
+    async fn materialize_image_with_connection(
+        &self,
+        config: &JsonValue,
+        args: &MaterializeImageArgs,
+    ) -> Result<MaterializeOutcome, AllocatorError> {
+        // Same env-fallback routing as stage: dispatch on `scheduler_flavor`.
+        // Only the slurm leg implements the Apptainer pull; other legs return
+        // the unsupported error from the trait default.
+        let flavor = config
+            .get("scheduler_flavor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("http");
+        self.leg(flavor)?
+            .materialize_image_with_connection(config, args)
             .await
     }
 }

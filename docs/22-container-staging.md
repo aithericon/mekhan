@@ -1,11 +1,45 @@
 # 22 — Container Staging: Materialize OCI → Apptainer `.sif`, Run the Executor Inside It on HPC Slurm
 
-Status: **DESIGNED** (grilled 2026-06-02; not yet built). Extends the staging pipeline from
+Status: **PARTIALLY BUILT** (grilled + Phases 1–3 built offline-green 2026-06-02; compiler frag +
+Phase 4 live e2e pending). Extends the staging pipeline from
 [20-control-plane-gaps](20-control-plane-gaps.md) to carry a *run environment* — an OCI image
 materialized to an Apptainer/Singularity `.sif` on the cluster — and to run the drain executor
 **inside** that container on its allocation. Builds on
 [16-multi-cluster-scheduling](16-multi-cluster-scheduling.md),
 [17-lease-scope](17-lease-scope.md), and the Slurm-lease executor lifecycle.
+
+## Implementation status (2026-06-02)
+
+Built + offline-green (Phases 1–3 of the plan):
+- **musl-static executor** for `x86_64` so the bind-mounted binary is glibc-independent
+  (`flake.nix` adds the fenix target std; `.cargo/config.toml` + `just/dev.just slurm-up`).
+- **`container_image` resource kind** (`shared/resources/src/types.rs`) + `container_resource_id`
+  on job templates (migration `20240135…` + model + handler) + UI picker.
+- **`materialize_image` engine effect** (`materialize_image_handlers.rs` + `effects.rs` +
+  `net_registry.rs`) — Slurm leg runs `apptainer pull` over SSH to a content-addressed
+  `/shared/sif/<digest>.sif` and repoints the stable by-ref symlink.
+- **`ContainerSpec` apptainer-wrap** at the lease srun (`alloc.rs::srun_lease_executor_command`)
+  and per-job submit (`client.rs`) chokepoints — `mekhan resolves → engine wraps`.
+- **`materialize_image` net + `image_materializations` projection** (mekhan), cloned from
+  staging / `template_stagings`.
+
+Refinements vs. the original design, now load-bearing:
+- **Stable by-ref symlink** `/shared/sif/by-ref/<sanitize(image_ref)>.sif` → current `<digest>.sif`,
+  so the compiler can embed a path known at publish time (before the async pull finishes).
+  `sanitize_image_ref` is a pure function shared in intent between engine + compiler.
+- **venv cache** is namespaced by image via a `--bind /shared/venv-cache/<ref>` mount — no executor
+  cache-key change needed (avoids the cross-image C-extension ABI collision).
+- **v1 registry auth**: PUBLIC images only. Creds live on the resource kind but aren't yet wired into
+  the materialize effect_config (the engine resolves `{{secret:…}}` only in `effect_config`, and
+  detecting per-resource cred presence is deferred) — see "deferred" below.
+- **`/shared/sif` + `/shared/apptainer-cache`** are hard-coded v1 conventions (`slurm_allocator.rs`
+  `SHARED_SIF_ROOT`); a per-datacenter override is a later refinement.
+
+Pending:
+- **Compiler frag** — embed the `container:{sif_path,binds,nv}` blob into the lease-acquire request /
+  job token. Needs **publish-time pre-resolution** of `job_template → container_resource_id →
+  image_ref → by-ref sif_path` (the compiler reads the slug off the node but has no DB access).
+- **Materialize endpoint + publish auto-hook**; **Phase 4** apptainer-in-Slurm-Docker + live e2e.
 
 ## The ask
 

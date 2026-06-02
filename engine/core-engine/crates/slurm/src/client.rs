@@ -140,6 +140,17 @@ impl SchedulerClient for SlurmClient {
             self.config.template_dir, request.job_template_id
         );
 
+        // Container binding (docs/22): when the job token carries a `container`
+        // blob, run the worker template INSIDE the image via `apptainer exec`.
+        // Absent / malformed → the bare template path (native execution).
+        let target = request
+            .token_data
+            .get("container")
+            .and_then(|v| serde_json::from_value::<crate::alloc::ContainerSpec>(v.clone()).ok())
+            .filter(|c| !c.sif_path.is_empty())
+            .map(|c| c.wrap_script(&template_path))
+            .unwrap_or_else(|| template_path.clone());
+
         // EXECUTOR_TARGET_EXEC_ID drives the executor's PerJob consumer mode:
         // the spawned sbatch process creates an ephemeral consumer filtered to
         // its own exec_id, so it consumes exactly its dispatched job and no
@@ -150,7 +161,7 @@ impl SchedulerClient for SlurmClient {
             request.signal_key.replace('\'', "_"),
             token_data_json.replace('\'', "'\\''"),
             request.execution_id.replace('\'', "_"),
-            template_path,
+            target,
         );
 
         let output = self

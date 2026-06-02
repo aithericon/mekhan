@@ -29,8 +29,8 @@ use petri_application::{
     HttpAllocatorClient, MockSchedulerClient, PetriNetService, ProcessCompleteHandler,
     ProcessFailHandler, ProcessLogMessageHandler, ProcessLogMetricHandler, ProcessStartHandler,
     ProcessStatusDetailHandler, ResourceLeaseAcquireHandler, ResourceLeaseReleaseHandler,
-    SchedulerCancelHandler, SchedulerSubmitHandler, StageTemplateHandler, StateProjection,
-    TimerCancelHandler, TimerScheduleHandler, TopologyRepository,
+    MaterializeImageHandler, SchedulerCancelHandler, SchedulerSubmitHandler, StageTemplateHandler,
+    StateProjection, TimerCancelHandler, TimerScheduleHandler, TopologyRepository,
 };
 #[cfg(feature = "catalogue")]
 use petri_application::{
@@ -1095,13 +1095,29 @@ where
             .register_effect_handler(
                 effects::STAGE_TEMPLATE.handler_id,
                 Arc::new(StageTemplateHandler::new(
-                    allocator_client,
+                    allocator_client.clone(),
                     effects::STAGE_TEMPLATE.default_input_port,
                     effects::STAGE_TEMPLATE.default_output_port,
                 )),
             )
             .expect("register stage_template effect handler");
         tracing::info!(net_id = %net_id, "Registered stage_template effect handler");
+
+        // Register the materialize_image effect handler (docs/22 container
+        // staging). Shares the SAME `allocator_client` — it pulls an OCI image to
+        // an Apptainer `.sif` on the cluster the per-fire `effect_config` resolves
+        // to (Slurm leg; Nomad/HTTP legs record an unsupported failure as data).
+        service
+            .register_effect_handler(
+                effects::MATERIALIZE_IMAGE.handler_id,
+                Arc::new(MaterializeImageHandler::new(
+                    allocator_client,
+                    effects::MATERIALIZE_IMAGE.default_input_port,
+                    effects::MATERIALIZE_IMAGE.default_output_port,
+                )),
+            )
+            .expect("register materialize_image effect handler");
+        tracing::info!(net_id = %net_id, "Registered materialize_image effect handler");
 
         // Register timer effect handlers if configured
         if let Some(ref timer_client) = self.timer_client {

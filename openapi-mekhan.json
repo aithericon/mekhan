@@ -8287,6 +8287,14 @@
               "null"
             ]
           },
+          "container_resource_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Optional `container_image` resource to run this template's job inside\n(docs/22). Metadata on the template, not a versioned field."
+          },
           "display_name": {
             "type": "string"
           },
@@ -10315,6 +10323,14 @@
           "consumer_locked": {
             "type": "boolean"
           },
+          "container_resource_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Optional `container_image` resource bound to this template (docs/22)."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -10376,6 +10392,13 @@
         "properties": {
           "consumer_locked": {
             "type": "boolean"
+          },
+          "container_resource_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "created_at": {
             "type": "string",
@@ -11412,6 +11435,13 @@
               "properties": {
                 "consumer_locked": {
                   "type": "boolean"
+                },
+                "container_resource_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
                 },
                 "created_at": {
                   "type": "string",
@@ -15032,6 +15062,14 @@
               "boolean",
               "null"
             ]
+          },
+          "container_resource_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Bind/rebind the `container_image` resource (docs/22). `Some` sets it;\nabsent leaves it unchanged (same metadata convention as the fields\nabove — v1 has no explicit \"clear\" path)."
           },
           "display_name": {
             "type": [

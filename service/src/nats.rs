@@ -436,4 +436,27 @@ impl MekhanNats {
             .await?;
         Ok(consumer)
     }
+
+    /// Durable consumer for the `image_materializations` projection (docs/22).
+    /// Same `petri.events.>` firehose as staging; pre-filters to `materialize-*`
+    /// nets in-process.
+    pub async fn image_materializations_consumer(
+        &self,
+    ) -> Result<PullConsumer, async_nats::Error> {
+        let stream = self.get_stream_with_retry("PETRI_GLOBAL").await?;
+        let durable = self.durable_name("mekhan-image-materializations");
+        let consumer = stream
+            .get_or_create_consumer(
+                &durable,
+                jetstream::consumer::pull::Config {
+                    durable_name: Some(durable.clone()),
+                    filter_subject: "petri.events.>".into(),
+                    ack_policy: jetstream::consumer::AckPolicy::Explicit,
+                    deliver_policy: self.deliver_policy(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(consumer)
+    }
 }

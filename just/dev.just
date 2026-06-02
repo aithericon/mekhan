@@ -965,11 +965,15 @@ slurm-up:
     # need cross-compile system libs we don't have (and aren't exercised by
     # the python-backed e2e). Python + opendal-s3 is what the Scheduled run
     # actually needs (run main.py + pull staged files from rustfs).
-    echo "▶ cross-compiling executor for x86_64-unknown-linux-gnu (slim features)…"
+    # musl + static (docs/22 container staging): the binary is bind-mounted into
+    # apptainer images, so it must not depend on the image's glibc. The slim
+    # feature set links no C libs (shells out to python3, rustls for HTTP), so a
+    # fully static musl build is clean. zigbuild handles the musl C toolchain.
+    echo "▶ cross-compiling executor for x86_64-unknown-linux-musl (static, slim features)…"
     (cd executor && cargo zigbuild -p aithericon-executor-service \
        --features "python,http,http-cancel,opendal-s3,url-inputs" \
-       --target x86_64-unknown-linux-gnu)
-    exec_bin="$PWD/executor/target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service"
+       --target x86_64-unknown-linux-musl)
+    exec_bin="$PWD/executor/target/x86_64-unknown-linux-musl/debug/aithericon-executor-service"
     if [ ! -f "$exec_bin" ]; then
       echo "✗ Linux executor binary not found at $exec_bin" >&2; exit 1; fi
 

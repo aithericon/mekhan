@@ -172,6 +172,16 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // Image-materializations projection (PETRI_GLOBAL → image_materializations).
+    // Folds each materialize net's terminal `materialize_image` effect into its
+    // row's status/digest/sif_path/last_error (docs/22 container staging).
+    tokio::spawn(
+        mekhan_service::projections::image_materializations::start_image_materializations_ingest(
+            mekhan_nats.clone(),
+            db.clone(),
+        ),
+    );
+
     // Engine-initiated human task cancellations. When a Timeout's timer wins
     // the SLA race, the engine fires `human_cancel` and publishes to
     // `human.cancel.{net_id}.{place}` — without this listener, hpi_tasks

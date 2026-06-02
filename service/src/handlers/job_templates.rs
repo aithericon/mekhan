@@ -283,8 +283,8 @@ pub async fn create_job_template(
     let insert_parent = sqlx::query(
         "INSERT INTO job_templates \
             (id, workspace_id, slug, display_name, flavor, visibility, \
-             consumer_locked, latest_version, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             consumer_locked, latest_version, created_by, container_resource_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(template_id)
     .bind(workspace_id)
@@ -295,6 +295,7 @@ pub async fn create_job_template(
     .bind(consumer_locked)
     .bind(version)
     .bind(&created_by)
+    .bind(req.container_resource_id)
     .execute(&state.db)
     .await;
     if let Err(e) = insert_parent {
@@ -384,6 +385,7 @@ pub async fn get_job_template(
         latest_version: row.latest_version,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        container_resource_id: row.container_resource_id,
         versions,
         stagings,
     }))
@@ -426,8 +428,10 @@ pub async fn update_job_template(
 
     let spec_change =
         req.common_spec.is_some() || req.escape_hatch.is_some() || req.parameters.is_some();
-    let meta_change =
-        req.display_name.is_some() || req.visibility.is_some() || req.consumer_locked.is_some();
+    let meta_change = req.display_name.is_some()
+        || req.visibility.is_some()
+        || req.consumer_locked.is_some()
+        || req.container_resource_id.is_some();
     if !spec_change && !meta_change {
         return Err(ApiError::bad_request(
             "update body must set at least one field",
@@ -439,6 +443,7 @@ pub async fn update_job_template(
     let mut display_name = row.display_name.clone();
     let mut visibility = row.visibility.clone();
     let mut consumer_locked = row.consumer_locked;
+    let mut container_resource_id = row.container_resource_id;
 
     // Metadata mutation in place.
     if let Some(name) = req.display_name.as_ref() {
@@ -455,15 +460,20 @@ pub async fn update_job_template(
     if let Some(locked) = req.consumer_locked {
         consumer_locked = locked;
     }
+    if req.container_resource_id.is_some() {
+        container_resource_id = req.container_resource_id;
+    }
     if meta_change {
         sqlx::query(
             "UPDATE job_templates \
-             SET display_name = $1, visibility = $2, consumer_locked = $3, updated_at = NOW() \
-             WHERE id = $4",
+             SET display_name = $1, visibility = $2, consumer_locked = $3, \
+                 container_resource_id = $4, updated_at = NOW() \
+             WHERE id = $5",
         )
         .bind(&display_name)
         .bind(&visibility)
         .bind(consumer_locked)
+        .bind(container_resource_id)
         .bind(row.id)
         .execute(&state.db)
         .await?;
@@ -521,6 +531,7 @@ pub async fn update_job_template(
         latest_version,
         created_at: row.created_at,
         updated_at: chrono::Utc::now(),
+        container_resource_id,
     }))
 }
 

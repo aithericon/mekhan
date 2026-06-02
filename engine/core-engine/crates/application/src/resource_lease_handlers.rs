@@ -149,6 +149,37 @@ pub struct StageOutcome {
     pub remote_ref: String,
 }
 
+/// The `request` input token the `materialize_image` handler deserializes
+/// (docs/22). Carries ONLY the correlation id — the `image_ref` and the
+/// (possibly secret) registry credentials live in `effect_config` so
+/// `firing.rs` resolves any `{{secret:…}}` templates before the handler runs
+/// (secret resolution only runs over `effect_config`, never seeded tokens).
+#[derive(Clone, Debug, Deserialize)]
+pub struct MaterializeRequestToken {
+    pub materialize_id: String,
+}
+
+/// The allocator-facing view of a materialize request.
+#[derive(Clone, Debug)]
+pub struct MaterializeImageArgs {
+    /// Registry image reference without transport prefix.
+    pub image_ref: String,
+    /// Optional registry pull credentials (`--docker-login`).
+    pub registry_username: Option<String>,
+    pub registry_password: Option<String>,
+}
+
+/// The successful outcome of a materialize: the content address (`digest`) and
+/// the absolute `.sif` path on the cluster's shared filesystem. `sif_path` is
+/// the canonical `/shared/sif/<digest>.sif`; the stable by-ref symlink the
+/// compiler embeds is maintained alongside it by the allocator leg.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaterializeOutcome {
+    pub digest: String,
+    pub sif_path: String,
+    pub size_bytes: Option<i64>,
+}
+
 /// Client for a generic HTTP lease allocator. Trait so handlers can be tested
 /// against a mock without standing up a real cluster.
 ///
@@ -291,6 +322,29 @@ pub trait AllocatorClient: Send + Sync {
         let _ = (config, args);
         Err(AllocatorError::BadResponse(
             "stage_template is unsupported on this allocator leg".into(),
+        ))
+    }
+
+    /// Connection-aware image materialization (docs/22 container staging).
+    /// Pulls an OCI image to an Apptainer `.sif` on the cluster the
+    /// `effect_config` resolves to, using the same per-fire connection the lease
+    /// path consumes. Returns the content-addressed [`MaterializeOutcome`]
+    /// (`digest` + `sif_path`).
+    ///
+    /// Default impl is UNSUPPORTED so the generic HTTP / Nomad legs compile
+    /// without it — only the registry-backed adapter (petri-api) and the Slurm
+    /// leg override it (Apptainer-over-SSH is a Slurm-flavor capability; the
+    /// Nomad story uses native container task drivers, out of scope here).
+    /// Like staging, this is a pull-once operation with no held lease — no
+    /// active-count bump.
+    async fn materialize_image_with_connection(
+        &self,
+        config: &JsonValue,
+        args: &MaterializeImageArgs,
+    ) -> Result<MaterializeOutcome, AllocatorError> {
+        let _ = (config, args);
+        Err(AllocatorError::BadResponse(
+            "materialize_image is unsupported on this allocator leg".into(),
         ))
     }
 }

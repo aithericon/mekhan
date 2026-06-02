@@ -15,12 +15,18 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        # Rust stable + aarch64-unknown-linux-musl target via fenix.
-        # Adding the std lib for the target lets `cargo build --target ...`
-        # work without rustup.
+        # Rust stable + cross-target std libs via fenix. Adding the std lib
+        # for a target lets `cargo build --target ...` work without rustup.
+        #   - aarch64-unknown-linux-musl: the CI / prod cross-build.
+        #   - x86_64-unknown-linux-musl: the container-staging executor
+        #     (docs/22). The Slurm test container is linux/amd64, and the
+        #     binary is bind-mounted into apptainer images, so it's built
+        #     static-musl for that arch. zigbuild supplies the C linker; the
+        #     slim feature set links no C libs, so no crossCC is needed here.
         rustToolchain = fenix.packages.${system}.combine [
           fenix.packages.${system}.stable.toolchain
           fenix.packages.${system}.targets.aarch64-unknown-linux-musl.stable.rust-std
+          fenix.packages.${system}.targets.x86_64-unknown-linux-musl.stable.rust-std
         ];
 
         # Cross-stdenv for aarch64-musl. Gives us the gcc/ld/ar prefixed for

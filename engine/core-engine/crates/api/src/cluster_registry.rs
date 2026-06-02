@@ -51,7 +51,8 @@ use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
 use petri_application::resource_lease_handlers::{
-    AllocatorClient, AllocatorError, HttpAllocatorClient, StageOutcome, StageTemplateArgs,
+    AllocatorClient, AllocatorError, HttpAllocatorClient, MaterializeImageArgs, MaterializeOutcome,
+    StageOutcome, StageTemplateArgs,
 };
 
 /// Default idle grace before a quiet (active==0) cluster client is torn down.
@@ -978,6 +979,23 @@ impl AllocatorClient for ClusterRegistryAllocatorClient {
         let res = client
             .allocator
             .stage_template_with_connection(config, args)
+            .await;
+        self.registry.release(&conn.resource_id, conn.version).await;
+        res
+    }
+
+    async fn materialize_image_with_connection(
+        &self,
+        config: &serde_json::Value,
+        args: &MaterializeImageArgs,
+    ) -> Result<MaterializeOutcome, AllocatorError> {
+        // Same resolve-bump-release shape as stage_template (docs/22): pull-once,
+        // no held lease, drop the active-count bump as soon as the pull returns.
+        let conn = ClusterConnection::from_effect_config(config);
+        let client = self.registry.get_or_build(&conn).await?;
+        let res = client
+            .allocator
+            .materialize_image_with_connection(config, args)
             .await;
         self.registry.release(&conn.resource_id, conn.version).await;
         res

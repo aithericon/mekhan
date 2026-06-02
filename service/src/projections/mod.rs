@@ -6,5 +6,6 @@
 //! reused by tests (offline replay) and by the consumer (online ingest).
 
 pub mod allocations;
+pub mod image_materializations;
 pub mod step_executions;
 pub mod template_stagings;
