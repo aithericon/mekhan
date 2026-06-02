@@ -1984,6 +1984,7 @@ mod tests {
             },
         );
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let known_globals = crate::compiler::named_global::globals_from_resources(&known);
         let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
             &demo.metadata.name,
@@ -1991,7 +1992,7 @@ mod tests {
             &files,
             CompileOptions {
                 inline_sources: &inline,
-                known_resources: &known,
+                known_globals: &known_globals,
                 ..Default::default()
             },
         )
@@ -2039,7 +2040,6 @@ mod tests {
     #[test]
     fn http_call_demo_loads_and_compiles_with_borrow() {
         use crate::compiler::node_files_inline;
-        use crate::compiler::resource_refs::KnownResources;
         use crate::compiler::{compile_to_air_with_options, CompileArtifacts, CompileOptions};
         use std::collections::HashMap;
 
@@ -2052,9 +2052,8 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        // HTTP binds no workspace resource — empty known map, like any
+        // HTTP binds no workspace resource — empty globals, like any
         // resource-free step.
-        let known = KnownResources::new();
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
         let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
@@ -2063,7 +2062,6 @@ mod tests {
             &files,
             CompileOptions {
                 inline_sources: &inline,
-                known_resources: &known,
                 ..Default::default()
             },
         )
@@ -2133,6 +2131,7 @@ mod tests {
             },
         );
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let known_globals = crate::compiler::named_global::globals_from_resources(&known);
         let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
             &demo.metadata.name,
@@ -2140,7 +2139,7 @@ mod tests {
             &files,
             CompileOptions {
                 inline_sources: &inline,
-                known_resources: &known,
+                known_globals: &known_globals,
                 ..Default::default()
             },
         )

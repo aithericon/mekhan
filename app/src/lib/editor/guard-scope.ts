@@ -47,6 +47,13 @@ export type ScopeEntry = {
  *  Picker UIs should grey themselves out and surface the diagnostic. */
 export type ScopeAnalysis = {
 	scopes: Map<string, ScopeEntry[]>;
+	/** Server-authoritative "Globals" scope — workspace resources + template
+	 *  assets resolved by the backend when `workspace_id`/`template_id` are
+	 *  present in the analyze request. Entries are deduplicated (the server
+	 *  emits the same set for every node; we keep one copy here). When the
+	 *  server has no DB context (ids absent or scope empty), this is `[]`
+	 *  and callers may fall back to client-side `buildResourceScope`. */
+	globalsScope: ScopeEntry[];
 	graphOk: boolean;
 	diagnostics: GuardDiagnosticDto[];
 	/** True when the analyzer call itself failed (network / 5xx). Distinct
@@ -105,6 +112,15 @@ export function tyDescriptorLabel(ty: TyDescriptor | undefined): string {
 	}
 }
 
+/** Template / workspace context forwarded to the analyze endpoint so the
+ *  backend can resolve workspace-scoped resources and template-visible assets
+ *  into the "Globals" scope group. Both are optional: the analyze call still
+ *  works without them — the Globals group will simply be empty. */
+export type AnalyzeContext = {
+	templateId?: string | null;
+	workspaceId?: string | null;
+};
+
 /**
  * Fetch the in-scope identifiers at every node from the backend analyzer.
  * Returns the scope map keyed by node id, plus the `graph_ok` flag and any
@@ -112,37 +128,68 @@ export function tyDescriptorLabel(ty: TyDescriptor | undefined): string {
  * itself. Best-effort: on any failure (network, 5xx) returns
  * `{ scopes: empty, graphOk: false, requestFailed: true }` — the editor
  * degrades, never throws.
+ *
+ * When `ctx` carries `templateId` / `workspaceId`, the backend resolves
+ * named globals (workspace resources + template assets) and returns them as
+ * entries with `producer_label === "Globals"`. This function separates those
+ * entries into `ScopeAnalysis.globalsScope` (deduplicated — the server emits
+ * the same set for every node) and strips them from the per-node `scopes`
+ * map so the RefPicker's "Globals" tab and "Refs" tab are disjoint.
  */
-export async function fetchNodeScopes(graph: WorkflowGraph): Promise<ScopeAnalysis> {
+export async function fetchNodeScopes(
+	graph: WorkflowGraph,
+	ctx?: AnalyzeContext
+): Promise<ScopeAnalysis> {
 	const out = new Map<string, ScopeEntry[]>();
 	try {
 		const surface = await analyzeGraph({
 			graph,
 			name: 'editor',
 			description: '',
-			files: {}
+			files: {},
+			...(ctx?.templateId ? { template_id: ctx.templateId } : {}),
+			...(ctx?.workspaceId ? { workspace_id: ctx.workspaceId } : {})
 		});
+
+		// Globals entries are recognised by `producer_label === "Globals"`.
+		// The server emits the same set for every node; we deduplicate by
+		// `path` and keep one canonical copy in `globalsScope`.
+		const seenGlobalPaths = new Set<string>();
+		const globalsScope: ScopeEntry[] = [];
+
 		for (const [nodeId, entries] of Object.entries(surface.scopes ?? {})) {
-			out.set(
-				nodeId,
-				(entries ?? []).map((e) => ({
+			const regularEntries: ScopeEntry[] = [];
+			for (const e of entries ?? []) {
+				const mapped: ScopeEntry = {
 					nodeId: e.producer_node,
 					nodeLabel: e.producer_label,
 					field: e.path.split('.').pop() ?? e.path,
 					kind: tyDescriptorToFieldKind(e.ty),
 					qualified: e.path,
 					ty: e.ty
-				}))
-			);
+				};
+				if (e.producer_label === 'Globals') {
+					// Deduplicate across nodes (all nodes share the same global set).
+					if (!seenGlobalPaths.has(e.path)) {
+						seenGlobalPaths.add(e.path);
+						globalsScope.push(mapped);
+					}
+				} else {
+					regularEntries.push(mapped);
+				}
+			}
+			out.set(nodeId, regularEntries);
 		}
+
 		return {
 			scopes: out,
+			globalsScope,
 			graphOk: surface.graph_ok ?? false,
 			diagnostics: surface.diagnostics ?? [],
 			requestFailed: false
 		};
 	} catch {
-		return { scopes: out, graphOk: false, diagnostics: [], requestFailed: true };
+		return { scopes: out, globalsScope: [], graphOk: false, diagnostics: [], requestFailed: true };
 	}
 }
 

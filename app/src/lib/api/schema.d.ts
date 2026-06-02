@@ -2920,6 +2920,22 @@ export interface components {
             };
             graph: components["schemas"]["WorkflowGraph"];
             name: string;
+            /**
+             * Format: uuid
+             * @description Template the draft belongs to. When present, `/api/v1/analyze` resolves
+             *     template-visible **assets** referenced by the graph (`<asset>.<field>`)
+             *     into the same "Globals" scope.
+             */
+            template_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Workspace the draft belongs to. When present, `POST /api/v1/analyze`
+             *     resolves workspace-scoped **resources** referenced by the graph so the
+             *     editor picker / diagnostics see resource public fields (`<resource>.<field>`)
+             *     as a known "Globals" scope instead of a false unresolved. Absent on the
+             *     stateless `/api/v1/compile` path (which has no DB context).
+             */
+            workspace_id?: string | null;
         };
         /** @enum {string} */
         CompletionStatus: "success" | "failure" | "cancelled" | "any";

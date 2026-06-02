@@ -127,6 +127,7 @@ impl ApplyStrategy for BackendFieldStrategy {
 pub(crate) const STRATEGIES: &[&(dyn ApplyStrategy + Sync)] = &[
     &GuardRewriteStrategy,
     &EnvelopeStageStrategy,
+    &super::constant::ConstantInlineStrategy,
     &HumanTaskStrategy,
     &BackendFieldStrategy,
 ];

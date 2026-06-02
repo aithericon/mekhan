@@ -32,6 +32,11 @@
 		binding?: YjsGraphBinding;
 		nodeId?: string;
 		templateId?: string;
+		/** Workspace the template lives in. When provided, the analyze request
+		 *  carries it so the backend can resolve workspace-scoped resources into
+		 *  the "Globals" scope group (replacing the client-side buildResourceScope
+		 *  projection). */
+		workspaceId?: string;
 		/// Select a different node by id (swaps the property panel to it).
 		/// Used by the Start section's "Add trigger" affordance to jump to
 		/// the freshly-created Trigger node.
@@ -47,6 +52,7 @@
 		binding,
 		nodeId,
 		templateId,
+		workspaceId,
 		onselectnode
 	}: Props = $props();
 
@@ -88,17 +94,26 @@
 	// Debounced so a burst of graph edits collapses to one round-trip;
 	// best-effort (stale/empty on failure — never throws).
 	let scope = $state<ScopeEntry[]>([]);
+	// Server-authoritative globals (resources + assets) returned when
+	// workspace_id / template_id are present in the analyze request. Falls
+	// back to the client-side buildResourceScope projection below when the
+	// server has no DB context (ids absent or globals empty).
+	let globalsFromServer = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		const g = binding?.graph;
 		const id = nodeId;
 		if (!g || !id) {
 			scope = [];
+			globalsFromServer = [];
 			return;
 		}
 		let cancelled = false;
 		const timer = setTimeout(async () => {
-			const result = await fetchNodeScopes(g);
-			if (!cancelled) scope = result.scopes.get(id) ?? [];
+			const result = await fetchNodeScopes(g, { templateId, workspaceId });
+			if (!cancelled) {
+				scope = result.scopes.get(id) ?? [];
+				globalsFromServer = result.globalsScope;
+			}
 		}, 250);
 		return () => {
 			cancelled = true;
@@ -132,12 +147,13 @@
 		binding && nodeId ? binding.graph.edges.filter((e) => e.target === nodeId).length : 0
 	);
 
-	// Workspace resources for the RefPicker's Resources tab. Direct-mode
-	// resources are workspace-scoped (no per-workflow alias layer) so the
-	// list is the same for every node and every workflow — one
-	// module-cached fetch covers the whole session. The type registry is
-	// fetched the same way; both run in parallel on mount, the picker
-	// degrades to a single-pane mode while either is pending.
+	// Workspace resources for the RefPicker's Globals tab. When the server
+	// has returned a non-empty globalsScope (i.e. workspace_id / template_id
+	// were present in the analyze request), we use those server-authoritative
+	// entries directly — they cover both resources and assets and carry
+	// proper type info. When the server had no DB context, we fall back to
+	// the client-side buildResourceScope projection (resources-only, type
+	// info from the registry).
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
 	let workspaceResources = $state<ResourceSummary[]>([]);
 	$effect(() => {
@@ -152,7 +168,11 @@
 			})
 			.catch(() => {});
 	});
-	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
+	const resourceScope = $derived(
+		globalsFromServer.length > 0
+			? globalsFromServer
+			: buildResourceScope(workspaceResources, resourceTypes)
+	);
 
 	// Single exhaustive dispatch: pick the section component for this node kind.
 	// Capitalized so the template treats it as a component. The registry's

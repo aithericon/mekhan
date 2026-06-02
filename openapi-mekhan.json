@@ -8415,6 +8415,22 @@
           },
           "name": {
             "type": "string"
+          },
+          "template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Template the draft belongs to. When present, `/api/v1/analyze` resolves\ntemplate-visible **assets** referenced by the graph (`<asset>.<field>`)\ninto the same \"Globals\" scope."
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace the draft belongs to. When present, `POST /api/v1/analyze`\nresolves workspace-scoped **resources** referenced by the graph so the\neditor picker / diagnostics see resource public fields (`<resource>.<field>`)\nas a known \"Globals\" scope instead of a false unresolved. Absent on the\nstateless `/api/v1/compile` path (which has no DB context)."
           }
         }
       },

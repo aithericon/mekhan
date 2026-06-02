@@ -9,11 +9,11 @@
 	//                   the popover. A single filter narrows both columns
 	//                   at once; ancestors of matches auto-expand.
 	//
-	// Resources tab: when the parent provides a non-empty `resourceScope`
-	// (built from `WorkflowGraph.resources` + the type registry), the
-	// popover gains a tab switcher. The Resources tab keeps the same
-	// two-column shape; resource entries have no `ty` tree, so the right
-	// column flattens to one row per field (the legacy shape).
+	// Globals tab: when the parent provides a non-empty `resourceScope`
+	// (server-authoritative resources + assets, or client-side fallback
+	// from `buildResourceScope`), the popover gains a tab switcher. The
+	// Globals tab keeps the same two-column shape; entries without a `ty`
+	// tree flatten to one row per field (the legacy shape).
 	import type { ScopeEntry, TyDescriptor } from '$lib/editor/guard-scope';
 	import { tyDescriptorLabel } from '$lib/editor/guard-scope';
 	import * as Popover from '$lib/components/ui/popover';
@@ -25,9 +25,11 @@
 
 	type Props = {
 		scope: ScopeEntry[];
-		/** Workflow-level resource refs (alias → field) flattened to
+		/** Named globals (workspace resources + template assets) flattened to
 		 *  `ScopeEntry[]`. When non-empty the popover renders tabs and
-		 *  the user can switch between in-scope refs and resources. */
+		 *  the user can switch between in-scope refs and globals. Server-
+		 *  authoritative when the analyze request carried ids; falls back to
+		 *  client-side projection otherwise. */
 		resourceScope?: ScopeEntry[];
 		disabled?: boolean;
 		/** Currently-picked qualified ref, shown in the trigger + highlighted. */
@@ -309,8 +311,8 @@
 	const emptyMessage = $derived.by(() => {
 		if (activeTab === 'resources') {
 			return resourceScope.length === 0
-				? 'No resources declared on this workflow.'
-				: 'No matching resource fields.';
+				? 'No globals (resources or assets) visible to this workflow.'
+				: 'No matching global fields.';
 		}
 		return scope.length === 0 ? 'No upstream fields in scope.' : 'No matching fields.';
 	});
@@ -374,7 +376,7 @@
 					onclick={() => (activeTab = 'resources')}
 					data-testid="ref-picker-tab-resources"
 				>
-					Resources
+					Globals
 					<span class="ml-1.5 text-muted-foreground">({resourceScope.length})</span>
 				</button>
 			</div>
@@ -385,7 +387,7 @@
 				type="text"
 				value={query}
 				placeholder={activeTab === 'resources'
-					? 'Filter aliases & fields…'
+					? 'Filter globals & fields…'
 					: 'Filter nodes & fields…'}
 				oninput={(e) => (query = (e.currentTarget as HTMLInputElement).value)}
 				class="h-9 text-sm"

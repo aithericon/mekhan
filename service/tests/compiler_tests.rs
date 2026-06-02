@@ -5003,13 +5003,14 @@ fn automated_step_scheduled_emits_pooled_topology() {
         definitions: Default::default(),
         default_scheduler: None,
     };
+    let known_globals = mekhan_service::compiler::named_global::globals_from_resources(&known);
     let air = compile_to_air_with_options(
         &graph,
         "t",
         "",
         &std::collections::HashMap::new(),
         CompileOptions {
-            known_resources: &known,
+            known_globals: &known_globals,
             ..Default::default()
         },
     )

@@ -27,6 +27,10 @@
 		 *  Inputs-in-scope picker and every nested section that embeds a
 		 *  RefPicker (Decision, Loop, AutomatedStep, HumanTask). */
 		scope?: ScopeEntry[];
+		/** Server-authoritative globals (resources + assets) from the analyze
+		 *  response. When non-empty, used as the "Globals" tab in RefPicker
+		 *  instead of the client-side buildResourceScope projection. */
+		globalsScope?: ScopeEntry[];
 		scopeBusy?: boolean;
 		onRefreshScope?: () => void;
 		/** Insert a snippet at the active code editor's cursor. When
@@ -39,15 +43,16 @@
 		nodeId,
 		readonly = false,
 		scope = [],
+		globalsScope = [],
 		scopeBusy = false,
 		onRefreshScope,
 		oninsertref
 	}: Props = $props();
 
-	// Workspace resources for the RefPicker's Resources tab. Same
-	// module-cached fetch + derivation as the canvas-side panel; the
-	// caches are shared so opening the IDE on top of the canvas doesn't
-	// double up the network calls.
+	// Globals tab for RefPicker: prefer the server-authoritative globalsScope
+	// (resources + assets, typed) when it is non-empty; fall back to the
+	// client-side buildResourceScope projection (resources-only) when the
+	// IDE page didn't carry workspace/template ids into the analyze call.
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
 	let workspaceResources = $state<ResourceSummary[]>([]);
 	$effect(() => {
@@ -62,7 +67,11 @@
 			})
 			.catch(() => {});
 	});
-	const resourceScope = $derived(buildResourceScope(workspaceResources, resourceTypes));
+	const resourceScope = $derived(
+		globalsScope.length > 0
+			? globalsScope
+			: buildResourceScope(workspaceResources, resourceTypes)
+	);
 
 	const nodeData = $derived(
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null

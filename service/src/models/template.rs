@@ -2394,6 +2394,18 @@ pub struct CompileRequest {
     pub graph: WorkflowGraph,
     #[serde(default)]
     pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// Workspace the draft belongs to. When present, `POST /api/v1/analyze`
+    /// resolves workspace-scoped **resources** referenced by the graph so the
+    /// editor picker / diagnostics see resource public fields (`<resource>.<field>`)
+    /// as a known "Globals" scope instead of a false unresolved. Absent on the
+    /// stateless `/api/v1/compile` path (which has no DB context).
+    #[serde(default)]
+    pub workspace_id: Option<uuid::Uuid>,
+    /// Template the draft belongs to. When present, `/api/v1/analyze` resolves
+    /// template-visible **assets** referenced by the graph (`<asset>.<field>`)
+    /// into the same "Globals" scope.
+    #[serde(default)]
+    pub template_id: Option<uuid::Uuid>,
 }
 
 /// Git provenance recorded on a version published via `mekhan apply`.

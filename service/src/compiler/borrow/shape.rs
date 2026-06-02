@@ -124,6 +124,29 @@ pub(crate) enum BorrowResolution {
         version: i32,
     },
 
+    /// Static **named-global** field reference substituted into control-flow
+    /// Rhai at apply time (docs/20 §5.1). A static resource public field
+    /// (`pg.port`) OR an object-asset record field (`steel.yield_strength`)
+    /// referenced from a Decision guard / Loop condition / End or Failure
+    /// result mapping is a compile-time constant — the producing global's
+    /// pinned `static_vals` never change for this published version. The apply
+    /// step boundary-substitutes the literal for `<name>.<ref_path>` in the
+    /// consumer node's guard/condition/mapping Rhai (no read-arc, no runtime
+    /// envelope). This replaces the former `asset_const` pre-pass +
+    /// `inline_object_asset_refs`, and additionally covers static resource
+    /// public fields (the convergence dividend).
+    ConstantInline {
+        /// Named-global reference head (`<name>` in `<name>.<ref_path>`).
+        name: String,
+        /// Dotted path within the global's `static_vals` (`yield_strength`,
+        /// `spec.density`, `port`). The substituted needle is
+        /// `<name>.<ref_path>`.
+        ref_path: String,
+        /// The Rhai literal to substitute, produced by
+        /// `json_to_rhai_literal` over the navigated `static_vals` value.
+        literal: String,
+    },
+
     /// LLM / Kreuzberg AutomatedStep: stage one input file per `(slug, attr)`
     /// via a `job_inputs.push(...)` snippet at `BORROW_MARKER` AND
     /// rewrite the `{{<slug>.<attr>}}` placeholder in the embedded config

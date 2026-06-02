@@ -14,8 +14,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use crate::compiler::asset_refs::{KnownAsset, KnownAssets};
-use crate::compiler::resource_refs::{KnownResource, KnownResources};
+use crate::compiler::named_global::GlobalKind;
 use crate::compiler::{
     compile_to_air_with_options, derive_child_io, generate_py_io_files, make_child_callable,
     node_files_storage_path, node_input_scopes, node_namespace_scopes, node_output_fields,
@@ -112,7 +111,7 @@ impl<'a> PublishService<'a> {
         // template.default_scheduler ?? workspace.default_datacenter ?? error`,
         // stamping the resolved alias into the node's own `scheduler` /
         // `lease.scheduler` field. This runs ONCE here, BEFORE
-        // `discover_known_resources`, so both resource discovery and the
+        // `discover_named_globals`, so both resource discovery and the
         // compiler lowering read the already-resolved alias from the node data
         // (single resolution site — collection and lowering cannot drift). A
         // `Lease`/`Loop.lease` that bottoms out hard-fails with
@@ -122,7 +121,7 @@ impl<'a> PublishService<'a> {
         // only in the compiled artifact.
         let workspace_default =
             workspace_default_datacenter_alias(self.state, workspace_id).await?;
-        let mut compiled_graph = crate::compiler::scheduler_select::resolve_scheduler_defaults(
+        let compiled_graph = crate::compiler::scheduler_select::resolve_scheduler_defaults(
             &compiled_graph,
             workspace_default.as_deref(),
         )
@@ -136,38 +135,32 @@ impl<'a> PublishService<'a> {
             ApiError::compile(format!("scheduler selection failed: {summary}"), views)
         })?;
 
-        // Discover workspace resources this graph touches by source-scanning
-        // Python entrypoints for `<head>.<field>` accesses and looking the
-        // heads up in the workspace's resources list. The compiler uses this
-        // map (a) to validate name/slug collisions, (b) to discriminate
-        // resource refs from slug refs in the borrow planner, and (c) to
-        // pin each ref to `(resource_id, latest_version)` in the AIR.
-        // NB: discover against the scheduler-RESOLVED graph (`compiled_graph`),
-        // not the author's original — so a node that inherits its cluster from
-        // a template/workspace default collects + resolves the stamped alias.
-        let known_resources =
-            discover_known_resources(self.state, &compiled_graph, files, workspace_id).await?;
-
-        // Discover node-level asset bindings (docs/20 §5). Walks each node's
-        // `asset_bindings` and scope-resolves every `ref_key` (most-specific-
-        // wins through the template's downward-visible scope set) to a stable
-        // `(asset_id, version)` pin. Symmetric with `discover_known_resources`
-        // but reads node DATA (not Python source) — assets are opaque, bound by
-        // selection, never `<head>.<field>`-scanned. The pin rides the AIR so a
-        // post-publish record edit (which bumps the asset version) never bleeds
-        // into an already-published workflow.
-        let known_assets =
-            discover_asset_bindings(self.state, &compiled_graph, template_id, workspace_id).await?;
-
-        // Inline single-record (object) asset field references as compile-time
-        // constants (docs/20 §5.1). A `<ref_key>.<field>` in a Decision guard /
-        // Loop condition / End or Failure result mapping is static (the object
-        // asset's pinned record never changes), so we substitute the Rhai literal
-        // in place BEFORE compile — no read-arc, no `__assets` in guard scope, no
-        // engine change. Returns the `(asset_id, version)` pins for lineage.
-        let asset_const_pins =
-            inline_object_asset_refs(self.state, &mut compiled_graph, template_id, workspace_id)
-                .await?;
+        // Discover every named global (workspace resource + template-visible
+        // asset) this graph references in ONE unified pass (docs/20 §5). This
+        // subsumes the three formerly-separate discovery fns
+        // (`discover_known_resources` + `discover_asset_bindings` +
+        // `inline_object_asset_refs`): resources resolve workspace-scoped
+        // (Python/config heads via `files`), assets template-visible (node
+        // bindings AND control-flow Rhai heads); object assets / static resource
+        // fields fold into the constant-inline borrow channel inside the
+        // compiler, so the graph is no longer mutated pre-compile. NB: discover
+        // against the scheduler-RESOLVED graph (`compiled_graph`), not the
+        // author's original.
+        //
+        // `strict = true` is the publish error gate: an unresolved DECLARED
+        // resource alias / asset binding hard-fails here (symmetric with the
+        // pre-convergence behavior). The same registry then drives compile, the
+        // `__resources` / `__assets` splices (off `envelope_used`), and
+        // `__asset_pins` — there is no second, parallel discovery pass.
+        let known_globals = crate::process::discover::discover_named_globals(
+            self.state,
+            &compiled_graph,
+            Some(workspace_id),
+            Some(template_id),
+            files,
+            true,
+        )
+        .await?;
 
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
@@ -191,8 +184,7 @@ impl<'a> PublishService<'a> {
             CompileOptions {
                 inline_sources: files,
                 sub_air: &sub_air,
-                known_resources: &known_resources,
-                known_assets: &known_assets,
+                known_globals: &known_globals,
                 config_storage,
             },
         )
@@ -201,84 +193,75 @@ impl<'a> PublishService<'a> {
             ApiError::compile(format!("compilation failed: {e}"), vec![view])
         })?;
 
-        // Resolve every known resource against the workspace + ACL, write
-        // audit rows, and splice the envelope into the AIR. The launcher
-        // never touches resources — the AIR persisted here already carries
-        // the baked-in `__resources` declarations for every prepare
-        // transition that needs them.
-        if !known_resources.is_empty() {
+        // ── Resource secret-envelope splice (`__resources`) ──────────────────
+        // Resolve every resource against the workspace + ACL, write audit rows,
+        // and splice the envelope into the AIR. The manifest is the registry's
+        // envelope-USED resources (named in Python/config or a declared alias) —
+        // a resource used only as a control-flow constant (`demo_pg.port`)
+        // carries `envelope_used = false` and gets no needless secret splice,
+        // matching the set of `ResourceEnvelope` borrows the compiler emitted.
+        // The launcher never touches resources — the persisted AIR already
+        // carries the baked-in `__resources` declarations.
+        let resource_manifest =
+            crate::compiler::named_global::splice_resources_from_globals(&known_globals);
+        if !resource_manifest.is_empty() {
             let envelope = self
                 .state
                 .resource_resolver
-                .resolve_known(workspace_id, principal_id, &known_resources, None)
+                .resolve_known(workspace_id, principal_id, &resource_manifest, None)
                 .await
                 .map_err(|e| {
                     ApiError::bad_request(format!("resource resolution failed at publish: {e}"))
                 })?;
-            let names: Vec<&str> = known_resources.keys().map(String::as_str).collect();
+            let names: Vec<&str> = resource_manifest.keys().map(String::as_str).collect();
             air_json = splice_resources_into_air(air_json, &envelope, &names);
         }
 
-        // Materialize every bound asset's pinned records and splice the
-        // `__assets` envelope into the AIR. Symmetric with the resource splice
-        // above: the launcher never touches assets — the persisted AIR already
-        // carries the records for every prepare transition that stages one. The
-        // records are business data and ride `job_inputs` staging (never the
-        // control token — docs/10).
-        if !known_assets.is_empty() {
+        // ── Asset staging-envelope splice (`__assets`) ───────────────────────
+        // Materialize every bound (collection) asset's pinned records and splice
+        // the `__assets` envelope into the AIR. The manifest is the registry's
+        // envelope-USED assets (a collection bound on a node), keyed by alias.
+        // Object assets inline via the constant channel and never appear here.
+        // Business data rides `job_inputs` staging, never the control token
+        // (docs/10).
+        let asset_manifest =
+            crate::compiler::named_global::splice_assets_from_globals(&known_globals);
+        if !asset_manifest.is_empty() {
             let envelope = self
                 .state
                 .asset_resolver
-                .resolve_known(&known_assets)
+                .resolve_known(&asset_manifest)
                 .await
                 .map_err(|e| {
                     ApiError::bad_request(format!("asset resolution failed at publish: {e}"))
                 })?;
-            let aliases: Vec<&str> = known_assets.keys().map(String::as_str).collect();
+            let aliases: Vec<&str> = asset_manifest.keys().map(String::as_str).collect();
             air_json = crate::petri::asset_resolver::splice_assets_into_air(
                 air_json, &envelope, &aliases,
             );
-
-            // Stash the `{alias -> {asset_id, version}}` pin map as a sidecar
-            // key on the AIR JSON. The launcher reads it into
-            // `workflow_instances.asset_pins` at launch (docs/20 §6) and strips
-            // it before handing the AIR to the engine, so the engine never sees
-            // it. This is the launch-time pin record symmetric with
-            // `resource_pins`; the *authoritative* pin is already baked into the
-            // spliced `__assets` records above (the AIR carries the version's
-            // data verbatim), so this sidecar is the replay/debug projection.
-            if let Some(obj) = air_json.as_object_mut() {
-                let pins: serde_json::Map<String, serde_json::Value> = known_assets
-                    .iter()
-                    .map(|(alias, a)| {
-                        (
-                            alias.clone(),
-                            serde_json::json!({
-                                "asset_id": a.asset_id,
-                                "version": a.version,
-                            }),
-                        )
-                    })
-                    .collect();
-                obj.insert(
-                    "__asset_pins".to_string(),
-                    serde_json::Value::Object(pins),
-                );
-            }
         }
 
-        // Merge object-asset-reference pins (docs/20 §5.1) into `__asset_pins`,
-        // so reverse lineage (§9) counts runs that *referenced* an asset's field
-        // — not just those that staged it. Creates the map if no node binding did.
-        if !asset_const_pins.is_empty() {
+        // Stash the `{key -> {asset_id, version}}` pin map as a sidecar key on
+        // the AIR JSON for EVERY asset global in the registry — both the
+        // envelope-staged collections AND the constant-inlined objects (docs/20
+        // §5.1 / §9), so reverse lineage counts runs that *referenced* an
+        // asset's field, not just those that staged it. The launcher reads it
+        // into `workflow_instances.asset_pins` at launch (docs/20 §6) and strips
+        // it before handing the AIR to the engine.
+        let asset_pins: Vec<(String, Uuid, i32)> = known_globals
+            .iter()
+            .filter(|(_, g)| g.kind == GlobalKind::Asset)
+            .map(|(key, g)| (key.clone(), g.id, g.version))
+            .collect();
+        if !asset_pins.is_empty() {
             if let Some(obj) = air_json.as_object_mut() {
                 let entry = obj
                     .entry("__asset_pins")
                     .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
                 if let Some(pins) = entry.as_object_mut() {
-                    for (ref_key, (asset_id, ver)) in &asset_const_pins {
+                    for (key, asset_id, ver) in &asset_pins {
                         pins.insert(
-                            ref_key.clone(),
+                            key.clone(),
                             serde_json::json!({ "asset_id": asset_id, "version": ver }),
                         );
                     }
@@ -378,26 +361,6 @@ impl<'a> PublishService<'a> {
     }
 }
 
-/// Build a [`KnownResources`] map by source-scanning every Python entrypoint
-/// for `<head>.<field>` references and intersecting the head identifiers with
-/// the workspace's live (non-soft-deleted) resources.
-///
-/// The map keys are workspace resource names (the `path` column on the
-/// `resources` row, which the Python source author types verbatim);
-/// the values carry the stable `resource_id` and the `latest_version` to
-/// pin at publish time.
-///
-/// A head identifier picked up by a backend's `ref_scanner` and not present
-/// in the workspace is silently dropped — that ref might be a slug
-/// (handled by the slug index in the borrow planner), a control-token
-/// leaf, or a real Python typo (the runtime will raise its own NameError).
-///
-/// A head declared via `resource_alias_paths` (e.g. `resource_alias: "mail"`
-/// on an SMTP step) is treated as an *unambiguous* binding: if the
-/// workspace has no matching resource, publish fails with
-/// [`CompileError::WorkspaceResourceUnknown`]. Without that hard fail the
-/// AIR builds without the borrow and the backend later crashes at run
-/// time with "compiler must emit a ResourceEnvelope borrow", which sends
 /// Read the workspace's default-datacenter setting and map it to its resource
 /// alias (path) — the LAST rung of the multi-cluster selection chain (docs/16
 /// §6). The column stores a `resource_id`; the selection chain stamps an
@@ -421,515 +384,6 @@ async fn workspace_default_datacenter_alias(
     .await
     .map_err(|e| ApiError::internal(format!("workspace default datacenter lookup: {e}")))?;
     Ok(alias)
-}
-
-/// the operator chasing the compiler instead of the missing resource row.
-async fn discover_known_resources(
-    state: &AppState,
-    graph: &WorkflowGraph,
-    inline_sources: &HashMap<String, HashMap<String, String>>,
-    workspace_id: Uuid,
-) -> Result<KnownResources, ApiError> {
-    use crate::backends::ScanCtx;
-    use crate::compiler::resource_binding::{
-        collect_declared_resource_aliases, collect_resource_heads,
-    };
-    use crate::compiler::CompileError;
-    use std::collections::BTreeSet;
-
-    // Pass 1: collect every distinct `<head>` the graph references in any
-    // surface that can name a workspace resource, plus a separate map of
-    // *declared* aliases (the strict subset) so we can fail-fast on
-    // unresolved ones below.
-    let mut heads: BTreeSet<String> = BTreeSet::new();
-    let mut declared: Vec<(String, String)> = Vec::new(); // (node_id, alias)
-    for node in &graph.nodes {
-        // A `LeaseScope` holds a datacenter lease for its whole child region
-        // (docs/17). It's a declared binding on the node data, and a LeaseScope
-        // node hits the `_ => continue` arm below — so collect its
-        // `lease.scheduler` here, or `lower_lease_scope`'s
-        // `resolve_binding(.., "datacenter")` hard-fails at publish.
-        if let WorkflowNodeData::LeaseScope { lease, .. } = &node.data {
-            let alias = lease.scheduler.trim();
-            if !alias.is_empty() {
-                heads.insert(alias.to_string());
-                declared.push((node.id.clone(), alias.to_string()));
-            }
-        }
-
-        // Single projection path: both AutomatedStep and Agent feed the
-        // same scanner with the same shape. Agent uses the central
-        // `agent_to_llm_config` so any future LLM-backend scan rules
-        // (`ref_scanner`, new `resource_alias_paths`) apply uniformly.
-        let (backend_type, config_owned, config_ref, entrypoint): (
-            crate::models::template::ExecutionBackendType,
-            Option<serde_json::Value>,
-            Option<&serde_json::Value>,
-            Option<&str>,
-        ) = match &node.data {
-            WorkflowNodeData::AutomatedStep { execution_spec, .. } => (
-                execution_spec.backend_type,
-                None,
-                Some(&execution_spec.config),
-                execution_spec.entrypoint.as_deref(),
-            ),
-            WorkflowNodeData::Agent {
-                model,
-                system_prompt,
-                user_prompt,
-                response_format,
-                images,
-                ..
-            } => (
-                crate::models::template::ExecutionBackendType::Llm,
-                Some(crate::models::template::agent_to_llm_config(
-                    model,
-                    system_prompt.as_deref(),
-                    user_prompt,
-                    response_format.as_ref(),
-                    images,
-                    &[],
-                )),
-                None,
-                None,
-            ),
-            _ => continue,
-        };
-        let config: &serde_json::Value =
-            config_ref.unwrap_or_else(|| config_owned.as_ref().unwrap());
-        let ctx = ScanCtx {
-            config,
-            node_id: &node.id,
-            inline_sources,
-            entrypoint,
-        };
-        for head in collect_resource_heads(&ctx, backend_type) {
-            heads.insert(head);
-        }
-        for alias in collect_declared_resource_aliases(&ctx, backend_type) {
-            declared.push((node.id.clone(), alias));
-        }
-
-        // `Executor.pool.alias` is a declared resource binding too, but it lives
-        // on the node *data* (`deploymentModel.pool`), not inside the backend
-        // config the scanner above reads. Collect it the same way — into
-        // `heads` (so it resolves to a `KnownResource` the compiler can read)
-        // and `declared` (so a missing/unknown alias hard-fails at publish,
-        // like any other declared alias). Plain executor dispatch (no pool)
-        // contributes nothing.
-        if let WorkflowNodeData::AutomatedStep {
-            deployment_model:
-                crate::models::template::DeploymentModel::Executor {
-                    pool: Some(binding),
-                },
-            ..
-        } = &node.data
-        {
-            if !binding.alias.is_empty() {
-                heads.insert(binding.alias.clone());
-                declared.push((node.id.clone(), binding.alias.clone()));
-            }
-        }
-
-        // A `Scheduled { scheduler: Some(alias) }` step binds a datacenter
-        // directly (submit-to or lease-on a specific cluster).
-        if let WorkflowNodeData::AutomatedStep {
-            deployment_model:
-                crate::models::template::DeploymentModel::Scheduled {
-                    scheduler: Some(alias),
-                    ..
-                },
-            ..
-        } = &node.data
-        {
-            if !alias.is_empty() {
-                heads.insert(alias.clone());
-                declared.push((node.id.clone(), alias.clone()));
-            }
-        }
-    }
-
-    if heads.is_empty() {
-        return Ok(KnownResources::new());
-    }
-
-    // Pass 2: look every head up in the workspace's resources table. We
-    // query in one pass (head IN $1) to keep this O(1) round-trips
-    // regardless of how many heads the source touches. Soft-deleted
-    // resources are invisible (NULL filter on `deleted_at`).
-    let head_vec: Vec<String> = heads.into_iter().collect();
-    // Join to `resource_versions` for the pinned version's `public_config` so
-    // the compiler can inspect flavor-discriminated connection fields (e.g. a
-    // datacenter's `scheduler_flavor` + `ssh_*`/`nomad_*` presence) at publish.
-    // `LEFT JOIN` so a resource with no version row still resolves (empty
-    // config) rather than vanishing from `known`.
-    let rows: Vec<(Uuid, String, String, i32, Option<serde_json::Value>)> = sqlx::query_as(
-        "SELECT r.id, r.path, r.resource_type, r.latest_version, rv.public_config \
-         FROM resources r \
-         LEFT JOIN resource_versions rv \
-           ON rv.resource_id = r.id AND rv.version = r.latest_version \
-         WHERE r.workspace_id = $1 AND r.path = ANY($2) AND r.deleted_at IS NULL",
-    )
-    .bind(workspace_id)
-    .bind(&head_vec)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("workspace resource lookup: {e}")))?;
-
-    let mut known = KnownResources::new();
-    for (id, path, resource_type, latest_version, public_config) in rows {
-        known.insert(
-            path,
-            KnownResource {
-                id,
-                type_name: resource_type,
-                latest_version,
-                public_config: public_config.unwrap_or(serde_json::Value::Null),
-            },
-        );
-    }
-
-    // Hard-fail on declared aliases that didn't resolve. Emit one
-    // CompileError per (node_id, alias) so the editor can highlight every
-    // offending node — even though they all share the same root cause,
-    // the user sometimes references the same alias from multiple steps
-    // and needs to know that creating one resource will satisfy all of
-    // them at once.
-    let mut missing: Vec<CompileError> = Vec::new();
-    for (node_id, alias) in declared {
-        if !known.contains_key(&alias) {
-            missing.push(CompileError::WorkspaceResourceUnknown { node_id, alias });
-        }
-    }
-    if !missing.is_empty() {
-        let summary = missing
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("; ");
-        let views: Vec<_> = missing.iter().map(|e| e.to_view()).collect();
-        return Err(ApiError::compile(
-            format!("workspace resources missing: {summary}"),
-            views,
-        ));
-    }
-
-    Ok(known)
-}
-
-/// Discover node-level asset bindings (docs/20 §5) and scope-resolve + pin each
-/// to a stable `(asset_id, version)`. The asset analog of
-/// [`discover_known_resources`], but reads node DATA (`asset_bindings`) rather
-/// than source-scanning Python — assets are opaque, bound by selection.
-///
-/// Scope: a binding inside template `T` sees assets owned by `T`, by any
-/// project that contains `T`, or by the workspace (most-specific-wins). Two
-/// equally-specific definitions → `AssetBindingAmbiguous`. An unresolved
-/// declared binding → `AssetBindingUnknown` (hard-fail, symmetric with
-/// `WorkspaceResourceUnknown`).
-///
-/// Returns a [`KnownAssets`] keyed by binding **alias** (the staged-file stem
-/// the compiler indexes via `__assets["<alias>"]`).
-async fn discover_asset_bindings(
-    state: &AppState,
-    graph: &WorkflowGraph,
-    template_id: Uuid,
-    workspace_id: Uuid,
-) -> Result<KnownAssets, ApiError> {
-    use crate::models::asset::ScopeKind;
-    use crate::models::template::AssetBinding;
-    use crate::scope::{visible_scopes_for, Scope, ScopedItem};
-
-    // Pass 1: collect every distinct (node_id, alias, ref_key) declared binding.
-    let mut declared: Vec<(String, AssetBinding)> = Vec::new();
-    for node in &graph.nodes {
-        let bindings: &[AssetBinding] = match &node.data {
-            WorkflowNodeData::AutomatedStep { asset_bindings, .. } => asset_bindings,
-            WorkflowNodeData::Agent { asset_bindings, .. } => asset_bindings,
-            _ => continue,
-        };
-        for b in bindings {
-            if b.alias.trim().is_empty() || b.ref_key.trim().is_empty() {
-                continue;
-            }
-            declared.push((node.id.clone(), b.clone()));
-        }
-    }
-
-    if declared.is_empty() {
-        return Ok(KnownAssets::new());
-    }
-
-    // Compute the template's downward-visible scope set ONCE. The publish
-    // context is a concrete template, so binding visibility is template-scoped:
-    // the template chain-root + every project containing it + the workspace.
-    let visible = visible_scopes_for(&state.db, ScopeKind::Template, template_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("asset scope resolution: {e}")))?;
-
-    // Gather every candidate asset owned by ANY visible scope, in one query.
-    // `(asset_id, type_id, version)` is the pin payload. Soft-deleted assets
-    // are invisible.
-    let ref_keys: Vec<String> = declared
-        .iter()
-        .map(|(_, b)| b.ref_key.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-
-    // Visible owner scopes flattened to `(scope_kind, scope_id)` pairs for the
-    // SQL membership filter.
-    let mut scope_kinds: Vec<String> = Vec::new();
-    let mut scope_ids: Vec<Uuid> = Vec::new();
-    if let Some(ws) = visible.workspace {
-        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
-        scope_ids.push(ws);
-    }
-    for p in &visible.projects {
-        scope_kinds.push(ScopeKind::Project.as_db().to_string());
-        scope_ids.push(*p);
-    }
-    if let Some(t) = visible.template {
-        scope_kinds.push(ScopeKind::Template.as_db().to_string());
-        scope_ids.push(t);
-    }
-    // `workspace_id` is the fallback workspace owner when the template lookup
-    // didn't surface one (defensive — `visible.workspace` should already carry
-    // it for a real template).
-    if visible.workspace.is_none() {
-        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
-        scope_ids.push(workspace_id);
-    }
-
-    // Match rows whose (scope_kind, scope_id) appears at the SAME index in the
-    // two unnested arrays — i.e. an owner pair in the visible set.
-    let rows: Vec<(Uuid, Uuid, i32, String, Uuid, String)> = sqlx::query_as(
-        "SELECT a.id, a.type_id, a.version, a.ref_key, a.scope_id, a.scope_kind \
-         FROM assets a \
-         JOIN UNNEST($1::text[], $2::uuid[]) AS s(scope_kind, scope_id) \
-           ON a.scope_kind = s.scope_kind AND a.scope_id = s.scope_id \
-         WHERE a.ref_key = ANY($3) AND a.deleted_at IS NULL",
-    )
-    .bind(&scope_kinds)
-    .bind(&scope_ids)
-    .bind(&ref_keys)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("asset binding lookup: {e}")))?;
-
-    // Build the candidate set keyed by ref_key for the scope resolver.
-    let candidates: Vec<ScopedItem<(Uuid, Uuid, i32)>> = rows
-        .into_iter()
-        .filter_map(|(id, type_id, version, ref_key, scope_id, scope_kind)| {
-            ScopeKind::from_db(&scope_kind).map(|kind| ScopedItem {
-                scope: Scope { kind, id: scope_id },
-                ref_key,
-                item: (id, type_id, version),
-            })
-        })
-        .collect();
-
-    // Resolve each declared binding most-specific-wins; emit one
-    // `KnownAsset` per binding alias. Errors are per-(node, ref_key) so the
-    // editor can highlight the offending node.
-    let mut known = KnownAssets::new();
-    for (node_id, binding) in &declared {
-        let resolved = crate::scope::resolve_one(&binding.ref_key, candidates.clone()).map_err(
-            |clash| {
-                let view = CompileError::AssetBindingAmbiguous {
-                    node_id: node_id.clone(),
-                    ref_key: binding.ref_key.clone(),
-                    detail: clash.to_string(),
-                };
-                ApiError::compile(format!("asset binding ambiguous: {view}"), vec![view.to_view()])
-            },
-        )?;
-
-        match resolved {
-            Some(item) => {
-                let (asset_id, type_id, version) = item.item;
-                known.insert(
-                    binding.alias.clone(),
-                    KnownAsset {
-                        asset_id,
-                        type_id,
-                        ref_key: binding.ref_key.clone(),
-                        version,
-                    },
-                );
-            }
-            None => {
-                let view = CompileError::AssetBindingUnknown {
-                    node_id: node_id.clone(),
-                    ref_key: binding.ref_key.clone(),
-                };
-                return Err(ApiError::compile(
-                    format!("asset binding missing: {view}"),
-                    vec![view.to_view()],
-                ));
-            }
-        }
-    }
-
-    Ok(known)
-}
-
-/// Inline single-record (object) asset **field references** as compile-time
-/// constants (docs/20 §5.1). Scans Decision guards / Loop conditions / End +
-/// Failure result mappings for `<ref_key>.<field>` heads that resolve to a
-/// scope-visible OBJECT asset, substitutes the Rhai literal in place (mutating
-/// `graph`), and returns the `(asset_id, version)` pins for reverse lineage.
-///
-/// Heads that are producer slugs are left alone (normal references win); heads
-/// that resolve to a *collection* asset are not inlined (a collection has no
-/// single field value) and fall through to ordinary resolution.
-async fn inline_object_asset_refs(
-    state: &AppState,
-    graph: &mut WorkflowGraph,
-    template_id: Uuid,
-    workspace_id: Uuid,
-) -> Result<std::collections::BTreeMap<String, (Uuid, i32)>, ApiError> {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use crate::compiler::asset_const::{inline_asset_constants, ObjectAssetConsts};
-    use crate::compiler::token_shape::{scan_dotted_refs, slug_index};
-    use crate::models::asset::ScopeKind;
-    use crate::scope::{resolve_one, visible_scopes_for, Scope, ScopedItem};
-
-    fn collect_heads(src: &str, heads: &mut BTreeSet<String>) {
-        for (root, segs, _lit) in scan_dotted_refs(src) {
-            if !segs.is_empty() && segs[0] != "[*]" && root != "input" {
-                heads.insert(root);
-            }
-        }
-    }
-
-    // 1. Candidate heads from every control-flow Rhai source.
-    let mut heads: BTreeSet<String> = BTreeSet::new();
-    for node in &graph.nodes {
-        match &node.data {
-            WorkflowNodeData::Decision { conditions, .. } => {
-                for c in conditions {
-                    collect_heads(&c.guard, &mut heads);
-                }
-            }
-            WorkflowNodeData::Loop { loop_condition, .. } => collect_heads(loop_condition, &mut heads),
-            WorkflowNodeData::End { result_mapping, .. } => {
-                for m in result_mapping {
-                    collect_heads(&m.expression, &mut heads);
-                }
-            }
-            WorkflowNodeData::Failure {
-                error_result_mapping,
-                ..
-            } => {
-                for m in error_result_mapping {
-                    collect_heads(&m.expression, &mut heads);
-                }
-            }
-            _ => {}
-        }
-    }
-    if heads.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    // 2. Drop heads that are producer slugs — a real upstream reference wins.
-    let slugs = slug_index(graph)
-        .map_err(|e| ApiError::compile(format!("compilation failed: {e}"), vec![e.to_view()]))?;
-    heads.retain(|h| slugs.node_for(h).is_none());
-    if heads.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    // 3. Gather scope-visible OBJECT assets matching those heads (mirrors
-    //    `discover_asset_bindings`, restricted to `cardinality = 'object'`).
-    let visible = visible_scopes_for(&state.db, ScopeKind::Template, template_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("asset scope resolution: {e}")))?;
-    let mut scope_kinds: Vec<String> = Vec::new();
-    let mut scope_ids: Vec<Uuid> = Vec::new();
-    if let Some(ws) = visible.workspace {
-        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
-        scope_ids.push(ws);
-    }
-    for p in &visible.projects {
-        scope_kinds.push(ScopeKind::Project.as_db().to_string());
-        scope_ids.push(*p);
-    }
-    if let Some(t) = visible.template {
-        scope_kinds.push(ScopeKind::Template.as_db().to_string());
-        scope_ids.push(t);
-    }
-    if visible.workspace.is_none() {
-        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
-        scope_ids.push(workspace_id);
-    }
-    let ref_keys: Vec<String> = heads.iter().cloned().collect();
-
-    let rows: Vec<(Uuid, i32, String, Uuid, String)> = sqlx::query_as(
-        "SELECT a.id, a.version, a.ref_key, a.scope_id, a.scope_kind \
-         FROM assets a \
-         JOIN asset_types t ON t.id = a.type_id \
-         JOIN UNNEST($1::text[], $2::uuid[]) AS s(scope_kind, scope_id) \
-           ON a.scope_kind = s.scope_kind AND a.scope_id = s.scope_id \
-         WHERE a.ref_key = ANY($3) AND a.deleted_at IS NULL AND t.cardinality = 'object'",
-    )
-    .bind(&scope_kinds)
-    .bind(&scope_ids)
-    .bind(&ref_keys)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::internal(format!("asset field-ref lookup: {e}")))?;
-    if rows.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let candidates: Vec<ScopedItem<(Uuid, i32)>> = rows
-        .into_iter()
-        .filter_map(|(id, version, ref_key, scope_id, scope_kind)| {
-            ScopeKind::from_db(&scope_kind).map(|kind| ScopedItem {
-                scope: Scope { kind, id: scope_id },
-                ref_key,
-                item: (id, version),
-            })
-        })
-        .collect();
-
-    // 4. Resolve each head most-specific-wins; fetch its single record (row 0).
-    let mut consts = ObjectAssetConsts::new();
-    let mut pins: BTreeMap<String, (Uuid, i32)> = BTreeMap::new();
-    for head in &heads {
-        let resolved = resolve_one(head, candidates.clone()).map_err(|clash| {
-            let view = CompileError::AssetBindingAmbiguous {
-                node_id: String::new(),
-                ref_key: head.clone(),
-                detail: clash.to_string(),
-            };
-            ApiError::compile(
-                format!("asset field reference ambiguous: {view}"),
-                vec![view.to_view()],
-            )
-        })?;
-        let Some(item) = resolved else { continue };
-        let (asset_id, version) = item.item;
-        let record: Option<(serde_json::Value,)> = sqlx::query_as(
-            "SELECT data FROM asset_records WHERE asset_id = $1 AND version = $2 AND row_idx = 0",
-        )
-        .bind(asset_id)
-        .bind(version)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::internal(format!("asset record fetch: {e}")))?;
-        if let Some((data,)) = record {
-            consts.insert(head.clone(), data);
-            pins.insert(head.clone(), (asset_id, version));
-        }
-    }
-
-    // 5. Rewrite the graph's control-flow sources in place.
-    inline_asset_constants(graph, &consts);
-    Ok(pins)
 }
 
 /// Inject the `_aithericon_io` `.py`/`.pyi` pair into every Python automated

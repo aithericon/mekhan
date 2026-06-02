@@ -149,7 +149,7 @@ fn repeater_output_surfaces_as_array_in_consumer_scope() {
         "review_tasks",
         REVIEW_FIELDS,
     );
-    let surface = surface_types(&g);
+    let surface = surface_types(&g, &Default::default());
     assert!(surface.graph_ok, "graph must analyze");
     let consumer_scope = surface
         .scopes

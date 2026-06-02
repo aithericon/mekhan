@@ -1,5 +1,4 @@
 pub mod asset_refs;
-pub(crate) mod asset_const;
 pub mod backend_configs;
 pub(crate) mod borrow;
 mod compile;
@@ -8,6 +7,7 @@ pub(crate) mod graph;
 pub(crate) mod human_task_refs;
 pub mod interface;
 pub(crate) mod lower;
+pub mod named_global;
 pub(crate) mod placeholder_refs;
 mod pyio;
 pub(crate) mod python_refs;

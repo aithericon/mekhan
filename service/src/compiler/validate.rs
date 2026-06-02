@@ -274,7 +274,7 @@ pub(crate) fn validate_loop_body_control_refs(
     use crate::compiler::token_shape::analyze;
     use crate::compiler::token_shape::surface::is_control_leaf;
 
-    let Ok(report) = analyze(graph) else {
+    let Ok(report) = analyze(graph, &Default::default()) else {
         return Ok(());
     };
 
@@ -1271,6 +1271,7 @@ pub fn node_output_fields(
 pub(crate) fn validate_guards<'a>(
     graph: &'a WorkflowGraph,
     _wg: &WorkflowDiGraph<'a>,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
 ) -> Result<(), CompileError> {
     use crate::compiler::rhai_scope;
 
@@ -1298,7 +1299,7 @@ pub(crate) fn validate_guards<'a>(
     // Single shape-aware resolver: errors (provenance-rich GuardUnresolved)
     // if any guard references a field no upstream node produces and isn't on
     // the pre-yield control token.
-    crate::compiler::token_shape::guard_readarc_plan(graph)?;
+    crate::compiler::token_shape::guard_readarc_plan(graph, known_globals)?;
     Ok(())
 }
 
@@ -1690,7 +1691,7 @@ pub(crate) fn validate_repeaters(graph: &WorkflowGraph) -> Result<(), CompileErr
         return Ok(());
     }
 
-    let report = analyze(graph)?;
+    let report = analyze(graph, &Default::default())?;
     let slugs = slug_index(graph)?;
 
     for node in &graph.nodes {
@@ -1869,7 +1870,7 @@ pub(crate) fn validate_maps(graph: &WorkflowGraph) -> Result<(), CompileError> {
         return Ok(());
     }
 
-    let report = analyze(graph)?;
+    let report = analyze(graph, &Default::default())?;
     let slugs = slug_index(graph)?;
 
     for node in &graph.nodes {
@@ -2010,7 +2011,7 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
         return Ok(());
     }
 
-    let report = analyze(graph)?;
+    let report = analyze(graph, &Default::default())?;
     let slugs = slug_index(graph)?;
 
     for node in &graph.nodes {
