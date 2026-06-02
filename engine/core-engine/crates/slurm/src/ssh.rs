@@ -64,8 +64,26 @@ impl SshSession {
         let key_path = shellexpand::tilde(&config.ssh_key).to_string();
         builder.keyfile(&key_path);
 
-        // Enable ControlMaster multiplexing
-        builder.control_directory(std::env::temp_dir());
+        // Enable ControlMaster multiplexing. The control socket is a Unix domain
+        // socket whose path is capped at ~104 bytes (`sockaddr_un.sun_path`) on
+        // macOS/BSD. openssh derives it as `<control_dir>/.ssh-connection<rand>/
+        // <user>@<host>:<port>` (+ a temp suffix), so a long `control_dir` blows
+        // the limit and the master fails with "ControlPath too long", which the
+        // `openssh` crate surfaces as the opaque "failed to connect to the remote
+        // host". `std::env::temp_dir()` is exactly such a long path on macOS (the
+        // per-user `/var/folders/…/T/` — longer still under nix-shell's
+        // `$TMPDIR`). Prefer a short, stable base (`/tmp`) so the socket path
+        // stays well under the cap; fall back to `temp_dir()` only if `/tmp` is
+        // unavailable.
+        let control_dir = {
+            let short = std::path::Path::new("/tmp");
+            if short.is_dir() {
+                short.to_path_buf()
+            } else {
+                std::env::temp_dir()
+            }
+        };
+        builder.control_directory(control_dir);
 
         // Keepalive: send a probe every 15s, disconnect after 3 missed replies.
         // Without this, a dead connection hangs until the next command times out

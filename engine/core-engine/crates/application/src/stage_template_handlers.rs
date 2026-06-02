@@ -288,7 +288,7 @@ mod tests {
                     "entrypoint": "python run.py",
                     "env": { "FOO": "bar" }
                 },
-                "escape_hatch": { "sbatch_directives": null, "hcl_stanza": null },
+                "escape_hatch": { "sbatch_directives": [], "hcl_stanza": null },
                 "package_ref": null
             }),
         );

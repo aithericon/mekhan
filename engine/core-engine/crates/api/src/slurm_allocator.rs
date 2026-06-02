@@ -287,10 +287,15 @@ impl SlurmAllocatorClient {
             "partition": args.spec.partition,
             "entrypoint": args.spec.entrypoint,
         });
+        // mekhan models `sbatch_directives` as one element per directive line;
+        // the renderer takes a single verbatim block, so join with newlines
+        // (None when empty → renderer omits the block).
+        let directives = (!args.escape_hatch.sbatch_directives.is_empty())
+            .then(|| args.escape_hatch.sbatch_directives.join("\n"));
         let script = alloc::render_sbatch_script(
             &args.slug,
             &spec,
-            args.escape_hatch.sbatch_directives.as_deref(),
+            directives.as_deref(),
             &args.spec.env,
         );
 

@@ -95,9 +95,12 @@ pub struct StageSpec {
 /// author-supplied raw directives spliced verbatim into the rendered template.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StageEscapeHatch {
-    /// Raw `#SBATCH` directive block (Slurm), spliced into the sbatch script.
+    /// Raw `#SBATCH` directive lines (Slurm), spliced verbatim into the sbatch
+    /// script. One element per directive line — mirrors mekhan's
+    /// `EscapeHatch.sbatch_directives: Vec<String>` authoring model (the pinned
+    /// wire contract). Empty when absent.
     #[serde(default)]
-    pub sbatch_directives: Option<String>,
+    pub sbatch_directives: Vec<String>,
     /// Raw HCL/JSON stanza (Nomad), merged into the rendered job (v1: advisory).
     #[serde(default)]
     pub hcl_stanza: Option<String>,
