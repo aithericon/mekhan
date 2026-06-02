@@ -39,9 +39,6 @@
 	// `POST /api/analyze`-backed loader the canvas-mode property panel uses,
 	// so what the picker shows is exactly what the compiler resolves.
 	let nodeScopes = $state<Map<string, ScopeEntry[]>>(new Map());
-	// Server-authoritative globals (resources + assets) from the analyze
-	// response. Passed to NodeConfigPanel as `globalsScope`.
-	let globalsScope = $state<ScopeEntry[]>([]);
 	let scopeBusy = $state(false);
 	// Surfaced from the analyzer so an empty picker can explain itself: when
 	// `graphOk` is false (dangling edge, missing End, …) or the request
@@ -58,7 +55,6 @@
 				workspaceId: template?.workspace_id
 			});
 			nodeScopes = result.scopes;
-			globalsScope = result.globalsScope;
 			graphOk = result.graphOk;
 			scopeRequestFailed = result.requestFailed;
 			scopeDiagnostics = result.diagnostics;
@@ -438,7 +434,7 @@
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
 					scope={nodeScopes.get(selectedNodeId) ?? []}
-					{globalsScope}
+					{templateId}
 					scopeBusy={scopeBusy}
 					onRefreshScope={refreshScopes}
 					oninsertref={editorApi ? (s) => editorApi?.insertAtCursor(s) : undefined}

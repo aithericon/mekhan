@@ -13,6 +13,7 @@
 		fetchNodeScopes,
 		loadResourceTypes,
 		loadWorkspaceResources,
+		loadTemplateAssetScope,
 		buildResourceScope,
 		type ScopeEntry
 	} from '$lib/editor/guard-scope';
@@ -94,11 +95,6 @@
 	// Debounced so a burst of graph edits collapses to one round-trip;
 	// best-effort (stale/empty on failure — never throws).
 	let scope = $state<ScopeEntry[]>([]);
-	// Server-authoritative globals (resources + assets) returned when
-	// workspace_id / template_id are present in the analyze request. Falls
-	// back to the client-side buildResourceScope projection below when the
-	// server has no DB context (ids absent or globals empty).
-	let globalsFromServer = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		const g = binding?.graph;
 		const id = nodeId;
@@ -106,13 +102,12 @@
 		// re-runs when either changes (e.g. when the template finishes
 		// loading and workspace_id becomes available). Without this read
 		// the effect body only tracks `binding?.graph` and `nodeId`, so
-		// the first analyze call runs without workspace context and assets
-		// are never returned in the Globals scope.
+		// the first analyze call runs without workspace context and the
+		// per-node diagnostics never see resolved globals.
 		const wid = workspaceId;
 		const tid = templateId;
 		if (!g || !id) {
 			scope = [];
-			globalsFromServer = [];
 			return;
 		}
 		let cancelled = false;
@@ -120,7 +115,6 @@
 			const result = await fetchNodeScopes(g, { templateId: tid, workspaceId: wid });
 			if (!cancelled) {
 				scope = result.scopes.get(id) ?? [];
-				globalsFromServer = result.globalsScope;
 			}
 		}, 250);
 		return () => {
@@ -155,15 +149,16 @@
 		binding && nodeId ? binding.graph.edges.filter((e) => e.target === nodeId).length : 0
 	);
 
-	// Workspace resources for the RefPicker's Globals tab. When the server
-	// has returned a non-empty globalsScope (i.e. workspace_id / template_id
-	// were present in the analyze request), we use those server-authoritative
-	// entries directly — they cover both resources and assets and carry
-	// proper type info. When the server had no DB context, we fall back to
-	// the client-side buildResourceScope projection (resources-only, type
-	// info from the registry).
+	// The RefPicker is a LIBRARY BROWSER: its Resources and Assets tabs list
+	// everything the user can select from their global libraries — the full
+	// workspace resource set and the full template-visible asset set — NOT
+	// only what the current graph happens to reference. So we load both
+	// libraries client-side and feed their union to the picker, regardless of
+	// what the analyzer discovered. (The analyzer's per-node `scope` above
+	// still drives diagnostics; it is not the picker's source of truth.)
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
 	let workspaceResources = $state<ResourceSummary[]>([]);
+	let assetScope = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		void loadResourceTypes()
 			.then((types) => {
@@ -176,11 +171,26 @@
 			})
 			.catch(() => {});
 	});
-	const resourceScope = $derived(
-		globalsFromServer.length > 0
-			? globalsFromServer
-			: buildResourceScope(workspaceResources, resourceTypes)
-	);
+	$effect(() => {
+		const tid = templateId;
+		if (!tid) {
+			assetScope = [];
+			return;
+		}
+		let cancelled = false;
+		void loadTemplateAssetScope(tid)
+			.then((entries) => {
+				if (!cancelled) assetScope = entries;
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+	const resourceScope = $derived([
+		...buildResourceScope(workspaceResources, resourceTypes),
+		...assetScope
+	]);
 
 	// Single exhaustive dispatch: pick the section component for this node kind.
 	// Capitalized so the template treats it as a component. The registry's

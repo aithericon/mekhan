@@ -18,6 +18,12 @@ import {
 	type ResourceTypeInfo,
 	type ResourceSummary
 } from '$lib/api/resources';
+import {
+	listAssets,
+	getAssetType,
+	type AssetSummary,
+	type PortField
+} from '$lib/api/assets';
 
 type WorkflowGraph = components['schemas']['WorkflowGraph'];
 type FieldKind = components['schemas']['FieldKind'];
@@ -321,11 +327,102 @@ export function buildResourceScope(
 				nodeLabel: resource.display_name || resource.path,
 				field,
 				kind: field === 'port' ? 'number' : 'text',
-				qualified: `${resource.path}.${field}`
+				qualified: `${resource.path}.${field}`,
+				globalKind: 'resource'
 			});
 		}
 	}
 	return out;
+}
+
+/**
+ * Project template-visible assets + their type fields into `ScopeEntry[]`
+ * for `RefPicker`'s Assets tab — the asset analogue of `buildResourceScope`.
+ *
+ * Each asset contributes one entry per field of its declared type, keyed by
+ * the asset's `ref_key` (the identifier the compiler matches `<ref_key>.<field>`
+ * against). `typesById` maps an asset's `type_id` to its ordered `PortField`
+ * list (asset type summaries don't carry fields — the caller fetches each
+ * type's detail; see `loadTemplateAssetScope`). Assets whose type is missing
+ * from the map are dropped silently.
+ *
+ * Unlike resources (workspace-scoped), assets are template-visible: the set
+ * shown depends on the template's scope chain, resolved server-side by the
+ * `/api/v1/assets?scope=template:<id>` query the loader issues.
+ */
+export function buildAssetScope(
+	assets: AssetSummary[] | undefined,
+	typesById: Map<string, PortField[]>
+): ScopeEntry[] {
+	if (!assets || assets.length === 0) return [];
+	const out: ScopeEntry[] = [];
+	// Alphabetise by `ref_key` so the picker order matches what the user types.
+	const sorted = [...assets].sort((a, b) => a.ref_key.localeCompare(b.ref_key));
+	for (const asset of sorted) {
+		const fields = typesById.get(asset.type_id);
+		if (!fields) continue;
+		for (const field of fields) {
+			out.push({
+				nodeId: `asset:${asset.id}`,
+				nodeLabel: asset.display_name || asset.ref_key,
+				field: field.name,
+				kind: field.kind,
+				qualified: `${asset.ref_key}.${field.name}`,
+				globalKind: 'asset'
+			});
+		}
+	}
+	return out;
+}
+
+/**
+ * Template-asset library for the RefPicker's Assets tab. Fetches every
+ * template-visible asset plus the field list of each distinct asset type, then
+ * projects them via `buildAssetScope`. Cached per-template (mirrors the
+ * resource caches): assets DO change at runtime, but the editor's "Refresh"
+ * affordance + a full page reload pick up changes.
+ *
+ * Resolves to `[]` (never rejects) on any failure so the picker degrades to
+ * its other tabs instead of throwing.
+ */
+const templateAssetScopeCache = new Map<string, Promise<ScopeEntry[]>>();
+
+export function loadTemplateAssetScope(templateId: string): Promise<ScopeEntry[]> {
+	const cached = templateAssetScopeCache.get(templateId);
+	if (cached) return cached;
+	const promise = (async () => {
+		const page = await listAssets({
+			scope: { kind: 'template', id: templateId },
+			perPage: 200
+		});
+		const assets = page.items;
+		const typeIds = [...new Set(assets.map((a) => a.type_id))];
+		const typesById = new Map<string, PortField[]>();
+		await Promise.all(
+			typeIds.map(async (id) => {
+				try {
+					const detail = await getAssetType(id);
+					typesById.set(id, detail.fields);
+				} catch {
+					// Skip a type we can't resolve — its assets just won't list.
+				}
+			})
+		);
+		return buildAssetScope(assets, typesById);
+	})();
+	templateAssetScopeCache.set(templateId, promise);
+	promise.catch(() => {
+		// Drop the rejected promise so the next call retries.
+		if (templateAssetScopeCache.get(templateId) === promise) {
+			templateAssetScopeCache.delete(templateId);
+		}
+	});
+	return promise;
+}
+
+/** Test/HMR helper — drops the template-asset scope cache. */
+export function _clearAssetScopeCache(): void {
+	templateAssetScopeCache.clear();
 }
 
 /**

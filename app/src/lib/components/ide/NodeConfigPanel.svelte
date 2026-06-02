@@ -12,6 +12,7 @@
 	import {
 		loadResourceTypes,
 		loadWorkspaceResources,
+		loadTemplateAssetScope,
 		buildResourceScope,
 		type ScopeEntry
 	} from '$lib/editor/guard-scope';
@@ -27,10 +28,10 @@
 		 *  Inputs-in-scope picker and every nested section that embeds a
 		 *  RefPicker (Decision, Loop, AutomatedStep, HumanTask). */
 		scope?: ScopeEntry[];
-		/** Server-authoritative globals (resources + assets) from the analyze
-		 *  response. When non-empty, used as the "Globals" tab in RefPicker
-		 *  instead of the client-side buildResourceScope projection. */
-		globalsScope?: ScopeEntry[];
+		/** Template this node belongs to. Drives the Assets tab of RefPicker:
+		 *  the picker lists every template-visible asset so the user can browse
+		 *  and select from their asset library. */
+		templateId?: string | null;
 		scopeBusy?: boolean;
 		onRefreshScope?: () => void;
 		/** Insert a snippet at the active code editor's cursor. When
@@ -43,18 +44,19 @@
 		nodeId,
 		readonly = false,
 		scope = [],
-		globalsScope = [],
+		templateId = null,
 		scopeBusy = false,
 		onRefreshScope,
 		oninsertref
 	}: Props = $props();
 
-	// Globals tab for RefPicker: prefer the server-authoritative globalsScope
-	// (resources + assets, typed) when it is non-empty; fall back to the
-	// client-side buildResourceScope projection (resources-only) when the
-	// IDE page didn't carry workspace/template ids into the analyze call.
+	// The RefPicker is a LIBRARY BROWSER: its Resources and Assets tabs list
+	// everything the user can select — the full workspace resource set and the
+	// full template-visible asset set — not only what the graph references. We
+	// load both libraries client-side and feed their union to the picker.
 	let resourceTypes = $state<ResourceTypeInfo[]>([]);
 	let workspaceResources = $state<ResourceSummary[]>([]);
+	let assetScope = $state<ScopeEntry[]>([]);
 	$effect(() => {
 		void loadResourceTypes()
 			.then((types) => {
@@ -67,11 +69,26 @@
 			})
 			.catch(() => {});
 	});
-	const resourceScope = $derived(
-		globalsScope.length > 0
-			? globalsScope
-			: buildResourceScope(workspaceResources, resourceTypes)
-	);
+	$effect(() => {
+		const tid = templateId;
+		if (!tid) {
+			assetScope = [];
+			return;
+		}
+		let cancelled = false;
+		void loadTemplateAssetScope(tid)
+			.then((entries) => {
+				if (!cancelled) assetScope = entries;
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+	const resourceScope = $derived([
+		...buildResourceScope(workspaceResources, resourceTypes),
+		...assetScope
+	]);
 
 	const nodeData = $derived(
 		binding.graph.nodes.find((n) => n.id === nodeId)?.data ?? null
