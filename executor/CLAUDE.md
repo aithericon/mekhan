@@ -137,7 +137,7 @@ Sandbox env vars (nsjail process isolation for the `process` + `python` backends
 - `EXECUTOR_SANDBOX__TMPFS_SIZE_MB` — private `/tmp` tmpfs size (default 64).
 - `EXECUTOR_SANDBOX__SANDBOX_UID` — unprivileged uid the child is dropped to (default 99999).
 
-The sandbox wraps the single `run_process` chokepoint (`executor-process`), so both the process and python backends are covered. Env is **scrubbed by default** (the executor's own vault/NATS creds are NOT inherited; only spec + RunContext env pass via nsjail `--env`).
+The sandbox wraps the single `run_process` chokepoint (`executor-process`), so both the process and python backends are covered by nsjail; env is **scrubbed by default** (the executor's own vault/NATS creds are NOT inherited; only spec + RunContext env pass via nsjail `--env`). The **docker** backend honours the same `EXECUTOR_SANDBOX__*` knobs by mapping them onto the container's native `HostConfig` (network=none, cap_drop ALL, no-new-privileges, readonly rootfs + private tmpfs, non-root uid, memory/pids/cpu caps) — Docker is the isolator there, not nsjail. In-process backends (http/postgres/file_ops/smtp/llm) have no child to wrap; kreuzberg/surya in-process parsing of untrusted input is an out-of-process follow-up. See `docs/sandbox.md` → "Backend coverage".
 
 ### Testing
 

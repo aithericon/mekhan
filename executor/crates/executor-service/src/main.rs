@@ -632,7 +632,14 @@ fn register_executor_backend(
         "docker" => match DockerBackend::new() {
             Ok(docker) => {
                 info!("docker backend registered");
-                registry.register(docker.with_max_output_bytes(config.max_output_bytes))
+                let mut docker = docker.with_max_output_bytes(config.max_output_bytes);
+                // Docker is its own isolator — map the same sandbox intent onto
+                // the container's native HostConfig (network/caps/readonly/
+                // user/limits) rather than nsjail.
+                if let Some(cfg) = &sandbox_cfg {
+                    docker = docker.with_sandbox(cfg.clone());
+                }
+                registry.register(docker)
             }
             Err(e) => {
                 warn!("docker backend unavailable: {e}");

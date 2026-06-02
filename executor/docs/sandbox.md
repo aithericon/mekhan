@@ -154,6 +154,34 @@ build a `SandboxConfig`, call `.validate()?` (fail-closed at startup — exits
 non-zero if nsjail missing or non-Linux), and thread it via `.with_sandbox(cfg)`
 into `ProcessBackend` and `PythonBackend`.
 
+## Backend coverage — nsjail is not uniform
+
+nsjail wraps the **spawn of a child process that runs untrusted code**, so it
+only applies where that actually happens. The backends fall into four groups:
+
+| Group | Backends | Treatment |
+|-------|----------|-----------|
+| Spawn untrusted child via `run_process` | `process`, `python` | **Covered** by the nsjail wrap (one chokepoint). Any future backend that runs user code through `run_process` inherits it for free. |
+| Fully in-process I/O (no child) | `http`, `postgres`, `file_ops`, `smtp`, `llm` core | nsjail N/A — there is no child to wrap. The "untrusted" surface is config (URL/SQL/creds), isolated at other layers (validated query idents + RLS, egress policy, …). |
+| Delegates isolation to an external isolator | `docker` | **Covered** — the same `SandboxConfig` *intent* is mapped onto the container's native `HostConfig` (see below), not nsjail. |
+| In-process parser of untrusted input | `kreuzberg` (malicious docs), the doc fed to `surya` | Real isolation desire, but **not addressable by the child-wrap** — would need an out-of-process redesign (fork+nsjail the parse) or seccomp; tracked as a follow-up. `surya`/`llm` already run as persistent managed daemons (not ONCE-mode), so they'd need their own containment story. |
+
+### Docker backend parity (`executor-docker::container::apply_sandbox_to_host_config`)
+
+`DockerBackend` gains the same `with_sandbox(...)` builder; when set, the policy
+is translated to Docker's native isolation on every container:
+
+- **Security floors (enforced, override per-job `DockerConfig`):** `network_mode
+  = "none"` unless `allow_network`; `cap_drop = ["ALL"]`; `security_opt =
+  ["no-new-privileges:true"]`; `readonly_rootfs` + a private writable `/tmp`
+  tmpfs (the run_dir bind stays RW for outputs/ipc); container runs as the
+  unprivileged `sandbox_uid`.
+- **Resource ceilings (stricter of job-vs-sandbox):** `memory = min(job,
+  sandbox)`; `pids_limit` + `cpu_period`/`cpu_quota` from the sandbox.
+
+Same `EXECUTOR_SANDBOX__*` knobs, same deny-by-default + clean posture; Docker
+mechanism instead of nsjail.
+
 ## What v1 does NOT do (explicit non-goals / follow-ups)
 
 - **Per-job sandbox overrides** (`spec.config.sandbox.*`). The chokepoint has
