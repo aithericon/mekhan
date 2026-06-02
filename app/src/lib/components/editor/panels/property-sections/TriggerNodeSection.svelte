@@ -195,13 +195,17 @@
 	}
 
 	const origin = $derived(browser ? window.location.origin : 'https://YOUR_HOST');
-	const fireUrl = $derived(`${origin}/api/triggers/${nodeId ?? '{node_id}'}/fire`);
+	const triggerBase = $derived(`${origin}/api/v1/triggers/${nodeId ?? '{node_id}'}`);
+	const fireUrl = $derived(`${triggerBase}/fire`);
+	const invokeUrl = $derived(`${triggerBase}/invoke`);
 
 	// With file fields, fire as multipart/form-data: one `-F` per file part +
-	// a `payload` part for the rest. Otherwise a plain JSON body.
-	const curlCommand = $derived.by(() => {
+	// a `payload` part for the rest. Otherwise a plain JSON body. The body shape
+	// is identical for `/fire` (async) and `/invoke` (sync) — only the URL
+	// differs — so the same builder serves both.
+	function buildCurl(url: string): string {
 		if (fileFields.length > 0) {
-			const lines = [`curl -X POST '${fireUrl}'`];
+			const lines = [`curl -X POST '${url}'`];
 			for (const f of fileFields) {
 				lines.push(`  -F '${f.name}=@/path/to/${f.name};type=${fileMime(f)}'`);
 			}
@@ -209,11 +213,13 @@
 			return lines.join(' \\\n');
 		}
 		return [
-			`curl -X POST '${fireUrl}'`,
+			`curl -X POST '${url}'`,
 			`  -H 'Content-Type: application/json'`,
 			`  -d '${JSON.stringify({ payload: samplePayload })}'`
 		].join(' \\\n');
-	});
+	}
+	const fireCurl = $derived(buildCurl(fireUrl));
+	const invokeCurl = $derived(buildCurl(invokeUrl));
 	const hasMapping = $derived((data.payloadMapping ?? []).length > 0);
 
 	const sourceKindLabels: Record<string, string> = {
@@ -498,11 +504,20 @@
 			<div class="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
 				<div class="flex items-center justify-between gap-2">
 					<span class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-						Sample request
+						Fire <span class="font-normal normal-case">— async, returns <code>202 {'{'} instance_id {'}'}</code></span>
 					</span>
-					<CopyButton text={curlCommand} />
+					<CopyButton text={fireCurl} />
 				</div>
-				<pre class="overflow-x-auto whitespace-pre-wrap break-all font-mono text-sm leading-relaxed text-foreground">{curlCommand}</pre>
+				<pre class="overflow-x-auto whitespace-pre-wrap break-all font-mono text-sm leading-relaxed text-foreground">{fireCurl}</pre>
+			</div>
+			<div class="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
+				<div class="flex items-center justify-between gap-2">
+					<span class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+						Invoke <span class="font-normal normal-case">— sync, waits and returns <code>{'{'} ok, value {'}'}</code></span>
+					</span>
+					<CopyButton text={invokeCurl} />
+				</div>
+				<pre class="overflow-x-auto whitespace-pre-wrap break-all font-mono text-sm leading-relaxed text-foreground">{invokeCurl}</pre>
 			</div>
 			{#if fileFields.length > 0}
 				<p class="text-sm text-muted-foreground">
