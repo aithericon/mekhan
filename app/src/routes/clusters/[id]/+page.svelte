@@ -7,6 +7,7 @@
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import ClusterMetricsPanel from '$lib/components/clusters/ClusterMetricsPanel.svelte';
 	import ClusterLeasesTable from '$lib/components/clusters/ClusterLeasesTable.svelte';
+	import ClusterTemplatesTable from '$lib/components/clusters/ClusterTemplatesTable.svelte';
 	import {
 		listClusters,
 		reconnectCluster,
@@ -164,6 +165,14 @@
 				/>
 
 				<ClusterLeasesTable {leases} loading={leasesLoading} variant="recent" />
+
+				<!-- Templates section: job templates whose flavor matches this cluster -->
+				<div class="border-t border-border/40 pt-8">
+					<ClusterTemplatesTable
+						flavor={cluster?.flavor ?? null}
+						clusterId={resourceId}
+					/>
+				</div>
 			</div>
 		{/if}
 	</div>

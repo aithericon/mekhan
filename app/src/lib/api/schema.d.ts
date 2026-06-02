@@ -760,6 +760,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/job-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/job-templates` — paginated list, optionally filtered by flavor.
+         *     Returns the caller's workspace templates plus any public ones.
+         */
+        get: operations["list_job_templates"];
+        put?: never;
+        /** `POST /api/v1/job-templates` — create a logical template + its v1 row. */
+        post: operations["create_job_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/job-templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/job-templates/{id}` — detail view incl. versions + stagings. */
+        get: operations["get_job_template"];
+        /**
+         * `PUT /api/v1/job-templates/{id}` — update metadata and/or spec. Any of
+         *     `common_spec` / `escape_hatch` / `parameters` in the body bumps a new
+         *     version; metadata-only edits do not.
+         */
+        put: operations["update_job_template"];
+        post?: never;
+        /**
+         * `DELETE /api/v1/job-templates/{id}` — soft delete. Preserves version +
+         *     staging history.
+         */
+        delete: operations["delete_job_template"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/job-templates/{id}/stagings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/job-templates/{id}/stagings` — list stagings for a template. */
+        get: operations["list_job_template_stagings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/active-workspace": {
         parameters: {
             query?: never;
@@ -2828,6 +2892,28 @@ export interface components {
             clusters: components["schemas"]["ClusterSummary"][];
         };
         /**
+         * @description Typed flavor-neutral core of a job template version. Every field is optional
+         *     — a template may specify as much or as little as it likes; the flavor's
+         *     staging step fills in defaults. Serialized into `job_template_versions.common_spec`.
+         */
+        CommonSpec: {
+            /** Format: int32 */
+            cpus?: number | null;
+            entrypoint?: string | null;
+            env?: {
+                [key: string]: string;
+            };
+            gpu_type?: string | null;
+            /** Format: int32 */
+            gpus?: number | null;
+            image?: string | null;
+            /** Format: int64 */
+            mem_mb?: number | null;
+            partition?: string | null;
+            /** @description Walltime string in the flavor's own grammar (e.g. Slurm `"01:30:00"`). */
+            time_limit?: string | null;
+        };
+        /**
          * @description Structured payload of a compile error for the editor. Returned as part of
          *     the publish API response so the frontend can highlight the offending
          *     node/edge inline instead of just showing a flat error string.
@@ -2908,6 +2994,27 @@ export interface components {
             start_tokens?: components["schemas"]["StartToken"][];
             /** Format: uuid */
             template_id: string;
+        };
+        /**
+         * @description Request body for `POST /api/v1/job-templates`. Lands a `job_templates` row
+         *     at `latest_version = 1` plus the first `job_template_versions` row (v1).
+         */
+        CreateJobTemplateRequest: {
+            common_spec: components["schemas"]["CommonSpec"];
+            consumer_locked?: boolean | null;
+            display_name: string;
+            escape_hatch?: null | components["schemas"]["EscapeHatch"];
+            /** @description `slurm` | `nomad`. */
+            flavor: string;
+            parameters?: components["schemas"]["TemplateParameter"][] | null;
+            /** @description Identifier-safe key, unique within a workspace. */
+            slug: string;
+            visibility?: string | null;
+            /**
+             * Format: uuid
+             * @description Optional workspace scoping. `None` resolves to the caller's workspace.
+             */
+            workspace_id?: string | null;
         };
         CreateProjectRequest: {
             description?: string;
@@ -3088,7 +3195,15 @@ export interface components {
             mode: "executor";
             pool?: null | components["schemas"]["ResourcePoolBinding"];
         } | {
+            /**
+             * @description Legacy/manual native job NAME registered on the scheduler. When
+             *     `job_template_ref` is `Some`, publish OVERWRITES this string with the
+             *     referenced template's slug (the name Phase-4 staging registers the
+             *     native job under), so lowering/engine always read a concrete name
+             *     here regardless of which authoring path produced it.
+             */
             jobTemplate: string;
+            jobTemplateRef?: null | components["schemas"]["TemplateRef"];
             /** @enum {string} */
             mode: "scheduled";
             resources?: null | components["schemas"]["ResourceConfig"];
@@ -3177,6 +3292,16 @@ export interface components {
              *     avoid pulling the dependency into this module's signature.
              */
             failing_tests?: unknown;
+        };
+        /**
+         * @description Flavor-specific raw passthrough. Slurm fills `sbatch_directives`; Nomad fills
+         *     `hcl_stanza`. Serialized into `job_template_versions.escape_hatch`.
+         */
+        EscapeHatch: {
+            /** @description Raw HCL job stanza (nomad flavor). */
+            hcl_stanza?: string | null;
+            /** @description Raw `#SBATCH` directive lines (slurm flavor). */
+            sbatch_directives?: string[];
         };
         EventDetail: {
             artifact?: null | components["schemas"]["CatalogueEntry"];
@@ -3634,6 +3759,61 @@ export interface components {
             status: string;
         };
         /**
+         * @description Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus
+         *     its full version history and current stagings.
+         */
+        JobTemplateDetail: {
+            consumer_locked: boolean;
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            flavor: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            latest_version: number;
+            slug: string;
+            /** @description Current stagings across every datacenter. */
+            stagings: components["schemas"]["TemplateStaging"][];
+            /** Format: date-time */
+            updated_at: string;
+            /** @description All versions, newest first. */
+            versions: components["schemas"]["JobTemplateVersion"][];
+            visibility: string;
+        };
+        /**
+         * @description Compact list-row shape. Returned by `GET /api/v1/job-templates` — never
+         *     carries per-version payload so the list endpoint stays cheap.
+         */
+        JobTemplateSummary: {
+            consumer_locked: boolean;
+            /** Format: date-time */
+            created_at: string;
+            display_name: string;
+            flavor: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            latest_version: number;
+            slug: string;
+            /** Format: date-time */
+            updated_at: string;
+            visibility: string;
+        };
+        /**
+         * @description One version, materialized with its decoded JSONB payload. Member of
+         *     [`JobTemplateDetail::versions`].
+         */
+        JobTemplateVersion: {
+            common_spec: components["schemas"]["CommonSpec"];
+            /** Format: date-time */
+            created_at: string;
+            escape_hatch?: null | components["schemas"]["EscapeHatch"];
+            parameters: components["schemas"]["TemplateParameter"][];
+            /** Format: int32 */
+            version: number;
+        };
+        /**
          * @description Firing rule for a `Join` node. `All` (the default) is the AND-join —
          *     waits for every incoming branch. `Any` fires per arriving token — the
          *     canonical petri-net XOR-join, dual of `Decision`'s XOR-split.
@@ -4071,6 +4251,29 @@ export interface components {
                 template_version: number;
                 /** Format: uuid */
                 test_id?: string | null;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_JobTemplateSummary: {
+            items: {
+                consumer_locked: boolean;
+                /** Format: date-time */
+                created_at: string;
+                display_name: string;
+                flavor: string;
+                /** Format: uuid */
+                id: string;
+                /** Format: int32 */
+                latest_version: number;
+                slug: string;
+                /** Format: date-time */
+                updated_at: string;
+                visibility: string;
             }[];
             /** Format: int64 */
             page: number;
@@ -5498,6 +5701,42 @@ export interface components {
             output: components["schemas"]["Port"];
         };
         /**
+         * @description One declared parameter the template exposes to its consumers. Serialized as
+         *     an element of the `job_template_versions.parameters` array.
+         */
+        TemplateParameter: {
+            default?: unknown;
+            description?: string | null;
+            /**
+             * @description Free-form kind tag (`string` | `int` | `bool` | …). Kept a string so the
+             *     vocabulary can grow without an ALTER.
+             */
+            kind: string;
+            name: string;
+            required: boolean;
+        };
+        /**
+         * @description A pinned reference to a control-plane job template (Phase 3, B-model).
+         *
+         *     Lives on [`DeploymentModel::Scheduled::job_template_ref`]. At publish,
+         *     `resolve_job_templates` loads the `(template_id, version)` row, validates the
+         *     template's flavor against the step's resolved cluster flavor, and stamps the
+         *     template's slug into the sibling `job_template` string. The actual staging of
+         *     the native job onto the cluster is Phase 4.
+         */
+        TemplateRef: {
+            /**
+             * Format: uuid
+             * @description `job_templates.id` — the logical template (workspace-scoped).
+             */
+            templateId: string;
+            /**
+             * Format: int32
+             * @description `job_template_versions.version` — the immutable version to bind.
+             */
+            version: number;
+        };
+        /**
          * @description One template source. Carries the source bytes inline plus a label used
          *     for diagnostic messages ("error in subject.tera at line 3"). The label
          *     is the original node-file name from the editor.
@@ -5507,6 +5746,29 @@ export interface components {
             label: string;
             /** @description Raw Tera template text. */
             source: string;
+        };
+        /**
+         * @description One staging row, on the wire. Member of [`JobTemplateDetail::stagings`] and
+         *     the body of `GET /api/v1/job-templates/{id}/stagings`.
+         */
+        TemplateStaging: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            datacenter_resource_id: string;
+            /** Format: uuid */
+            id: string;
+            last_error?: string | null;
+            remote_ref?: string | null;
+            /** Format: date-time */
+            staged_at?: string | null;
+            status: string;
+            /** Format: uuid */
+            template_id: string;
+            /** Format: int32 */
+            template_version: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         /**
          * @description A test attached to a logical template family. `template_id` is the family
@@ -5717,6 +5979,20 @@ export interface components {
             scopes: {
                 [key: string]: components["schemas"]["ScopeEntryDto"][];
             };
+        };
+        /**
+         * @description Request body for `PUT /api/v1/job-templates/{id}`. A change to any of
+         *     `common_spec` / `escape_hatch` / `parameters` BUMPS a new version;
+         *     metadata-only changes (`display_name` / `visibility` / `consumer_locked`)
+         *     do not.
+         */
+        UpdateJobTemplateRequest: {
+            common_spec?: null | components["schemas"]["CommonSpec"];
+            consumer_locked?: boolean | null;
+            display_name?: string | null;
+            escape_hatch?: null | components["schemas"]["EscapeHatch"];
+            parameters?: components["schemas"]["TemplateParameter"][] | null;
+            visibility?: string | null;
         };
         /**
          * @description Partial update for a project. Both fields optional — omitted fields are
@@ -7837,6 +8113,232 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_job_templates: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+                /** @description Optional filter: only return templates of this flavor (`slurm` | `nomad`). */
+                flavor?: string | null;
+                /** @description Optional workspace filter. Defaults to the caller's workspace. */
+                workspace_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated list of job templates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_JobTemplateSummary"];
+                };
+            };
+        };
+    };
+    create_job_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateJobTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Job template created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTemplateSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Slug already exists in workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_job_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job template detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTemplateDetail"];
+                };
+            };
+            /** @description Job template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_job_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateJobTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Job template updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTemplateSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Job template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_job_template: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job template soft-deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Job template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_job_template_stagings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Job template id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stagings for the template */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateStaging"][];
+                };
+            };
+            /** @description Job template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

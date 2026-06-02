@@ -1794,6 +1794,325 @@
         }
       }
     },
+    "/api/v1/job-templates": {
+      "get": {
+        "tags": [
+          "job-templates"
+        ],
+        "summary": "`GET /api/v1/job-templates` — paginated list, optionally filtered by flavor.\nReturns the caller's workspace templates plus any public ones.",
+        "operationId": "list_job_templates",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "flavor",
+            "in": "query",
+            "description": "Optional filter: only return templates of this flavor (`slurm` | `nomad`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "description": "Optional workspace filter. Defaults to the caller's workspace.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of job templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_JobTemplateSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "job-templates"
+        ],
+        "summary": "`POST /api/v1/job-templates` — create a logical template + its v1 row.",
+        "operationId": "create_job_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateJobTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Job template created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTemplateSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Slug already exists in workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/job-templates/{id}": {
+      "get": {
+        "tags": [
+          "job-templates"
+        ],
+        "summary": "`GET /api/v1/job-templates/{id}` — detail view incl. versions + stagings.",
+        "operationId": "get_job_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job template detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTemplateDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "job-templates"
+        ],
+        "summary": "`PUT /api/v1/job-templates/{id}` — update metadata and/or spec. Any of\n`common_spec` / `escape_hatch` / `parameters` in the body bumps a new\nversion; metadata-only edits do not.",
+        "operationId": "update_job_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateJobTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Job template updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTemplateSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "job-templates"
+        ],
+        "summary": "`DELETE /api/v1/job-templates/{id}` — soft delete. Preserves version +\nstaging history.",
+        "operationId": "delete_job_template",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Job template soft-deleted"
+          },
+          "404": {
+            "description": "Job template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/job-templates/{id}/stagings": {
+      "get": {
+        "tags": [
+          "job-templates"
+        ],
+        "summary": "`GET /api/v1/job-templates/{id}/stagings` — list stagings for a template.",
+        "operationId": "list_job_template_stagings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job template id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stagings for the template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateStaging"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/me/active-workspace": {
       "post": {
         "tags": [
@@ -7584,6 +7903,73 @@
           }
         }
       },
+      "CommonSpec": {
+        "type": "object",
+        "description": "Typed flavor-neutral core of a job template version. Every field is optional\n— a template may specify as much or as little as it likes; the flavor's\nstaging step fills in defaults. Serialized into `job_template_versions.common_spec`.",
+        "properties": {
+          "cpus": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "entrypoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "gpu_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gpus": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mem_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "partition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time_limit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Walltime string in the flavor's own grammar (e.g. Slurm `\"01:30:00\"`)."
+          }
+        }
+      },
       "CompileErrorView": {
         "type": "object",
         "description": "Structured payload of a compile error for the editor. Returned as part of\nthe publish API response so the frontend can highlight the offending\nnode/edge inline instead of just showing a flat error string.",
@@ -7802,6 +8188,71 @@
           "template_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "CreateJobTemplateRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/job-templates`. Lands a `job_templates` row\nat `latest_version = 1` plus the first `job_template_versions` row (v1).",
+        "required": [
+          "slug",
+          "display_name",
+          "flavor",
+          "common_spec"
+        ],
+        "properties": {
+          "common_spec": {
+            "$ref": "#/components/schemas/CommonSpec"
+          },
+          "consumer_locked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "escape_hatch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EscapeHatch"
+              }
+            ]
+          },
+          "flavor": {
+            "type": "string",
+            "description": "`slurm` | `nomad`."
+          },
+          "parameters": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TemplateParameter"
+            }
+          },
+          "slug": {
+            "type": "string",
+            "description": "Identifier-safe key, unique within a workspace."
+          },
+          "visibility": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Optional workspace scoping. `None` resolves to the caller's workspace."
           }
         }
       },
@@ -8235,7 +8686,19 @@
             ],
             "properties": {
               "jobTemplate": {
-                "type": "string"
+                "type": "string",
+                "description": "Legacy/manual native job NAME registered on the scheduler. When\n`job_template_ref` is `Some`, publish OVERWRITES this string with the\nreferenced template's slug (the name Phase-4 staging registers the\nnative job under), so lowering/engine always read a concrete name\nhere regardless of which authoring path produced it."
+              },
+              "jobTemplateRef": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TemplateRef",
+                    "description": "Optional control-plane job-template REFERENCE (Phase 3, B-model).\nWhen `Some`, publish resolves+validates it against the step's\nresolved cluster (`resolve_job_templates`) and stamps the template's\nslug into `job_template`. `None` ⇒ the bare `job_template` string is\nused verbatim (legacy/manual path). The actual staging mechanism is\nPhase 4 — this field only drives resolve+validate at publish."
+                  }
+                ]
               },
               "mode": {
                 "type": "string",
@@ -8469,6 +8932,26 @@
           },
           "failing_tests": {
             "description": "Structured per-test failures returned by the publication gate when a\npublish is blocked. Absent on non-gate errors. The shape mirrors\n`models::template_test::FailingTestInfo`; declared as `Value` here to\navoid pulling the dependency into this module's signature."
+          }
+        }
+      },
+      "EscapeHatch": {
+        "type": "object",
+        "description": "Flavor-specific raw passthrough. Slurm fills `sbatch_directives`; Nomad fills\n`hcl_stanza`. Serialized into `job_template_versions.escape_hatch`.",
+        "properties": {
+          "hcl_stanza": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw HCL job stanza (nomad flavor)."
+          },
+          "sbatch_directives": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Raw `#SBATCH` directive lines (slurm flavor)."
           }
         }
       },
@@ -9735,6 +10218,157 @@
           }
         }
       },
+      "JobTemplateDetail": {
+        "type": "object",
+        "description": "Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus\nits full version history and current stagings.",
+        "required": [
+          "id",
+          "slug",
+          "display_name",
+          "flavor",
+          "visibility",
+          "consumer_locked",
+          "latest_version",
+          "created_at",
+          "updated_at",
+          "versions",
+          "stagings"
+        ],
+        "properties": {
+          "consumer_locked": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "flavor": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latest_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "stagings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateStaging"
+            },
+            "description": "Current stagings across every datacenter."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobTemplateVersion"
+            },
+            "description": "All versions, newest first."
+          },
+          "visibility": {
+            "type": "string"
+          }
+        }
+      },
+      "JobTemplateSummary": {
+        "type": "object",
+        "description": "Compact list-row shape. Returned by `GET /api/v1/job-templates` — never\ncarries per-version payload so the list endpoint stays cheap.",
+        "required": [
+          "id",
+          "slug",
+          "display_name",
+          "flavor",
+          "visibility",
+          "consumer_locked",
+          "latest_version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "consumer_locked": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "flavor": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latest_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "visibility": {
+            "type": "string"
+          }
+        }
+      },
+      "JobTemplateVersion": {
+        "type": "object",
+        "description": "One version, materialized with its decoded JSONB payload. Member of\n[`JobTemplateDetail::versions`].",
+        "required": [
+          "version",
+          "common_spec",
+          "parameters",
+          "created_at"
+        ],
+        "properties": {
+          "common_spec": {
+            "$ref": "#/components/schemas/CommonSpec"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escape_hatch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EscapeHatch"
+              }
+            ]
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateParameter"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "JoinMode": {
         "type": "string",
         "description": "Firing rule for a `Join` node. `All` (the default) is the AND-join —\nwaits for every incoming branch. `Any` fires per arriving token — the\ncanonical petri-net XOR-join, dual of `Decision`'s XOR-split.",
@@ -10655,6 +11289,80 @@
                     "null"
                   ],
                   "format": "uuid"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_JobTemplateSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row shape. Returned by `GET /api/v1/job-templates` — never\ncarries per-version payload so the list endpoint stays cheap.",
+              "required": [
+                "id",
+                "slug",
+                "display_name",
+                "flavor",
+                "visibility",
+                "consumer_locked",
+                "latest_version",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "consumer_locked": {
+                  "type": "boolean"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "flavor": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "latest_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "slug": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "visibility": {
+                  "type": "string"
                 }
               }
             }
@@ -13476,6 +14184,54 @@
           }
         }
       },
+      "TemplateParameter": {
+        "type": "object",
+        "description": "One declared parameter the template exposes to its consumers. Serialized as\nan element of the `job_template_versions.parameters` array.",
+        "required": [
+          "name",
+          "kind",
+          "required"
+        ],
+        "properties": {
+          "default": {},
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "description": "Free-form kind tag (`string` | `int` | `bool` | …). Kept a string so the\nvocabulary can grow without an ALTER."
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TemplateRef": {
+        "type": "object",
+        "description": "A pinned reference to a control-plane job template (Phase 3, B-model).\n\nLives on [`DeploymentModel::Scheduled::job_template_ref`]. At publish,\n`resolve_job_templates` loads the `(template_id, version)` row, validates the\ntemplate's flavor against the step's resolved cluster flavor, and stamps the\ntemplate's slug into the sibling `job_template` string. The actual staging of\nthe native job onto the cluster is Phase 4.",
+        "required": [
+          "templateId",
+          "version"
+        ],
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "`job_templates.id` — the logical template (workspace-scoped)."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`job_template_versions.version` — the immutable version to bind."
+          }
+        }
+      },
       "TemplateSource": {
         "type": "object",
         "description": "One template source. Carries the source bytes inline plus a label used\nfor diagnostic messages (\"error in subject.tera at line 3\"). The label\nis the original node-file name from the editor.",
@@ -13491,6 +14247,67 @@
           "source": {
             "type": "string",
             "description": "Raw Tera template text."
+          }
+        }
+      },
+      "TemplateStaging": {
+        "type": "object",
+        "description": "One staging row, on the wire. Member of [`JobTemplateDetail::stagings`] and\nthe body of `GET /api/v1/job-templates/{id}/stagings`.",
+        "required": [
+          "id",
+          "template_id",
+          "template_version",
+          "datacenter_resource_id",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "datacenter_resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remote_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "staged_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -14083,6 +14900,59 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "UpdateJobTemplateRequest": {
+        "type": "object",
+        "description": "Request body for `PUT /api/v1/job-templates/{id}`. A change to any of\n`common_spec` / `escape_hatch` / `parameters` BUMPS a new version;\nmetadata-only changes (`display_name` / `visibility` / `consumer_locked`)\ndo not.",
+        "properties": {
+          "common_spec": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommonSpec"
+              }
+            ]
+          },
+          "consumer_locked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "escape_hatch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EscapeHatch"
+              }
+            ]
+          },
+          "parameters": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TemplateParameter"
+            }
+          },
+          "visibility": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -15629,6 +16499,10 @@
     {
       "name": "resources",
       "description": "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."
+    },
+    {
+      "name": "job-templates",
+      "description": "Versioned cluster job-spec entity (flavor-tagged `slurm`/`nomad`) — typed common spec + flavor escape hatch + declared parameters, staged onto datacenter resources. No secret coupling."
     },
     {
       "name": "backends",

@@ -4,14 +4,40 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { Input } from '$lib/components/ui/input';
 	import { FormField } from '$lib/components/ui/form-field';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
-	import { GPU_JOB_TEMPLATES } from '$lib/editor/deployment-targets';
+	import JobTemplatePicker, {
+		type JobTemplateRef
+	} from './shared/JobTemplatePicker.svelte';
+	import TemplateParameterForm from './TemplateParameterForm.svelte';
 
 	// The editor-side shape of `DeploymentModel` (executor{pool?} | scheduled{…}).
 	// Shared by the AutomatedStep and Agent panels — both carry the identical
 	// `deploymentModel` field derived from the same OpenAPI schema.
 	type DeploymentModelValue = NonNullable<AutomatedStepNodeData['deploymentModel']>;
+
+	// Phase 3 B-model extension: the Scheduled variant carries an optional
+	// `jobTemplateRef` + `jobTemplateParams` that the schema hasn't been
+	// regenerated for yet. We add them locally; the Yjs doc is freeform JSON
+	// so they survive round-trips without schema changes. At publish time the
+	// mekhan compiler reads `jobTemplateRef` and stamps `jobTemplate` with the
+	// resolved slug.
+	type ScheduledExtended = {
+		mode: 'scheduled';
+		jobTemplate: string;
+		scheduler?: string | null;
+		resources?: null | unknown;
+		/** Phase 3 B-model: pointer to a control-plane job-template. When set,
+		 *  publish resolves the slug into `jobTemplate`. */
+		jobTemplateRef?: JobTemplateRef | null;
+		/** Phase 3 B-model: parameter values for the picked template. */
+		jobTemplateParams?: Record<string, unknown>;
+	};
+
+	type ExtendedDeploymentModel =
+		| { mode: 'executor'; pool?: null | unknown }
+		| ScheduledExtended;
 
 	type Props = {
 		value: DeploymentModelValue | undefined;
@@ -24,6 +50,10 @@
 
 	let { value, schedulable = true, readonly = false, onchange }: Props = $props();
 
+	// Cast to our extended type so we can read/write the new optional fields
+	// without fighting the narrower schema type.
+	const ext = $derived(value as ExtendedDeploymentModel | undefined);
+
 	// Deployment model — executor (our executor daemon pool over the NATS work
 	// queue) vs scheduled (external cluster — Nomad/Slurm). Optional-chained so
 	// legacy templates (no field) render as executor; Rust `#[serde(default)]`
@@ -34,58 +64,100 @@
 
 	const scheduler = $derived(value?.mode === 'scheduled' ? (value.scheduler ?? '') : '');
 
+	// Phase 3 B-model fields
+	const jobTemplateRef = $derived(
+		ext?.mode === 'scheduled' ? (ext.jobTemplateRef ?? null) : null
+	);
+	const jobTemplateParams = $derived(
+		ext?.mode === 'scheduled' ? (ext.jobTemplateParams ?? {}) : {}
+	);
+
+	// Flavor hint for the picker: derive from the selected scheduler resource's
+	// flavor when it's available (future; for now pass null → show all templates).
+	const pickerFlavor = $derived<string | null>(null);
+
+	// Whether to show the free-text job template override (legacy path or manual).
+	let showManualTemplate = $state(false);
+	$effect(() => {
+		// Auto-expand the manual field when there's a pre-existing free-text value
+		// and no structured ref (so legacy templates don't silently lose their value).
+		if (ext?.mode === 'scheduled' && ext.jobTemplate && !ext.jobTemplateRef) {
+			untrack(() => { showManualTemplate = true; });
+		}
+	});
+
 	// Switching to scheduled drops any executor pool (pool is Executor-only — a
 	// datacenter cluster is bound under Scheduled instead). Defaults to
 	// env-global scheduler.
 	function setDeploymentMode(mode: string) {
-		onchange(
-			mode === 'scheduled'
-				? { mode: 'scheduled', jobTemplate: jobTemplate || GPU_JOB_TEMPLATES[0].value }
-				: { mode: 'executor' }
-		);
+		if (mode === 'scheduled') {
+			const dm: ScheduledExtended = { mode: 'scheduled', jobTemplate: '' };
+			onchange(dm as unknown as DeploymentModelValue);
+		} else {
+			onchange({ mode: 'executor' } as DeploymentModelValue);
+		}
 	}
 
 	function setJobTemplate(v: string) {
 		if (value?.mode !== 'scheduled') return;
-		onchange({ ...value, jobTemplate: v });
+		onchange({ ...value, jobTemplate: v } as DeploymentModelValue);
 	}
 
 	function setScheduler(alias: string) {
 		if (value?.mode !== 'scheduled') return;
-		const dm = { ...value };
+		const dm = { ...value } as ScheduledExtended;
 		if (alias) dm.scheduler = alias;
 		else delete dm.scheduler;
-		onchange(dm);
+		onchange(dm as unknown as DeploymentModelValue);
+	}
+
+	function setJobTemplateRef(ref: JobTemplateRef | null) {
+		if (value?.mode !== 'scheduled') return;
+		const dm = { ...value } as ScheduledExtended;
+		dm.jobTemplateRef = ref ?? undefined;
+		if (!ref) {
+			// Clear params when the template is deselected.
+			delete dm.jobTemplateParams;
+		}
+		onchange(dm as unknown as DeploymentModelValue);
+	}
+
+	function setJobTemplateParams(params: Record<string, unknown>) {
+		if (value?.mode !== 'scheduled') return;
+		const dm = { ...value } as ScheduledExtended;
+		dm.jobTemplateParams = Object.keys(params).length > 0 ? params : undefined;
+		onchange(dm as unknown as DeploymentModelValue);
 	}
 
 	// Executor-pool token admission. The binding lives under
 	// `deploymentModel.Executor.pool` (post-R3 consolidation); presence = "claim
 	// a unit from this token_pool". `alias` is REQUIRED — a pooled step names a
 	// token_pool resource (no well-known-global fallback).
-	const poolAlias = $derived(value?.mode === 'executor' ? (value.pool?.alias ?? '') : '');
-	const requiresPool = $derived(value?.mode === 'executor' && value.pool != null);
+	const poolAlias = $derived(value?.mode === 'executor' ? ((value as { mode: 'executor'; pool?: null | { alias: string } }).pool?.alias ?? '') : '');
+	const requiresPool = $derived(value?.mode === 'executor' && (value as { mode: 'executor'; pool?: null | unknown }).pool != null);
 	// Pool is intrinsically executor-only now (it lives under Executor.pool), so
 	// the control is simply hidden while scheduled.
 	const poolControlsVisible = $derived(deploymentMode === 'executor');
 
 	function setRequiresPool(on: boolean) {
-		onchange(on ? { mode: 'executor', pool: { alias: poolAlias } } : { mode: 'executor' });
+		onchange(on ? { mode: 'executor', pool: { alias: poolAlias } } as DeploymentModelValue : { mode: 'executor' } as DeploymentModelValue);
 	}
 
 	function setPoolAlias(alias: string) {
 		if (value?.mode !== 'executor') return;
 		// Preserve any existing request params when re-pointing the alias.
-		const prevRequest = value.pool?.request;
+		const prev = value as { mode: 'executor'; pool?: null | { alias: string; request?: unknown } };
+		const prevRequest = prev.pool?.request;
 		onchange({
 			mode: 'executor',
 			pool: { alias, ...(prevRequest !== undefined ? { request: prevRequest } : {}) }
-		});
+		} as DeploymentModelValue);
 	}
 
 	// ── Optional raw-JSON `request` params (v1: a textarea, not a schema form).
 	// Bound to Executor.pool.request. Kept as text locally so
 	// invalid JSON mid-typing doesn't clobber the model; committed on valid parse.
-	const requestValue = $derived(value?.mode === 'executor' ? value.pool?.request : undefined);
+	const requestValue = $derived(value?.mode === 'executor' ? (value as { mode: 'executor'; pool?: null | { alias: string; request?: unknown } }).pool?.request : undefined);
 	let requestText = $state('');
 	let requestError = $state<string | null>(null);
 	$effect(() => {
@@ -114,10 +186,11 @@
 		}
 		requestError = null;
 		if (dm.mode === 'executor') {
-			if (dm.pool == null) return; // no pool → nothing to attach request to
-			const pool: { alias: string; request?: unknown } = { alias: dm.pool.alias };
+			const extDm = dm as { mode: 'executor'; pool?: null | { alias: string; request?: unknown } };
+			if (extDm.pool == null) return; // no pool → nothing to attach request to
+			const pool: { alias: string; request?: unknown } = { alias: extDm.pool.alias };
 			if (parsed !== undefined) pool.request = parsed;
-			onchange({ mode: 'executor', pool });
+			onchange({ mode: 'executor', pool } as DeploymentModelValue);
 		}
 	}
 
@@ -210,26 +283,54 @@
 				</p>
 			{/if}
 
-			<FormField label="Job template" for="deployment-job-template">
-				<Select.Root
-					type="single"
-					value={jobTemplate}
-					onValueChange={(v) => {
-						if (v) setJobTemplate(v);
-					}}
-					disabled={readonly}
-				>
-					<Select.Trigger disabled={readonly} data-testid="select-job-template">
-						{GPU_JOB_TEMPLATES.find((t) => t.value === jobTemplate)?.label ??
-							(jobTemplate || 'Select a job template…')}
-					</Select.Trigger>
-					<Select.Content>
-						{#each GPU_JOB_TEMPLATES as t (t.value)}
-							<Select.Item value={t.value} label={t.label} />
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</FormField>
+			<!-- Phase 3 B-model: structured job-template picker -->
+			<JobTemplatePicker
+				flavor={pickerFlavor}
+				selected={jobTemplateRef}
+				onChange={setJobTemplateRef}
+				label="Job template"
+				{readonly}
+				testId="select-job-template-ref"
+			/>
+
+			<!-- Parameter form: shown when a template with declared params is picked -->
+			<TemplateParameterForm
+				templateRef={jobTemplateRef}
+				values={jobTemplateParams}
+				onchange={setJobTemplateParams}
+				{readonly}
+			/>
+
+			<!-- Manual override toggle: exposes the legacy free-text job_template field -->
+			<div class="space-y-1 pt-1">
+				<label class="flex items-center gap-1.5 text-sm text-muted-foreground">
+					<Checkbox
+						checked={showManualTemplate}
+						disabled={readonly}
+						onCheckedChange={(v) => (showManualTemplate = v === true)}
+						data-testid="toggle-manual-job-template"
+					/>
+					Override job template name manually
+				</label>
+				{#if showManualTemplate}
+					<FormField label="Job template name (manual)" for="deployment-job-template-manual">
+						<Input
+							id="deployment-job-template-manual"
+							type="text"
+							class="font-mono text-sm"
+							value={jobTemplate}
+							disabled={readonly}
+							placeholder="e.g. petri-mumax3-worker"
+							data-testid="input-job-template"
+							oninput={(e) => setJobTemplate((e.currentTarget as HTMLInputElement).value)}
+						/>
+					</FormField>
+					<p class="text-sm italic text-muted-foreground">
+						Overrides the picker above. Use when the job name is pre-registered on the cluster and
+						does not yet have a control-plane template.
+					</p>
+				{/if}
+			</div>
 
 			<p class="text-sm text-muted-foreground">
 				Leases a warm allocation from the datacenter for the step's duration; the granted lease is readable in the body as <code>lease.node</code> / <code>lease.alloc_id</code>.

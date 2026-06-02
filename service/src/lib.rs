@@ -264,6 +264,19 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::rotate_resource))
         .routes(routes!(handlers::resources::list_resource_audit))
+        // Job templates (Phase 3, B-model) — versioned cluster job-spec entity
+        // (flavor-tagged slurm/nomad) + staging join. Mirrors the resources
+        // CRUD + versioning pattern but with NO Vault coupling. DB-only.
+        .routes(routes!(
+            handlers::job_templates::list_job_templates,
+            handlers::job_templates::create_job_template
+        ))
+        .routes(routes!(
+            handlers::job_templates::get_job_template,
+            handlers::job_templates::update_job_template,
+            handlers::job_templates::delete_job_template
+        ))
+        .routes(routes!(handlers::job_templates::list_job_template_stagings))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))
