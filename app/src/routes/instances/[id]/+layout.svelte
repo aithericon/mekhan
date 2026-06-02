@@ -100,6 +100,8 @@
 		}, 250);
 	}
 
+	let terminalPollTimer: ReturnType<typeof setTimeout> | null = null;
+
 	function closeStream() {
 		sseConnection?.close();
 		sseConnection = null;
@@ -107,6 +109,39 @@
 			clearTimeout(refetchTimer);
 			refetchTimer = null;
 		}
+		if (terminalPollTimer !== null) {
+			clearTimeout(terminalPollTimer);
+			terminalPollTimer = null;
+		}
+	}
+
+	const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+	// The server derives the `result` SSE event straight from the engine's
+	// terminal domain event (NetCompleted/NetCancelled), but the
+	// `workflow_instances` row that `getInstance()` reads is written by a
+	// SEPARATE async lifecycle consumer. So the `result` event can arrive
+	// before the row flips to a terminal status — a single reload here would
+	// read stale `running` data and, since we then close the stream, never
+	// self-correct. Poll the projection until it catches up (bounded), then
+	// close. Each step's panels stop their own polling on terminal status, so
+	// landing it here is what makes the whole page settle.
+	function reloadUntilTerminal(attemptsLeft: number) {
+		if (terminalPollTimer !== null) {
+			clearTimeout(terminalPollTimer);
+			terminalPollTimer = null;
+		}
+		reload({ silent: true }).then(() => {
+			const status = ctx.instance?.status;
+			if (attemptsLeft <= 0 || (status && TERMINAL_STATUSES.has(status))) {
+				closeStream();
+			} else {
+				terminalPollTimer = setTimeout(
+					() => reloadUntilTerminal(attemptsLeft - 1),
+					300
+				);
+			}
+		});
 	}
 
 	function openStream(id: string) {
@@ -119,10 +154,9 @@
 			onTerminal: () => closeStream(),
 			onEvent: ({ event }) => {
 				if (event === 'result') {
-					// Terminal: one final refetch to land the terminal status /
-					// completed_at, then close (the server closes its side too).
-					reload({ silent: true });
-					closeStream();
+					// Terminal: refetch until the row lands a terminal status
+					// (closing the lifecycle-consumer race), then close.
+					reloadUntilTerminal(10);
 				} else if (event !== 'connected') {
 					scheduleRefetch();
 				}

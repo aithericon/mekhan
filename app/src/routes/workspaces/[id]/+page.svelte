@@ -6,6 +6,8 @@
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import Copy from '@lucide/svelte/icons/copy';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
+	import BookOpen from '@lucide/svelte/icons/book-open';
+	import ProjectApiDrawer from '$lib/components/projects/ProjectApiDrawer.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -136,6 +138,14 @@
 
 	function bundleUrl(p: Project): string {
 		return `/api/v1/workspaces/${workspaceId}/projects/${p.id}/openapi.json`;
+	}
+
+	// Per-project API contract drawer (rendered docs + invoke playground).
+	let apiOpen = $state(false);
+	let apiProject = $state<Project | null>(null);
+	function openApi(p: Project) {
+		apiProject = p;
+		apiOpen = true;
 	}
 
 	async function copyBundleUrl(p: Project) {
@@ -284,6 +294,16 @@
 										<div class="truncate text-xs text-muted-foreground">{p.slug}</div>
 									</div>
 									<div class="flex gap-1">
+											<Button
+												variant="outline"
+												size="sm"
+												title="Browse the project's API contract"
+												onclick={() => openApi(p)}
+												data-testid={`btn-api-${p.slug}`}
+											>
+												<BookOpen class="size-3.5" />
+												API
+											</Button>
 										<Button
 											variant="ghost"
 											size="sm"
@@ -325,3 +345,12 @@
 		</div>
 	{/if}
 </div>
+
+{#if apiProject}
+	<ProjectApiDrawer
+		bind:open={apiOpen}
+		{workspaceId}
+		projectId={apiProject.id}
+		projectName={apiProject.display_name}
+	/>
+{/if}

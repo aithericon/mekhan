@@ -1278,6 +1278,64 @@ export async function getProjectOpenApiBundle(
 	return rawJson(`/workspaces/${workspaceId}/projects/${projectId}/openapi.json`);
 }
 
+/// Result of a `/fire` or `/invoke` call. `status` distinguishes the response
+/// union: `/fire` → 202 `{ instance_id }`; `/invoke` → 200 success envelope
+/// `{ ok, value }` (completed) or 202 `{ instance_id }` (timed out, still
+/// running). The drawer's invoke playground renders on `status`.
+export interface TriggerCallResult {
+	status: number;
+	body: Record<string, unknown>;
+}
+
+/// POST a manual trigger's `/fire` (async) or `/invoke` (sync) endpoint. When
+/// `files` is non-empty the request is sent as `multipart/form-data` (a JSON
+/// `payload` part for the scalar scope + one binary part per file field, which
+/// the server auto-converts to a file-reference object); otherwise plain JSON.
+async function postTrigger(
+	kind: 'fire' | 'invoke',
+	nodeId: string,
+	payload: Record<string, unknown>,
+	files?: Record<string, File>
+): Promise<TriggerCallResult> {
+	const path = `/triggers/${encodeURIComponent(nodeId)}/${kind}`;
+	const fileEntries = Object.entries(files ?? {}).filter(([, f]) => f instanceof File);
+
+	let res: Response;
+	if (fileEntries.length > 0) {
+		const fd = new FormData();
+		fd.append('payload', JSON.stringify(payload ?? {}));
+		for (const [name, file] of fileEntries) fd.append(name, file, file.name);
+		// No explicit Content-Type — the browser sets the multipart boundary.
+		res = await authFetch(`${API_BASE}${path}`, { method: 'POST', body: fd });
+	} else {
+		res = await authFetch(`${API_BASE}${path}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ payload: payload ?? {} })
+		});
+	}
+
+	const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+	if (!res.ok) throw new ApiError(res.status, body);
+	return { status: res.status, body };
+}
+
+export function fireTrigger(
+	nodeId: string,
+	payload: Record<string, unknown>,
+	files?: Record<string, File>
+): Promise<TriggerCallResult> {
+	return postTrigger('fire', nodeId, payload, files);
+}
+
+export function invokeTrigger(
+	nodeId: string,
+	payload: Record<string, unknown>,
+	files?: Record<string, File>
+): Promise<TriggerCallResult> {
+	return postTrigger('invoke', nodeId, payload, files);
+}
+
 // ── Raw-JSON helper for query-DSL endpoints ────────────────────────────────
 //
 // Most JSON endpoints route through `client.GET/POST/...` via openapi-fetch
