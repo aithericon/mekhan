@@ -2,6 +2,10 @@ services:
   slurm:
     platform: linux/amd64
     build: .
+    # Required for unprivileged `apptainer pull`/`exec` (docs/22 container
+    # staging): apptainer needs user-namespace + mount privileges the default
+    # restricted container does not grant. This is a throwaway local dev cluster.
+    privileged: true
     hostname: slurm-login
     ports:
       - "2222:22"       # SSH (login node simulation)

@@ -1003,6 +1003,21 @@ slurm-up:
     docker cp executor/packages/aithericon-sdk "$container:/opt/petri/aithericon-sdk"
     docker exec "$container" chmod -R a+rwX /opt/petri/aithericon-sdk
 
+    # 3a-bis. Container staging (docs/22): ensure the shared-FS stand-in dirs the
+    #    materialize effect + the apptainer-wrapped drain executor use exist and
+    #    are world-writable (the Dockerfile creates them on a fresh build; this is
+    #    an idempotent belt-and-suspenders for a cached image). Then sanity-check
+    #    apptainer + the bind-mounted static `uv` are present — both come from the
+    #    Dockerfile, so a miss means the image predates the container-staging
+    #    layer (re-run is a `--build`, so it self-heals on the next slurm-up).
+    docker exec "$container" mkdir -p /shared/sif/by-ref /shared/venv-cache /shared/apptainer-cache
+    docker exec "$container" chmod -R 0777 /shared
+    docker exec "$container" sh -c 'command -v apptainer >/dev/null 2>&1' \
+      || echo "  ⚠ apptainer not found in the Slurm container — container-staging e2e will fail (rebuild: just dev slurm-down && slurm-up)"
+    docker exec "$container" test -x /opt/petri/bin/uv \
+      || echo "  ⚠ /opt/petri/bin/uv missing in the Slurm container — in-container venv builds will fail"
+    echo "  ✓ /shared dirs ready; apptainer + uv checked (container staging, docs/22)"
+
     tpl="$(mktemp)"
     cat > "$tpl" <<'TEMPLATE'
     #!/bin/bash

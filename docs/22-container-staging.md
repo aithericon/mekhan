@@ -54,9 +54,20 @@ Now built (offline-green, atop Phases 1–3):
   (`service/src/handlers/container_images.rs`). Both skip when an `image_materializations` row is
   already `ready`.
 
+Phase 4 infra built (offline; live run pending):
+- `engine/infra/slurm/Dockerfile` installs `apptainer` (setuid) + a static musl `uv` + creates
+  `/shared/{sif,sif/by-ref,venv-cache,apptainer-cache}`; `docker-compose.yml` runs the cluster
+  `privileged: true` so unprivileged `apptainer pull`/`exec` work; `just dev slurm-up` idempotently
+  ensures the `/shared` dirs + sanity-checks apptainer/uv.
+- `service/tests/container_lease_slurm_e2e.rs` (`#[ignore]`, compiles): creates a `container_image`
+  resource + a slurm `job_template` bound to it, publishes a `Start → LeaseScope → Loop → Scheduled`
+  graph, waits for the `image_materializations` row → `ready` + by-ref symlink, then asserts the drain
+  executor is `apptainer exec`-wrapped (ps probe), all N iterations drain in-container, and the per-image
+  venv cache warms.
+
 Pending:
-- **Phase 4** — apptainer-in-Slurm-Docker (`engine/infra/slurm/Dockerfile` + `/shared` dirs + `uv`) +
-  live `container_lease_slurm_e2e`.
+- **Live Phase 4 run** — `just dev slurm-up` (slot-5 worktree) + run `container_lease_slurm_e2e`
+  `--ignored`; tune assertions against real apptainer behavior. Needs the user's live env.
 
 ### v1 caveat — no dispatch readiness gate
 
