@@ -804,12 +804,20 @@ export class YjsGraphBinding {
 				// the backend's `streamOutput` Y.Map key) so clearing it persists.
 				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
 				config.set('streamInput', (data as AutomatedStepNodeData).streamInput ?? false);
-				// Staged-asset bindings (docs/20 §5). Persist when non-empty; delete
-				// when cleared so the unset state round-trips through publish.
-				if (data.assetBindings && data.assetBindings.length > 0) {
-					config.set('assetBindings', data.assetBindings);
-				} else {
-					config.delete('assetBindings');
+				// Staged-asset bindings (docs/20 §5). Only touch the Y.Map key when
+				// the incoming data EXPLICITLY carries `assetBindings` (i.e. the
+				// AssetBindingsSection emitted a change). When the field is absent
+				// from the data object — which happens whenever a different field
+				// was updated by a handler that spread a stale snapshot that didn't
+				// yet include `assetBindings` (backend-registry-before-Yjs-sync
+				// race) — we preserve whatever is currently stored rather than
+				// silently deleting the bindings.
+				if ('assetBindings' in data) {
+					if (data.assetBindings && data.assetBindings.length > 0) {
+						config.set('assetBindings', data.assetBindings);
+					} else {
+						config.delete('assetBindings');
+					}
 				}
 				break;
 			case 'decision':
@@ -935,11 +943,16 @@ export class YjsGraphBinding {
 				}
 				config.set('contextStrategy', data.contextStrategy ?? 'none');
 				config.set('onToolError', data.onToolError ?? 'feedback');
-				// Staged-asset bindings (docs/20 §5). Symmetric with automated_step.
-				if (data.assetBindings && data.assetBindings.length > 0) {
-					config.set('assetBindings', data.assetBindings);
-				} else {
-					config.delete('assetBindings');
+				// Staged-asset bindings (docs/20 §5). Symmetric with automated_step:
+				// only touch the Y.Map key when the field is explicitly present in
+				// the incoming data. See the automated_step case comment for the
+				// full rationale.
+				if ('assetBindings' in data) {
+					if (data.assetBindings && data.assetBindings.length > 0) {
+						config.set('assetBindings', data.assetBindings);
+					} else {
+						config.delete('assetBindings');
+					}
 				}
 				break;
 			case 'delay':

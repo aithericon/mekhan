@@ -611,4 +611,138 @@ describe('YjsGraphBinding', () => {
 		if (after?.data.type !== 'failure') return;
 		expect(after.data.failureMessage).toBeUndefined();
 	});
+
+	// ── Regression: assetBindings silently dropped on unrelated node edits ──
+	//
+	// Bug: writeDataToConfig used `else config.delete('assetBindings')` — any
+	// writer that spreads data FROM a stale snapshot (before Yjs sync completed
+	// or before assetBindings was added) would wipe the stored bindings. The
+	// fix guards on `'assetBindings' in data` so only an explicit AssetBindings-
+	// Section write (empty array or new set) mutates the Y.Map key.
+
+	it('automated_step assetBindings survive an unrelated updateNodeData (no-assetBindings key in data)', () => {
+		// Seed a node
+		binding.addNode('as1', 'automated_step', { x: 0, y: 0 }, createDefaultNodeData('automated_step'));
+
+		// Step 1: set assetBindings via a normal write.
+		const node0 = binding.graph.nodes.find((n) => n.id === 'as1')!;
+		if (node0.data.type !== 'automated_step') return;
+		binding.updateNodeData('as1', {
+			...node0.data,
+			assetBindings: [{ refKey: 'metals_db', alias: 'materials' }]
+		} as Extract<WorkflowNodeData, { type: 'automated_step' }>);
+
+		// Confirm stored.
+		const node1 = binding.graph.nodes.find((n) => n.id === 'as1')!;
+		if (node1.data.type !== 'automated_step') return;
+		expect(node1.data.assetBindings).toEqual([{ refKey: 'metals_db', alias: 'materials' }]);
+
+		// Step 2: simulate a handler that re-emits node data WITHOUT the
+		// assetBindings key (e.g. a section that ran before the Yjs sync
+		// completed and therefore spread a partial snapshot). We do this by
+		// constructing the update object with `delete` to guarantee the property
+		// is absent — the same way `{ ...staleData, streamOutput: true }` would
+		// look if staleData didn't have assetBindings yet.
+		const partialUpdate = { ...node1.data, streamOutput: true } as Extract<
+			WorkflowNodeData,
+			{ type: 'automated_step' }
+		>;
+		delete (partialUpdate as Record<string, unknown>)['assetBindings'];
+		expect('assetBindings' in partialUpdate).toBe(false); // confirm the key is absent
+
+		binding.updateNodeData('as1', partialUpdate);
+
+		// assetBindings must NOT have been wiped.
+		const node2 = binding.graph.nodes.find((n) => n.id === 'as1')!;
+		if (node2.data.type !== 'automated_step') return;
+		expect(node2.data.assetBindings).toEqual([{ refKey: 'metals_db', alias: 'materials' }]);
+	});
+
+	it('automated_step assetBindings can be explicitly cleared via AssetBindingsSection-style write', () => {
+		binding.addNode('as2', 'automated_step', { x: 0, y: 0 }, createDefaultNodeData('automated_step'));
+
+		// Set bindings
+		const node0 = binding.graph.nodes.find((n) => n.id === 'as2')!;
+		if (node0.data.type !== 'automated_step') return;
+		binding.updateNodeData('as2', {
+			...node0.data,
+			assetBindings: [{ refKey: 'steel_spec', alias: 'steel' }]
+		} as Extract<WorkflowNodeData, { type: 'automated_step' }>);
+
+		const node1 = binding.graph.nodes.find((n) => n.id === 'as2')!;
+		if (node1.data.type !== 'automated_step') return;
+		expect(node1.data.assetBindings).toEqual([{ refKey: 'steel_spec', alias: 'steel' }]);
+
+		// AssetBindingsSection clears by emitting { ...data, assetBindings: [] }
+		// — the key IS present in the update object, value is empty array.
+		binding.updateNodeData('as2', {
+			...node1.data,
+			assetBindings: []
+		} as Extract<WorkflowNodeData, { type: 'automated_step' }>);
+
+		const node2 = binding.graph.nodes.find((n) => n.id === 'as2')!;
+		if (node2.data.type !== 'automated_step') return;
+		// After explicit clear, assetBindings should be gone (config key deleted,
+		// materialize omits it from the returned data).
+		expect(node2.data.assetBindings).toBeUndefined();
+	});
+
+	it('agent assetBindings survive an unrelated updateNodeData (no-assetBindings key in data)', () => {
+		const agentData = createDefaultNodeData('agent');
+		binding.addNode('ag1', 'agent', { x: 0, y: 0 }, agentData);
+
+		const node0 = binding.graph.nodes.find((n) => n.id === 'ag1')!;
+		if (node0.data.type !== 'agent') return;
+
+		// Set assetBindings
+		binding.updateNodeData('ag1', {
+			...node0.data,
+			assetBindings: [{ refKey: 'metals_db', alias: 'mats' }]
+		} as Extract<WorkflowNodeData, { type: 'agent' }>);
+
+		const node1 = binding.graph.nodes.find((n) => n.id === 'ag1')!;
+		if (node1.data.type !== 'agent') return;
+		expect(node1.data.assetBindings).toEqual([{ refKey: 'metals_db', alias: 'mats' }]);
+
+		// Unrelated edit without assetBindings key
+		const partialUpdate = { ...node1.data, maxTurns: 3 } as Extract<
+			WorkflowNodeData,
+			{ type: 'agent' }
+		>;
+		delete (partialUpdate as Record<string, unknown>)['assetBindings'];
+		expect('assetBindings' in partialUpdate).toBe(false);
+
+		binding.updateNodeData('ag1', partialUpdate);
+
+		const node2 = binding.graph.nodes.find((n) => n.id === 'ag1')!;
+		if (node2.data.type !== 'agent') return;
+		expect(node2.data.assetBindings).toEqual([{ refKey: 'metals_db', alias: 'mats' }]);
+	});
+
+	it('agent assetBindings can be explicitly cleared', () => {
+		const agentData = createDefaultNodeData('agent');
+		binding.addNode('ag2', 'agent', { x: 0, y: 0 }, agentData);
+
+		const node0 = binding.graph.nodes.find((n) => n.id === 'ag2')!;
+		if (node0.data.type !== 'agent') return;
+
+		binding.updateNodeData('ag2', {
+			...node0.data,
+			assetBindings: [{ refKey: 'steel_spec', alias: 'steel' }]
+		} as Extract<WorkflowNodeData, { type: 'agent' }>);
+
+		const node1 = binding.graph.nodes.find((n) => n.id === 'ag2')!;
+		if (node1.data.type !== 'agent') return;
+		expect(node1.data.assetBindings).toEqual([{ refKey: 'steel_spec', alias: 'steel' }]);
+
+		// Explicit clear: assetBindings key IS present, value is []
+		binding.updateNodeData('ag2', {
+			...node1.data,
+			assetBindings: []
+		} as Extract<WorkflowNodeData, { type: 'agent' }>);
+
+		const node2 = binding.graph.nodes.find((n) => n.id === 'ag2')!;
+		if (node2.data.type !== 'agent') return;
+		expect(node2.data.assetBindings).toBeUndefined();
+	});
 });

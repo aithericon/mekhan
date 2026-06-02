@@ -508,21 +508,24 @@ pub(crate) fn reachable_scope(
     //     with a producer slug (`slug` wins discovery), so `entry().or_insert`
     //     leaves any producer path untouched.
     for g in known_globals.values() {
+        // The picker splits globals into separate "Resources" / "Assets" tabs by
+        // `producer_label` (credentials vs curated data are distinct surfaces),
+        // and groups the left column by `note` = the global's name so each
+        // resource/asset is its own group. `producer_node` stays empty — a
+        // global is template-wide, not borrow-reachable from a node.
+        let producer_label = match g.kind {
+            crate::compiler::named_global::GlobalKind::Resource => "Resource",
+            crate::compiler::named_global::GlobalKind::Asset => "Asset",
+        }
+        .to_string();
         for f in &g.fields {
             let path = format!("{}.{}", g.name, f.name);
             by_path.entry(path.clone()).or_insert(ScopeEntry {
                 path,
                 ty: field_kind_descriptor(&f.kind),
                 producer_node: String::new(),
-                producer_label: "Globals".to_string(),
-                note: match g.kind {
-                    crate::compiler::named_global::GlobalKind::Resource => {
-                        "resource public field".to_string()
-                    }
-                    crate::compiler::named_global::GlobalKind::Asset => {
-                        "asset record field".to_string()
-                    }
-                },
+                producer_label: producer_label.clone(),
+                note: g.name.clone(),
             });
         }
     }

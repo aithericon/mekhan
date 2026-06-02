@@ -9,11 +9,13 @@
 	//                   the popover. A single filter narrows both columns
 	//                   at once; ancestors of matches auto-expand.
 	//
-	// Globals tab: when the parent provides a non-empty `resourceScope`
-	// (server-authoritative resources + assets, or client-side fallback
-	// from `buildResourceScope`), the popover gains a tab switcher. The
-	// Globals tab keeps the same two-column shape; entries without a `ty`
-	// tree flatten to one row per field (the legacy shape).
+	// Globals tabs: when the parent provides a non-empty `resourceScope`
+	// (server-authoritative workspace resources + template assets, or a
+	// client-side resource-only fallback from `buildResourceScope`), the popover
+	// gains a tab switcher. Globals are split by `ScopeEntry.globalKind` into
+	// separate "Resources" and "Assets" tabs (credentials vs curated data are
+	// distinct surfaces); each shows only when non-empty. They keep the same
+	// two-column shape; entries without a `ty` tree flatten to one row per field.
 	import type { ScopeEntry, TyDescriptor } from '$lib/editor/guard-scope';
 	import { tyDescriptorLabel } from '$lib/editor/guard-scope';
 	import * as Popover from '$lib/components/ui/popover';
@@ -57,7 +59,7 @@
 		onpick
 	}: Props = $props();
 
-	type Tab = 'refs' | 'resources';
+	type Tab = 'refs' | 'resources' | 'assets';
 	type Group = { key: string; label: string; isProcess: boolean; entries: ScopeEntry[] };
 
 	// Group by producer (stable first-seen order), keyed by node id + label so
@@ -77,16 +79,32 @@
 		return out.sort((a, b) => Number(a.isProcess) - Number(b.isProcess));
 	}
 
-	const refGroups = $derived(makeGroups(scope));
-	const resourceGroups = $derived(makeGroups(resourceScope));
+	// `resourceScope` carries the combined named globals (workspace resources +
+	// template assets, server-authoritative — or a client-side resource-only
+	// fallback). Split by `globalKind` so the popover can offer them as two
+	// distinct tabs; client-fallback entries (no `globalKind`) are resources.
+	const resourceEntries = $derived(resourceScope.filter((e) => e.globalKind !== 'asset'));
+	const assetEntries = $derived(resourceScope.filter((e) => e.globalKind === 'asset'));
 
-	const hasResources = $derived(resourceScope.length > 0);
+	const refGroups = $derived(makeGroups(scope));
+	const resourceGroups = $derived(makeGroups(resourceEntries));
+	const assetGroups = $derived(makeGroups(assetEntries));
+
+	const hasResources = $derived(resourceEntries.length > 0);
+	const hasAssets = $derived(assetEntries.length > 0);
+	const hasGlobals = $derived(hasResources || hasAssets);
 
 	let activeTab = $state<Tab>('refs');
 	$effect(() => {
-		if (selected && resourceScope.some((e) => e.qualified === selected)) {
-			activeTab = 'resources';
-		}
+		if (!selected) return;
+		if (assetEntries.some((e) => e.qualified === selected)) activeTab = 'assets';
+		else if (resourceEntries.some((e) => e.qualified === selected)) activeTab = 'resources';
+	});
+	// Never leave the active tab pointing at a tab that isn't rendered (the
+	// Resources/Assets tabs only show when their scope is non-empty).
+	$effect(() => {
+		if (activeTab === 'resources' && !hasResources) activeTab = hasAssets ? 'assets' : 'refs';
+		else if (activeTab === 'assets' && !hasAssets) activeTab = hasResources ? 'resources' : 'refs';
 	});
 
 	let open = $state(false);
@@ -96,7 +114,9 @@
 	let hoveredPath = $state<string | null>(null);
 
 	const q = $derived(query.trim().toLowerCase());
-	const sourceGroups = $derived(activeTab === 'resources' ? resourceGroups : refGroups);
+	const sourceGroups = $derived(
+		activeTab === 'assets' ? assetGroups : activeTab === 'resources' ? resourceGroups : refGroups
+	);
 
 	// A group survives the filter if its label matches or any reachable path
 	// (including nested object fields) matches. Surviving groups keep the
@@ -310,9 +330,14 @@
 
 	const emptyMessage = $derived.by(() => {
 		if (activeTab === 'resources') {
-			return resourceScope.length === 0
-				? 'No globals (resources or assets) visible to this workflow.'
-				: 'No matching global fields.';
+			return resourceEntries.length === 0
+				? 'No workspace resources visible to this workflow.'
+				: 'No matching resource fields.';
+		}
+		if (activeTab === 'assets') {
+			return assetEntries.length === 0
+				? 'No assets visible to this workflow.'
+				: 'No matching asset fields.';
 		}
 		return scope.length === 0 ? 'No upstream fields in scope.' : 'No matching fields.';
 	});
@@ -338,14 +363,14 @@
 			<span class="truncate font-mono">{selected}</span>
 		{:else}
 			<span class="text-muted-foreground"
-				>{scope.length === 0 && !hasResources ? 'No scope' : placeholder}</span
+				>{scope.length === 0 && !hasGlobals ? 'No scope' : placeholder}</span
 			>
 		{/if}
 		<ChevronsUpDown class="size-4 shrink-0 opacity-50" />
 	</Popover.Trigger>
 
 	<Popover.Content align="start" class="w-[620px] max-w-[90vw] overflow-hidden p-0">
-		{#if hasResources}
+		{#if hasGlobals}
 			<div class="flex border-b" role="tablist" data-testid="ref-picker-tabs">
 				<button
 					type="button"
@@ -363,22 +388,42 @@
 					Refs
 					<span class="ml-1.5 text-muted-foreground">({scope.length})</span>
 				</button>
-				<button
-					type="button"
-					role="tab"
-					aria-selected={activeTab === 'resources'}
-					class={cn(
-						'flex-1 px-3 py-2 text-sm transition-colors hover:bg-accent',
-						activeTab === 'resources'
-							? 'border-b-2 border-foreground font-medium text-foreground'
-							: 'text-muted-foreground'
-					)}
-					onclick={() => (activeTab = 'resources')}
-					data-testid="ref-picker-tab-resources"
-				>
-					Globals
-					<span class="ml-1.5 text-muted-foreground">({resourceScope.length})</span>
-				</button>
+				{#if hasResources}
+					<button
+						type="button"
+						role="tab"
+						aria-selected={activeTab === 'resources'}
+						class={cn(
+							'flex-1 px-3 py-2 text-sm transition-colors hover:bg-accent',
+							activeTab === 'resources'
+								? 'border-b-2 border-foreground font-medium text-foreground'
+								: 'text-muted-foreground'
+						)}
+						onclick={() => (activeTab = 'resources')}
+						data-testid="ref-picker-tab-resources"
+					>
+						Resources
+						<span class="ml-1.5 text-muted-foreground">({resourceEntries.length})</span>
+					</button>
+				{/if}
+				{#if hasAssets}
+					<button
+						type="button"
+						role="tab"
+						aria-selected={activeTab === 'assets'}
+						class={cn(
+							'flex-1 px-3 py-2 text-sm transition-colors hover:bg-accent',
+							activeTab === 'assets'
+								? 'border-b-2 border-foreground font-medium text-foreground'
+								: 'text-muted-foreground'
+						)}
+						onclick={() => (activeTab = 'assets')}
+						data-testid="ref-picker-tab-assets"
+					>
+						Assets
+						<span class="ml-1.5 text-muted-foreground">({assetEntries.length})</span>
+					</button>
+				{/if}
 			</div>
 		{/if}
 
@@ -387,8 +432,10 @@
 				type="text"
 				value={query}
 				placeholder={activeTab === 'resources'
-					? 'Filter globals & fields…'
-					: 'Filter nodes & fields…'}
+					? 'Filter resources & fields…'
+					: activeTab === 'assets'
+						? 'Filter assets & fields…'
+						: 'Filter nodes & fields…'}
 				oninput={(e) => (query = (e.currentTarget as HTMLInputElement).value)}
 				class="h-9 text-sm"
 			/>

@@ -102,6 +102,14 @@
 	$effect(() => {
 		const g = binding?.graph;
 		const id = nodeId;
+		// Read workspaceId and templateId synchronously so this effect
+		// re-runs when either changes (e.g. when the template finishes
+		// loading and workspace_id becomes available). Without this read
+		// the effect body only tracks `binding?.graph` and `nodeId`, so
+		// the first analyze call runs without workspace context and assets
+		// are never returned in the Globals scope.
+		const wid = workspaceId;
+		const tid = templateId;
 		if (!g || !id) {
 			scope = [];
 			globalsFromServer = [];
@@ -109,7 +117,7 @@
 		}
 		let cancelled = false;
 		const timer = setTimeout(async () => {
-			const result = await fetchNodeScopes(g, { templateId, workspaceId });
+			const result = await fetchNodeScopes(g, { templateId: tid, workspaceId: wid });
 			if (!cancelled) {
 				scope = result.scopes.get(id) ?? [];
 				globalsFromServer = result.globalsScope;

@@ -39,6 +39,11 @@ export type ScopeEntry = {
 	 *  Pickers drill into `ty.fields` (Object) or `ty.element` (Array) to
 	 *  surface nested + per-element refs without further round-trips. */
 	ty?: TyDescriptor;
+	/** For named-global entries (workspace resources / template assets), which
+	 *  kind this is — the RefPicker splits the two into separate "Resources" and
+	 *  "Assets" tabs. Absent for regular in-scope producer refs and for the
+	 *  client-side resource fallback (treated as `'resource'`). */
+	globalKind?: 'resource' | 'asset';
 };
 
 /** Result of one `/api/v1/analyze` round-trip. `graphOk: false` means the
@@ -151,24 +156,36 @@ export async function fetchNodeScopes(
 			...(ctx?.workspaceId ? { workspace_id: ctx.workspaceId } : {})
 		});
 
-		// Globals entries are recognised by `producer_label === "Globals"`.
-		// The server emits the same set for every node; we deduplicate by
-		// `path` and keep one canonical copy in `globalsScope`.
+		// Named-global entries are synthetic (empty `producer_node`) and labelled
+		// by kind — `producer_label === "Resource"` or `"Asset"` — with the
+		// global's name carried in `note` (so the picker groups by name). The
+		// server emits the same global set for every node; we deduplicate by
+		// `path` and keep one canonical copy in `globalsScope`, tagged with
+		// `globalKind` so the RefPicker can split Resources vs Assets into
+		// separate tabs.
 		const seenGlobalPaths = new Set<string>();
 		const globalsScope: ScopeEntry[] = [];
 
 		for (const [nodeId, entries] of Object.entries(surface.scopes ?? {})) {
 			const regularEntries: ScopeEntry[] = [];
 			for (const e of entries ?? []) {
+				const isGlobal =
+					e.producer_node === '' &&
+					(e.producer_label === 'Resource' || e.producer_label === 'Asset');
 				const mapped: ScopeEntry = {
 					nodeId: e.producer_node,
-					nodeLabel: e.producer_label,
+					// Group globals by their own name (carried in `note`); regular
+					// entries keep their producer's label.
+					nodeLabel: isGlobal ? e.note || e.producer_label : e.producer_label,
 					field: e.path.split('.').pop() ?? e.path,
 					kind: tyDescriptorToFieldKind(e.ty),
 					qualified: e.path,
-					ty: e.ty
+					ty: e.ty,
+					...(isGlobal
+						? { globalKind: e.producer_label === 'Asset' ? 'asset' : 'resource' }
+						: {})
 				};
-				if (e.producer_label === 'Globals') {
+				if (isGlobal) {
 					// Deduplicate across nodes (all nodes share the same global set).
 					if (!seenGlobalPaths.has(e.path)) {
 						seenGlobalPaths.add(e.path);
