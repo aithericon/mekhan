@@ -46,6 +46,7 @@
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
 			<Button variant="ghost" size="sm" href="/resources" data-testid="nav-resources">Resources</Button>
+			<Button variant="ghost" size="sm" href="/fleet" data-testid="nav-fleet">Fleet</Button>
 			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
 			<Button
 				variant="ghost"
@@ -75,6 +76,16 @@
 				title="Engine debug: raw processes (usually accessed via an instance)"
 			>
 				Processes
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				href="/admin/capability-types"
+				data-testid="nav-capability-types"
+				class="text-muted-foreground"
+				title="Typed capability registry for runner Requirements matching"
+			>
+				Capability Types
 			</Button>
 			<div class="ml-auto flex items-center gap-1">
 				{#if auth.isAuthenticated}

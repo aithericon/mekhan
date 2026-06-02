@@ -190,7 +190,11 @@ async fn main() -> anyhow::Result<()> {
     // `presence_expired` signal on a TTL miss. NATS is always connected here
     // (mekhan can't boot without it), so this is unconditional like the other
     // NATS-backed background tasks.
+    // Construct the shared presence handle ONCE: the controller tasks mutate it
+    // and the AppState read API (`GET /api/v1/runners/presence`) reads through it.
+    let runner_presence = mekhan_service::runners_presence::RunnerPresence::new();
     mekhan_service::runners_presence::spawn_presence_controller(
+        runner_presence.clone(),
         mekhan_nats.clone(),
         db.clone(),
         petri.clone(),
@@ -303,6 +307,7 @@ async fn main() -> anyhow::Result<()> {
         resource_store,
         resource_resolver,
         runner_nats_signer,
+        runner_presence,
     };
 
     // Seed built-in demos before the listener accepts requests. Idempotent

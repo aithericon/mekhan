@@ -224,6 +224,20 @@ pub struct RegistrationTokenSummary {
     pub created_at: DateTime<Utc>,
 }
 
+/// Phase 5 — one row of the live in-memory presence snapshot returned by
+/// `GET /api/v1/runners/presence`. This reflects the presence-controller's
+/// in-memory `PresenceMap` (the actual pool-capacity signal), NOT the
+/// `runners.last_seen_at` column on [`RunnerSummary`] (a best-effort UI bump).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct RunnerPresenceSnapshot {
+    pub runner_id: Uuid,
+    /// Whether mekhan currently considers the runner PRESENT (one pool unit
+    /// admitted and not yet reaped).
+    pub present: bool,
+    /// Milliseconds since the last presence heartbeat from this runner.
+    pub last_seen_ms_ago: u64,
+}
+
 impl From<RunnerRegistrationTokenRow> for RegistrationTokenSummary {
     fn from(r: RunnerRegistrationTokenRow) -> Self {
         Self {

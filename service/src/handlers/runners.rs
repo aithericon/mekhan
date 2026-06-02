@@ -32,7 +32,8 @@ use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::runner::{
     mint_token, CreateRegistrationTokenRequest, CreatedRegistrationToken, EnrollRequest,
     EnrolledRunner, RegistrationTokenSummary, RunnerDetail, RunnerNatsCreds,
-    RunnerRegistrationTokenRow, RunnerRow, RunnerSummary, REG_TOKEN_PREFIX, RUNNER_TOKEN_PREFIX,
+    RunnerPresenceSnapshot, RunnerRegistrationTokenRow, RunnerRow, RunnerSummary, REG_TOKEN_PREFIX,
+    RUNNER_TOKEN_PREFIX,
 };
 use crate::models::template::PaginatedResponse;
 use crate::AppState;
@@ -402,6 +403,49 @@ pub async fn list_runners(
         page: params.page,
         per_page: params.per_page,
     }))
+}
+
+/// `GET /api/v1/runners/presence` — live in-memory presence snapshot (Phase 5).
+///
+/// Returns the presence-controller's in-memory `PresenceMap` — the actual
+/// pool-capacity signal (which runners hold an admitted unit right now), NOT the
+/// `runners.last_seen_at` column on the list view. Read-only; behind the auth
+/// gate like the other management reads.
+///
+/// The in-memory map is keyed by `runner_id` only and carries no workspace, so
+/// it is filtered here against the caller's workspace — a presence row is
+/// returned only for a runner that lives in the caller's workspace. Without this
+/// the snapshot would leak every workspace's runner ids + liveness timing
+/// (tenant-isolation break), since every other runner read is workspace-scoped.
+#[utoipa::path(
+    get,
+    path = "/api/v1/runners/presence",
+    responses(
+        (status = 200, description = "Live runner presence snapshot", body = [RunnerPresenceSnapshot]),
+    ),
+    tag = "runners",
+)]
+pub async fn runner_presence(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Vec<RunnerPresenceSnapshot>>, ApiError> {
+    let workspace_id = caller_workspace(&user);
+    let own: std::collections::HashSet<Uuid> =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM runners WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .fetch_all(&state.db)
+            .await?
+            .into_iter()
+            .collect();
+
+    let snapshot = state
+        .runner_presence
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|s| own.contains(&s.runner_id))
+        .collect();
+    Ok(Json(snapshot))
 }
 
 /// `GET /api/v1/runners/{id}` — admin view (workspace-scoped).

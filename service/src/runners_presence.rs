@@ -98,6 +98,55 @@ pub(crate) struct PresenceEntry {
 /// `Mutex` is correct and contention-free in practice.
 type PresenceMap = Arc<Mutex<HashMap<Uuid, PresenceEntry>>>;
 
+/// Public newtype wrapper around the [`PresenceMap`] so the `pub` [`crate::AppState`]
+/// can hold a handle to the live presence map WITHOUT leaking the `pub(crate)`
+/// [`PresenceEntry`]/[`PresenceMap`] types (which would trip the
+/// `private_interfaces` lint that CI's `-D warnings` rejects).
+///
+/// The read API (`GET /api/v1/runners/presence`) reads through [`Self::snapshot`];
+/// the presence-controller tasks share the SAME inner map via [`Self::map`].
+#[derive(Clone)]
+pub struct RunnerPresence(PresenceMap);
+
+impl RunnerPresence {
+    /// Construct a fresh, empty presence handle. The controller tasks + the read
+    /// API share this one map.
+    pub fn new() -> Self {
+        Self(new_presence_map())
+    }
+
+    /// Borrow the inner shared map for the controller tasks (subscriber + sweep).
+    pub(crate) fn map(&self) -> &PresenceMap {
+        &self.0
+    }
+
+    /// Snapshot the live presence map for the read API. Locks the mutex, then for
+    /// each tracked runner emits a [`RunnerPresenceSnapshot`] with the elapsed
+    /// time since its last heartbeat computed against [`Instant::now`] (an
+    /// `Instant` has no serializable form, so we surface a relative age instead).
+    /// `async` because the inner map is a `tokio::sync::Mutex` (shared with the
+    /// async controller tasks) — `blocking_lock` would panic inside the runtime.
+    pub async fn snapshot(&self) -> Vec<crate::models::runner::RunnerPresenceSnapshot> {
+        let now = Instant::now();
+        let map = self.0.lock().await;
+        map.iter()
+            .map(
+                |(runner_id, entry)| crate::models::runner::RunnerPresenceSnapshot {
+                    runner_id: *runner_id,
+                    present: entry.present,
+                    last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
+                },
+            )
+            .collect()
+    }
+}
+
+impl Default for RunnerPresence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Resolve a runner's `pool` alias to its backing `presence_pool` net id.
 ///
 /// `runner.pool` is an alias string (the `resources.path` column). It maps to a
@@ -261,9 +310,24 @@ async fn handle_presence(
         tracing::debug!(
             %runner_id,
             pool = ?runner.pool,
-            "runner present but no presence_pool resource in its workspace; skipping admit"
+            "runner present but no presence_pool resource in its workspace; tracking liveness only"
         );
-        // Still record last_seen so a later resource-create + heartbeat admits it.
+        // No pool to admit into, but the runner IS heartbeating — record it as
+        // present with an empty pool_net_id so the fleet "online" view (the read
+        // API + the sweep) sees it. The empty pool id means the sweep reaps it on
+        // TTL WITHOUT injecting a (bogus) pool expire. A later resource-create +
+        // re-acquire (the absent→present edge) upgrades it to a real admission.
+        {
+            let mut map = presence.lock().await;
+            map.insert(
+                runner_id,
+                PresenceEntry {
+                    last_seen: Instant::now(),
+                    pool_net_id: String::new(),
+                    present: true,
+                },
+            );
+        }
         touch_last_seen(db, runner_id).await;
         return;
     };
@@ -375,6 +439,13 @@ pub(crate) async fn start_presence_sweep(nats: MekhanNats, presence: PresenceMap
         };
 
         for (runner_id, pool_net_id) in expired {
+            if pool_net_id.is_empty() {
+                // Liveness-only entry (runner not admitted to any pool): nothing to
+                // expire on the engine — flipping `present = false` above is enough
+                // for the fleet view to show it offline.
+                tracing::debug!(%runner_id, "presence TTL miss; runner offline (no pool to expire)");
+                continue;
+            }
             tracing::info!(%runner_id, pool_net_id, "presence TTL miss; reaping runner unit");
             inject_expire(&nats, &pool_net_id, runner_id).await;
         }
@@ -391,14 +462,20 @@ pub(crate) fn new_presence_map() -> PresenceMap {
 /// accepted for symmetry with the other controllers and to keep the spawn site
 /// uniform, even though the controller drives the pool net purely over NATS
 /// (bridge + signal) and does not need the engine HTTP client today.
-pub fn spawn_presence_controller(nats: MekhanNats, db: PgPool, _petri: PetriClient) {
-    let presence = new_presence_map();
+/// `presence` is the SHARED handle also stored in [`crate::AppState`] so the read
+/// API (`GET /api/v1/runners/presence`) observes the very map the tasks mutate.
+pub fn spawn_presence_controller(
+    presence: RunnerPresence,
+    nats: MekhanNats,
+    db: PgPool,
+    _petri: PetriClient,
+) {
     tokio::spawn(start_presence_subscriber(
         nats.clone(),
         db.clone(),
-        presence.clone(),
+        presence.map().clone(),
     ));
-    tokio::spawn(start_presence_sweep(nats, presence));
+    tokio::spawn(start_presence_sweep(nats, presence.map().clone()));
 }
 
 #[cfg(test)]

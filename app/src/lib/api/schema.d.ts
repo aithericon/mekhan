@@ -1516,6 +1516,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/runners/presence` — live in-memory presence snapshot (Phase 5).
+         * @description Returns the presence-controller's in-memory `PresenceMap` — the actual
+         *     pool-capacity signal (which runners hold an admitted unit right now), NOT the
+         *     `runners.last_seen_at` column on the list view. Read-only; behind the auth
+         *     gate like the other management reads.
+         *
+         *     The in-memory map is keyed by `runner_id` only and carries no workspace, so
+         *     it is filtered here against the caller's workspace — a presence row is
+         *     returned only for a runner that lives in the caller's workspace. Without this
+         *     the snapshot would leak every workspace's runner ids + liveness timing
+         *     (tenant-isolation break), since every other runner read is workspace-scoped.
+         */
+        get: operations["runner_presence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners/registration-tokens": {
         parameters: {
             query?: never;
@@ -5577,6 +5606,26 @@ export interface components {
              *     `nats_public_key`.
              */
             nats_jwt: string;
+        };
+        /**
+         * @description Phase 5 — one row of the live in-memory presence snapshot returned by
+         *     `GET /api/v1/runners/presence`. This reflects the presence-controller's
+         *     in-memory `PresenceMap` (the actual pool-capacity signal), NOT the
+         *     `runners.last_seen_at` column on [`RunnerSummary`] (a best-effort UI bump).
+         */
+        RunnerPresenceSnapshot: {
+            /**
+             * Format: int64
+             * @description Milliseconds since the last presence heartbeat from this runner.
+             */
+            last_seen_ms_ago: number;
+            /**
+             * @description Whether mekhan currently considers the runner PRESENT (one pool unit
+             *     admitted and not yet reaped).
+             */
+            present: boolean;
+            /** Format: uuid */
+            runner_id: string;
         };
         /**
          * @description Compact list-row shape. Returned by `GET /api/v1/runners` — MUST NOT carry
@@ -10342,6 +10391,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runner_presence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live runner presence snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerPresenceSnapshot"][];
                 };
             };
         };

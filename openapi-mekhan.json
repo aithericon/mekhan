@@ -4370,6 +4370,31 @@
         }
       }
     },
+    "/api/v1/runners/presence": {
+      "get": {
+        "tags": [
+          "runners"
+        ],
+        "summary": "`GET /api/v1/runners/presence` — live in-memory presence snapshot (Phase 5).",
+        "description": "Returns the presence-controller's in-memory `PresenceMap` — the actual\npool-capacity signal (which runners hold an admitted unit right now), NOT the\n`runners.last_seen_at` column on the list view. Read-only; behind the auth\ngate like the other management reads.\n\nThe in-memory map is keyed by `runner_id` only and carries no workspace, so\nit is filtered here against the caller's workspace — a presence row is\nreturned only for a runner that lives in the caller's workspace. Without this\nthe snapshot would leak every workspace's runner ids + liveness timing\n(tenant-isolation break), since every other runner read is workspace-scoped.",
+        "operationId": "runner_presence",
+        "responses": {
+          "200": {
+            "description": "Live runner presence snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunnerPresenceSnapshot"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runners/registration-tokens": {
       "get": {
         "tags": [
@@ -14381,6 +14406,31 @@
           "nats_jwt": {
             "type": "string",
             "description": "Freshly signed scoped user JWT, bound to the runner's stored\n`nats_public_key`."
+          }
+        }
+      },
+      "RunnerPresenceSnapshot": {
+        "type": "object",
+        "description": "Phase 5 — one row of the live in-memory presence snapshot returned by\n`GET /api/v1/runners/presence`. This reflects the presence-controller's\nin-memory `PresenceMap` (the actual pool-capacity signal), NOT the\n`runners.last_seen_at` column on [`RunnerSummary`] (a best-effort UI bump).",
+        "required": [
+          "runner_id",
+          "present",
+          "last_seen_ms_ago"
+        ],
+        "properties": {
+          "last_seen_ms_ago": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since the last presence heartbeat from this runner.",
+            "minimum": 0
+          },
+          "present": {
+            "type": "boolean",
+            "description": "Whether mekhan currently considers the runner PRESENT (one pool unit\nadmitted and not yet reaped)."
+          },
+          "runner_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },

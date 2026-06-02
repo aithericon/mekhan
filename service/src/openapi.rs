@@ -78,6 +78,10 @@ use utoipa::OpenApi;
             crate::models::runner::CreateRegistrationTokenRequest,
             crate::models::runner::CreatedRegistrationToken,
             crate::models::runner::RegistrationTokenSummary,
+            // Phase 5 — live presence snapshot row. The handler returns it via
+            // `Vec<_>`, which utoipa's auto-discovery doesn't fully walk, so
+            // register it explicitly for frontend codegen.
+            crate::models::runner::RunnerPresenceSnapshot,
             // Phase 4 (typed capability registry) — capability type DTOs +
             // the CapabilityField sub-shape. The list/detail bodies refer to
             // these via PaginatedResponse<_> / nested Vec<_>, which utoipa's

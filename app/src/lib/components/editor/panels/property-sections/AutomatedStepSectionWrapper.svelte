@@ -8,6 +8,7 @@
 	import type { YjsGraphBinding } from '$lib/yjs/graph-binding.svelte';
 	import AutomatedStepSection from './AutomatedStepSection.svelte';
 	import RetryPolicySection from './RetryPolicySection.svelte';
+	import PlacementRequirementsSection from './PlacementRequirementsSection.svelte';
 
 	type Props = {
 		data: AutomatedStepNodeData;
@@ -32,3 +33,4 @@
 
 <AutomatedStepSection {data} {readonly} {onchange} {binding} {nodeId} {templateId} {scope} />
 <RetryPolicySection {data} {readonly} {onchange} />
+<PlacementRequirementsSection {data} {readonly} {onchange} />

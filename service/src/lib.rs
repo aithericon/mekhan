@@ -108,6 +108,11 @@ pub struct AppState {
     /// signed by the `runners`-account signing key. Always present: resolved
     /// at startup (auto-generates + persists a stable dev seed on a miss).
     pub runner_nats_signer: Arc<crate::runners_nats::RunnerNatsSigner>,
+    /// Phase 5 (Lab Runner Fleet) — shared handle to the presence controller's
+    /// in-memory `PresenceMap`. The same map the Phase-3 subscriber/sweep tasks
+    /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
+    /// capacity (which runners hold an admitted unit right now).
+    pub runner_presence: crate::runners_presence::RunnerPresence,
 }
 
 /// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
@@ -288,6 +293,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::runners::list_registration_tokens
         ))
         .routes(routes!(handlers::runners::revoke_registration_token))
+        // Phase 5 — live in-memory presence snapshot. Registered BEFORE the
+        // `{id}` routes so matchit prefers the literal `presence` segment over
+        // the `{id}` wildcard (same trie-ordering caveat as `registration-tokens`).
+        .routes(routes!(handlers::runners::runner_presence))
         .routes(routes!(handlers::runners::list_runners))
         .routes(routes!(handlers::runners::heartbeat_runner))
         // Phase 2 — self-service NATS scoped-creds mint/rotation. Runner-token
