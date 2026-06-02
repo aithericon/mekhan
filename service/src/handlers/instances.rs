@@ -20,7 +20,9 @@ use crate::models::instance::{
     CreateInstanceRequest, EngineStatus, InstanceListItem, InstanceStateResponse,
     ListInstancesQuery, WorkflowInstance,
 };
-use crate::models::responses::{InstanceChild, InstanceEventsResponse, StepExecutionResponse};
+use crate::models::responses::{
+    AllocationResponse, InstanceChild, InstanceEventsResponse, StepExecutionResponse,
+};
 use crate::models::template::{PaginatedResponse, WorkflowGraph};
 use crate::petri::events::fetch_events;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
@@ -723,6 +725,63 @@ pub async fn list_instance_children(
             },
         )
         .collect();
+
+    Ok(Json(response))
+}
+
+/// GET /api/v1/instances/:id/allocations
+///
+/// Lists the resource grants (datacenter leases + token-pool admissions) this
+/// instance held over its lifetime, from the `allocations` projection table.
+/// Each row is one `(net_id, grant_id, kind)` grant: a LeaseScope / Loop body
+/// holding a Slurm/Nomad/HTTP allocation (`datacenter_lease`), or an admission
+/// against one of our own worker pools (`token_pool_grant`). The instance view
+/// surfaces these to show "what did this run hold, for how long, and at what
+/// cost" — `duration_ms` is computed (`released_at - acquired_at`, or live for
+/// a still-`held` grant). Ordered by `acquired_at` (acquisition order).
+#[utoipa::path(
+    get,
+    path = "/api/v1/instances/{id}/allocations",
+    params(("id" = Uuid, Path, description = "Instance id")),
+    responses(
+        (status = 200, description = "Resource grants held by this instance", body = Vec<AllocationResponse>),
+        (status = 404, description = "Instance not found", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "instances",
+)]
+pub async fn list_instance_allocations(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<AllocationResponse>>, ApiError> {
+    // Existence check so the 404 path is honest (the projection may have no
+    // rows for an instance that never held a lease or pool grant).
+    let instance_exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM workflow_instances WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    if instance_exists.is_none() {
+        return Err(ApiError::not_found("instance not found"));
+    }
+
+    let rows: Vec<AllocationResponse> = sqlx::query_as(
+        "SELECT id, kind, net_id, instance_id, node_id, grant_id, \
+                cluster_resource_id, scheduler_flavor, alloc_id, node, \
+                executor_namespace, status, requested_at, acquired_at, \
+                released_at, expiry, exit_code, queue_wait_ms, elapsed_ms, \
+                cpu_seconds, gpu_seconds, peak_rss_bytes, requested_tres, \
+                allocated_tres, last_error, last_sequence \
+         FROM allocations \
+         WHERE instance_id = $1 \
+         ORDER BY acquired_at NULLS LAST, requested_at NULLS LAST",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let response: Vec<AllocationResponse> =
+        rows.into_iter().map(AllocationResponse::with_duration).collect();
 
     Ok(Json(response))
 }

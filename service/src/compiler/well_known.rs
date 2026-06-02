@@ -15,6 +15,21 @@ pub fn pool_net_id(resource_id: uuid::Uuid) -> String {
     format!("pool-{resource_id}")
 }
 
+/// Deterministic net id for a one-shot **staging run** (B-staging, Phase 4). A
+/// staging run pushes one job-template *version* onto one *datacenter* cluster;
+/// mekhan generates a short-lived Petri net (`build_staging_net`) that fires the
+/// `stage_template` engine effect once and completes. Keyed by the
+/// `template_stagings` row id (`staging_id`) so each (template_version ×
+/// datacenter) staging attempt is its own instance you can drill into, and so
+/// the `stage_template` effect_result's echoed `staging_id` correlates straight
+/// back to the row the `template_stagings` projection updates. Pure function of
+/// the staging row id ⇒ replay-safe + unique per attempt (re-staging the same
+/// combo upserts the row → reuses its id → re-deploys the same net id, which the
+/// engine replaces).
+pub fn staging_net_id(staging_id: uuid::Uuid) -> String {
+    format!("staging-{staging_id}")
+}
+
 /// The pool net's claim queue (`bridge_in::<ClaimRequest>("claim_inbox", …)`).
 /// A `ClaimRequest { grant_id }` deposited here is matched against a free
 /// capacity token by `t_grant`, which replies a `Grant { grant_id, gpu_id }`

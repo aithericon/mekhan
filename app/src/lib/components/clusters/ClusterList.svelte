@@ -9,13 +9,25 @@
 		listClusters,
 		reconnectCluster,
 		drainCluster,
-		type ClusterSummary
+		type ClusterSummary,
+		type ClusterMetrics
 	} from '$lib/api/clusters';
+
+	type Props = {
+		/** Per-cluster metrics map (cluster_id -> ClusterMetrics) injected from the fleet
+		 *  page. When absent the metric columns are hidden so the component degrades
+		 *  gracefully when used standalone. */
+		metricsById?: Record<string, ClusterMetrics>;
+	};
+
+	let { metricsById = {} }: Props = $props();
 
 	let clusters = $state<ClusterSummary[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let busyId = $state<string | null>(null);
+
+	const hasMetrics = $derived(Object.keys(metricsById).length > 0);
 
 	async function load(spin = false) {
 		if (spin) loading = true;
@@ -60,6 +72,15 @@
 		return 'bg-rose-500/15 text-rose-700 dark:text-rose-300'; // stopped / no_watcher
 	}
 	const name = (c: ClusterSummary) => c.display_name || c.resource_path || c.resource_id;
+
+	function pct(rate: number, leaseCount: number): string {
+		if (leaseCount === 0) return '—';
+		return `${(rate * 100).toFixed(1)}%`;
+	}
+	function hoursFrom(seconds: number): string {
+		if (seconds === 0) return '0';
+		return (seconds / 3600).toFixed(1);
+	}
 </script>
 
 <div class="space-y-4">
@@ -103,11 +124,16 @@
 						<th class="px-3 py-2 font-medium">Watcher</th>
 						<th class="px-3 py-2 font-medium">Health</th>
 						<th class="px-3 py-2 text-right font-medium">Leases</th>
+						{#if hasMetrics}
+							<th class="px-3 py-2 text-right font-medium">Success</th>
+							<th class="px-3 py-2 text-right font-medium">GPU-h</th>
+						{/if}
 						<th class="px-3 py-2 font-medium"></th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-border/60">
 					{#each clusters as c (c.resource_id)}
+						{@const cm = metricsById[c.resource_id]}
 						<tr class="hover:bg-muted/30">
 							<td class="px-3 py-2">
 								<div class="font-medium">{name(c)}</div>
@@ -141,6 +167,20 @@
 									<span class="text-muted-foreground">0</span>
 								{/if}
 							</td>
+							{#if hasMetrics}
+								<td class="px-3 py-2 text-right font-mono text-sm tabular-nums">
+									{#if cm}
+										<span class={cm.lease_count > 0 && cm.success_rate < 0.8 ? 'text-rose-600' : cm.lease_count > 0 && cm.success_rate >= 0.95 ? 'text-emerald-600' : 'text-foreground'}>
+											{pct(cm.success_rate, cm.lease_count)}
+										</span>
+									{:else}
+										<span class="text-muted-foreground">—</span>
+									{/if}
+								</td>
+								<td class="px-3 py-2 text-right font-mono text-sm tabular-nums text-muted-foreground">
+									{cm ? hoursFrom(cm.gpu_seconds_total) : '—'}
+								</td>
+							{/if}
 							<td class="px-3 py-2">
 								<div class="flex items-center justify-end gap-1.5">
 									{#if c.resource_id !== '_env'}

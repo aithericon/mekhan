@@ -11,12 +11,14 @@
 pub mod backoff;
 pub mod checkpoint;
 pub mod meta;
+pub mod metrics;
 pub mod signal;
 
 pub use checkpoint::{
     nomad_event_index_key, slurm_poll_cursor_key, slurm_tracked_jobs_key, CheckpointStore,
     DEV_BOOTSTRAP_CLUSTER_KEY,
 };
+pub use metrics::{AllocatedTres, AllocationMetrics, RequestedTres};
 pub use meta::{
     event_meta_key, parse_event_meta_key, parse_signal_meta_key, signal_meta_key, RoutingMeta,
     META_EVENT_PREFIX, META_NET_ID, META_PLACE, META_SIGNAL_KEY, META_SIGNAL_PREFIX,

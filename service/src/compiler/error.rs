@@ -576,6 +576,35 @@ pub enum CompileError {
     )]
     SchedulerUnresolved { node_id: String },
 
+    /// A `Scheduled` step carries a `job_template_ref` (Phase 3, B-model) whose
+    /// `(template_id, version)` couldn't be loaded from the workspace's
+    /// `job_templates` / `job_template_versions` tables — unknown id,
+    /// soft-deleted template, or no row at that version. Hard-fail at publish so
+    /// a dangling reference can't reach lowering. `template_ref` is a
+    /// human-readable `"<template_id>@v<version>"` for the diagnostic.
+    #[error(
+        "node '{node_id}': job template reference '{template_ref}' is unresolved — \
+         no such job template/version in this workspace"
+    )]
+    JobTemplateUnresolved {
+        node_id: String,
+        template_ref: String,
+    },
+
+    /// A `Scheduled` step's referenced job template (Phase 3, B-model) has a
+    /// flavor (`slurm` | `nomad` | …) that doesn't match the step's RESOLVED
+    /// cluster's scheduler flavor. A Slurm template can't stage onto a Nomad
+    /// datacenter and vice-versa — hard-fail at publish.
+    #[error(
+        "node '{node_id}': job template flavor '{template_flavor}' does not match \
+         the resolved cluster flavor '{cluster_flavor}'"
+    )]
+    JobTemplateFlavorMismatch {
+        node_id: String,
+        template_flavor: String,
+        cluster_flavor: String,
+    },
+
     /// `executionSpec.config` (or a nested value) carries a
     /// `{"$ref": "#/definitions/<name>"}` that the workflow-level
     /// `definitions` map can't resolve — unknown name, cycle,
@@ -780,6 +809,8 @@ impl CompileError {
             Self::SchedulerNotADatacenter { .. } => "scheduler_not_a_datacenter",
             Self::DatacenterConnectionIncomplete { .. } => "datacenter_connection_incomplete",
             Self::SchedulerUnresolved { .. } => "scheduler_unresolved",
+            Self::JobTemplateUnresolved { .. } => "job_template_unresolved",
+            Self::JobTemplateFlavorMismatch { .. } => "job_template_flavor_mismatch",
             Self::ResourcePoolRequestInvalid { .. } => "resource_pool_request_invalid",
             Self::SchemaRefUnresolved { .. } => "schema_ref_unresolved",
             Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
@@ -867,6 +898,8 @@ impl CompileError {
             | Self::SchedulerNotADatacenter { node_id, .. }
             | Self::DatacenterConnectionIncomplete { node_id, .. }
             | Self::SchedulerUnresolved { node_id }
+            | Self::JobTemplateUnresolved { node_id, .. }
+            | Self::JobTemplateFlavorMismatch { node_id, .. }
             | Self::ResourcePoolRequestInvalid { node_id, .. } => Some(node_id),
             _ => None,
         }

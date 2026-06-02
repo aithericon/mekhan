@@ -55,7 +55,9 @@ use std::collections::HashMap;
 use serde_json::{json, Value as JsonValue};
 
 #[cfg(feature = "nomad")]
-use petri_application::resource_lease_handlers::{AllocatorClient, AllocatorError};
+use petri_application::resource_lease_handlers::{
+    AllocatorClient, AllocatorError, StageOutcome, StageTemplateArgs,
+};
 #[cfg(feature = "nomad")]
 use petri_nomad::config::NomadConfig;
 #[cfg(feature = "nomad")]
@@ -77,6 +79,9 @@ pub struct NomadAllocatorClient {
     http: reqwest::Client,
     /// The parameterized job ID dispatched per-acquire (the drain executor).
     lease_job_template: String,
+    /// Bounded budget for the best-effort post-dispatch placement-node poll.
+    /// Defaults to ~30s; tests set 0 to skip the poll entirely.
+    placement_poll_budget: std::time::Duration,
 }
 
 #[cfg(feature = "nomad")]
@@ -103,6 +108,7 @@ impl NomadAllocatorClient {
             config,
             http,
             lease_job_template,
+            placement_poll_budget: std::time::Duration::from_secs(30),
         })
     }
 
@@ -214,19 +220,114 @@ impl NomadAllocatorClient {
             "nomad lease: dispatched persistent drain executor",
         );
 
-        // `DatacenterLease`: only `alloc_id` is required. node/expiry are
-        // unresolved at dispatch (the watcher streams placement asynchronously),
-        // so they're OMITTED rather than emitted as empty strings — the drain
-        // executor self-identifies via the namespace. The `scheduler` detail is
-        // the typed `nomad` variant carrying the dispatch evaluation id.
-        Ok(json!({
+        // Best-effort, BOUNDED post-dispatch poll for the placement node. Unlike
+        // Slurm's synchronous scontrol, Nomad placement is async — we poll
+        // `GET /v1/allocation?job=<dispatched_job_id>` for up to ~30s to capture
+        // the node the drain executor landed on (telemetry parity with Slurm's
+        // lease node). On timeout we leave `node` null; the terminal signal's
+        // AllocationMetrics will still carry it once the watcher observes the
+        // alloc. NON-fatal: any error/timeout just omits the field.
+        let node = self
+            .poll_placement_node(&dispatch_resp.dispatched_job_id)
+            .await;
+
+        // `DatacenterLease`: only `alloc_id` is required. `expiry` is unresolved
+        // at dispatch and OMITTED. `node` is included ONLY when the bounded poll
+        // resolved it (else omitted, not empty-string). The `scheduler` detail
+        // is the typed `nomad` variant carrying the dispatch evaluation id.
+        let mut lease = json!({
             "alloc_id": dispatch_resp.dispatched_job_id,
             "executor_namespace": executor_namespace,
             "scheduler": {
                 "flavor": "nomad",
                 "eval_id": dispatch_resp.eval_id,
             },
-        }))
+        });
+        if let Some(node) = node {
+            if let Some(obj) = lease.as_object_mut() {
+                obj.insert("node".to_string(), json!(node));
+            }
+        }
+        Ok(lease)
+    }
+
+    /// BOUNDED, best-effort poll of `GET /v1/allocation?job=<job_id>` for the
+    /// placement node name. Polls every 1s up to ~30s; returns the first
+    /// allocation's non-empty `NodeName`, or `None` on timeout / any error
+    /// (NEVER fails the acquire). On timeout the node is filled later by the
+    /// terminal signal's AllocationMetrics.
+    async fn poll_placement_node(&self, dispatched_job_id: &str) -> Option<String> {
+        use std::time::{Duration, Instant};
+
+        let budget = self.placement_poll_budget;
+        // Zero budget → skip the poll entirely (tests / opt-out).
+        if budget.is_zero() {
+            return None;
+        }
+        const INTERVAL: Duration = Duration::from_secs(1);
+
+        // Nomad's allocations-list (`/v1/allocations?prefix=` or `?job=`) returns
+        // a slim list; the per-job filter is `?job=<id>`. We reuse the watcher's
+        // `Allocation` model (its `node_name` field is present on list stubs).
+        let url = format!(
+            "{}/v1/allocations?job={}&region={}",
+            self.config.addr.trim_end_matches('/'),
+            dispatched_job_id,
+            self.config.region,
+        );
+
+        let deadline = Instant::now() + budget;
+        loop {
+            let resp = match self.auth(self.http.get(&url)).send().await {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    tracing::debug!(
+                        status = %r.status(),
+                        dispatched_job_id,
+                        "nomad lease: placement poll non-200 (will retry within budget)"
+                    );
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    tokio::time::sleep(INTERVAL).await;
+                    continue;
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, dispatched_job_id, "nomad lease: placement poll transport error");
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    tokio::time::sleep(INTERVAL).await;
+                    continue;
+                }
+            };
+
+            if let Ok(allocs) =
+                resp.json::<Vec<petri_nomad::models::Allocation>>().await
+            {
+                if let Some(node) = allocs
+                    .iter()
+                    .map(|a| a.node_name.trim())
+                    .find(|n| !n.is_empty())
+                {
+                    tracing::info!(
+                        dispatched_job_id,
+                        node,
+                        "nomad lease: resolved placement node via post-dispatch poll"
+                    );
+                    return Some(node.to_string());
+                }
+            }
+
+            if Instant::now() >= deadline {
+                tracing::debug!(
+                    dispatched_job_id,
+                    "nomad lease: placement node unresolved within budget — leaving node null"
+                );
+                return None;
+            }
+            tokio::time::sleep(INTERVAL).await;
+        }
     }
 
     /// Stop the dispatched drain-executor job: `nomad job stop` →
@@ -256,6 +357,164 @@ impl NomadAllocatorClient {
         tracing::info!(alloc_id = %alloc_id, "nomad lease: released (job stop)");
         Ok(())
     }
+
+    /// Render a [`StageTemplateArgs`] into a Nomad PARAMETERIZED job and REGISTER
+    /// it via `PUT /v1/job/{slug}` (the register endpoint, NOT dispatch). Returns
+    /// `remote_ref = slug`.
+    ///
+    /// The registered job mirrors the canonical shape (`ensure_parameterized_jobs`
+    /// / the test-harness `register_test_job_template`): `Type: "batch"`, a
+    /// `ParameterizedJob` section whose `MetaOptional` declares EXACTLY the routing
+    /// meta keys the later `submit` dispatch path sends (`RoutingMeta::to_meta_tags`
+    /// → `petri_net_id`/`petri_place`/`petri_signal_key`/`petri_signal_*`), so the
+    /// staged job is dispatchable. One TaskGroup runs the `spec.entrypoint` (or a
+    /// no-op default) with the requested CPU/MemoryMB/GPU device. `spec.image`, if
+    /// present, is set as the `docker` task driver image; otherwise `raw_exec`.
+    ///
+    /// Tolerates 200/201 (registered) and 409 (already registered) as success.
+    async fn stage_template(&self, args: &StageTemplateArgs) -> Result<StageOutcome, AllocatorError> {
+        let job = self.render_parameterized_job(args);
+        let url = self.url(&format!("job/{}", args.slug));
+
+        let resp = self
+            .auth(self.http.put(&url))
+            .json(&job)
+            .send()
+            .await
+            .map_err(|e| AllocatorError::Transport(e.to_string()))?;
+
+        let status = resp.status();
+        // 409 (already registered) is treated as success — staging is idempotent.
+        if !status.is_success() && status.as_u16() != 409 {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AllocatorError::Status {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        tracing::info!(
+            slug = %args.slug,
+            status = %status.as_u16(),
+            "nomad stage_template: registered parameterized job",
+        );
+        Ok(StageOutcome {
+            remote_ref: args.slug.clone(),
+        })
+    }
+
+    /// Build the `{ "Job": { … } }` register body for a parameterized job from
+    /// the typed [`StageTemplateArgs`]. The `MetaOptional` keys MUST cover what
+    /// the `submit` dispatch path stamps so the job stays dispatchable.
+    fn render_parameterized_job(&self, args: &StageTemplateArgs) -> JsonValue {
+        let spec = &args.spec;
+
+        // The routing meta keys `RoutingMeta::to_meta_tags()` sends on dispatch.
+        // Declared optional so a dispatch that omits some (e.g. no per-status
+        // routes) still validates. Mirrors the canonical registered job shape.
+        let meta_optional = json!([
+            "petri_net_id",
+            "petri_place",
+            "petri_signal_key",
+            "petri_signal_running",
+            "petri_signal_completed",
+            "petri_signal_failed",
+        ]);
+
+        // Resources from the typed spec; cluster-sane defaults for absent fields.
+        let cpu = spec.cpus.filter(|c| *c > 0).unwrap_or(1);
+        let mem = spec.mem_mb.filter(|m| *m > 0).unwrap_or(256);
+        let mut resources = json!({ "CPU": cpu, "MemoryMB": mem });
+        if let Some(gpus) = spec.gpus.filter(|g| *g > 0) {
+            // Nomad GPU is a Device constraint. `gpu_type` (if any) names the
+            // device; absent → the generic `gpu` device.
+            let device_name = spec
+                .gpu_type
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "gpu".to_string());
+            resources["Devices"] = json!([{ "Name": device_name, "Count": gpus }]);
+        }
+
+        // Driver + Config. An `image` → docker driver; otherwise raw_exec running
+        // the entrypoint via a shell (defaulting to a no-op `true` so the
+        // registered job is valid even before the entrypoint is finalized).
+        let entrypoint = spec
+            .entrypoint
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "true".to_string());
+        let (driver, config) = if let Some(image) = spec.image.clone().filter(|s| !s.is_empty()) {
+            (
+                "docker",
+                json!({ "image": image, "command": "sh", "args": ["-c", entrypoint] }),
+            )
+        } else {
+            (
+                "raw_exec",
+                json!({ "command": "sh", "args": ["-c", entrypoint] }),
+            )
+        };
+
+        // Task env from the typed spec.
+        let env: serde_json::Map<String, JsonValue> = spec
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), JsonValue::String(v.clone())))
+            .collect();
+
+        let mut task = json!({
+            "Name": "petri-worker",
+            "Driver": driver,
+            "Config": config,
+            "Resources": resources,
+        });
+        if !env.is_empty() {
+            task["Env"] = JsonValue::Object(env);
+        }
+
+        let mut job = json!({
+            "ID": args.slug,
+            "Name": args.slug,
+            "Type": "batch",
+            "Datacenters": ["dc1"],
+            "ParameterizedJob": {
+                "Payload": "optional",
+                "MetaRequired": [],
+                "MetaOptional": meta_optional,
+            },
+            "TaskGroups": [{
+                "Name": "main",
+                "Count": 1,
+                "RestartPolicy": { "Attempts": 0, "Mode": "fail" },
+                "ReschedulePolicy": { "Attempts": 0 },
+                "Tasks": [task],
+            }],
+        });
+
+        // v1 escape hatch: an `hcl_stanza` is advisory only (we register typed
+        // JSON, not HCL). Record it so the author intent is visible/diagnosable
+        // rather than silently dropped; a full HCL-merge is deferred.
+        if let Some(stanza) = args
+            .escape_hatch
+            .hcl_stanza
+            .as_ref()
+            .filter(|s| !s.is_empty())
+        {
+            tracing::warn!(
+                slug = %args.slug,
+                "nomad stage_template: escape_hatch.hcl_stanza is advisory in v1 (typed JSON \
+                 registration only) — not merged into the registered job",
+            );
+            if let Some(meta) = job.get_mut("Meta").and_then(|m| m.as_object_mut()) {
+                meta.insert("petri_stage_hcl_stanza".into(), json!(stanza));
+            } else {
+                job["Meta"] = json!({ "petri_stage_hcl_stanza": stanza });
+            }
+        }
+
+        json!({ "Job": job })
+    }
 }
 
 #[cfg(feature = "nomad")]
@@ -280,6 +539,17 @@ impl AllocatorClient for NomadAllocatorClient {
         alloc_id: &str,
     ) -> Result<(), AllocatorError> {
         self.release_lease(alloc_id).await
+    }
+
+    async fn stage_template_with_connection(
+        &self,
+        _config: &JsonValue,
+        args: &StageTemplateArgs,
+    ) -> Result<StageOutcome, AllocatorError> {
+        // Nomad uses its own held NomadConfig — the connection in `config` was
+        // already used by the registry to build/resolve THIS client, so the
+        // config arg is ignored here (symmetric with acquire/release).
+        self.stage_template(args).await
     }
 }
 
@@ -401,11 +671,13 @@ mod tests {
             addr: addr.to_string(),
             ..NomadConfig::default()
         };
-        // bypass env-driven template selection for the test
+        // bypass env-driven template selection for the test; skip the bounded
+        // placement poll (the one-shot fake Nomad only serves the dispatch POST).
         NomadAllocatorClient {
             http: config.build_http_client().unwrap(),
             config,
             lease_job_template: "petri-lease-executor".to_string(),
+            placement_poll_budget: std::time::Duration::ZERO,
         }
     }
 
@@ -518,6 +790,102 @@ mod tests {
             "body: {}",
             cap.body
         );
+    }
+
+    #[tokio::test]
+    async fn stage_template_registers_parameterized_job_via_put() {
+        // Nomad register returns an eval-ish body on success; we only assert the
+        // request line + body shape.
+        let (addr, captured) = fake_nomad(r#"{"EvalID":"reg-1","Index":3}"#).await;
+        let client = client_for(&addr);
+
+        let args = StageTemplateArgs {
+            slug: "train-job".to_string(),
+            spec: petri_application::resource_lease_handlers::StageSpec {
+                cpus: Some(4),
+                gpus: Some(2),
+                gpu_type: Some("a100".to_string()),
+                mem_mb: Some(8192),
+                image: Some("py:3.12".to_string()),
+                entrypoint: Some("python run.py".to_string()),
+                env: std::iter::once(("FOO".to_string(), "bar".to_string())).collect(),
+                ..Default::default()
+            },
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+
+        let outcome = client.stage_template(&args).await.unwrap();
+        assert_eq!(outcome.remote_ref, "train-job");
+
+        let cap = captured.lock().unwrap().clone();
+        // The REGISTER endpoint: PUT /v1/job/{slug} (NOT dispatch).
+        assert_eq!(cap.method, "PUT");
+        assert_eq!(cap.path, "/v1/job/train-job");
+
+        // Full Job spec: parameterized, batch, with the dispatch routing meta keys
+        // declared so the staged job is later dispatchable.
+        let body: serde_json::Value = serde_json::from_str(&cap.body)
+            .unwrap_or_else(|e| panic!("body not JSON: {e}; raw={}", cap.body));
+        let job = &body["Job"];
+        assert_eq!(job["ID"], "train-job");
+        assert_eq!(job["Type"], "batch");
+        assert!(job["ParameterizedJob"].is_object(), "body: {}", cap.body);
+        let meta_optional = job["ParameterizedJob"]["MetaOptional"]
+            .as_array()
+            .expect("MetaOptional array");
+        for required in [
+            "petri_net_id",
+            "petri_place",
+            "petri_signal_key",
+            "petri_signal_completed",
+            "petri_signal_failed",
+        ] {
+            assert!(
+                meta_optional.iter().any(|v| v == required),
+                "MetaOptional must declare {required}: {}",
+                cap.body
+            );
+        }
+        // Resources + GPU device + docker image + entrypoint + env threaded.
+        let task = &job["TaskGroups"][0]["Tasks"][0];
+        assert_eq!(task["Resources"]["CPU"], 4);
+        assert_eq!(task["Resources"]["MemoryMB"], 8192);
+        assert_eq!(task["Resources"]["Devices"][0]["Name"], "a100");
+        assert_eq!(task["Resources"]["Devices"][0]["Count"], 2);
+        assert_eq!(task["Driver"], "docker");
+        assert_eq!(task["Config"]["image"], "py:3.12");
+        assert_eq!(task["Env"]["FOO"], "bar");
+    }
+
+    #[tokio::test]
+    async fn stage_template_tolerates_409_already_registered() {
+        // A 409 (already registered) is success — staging is idempotent.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 8192];
+                let _ = sock.read(&mut buf).await;
+                let body = "conflict";
+                let resp = format!(
+                    "HTTP/1.1 409 Conflict\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+        let client = client_for(&addr);
+        let args = StageTemplateArgs {
+            slug: "dup-job".to_string(),
+            spec: Default::default(),
+            escape_hatch: Default::default(),
+            package_ref: None,
+        };
+        let outcome = client.stage_template(&args).await.unwrap();
+        assert_eq!(outcome.remote_ref, "dup-job");
     }
 
     #[tokio::test]

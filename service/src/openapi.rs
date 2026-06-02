@@ -51,6 +51,21 @@ use utoipa::OpenApi;
             crate::models::resource::UpdateResourceRequest,
             crate::models::resource::RotateResourceRequest,
             crate::models::resource::ResourceAuditEntry,
+            // Phase 3 (B-model) — Job-template CRUD DTOs. Nested types
+            // (CommonSpec / EscapeHatch / TemplateParameter inside the version
+            // shapes; TemplateStaging inside the detail + Vec<_> response) are
+            // only reachable through handler bodies, so register them explicitly
+            // for frontend codegen.
+            crate::models::job_template::JobTemplateSummary,
+            crate::models::job_template::JobTemplateDetail,
+            crate::models::job_template::JobTemplateVersion,
+            crate::models::job_template::CommonSpec,
+            crate::models::job_template::EscapeHatch,
+            crate::models::job_template::TemplateParameter,
+            crate::models::job_template::TemplateStaging,
+            crate::models::job_template::CreateJobTemplateRequest,
+            crate::models::job_template::UpdateJobTemplateRequest,
+            crate::models::job_template::StageJobTemplateRequest,
             // Executor backend config DTOs — the JSON shape each AutomatedStep
             // backend's `spec.config` carries. Registered so the SPA's generic
             // schema-driven config form can read them off the OpenAPI document
@@ -105,6 +120,13 @@ use utoipa::OpenApi;
             crate::handlers::clusters::ClusterSummary,
             crate::handlers::clusters::ClustersResponse,
             crate::handlers::clusters::ClusterActionResponse,
+            // Live-aggregated cluster accounting over the allocations table.
+            crate::handlers::clusters::ClusterMetrics,
+            crate::handlers::clusters::FleetMetrics,
+            // Resource-grant (allocations) read DTO, shared by the instance-
+            // allocations and cluster-leases endpoints (`LeaseResponse` is an
+            // alias for it, so only the one schema needs registering).
+            crate::models::responses::AllocationResponse,
         ),
     ),
     tags(
@@ -119,6 +141,7 @@ use utoipa::OpenApi;
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
         (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
+        (name = "job-templates", description = "Versioned cluster job-spec entity (flavor-tagged `slurm`/`nomad`) — typed common spec + flavor escape hatch + declared parameters, staged onto datacenter resources. No secret coupling."),
         (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
         (name = "node-types", description = "Workflow node-type registry — per-variant display metadata, runtime kind, and protocol flags."),
         (name = "health", description = "Liveness probe."),

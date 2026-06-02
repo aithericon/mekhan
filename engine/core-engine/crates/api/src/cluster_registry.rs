@@ -51,7 +51,7 @@ use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
 use petri_application::resource_lease_handlers::{
-    AllocatorClient, AllocatorError, HttpAllocatorClient,
+    AllocatorClient, AllocatorError, HttpAllocatorClient, StageOutcome, StageTemplateArgs,
 };
 
 /// Default idle grace before a quiet (active==0) cluster client is torn down.
@@ -960,6 +960,25 @@ impl AllocatorClient for ClusterRegistryAllocatorClient {
         // Drop the increment this call took…
         self.registry.release(&conn.resource_id, conn.version).await;
         // …and the increment the matching acquire took (the held lease ends).
+        self.registry.release(&conn.resource_id, conn.version).await;
+        res
+    }
+
+    async fn stage_template_with_connection(
+        &self,
+        config: &serde_json::Value,
+        args: &StageTemplateArgs,
+    ) -> Result<StageOutcome, AllocatorError> {
+        let conn = ClusterConnection::from_effect_config(config);
+        // Resolve (lazily build) the cluster from the connection. `get_or_build`
+        // bumps the active count for the duration of this register call only —
+        // staging is NOT a held lease, so we drop the bump immediately after the
+        // register completes (arming idle-teardown if no lease holds the cluster).
+        let client = self.registry.get_or_build(&conn).await?;
+        let res = client
+            .allocator
+            .stage_template_with_connection(config, args)
+            .await;
         self.registry.release(&conn.resource_id, conn.version).await;
         res
     }

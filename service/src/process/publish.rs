@@ -135,6 +135,27 @@ impl<'a> PublishService<'a> {
             ApiError::compile(format!("scheduler selection failed: {summary}"), views)
         })?;
 
+        // Phase 3 (B-model): resolve+validate each Scheduled step's optional
+        // job-template REFERENCE against its already-resolved cluster, stamping
+        // the referenced template's slug into the node's `job_template` string.
+        // Runs AFTER `resolve_scheduler_defaults` (so the node's effective
+        // cluster alias is known) and BEFORE `discover_known_resources` /
+        // lowering (so they read the resolved name, single-site discipline). A
+        // `None` ref leaves the legacy bare `job_template` string untouched.
+        // RESOLVE + VALIDATE ONLY — no `template_stagings` mutation (Phase 4).
+        let compiled_graph =
+            resolve_job_templates(&compiled_graph, workspace_id, &self.state.db).await?;
+
+        // Phase 4 (B-staging): best-effort publish-time AUTO-STAGE. For each
+        // resolved (template version × cluster) that isn't already freshly
+        // staged, kick a generated staging net (the dual-trigger's automatic
+        // arm; the explicit one is `POST /job-templates/{id}/stage`). This runs
+        // AFTER `resolve_job_templates` succeeded, so every (ref, cluster) pair
+        // is known-valid. Engine-down / per-target failures are SWALLOWED — a
+        // staging hiccup must never fail a publish (the Templates-tab "stage now"
+        // + the staging net's own retry are the backstops).
+        auto_stage_templates(self.state, &compiled_graph, workspace_id).await;
+
         // Discover workspace resources this graph touches by source-scanning
         // Python entrypoints for `<head>.<field>` accesses and looking the
         // heads up in the workspace's resources list. The compiler uses this
@@ -308,6 +329,340 @@ impl<'a> PublishService<'a> {
 /// [`CompileError::WorkspaceResourceUnknown`]. Without that hard fail the
 /// AIR builds without the borrow and the backend later crashes at run
 /// time with "compiler must emit a ResourceEnvelope borrow", which sends
+/// Phase 3 (B-model): resolve+validate every Scheduled step's optional
+/// job-template REFERENCE against its already-resolved cluster, returning a
+/// rewritten graph clone whose referenced nodes carry the template's slug in
+/// their `job_template` string.
+///
+/// For each `AutomatedStep` with `DeploymentModel::Scheduled { job_template_ref:
+/// Some(TemplateRef { template_id, version }), .. }`:
+///   (a) load the workspace-scoped, non-soft-deleted `job_templates` row + the
+///       `job_template_versions` row at `version` → [`CompileError::JobTemplateUnresolved`]
+///       if either is missing;
+///   (b) determine the step's RESOLVED cluster flavor (the `scheduler_flavor` on
+///       the resolved `scheduler` datacenter resource — the same alias
+///       `resolve_scheduler_defaults` stamped, or, for a lease-enclosed body,
+///       the enclosing `LeaseScope`'s `lease.scheduler`) and compare it to the
+///       template's flavor → [`CompileError::JobTemplateFlavorMismatch`] on
+///       mismatch;
+///   (c) stamp the template's `slug` into the node's `job_template` string so
+///       lowering/engine receive a concrete native job name (Phase-4 staging
+///       registers the native job under that slug).
+///
+/// A node whose `job_template_ref` is `None` is left untouched (legacy/manual
+/// bare `job_template` string). This is RESOLVE + VALIDATE ONLY — it performs no
+/// `template_stagings` writes (Phase 4).
+///
+/// All lookups are keyed by `workspace_id`. The author's original `graph` is
+/// still persisted as `graph_json` by the caller — the stamped slug lives only
+/// in the compiled artifact, mirroring `resolve_scheduler_defaults`'s discipline.
+async fn resolve_job_templates(
+    graph: &WorkflowGraph,
+    workspace_id: Uuid,
+    db: &sqlx::PgPool,
+) -> Result<WorkflowGraph, ApiError> {
+    use crate::models::template::{DeploymentModel, TemplateRef};
+
+    // Collect (node_id, TemplateRef) for every Scheduled step that carries a ref,
+    // alongside the node's resolved cluster alias (node-level scheduler, else the
+    // enclosing LeaseScope's). Done off the immutable input so the mutation loop
+    // below can borrow `out.nodes` exclusively.
+    let mut work: Vec<(String, TemplateRef, Option<String>)> = Vec::new();
+    for node in &graph.nodes {
+        if let WorkflowNodeData::AutomatedStep {
+            deployment_model:
+                DeploymentModel::Scheduled {
+                    scheduler,
+                    job_template_ref: Some(template_ref),
+                    ..
+                },
+            ..
+        } = &node.data
+        {
+            let cluster_alias = resolved_cluster_alias(node, graph, scheduler.as_deref());
+            work.push((node.id.clone(), template_ref.clone(), cluster_alias));
+        }
+    }
+
+    if work.is_empty() {
+        return Ok(graph.clone());
+    }
+
+    // Per (node, ref): load template + version, then validate flavor against the
+    // resolved cluster. Accumulate one CompileError per offending node so the
+    // editor can ring every bad node in a single publish round-trip. The
+    // resolved slug is recorded for the stamp pass.
+    let mut errors: Vec<CompileError> = Vec::new();
+    let mut resolved_slugs: HashMap<String, String> = HashMap::new(); // node_id → slug
+    for (node_id, template_ref, cluster_alias) in &work {
+        let ref_str = format!("{}@v{}", template_ref.template_id, template_ref.version);
+
+        // (a) Load the logical template (workspace-scoped, not soft-deleted) and
+        //     the immutable version row in one round-trip.
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT jt.slug, jt.flavor \
+             FROM job_templates jt \
+             JOIN job_template_versions jtv \
+               ON jtv.template_id = jt.id AND jtv.version = $3 \
+             WHERE jt.id = $1 AND jt.workspace_id = $2 AND jt.deleted_at IS NULL",
+        )
+        .bind(template_ref.template_id)
+        .bind(workspace_id)
+        .bind(template_ref.version)
+        .fetch_optional(db)
+        .await
+        .map_err(|e| ApiError::internal(format!("job template lookup: {e}")))?;
+
+        let Some((slug, template_flavor)) = row else {
+            errors.push(CompileError::JobTemplateUnresolved {
+                node_id: node_id.clone(),
+                template_ref: ref_str,
+            });
+            continue;
+        };
+
+        // (b) Resolve the step's cluster flavor and compare. A lease-enclosed
+        //     body whose enclosing scope's alias is itself unresolved, or a node
+        //     whose alias has no datacenter/flavor, surfaces as
+        //     JobTemplateUnresolved-adjacent: we treat a missing cluster flavor
+        //     as a flavor mismatch against the empty string so the operator sees
+        //     a concrete diagnostic (the cluster itself is separately validated
+        //     by `resolve_binding` at lowering).
+        let cluster_flavor = match cluster_alias {
+            Some(alias) => datacenter_flavor(db, workspace_id, alias).await?,
+            None => None,
+        };
+        match cluster_flavor {
+            Some(cf) if cf == template_flavor => {
+                resolved_slugs.insert(node_id.clone(), slug);
+            }
+            Some(cf) => {
+                errors.push(CompileError::JobTemplateFlavorMismatch {
+                    node_id: node_id.clone(),
+                    template_flavor,
+                    cluster_flavor: cf,
+                });
+            }
+            None => {
+                errors.push(CompileError::JobTemplateFlavorMismatch {
+                    node_id: node_id.clone(),
+                    template_flavor,
+                    cluster_flavor: String::new(),
+                });
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        let summary = errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        let views: Vec<_> = errors.iter().map(|e| e.to_view()).collect();
+        return Err(ApiError::compile(
+            format!("job template resolution failed: {summary}"),
+            views,
+        ));
+    }
+
+    // (c) Stamp the resolved slug into each node's `job_template` string.
+    let mut out = graph.clone();
+    for node in &mut out.nodes {
+        if let Some(slug) = resolved_slugs.get(&node.id) {
+            if let WorkflowNodeData::AutomatedStep {
+                deployment_model: DeploymentModel::Scheduled { job_template, .. },
+                ..
+            } = &mut node.data
+            {
+                *job_template = slug.clone();
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The RESOLVED datacenter alias for a Scheduled step: the node's own stamped
+/// `scheduler` (set by `resolve_scheduler_defaults`), else — for a body running
+/// on an enclosing `LeaseScope`'s held allocation by containment — that
+/// LeaseScope's `lease.scheduler`. `None` only if neither is present (which the
+/// caller turns into a flavor-mismatch diagnostic).
+fn resolved_cluster_alias(
+    node: &crate::models::template::WorkflowNode,
+    graph: &WorkflowGraph,
+    node_scheduler: Option<&str>,
+) -> Option<String> {
+    if let Some(alias) = node_scheduler.map(str::trim).filter(|a| !a.is_empty()) {
+        return Some(alias.to_string());
+    }
+    // Walk the parent chain to the enclosing LeaseScope and read its alias.
+    let mut current = node.parent_id.as_deref();
+    while let Some(pid) = current {
+        let parent = graph.nodes.iter().find(|n| n.id == pid)?;
+        match &parent.data {
+            WorkflowNodeData::LeaseScope { lease, .. } => {
+                let a = lease.scheduler.trim();
+                return if a.is_empty() {
+                    None
+                } else {
+                    Some(a.to_string())
+                };
+            }
+            _ => current = parent.parent_id.as_deref(),
+        }
+    }
+    None
+}
+
+/// Look up a `datacenter` resource's declared `scheduler_flavor` by workspace
+/// alias (path). Joins to the pinned `resource_versions` row for the public
+/// config. `None` when the resource/version is absent or carries no
+/// `scheduler_flavor`. Mirrors the join shape in `discover_known_resources`.
+async fn datacenter_flavor(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    alias: &str,
+) -> Result<Option<String>, ApiError> {
+    let public_config: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT rv.public_config \
+         FROM resources r \
+         JOIN resource_versions rv \
+           ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.workspace_id = $1 AND r.path = $2 AND r.deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(alias)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiError::internal(format!("datacenter flavor lookup: {e}")))?;
+
+    Ok(public_config
+        .as_ref()
+        .and_then(|c| c.get("scheduler_flavor"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string))
+}
+
+/// Look up a `datacenter` resource's id by workspace alias (path). Mirrors
+/// [`datacenter_flavor`]'s join but returns the resource id — the staging target
+/// the Phase-4 auto-stage hook feeds to `trigger_staging`.
+async fn datacenter_resource_id(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    alias: &str,
+) -> Result<Option<Uuid>, ApiError> {
+    sqlx::query_scalar(
+        "SELECT id FROM resources \
+         WHERE workspace_id = $1 AND path = $2 \
+           AND resource_type = 'datacenter' AND deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(alias)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| ApiError::internal(format!("datacenter resource id lookup: {e}")))
+}
+
+/// Publish-time auto-stage (Phase 4, B-staging). BEST-EFFORT: for each Scheduled
+/// step carrying a resolved job-template ref + cluster, ensure the
+/// `(template version × datacenter)` is staged, kicking a generated staging net
+/// for any combination not already `staged` at this exact version. Re-walks the
+/// already-validated `compiled_graph` (`resolve_job_templates` passed), so every
+/// lookup is consistent. ALL failures are logged + swallowed — a staging hiccup
+/// must never fail a publish (the explicit `POST /job-templates/{id}/stage` +
+/// the staging net itself are the backstops).
+async fn auto_stage_templates(state: &AppState, graph: &WorkflowGraph, workspace_id: Uuid) {
+    use crate::models::job_template::JobTemplateRow;
+    use crate::models::template::DeploymentModel;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            deployment_model:
+                DeploymentModel::Scheduled {
+                    scheduler,
+                    job_template_ref: Some(tref),
+                    ..
+                },
+            ..
+        } = &node.data
+        else {
+            continue;
+        };
+        let template_id = tref.template_id;
+        let version = tref.version;
+
+        let Some(alias) = resolved_cluster_alias(node, graph, scheduler.as_deref()) else {
+            continue;
+        };
+        let dc_id = match datacenter_resource_id(&state.db, workspace_id, &alias).await {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(node = %node.id, error = ?e, "auto-stage: datacenter id lookup failed");
+                continue;
+            }
+        };
+
+        // Skip if already freshly staged at this exact version.
+        let existing: Option<String> = match sqlx::query_scalar(
+            "SELECT status FROM template_stagings \
+             WHERE template_id = $1 AND template_version = $2 AND datacenter_resource_id = $3",
+        )
+        .bind(template_id)
+        .bind(version)
+        .bind(dc_id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(node = %node.id, %e, "auto-stage: staging status lookup failed");
+                continue;
+            }
+        };
+        if existing.as_deref() == Some("staged") {
+            continue;
+        }
+
+        // Load the template row (validated to exist by resolve_job_templates).
+        let template = match sqlx::query_as::<_, JobTemplateRow>(
+            "SELECT * FROM job_templates WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(template_id)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(Some(t)) => t,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(node = %node.id, %e, "auto-stage: template load failed");
+                continue;
+            }
+        };
+
+        match crate::petri::staging_net::trigger_staging(
+            &state.db,
+            &state.petri,
+            workspace_id,
+            &template,
+            version,
+            dc_id,
+            None,
+        )
+        .await
+        {
+            Ok(row) => tracing::info!(
+                template = %template.slug, version, %dc_id, staging_id = %row.id,
+                "auto-staged template at publish"
+            ),
+            Err(e) => tracing::warn!(
+                template = %template.slug, version, %dc_id, %e,
+                "auto-stage failed (swallowed)"
+            ),
+        }
+    }
+}
+
 /// Read the workspace's default-datacenter setting and map it to its resource
 /// alias (path) — the LAST rung of the multi-cluster selection chain (docs/16
 /// §6). The column stores a `resource_id`; the selection chain stamps an

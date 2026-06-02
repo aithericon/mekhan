@@ -175,6 +175,7 @@ fn leased_loop(loop_id: &str, body_id: &str, dc_alias: &str) -> Vec<WorkflowNode
                 deployment_model: DeploymentModel::Scheduled {
                     scheduler: None,
                     job_template: "mekhan-executor-worker".to_string(),
+                    job_template_ref: None,
                     resources: None,
                 },
             },

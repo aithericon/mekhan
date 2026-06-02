@@ -8,12 +8,13 @@
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
-	import type { InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
+	import type { AllocationResponse, InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
 	import type { NodeInterface } from '$lib/types/node-interface';
 	import type { LeaseRuntime } from '$lib/stores/instance-marking.svelte';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
 	import Server from '@lucide/svelte/icons/server';
+	import Cpu from '@lucide/svelte/icons/cpu';
 
 	type Props = {
 		step: StepExecution | null;
@@ -43,6 +44,10 @@
 		 *  section (lifecycle + typed placement detail). A LeaseScope container has
 		 *  no step row, so this is what makes its drawer non-empty. */
 		leaseRuntime?: LeaseRuntime | null;
+		/** Allocation rows for this node from the `allocations` projection
+		 *  (datacenter leases / token-pool grants). Rendered for Scheduled and
+		 *  LeaseScope nodes; gracefully omitted when empty. */
+		allocationRows?: AllocationResponse[];
 		open: boolean;
 		onClose: () => void;
 		/** When the user picks a different iteration in the drawer, the parent
@@ -58,6 +63,7 @@
 		instanceId,
 		childInstances = [],
 		leaseRuntime = null,
+		allocationRows = [],
 		open,
 		onClose,
 		onSelectIteration
@@ -96,6 +102,23 @@
 	// one child run. A SubWorkflow inside a Loop/Map yields one child per
 	// iteration (multiple rows), so the section lists every run.
 	const showChildren = $derived(kind === 'sub_workflow' && childInstances.length > 0);
+
+	// Show the Allocation panel for Scheduled AutomatedSteps and LeaseScope
+	// containers. Gracefully omitted when there are no rows (e.g. pre-run or
+	// non-scheduler nodes whose allocations are empty).
+	const showAllocationPanel = $derived(
+		(kind === 'scheduled' || kind === 'lease_scope') && allocationRows.length > 0
+	);
+
+	// Status palette for allocation rows — mirrors the allocation status values
+	// from the schema (`pending | held | released | failed | expired`).
+	const allocStatusColor: Record<string, string> = {
+		pending:  'bg-amber-100 text-amber-700',
+		held:     'bg-green-100 text-green-700',
+		released: 'bg-slate-100 text-slate-600',
+		failed:   'bg-red-100 text-red-700',
+		expired:  'bg-orange-100 text-orange-700'
+	};
 	const childStatusColor: Record<string, string> = {
 		created: 'bg-gray-100 text-gray-700',
 		running: 'bg-blue-100 text-blue-700',
@@ -189,6 +212,74 @@
 	</section>
 {/snippet}
 
+<!-- Allocation sub-panel: one row per resource grant. Rendered for Scheduled
+     AutomatedSteps and LeaseScope containers. A LeaseScope may carry multiple
+     grants (one per loop iteration); a Scheduled step typically carries one.
+     Fields are best-effort (nullable) — Phase-1 accounting fills them in as
+     the grant progresses; absent fields are shown as em-dashes. -->
+{#snippet allocationPanel(rows: AllocationResponse[])}
+	<section data-testid="allocation-panel">
+		<h3 class="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+			<Cpu class="size-4 text-muted-foreground" />
+			Allocation{rows.length > 1 ? `s (${rows.length})` : ''}
+		</h3>
+		<div class="divide-y divide-border rounded-md border border-border">
+			{#each rows as row (row.id)}
+				{@const statusCls = allocStatusColor[row.status] ?? 'bg-gray-100 text-gray-700'}
+				<div class="px-3 py-2 text-sm">
+					<!-- Row header: alloc_id + flavor + status pill + cluster back-link -->
+					<div class="mb-1.5 flex flex-wrap items-center gap-1.5">
+						{#if row.alloc_id}
+							<span class="font-mono text-foreground break-all">{row.alloc_id}</span>
+						{:else}
+							<span class="font-mono text-muted-foreground">—</span>
+						{/if}
+						{#if row.scheduler_flavor}
+							<Badge variant="outline" class="font-mono text-sm font-normal">{row.scheduler_flavor}</Badge>
+						{/if}
+						<Badge class="{statusCls} font-normal" variant="secondary">{row.status}</Badge>
+						{#if row.cluster_resource_id}
+							<a
+								href="/clusters/{row.cluster_resource_id}"
+								class="text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+								title="View cluster"
+							>cluster &rarr;</a>
+						{/if}
+					</div>
+					<!-- Detail grid -->
+					<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+						{#if row.node}
+							<dt class="text-muted-foreground">node</dt>
+							<dd class="font-mono break-all">{row.node}</dd>
+						{/if}
+						<dt class="text-muted-foreground">queue wait</dt>
+						<dd class="font-mono">{formatDuration(row.queue_wait_ms)}</dd>
+						<dt class="text-muted-foreground">runtime</dt>
+						<dd class="font-mono">{formatDuration(row.duration_ms)}</dd>
+						{#if row.exit_code !== null && row.exit_code !== undefined}
+							<dt class="text-muted-foreground">exit code</dt>
+							<dd class="font-mono">{row.exit_code}</dd>
+						{/if}
+						{#if row.cpu_seconds !== null && row.cpu_seconds !== undefined}
+							<dt class="text-muted-foreground">CPU-hours</dt>
+							<dd class="font-mono">{(row.cpu_seconds / 3600).toFixed(3)}</dd>
+						{/if}
+						{#if row.gpu_seconds !== null && row.gpu_seconds !== undefined}
+							<dt class="text-muted-foreground">GPU-hours</dt>
+							<dd class="font-mono">{(row.gpu_seconds / 3600).toFixed(3)}</dd>
+						{/if}
+					</dl>
+					{#if row.last_error}
+						<div class="mt-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-sm text-destructive font-mono break-words">
+							{row.last_error}
+						</div>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	</section>
+{/snippet}
+
 <Sheet.Root bind:open onOpenChange={(v: boolean) => { if (!v) onClose(); }}>
 	<SheetContent class="w-full sm:max-w-xl">
 		{#if step}
@@ -256,6 +347,9 @@
 			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				{#if leaseRuntime}
 					{@render leasePanel(leaseRuntime)}
+				{/if}
+				{#if showAllocationPanel}
+					{@render allocationPanel(allocationRows)}
 				{/if}
 				{#if showChildren}
 					<!-- Sub-workflow drill-in: each child ran as its own instance
@@ -408,7 +502,8 @@
 			</div>
 		{:else if leaseRuntime}
 			<!-- LeaseScope container: no step-execution row of its own. The drawer
-			     is the cluster view — the held allocation's lifecycle + placement. -->
+			     is the cluster view — the held allocation's lifecycle + placement.
+			     allocationPanel is appended below when rows are available. -->
 			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
 			<SheetDescription>Cluster lease held by this scope.</SheetDescription>
 
@@ -447,6 +542,52 @@
 
 			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 				{@render leasePanel(leaseRuntime)}
+				{#if showAllocationPanel}
+					{@render allocationPanel(allocationRows)}
+				{/if}
+			</div>
+		{:else if showAllocationPanel}
+			<!-- No step row and no lease-marking yet, but allocations are present
+			     (e.g. a released LeaseScope where the marking was already cleaned up).
+			     Render a minimal header + the allocation table so the data isn't lost. -->
+			<SheetTitle>{nodeLabel} — {meta.label}</SheetTitle>
+			<SheetDescription>Allocation detail for this node.</SheetDescription>
+
+			<header class="flex items-start gap-3 border-b border-border px-5 py-4">
+				<div class="flex size-9 shrink-0 items-center justify-center rounded-md {meta.chipClass}">
+					<Icon class="size-5 {meta.iconClass}" />
+				</div>
+				<div class="min-w-0 flex-1">
+					<h2 class="text-base font-semibold text-foreground truncate">{nodeLabel}</h2>
+					<div class="mt-1 flex flex-wrap items-center gap-2 text-sm">
+						<Badge variant="outline" class="font-mono">{meta.label}</Badge>
+					</div>
+					{#if node}
+						<div class="mt-1 font-mono text-sm text-muted-foreground/80 truncate" title={node.id}>
+							id: {node.id}
+						</div>
+					{/if}
+					{#if nodeDescription}
+						<p class="mt-1 text-sm text-muted-foreground line-clamp-2">{nodeDescription}</p>
+					{/if}
+				</div>
+				<div class="flex shrink-0 items-center gap-1">
+					{#if node}
+						<Button variant="ghost" size="sm" onclick={() => (configOpen = true)} title="View the node's saved configuration">
+							<Settings2 class="size-4" />
+							<span class="ml-1.5 hidden sm:inline">Config</span>
+						</Button>
+					{/if}
+					<SheetClose>
+						<Button variant="ghost" size="icon" aria-label="Close">
+							<X class="size-4" />
+						</Button>
+					</SheetClose>
+				</div>
+			</header>
+
+			<div class="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+				{@render allocationPanel(allocationRows)}
 			</div>
 		{/if}
 	</SheetContent>

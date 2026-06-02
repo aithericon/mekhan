@@ -5,19 +5,33 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
+	import ClusterMetricsPanel from '$lib/components/clusters/ClusterMetricsPanel.svelte';
+	import ClusterLeasesTable from '$lib/components/clusters/ClusterLeasesTable.svelte';
+	import ClusterTemplatesTable from '$lib/components/clusters/ClusterTemplatesTable.svelte';
 	import {
 		listClusters,
 		reconnectCluster,
 		drainCluster,
-		type ClusterSummary
+		listClusterLeases,
+		clusterMetrics,
+		type ClusterSummary,
+		type ClusterMetrics,
+		type AllocationResponse
 	} from '$lib/api/clusters';
 
 	const resourceId = $derived(page.params.id ?? '');
 	const poolNetId = $derived(`pool-${resourceId}`);
 
 	let cluster = $state<ClusterSummary | null>(null);
+	let metrics = $state<ClusterMetrics | null>(null);
+	let leases = $state<AllocationResponse[]>([]);
+	let metricsLoading = $state(true);
+	let leasesLoading = $state(true);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
+
+	// `_env` has no datacenter UUID — metrics/leases APIs return 400 for it.
+	const isEnvCluster = $derived(resourceId === '_env');
 
 	async function load() {
 		try {
@@ -29,10 +43,46 @@
 		}
 	}
 
+	async function loadMetrics() {
+		if (isEnvCluster) { metricsLoading = false; return; }
+		try {
+			metrics = await clusterMetrics(resourceId, '7d');
+		} catch {
+			// best-effort; don't clobber the main error state
+		} finally {
+			metricsLoading = false;
+		}
+	}
+
+	async function loadLeases() {
+		if (isEnvCluster) { leasesLoading = false; return; }
+		try {
+			leases = await listClusterLeases(resourceId);
+		} catch {
+			// best-effort
+		} finally {
+			leasesLoading = false;
+		}
+	}
+
 	$effect(() => {
 		void resourceId;
+		// Reset loading indicators when navigating to a different cluster.
+		metricsLoading = true;
+		leasesLoading = true;
+		metrics = null;
+		leases = [];
+
 		load();
-		const t = setInterval(load, 4000);
+		loadMetrics();
+		loadLeases();
+
+		// Coalesce all polling onto the same 4 s cadence the cluster summary uses.
+		const t = setInterval(() => {
+			void load();
+			void loadMetrics();
+			void loadLeases();
+		}, 4000);
 		return () => clearInterval(t);
 	});
 
@@ -103,5 +153,27 @@
 		{#key poolNetId}
 			<PoolContentionView netId={poolNetId} />
 		{/key}
+
+		{#if !isEnvCluster}
+			<div class="mt-8 space-y-8">
+				<ClusterMetricsPanel {metrics} loading={metricsLoading} />
+
+				<ClusterLeasesTable
+					leases={leases.filter((l) => l.status === 'held' || l.status === 'pending')}
+					loading={leasesLoading}
+					variant="active"
+				/>
+
+				<ClusterLeasesTable {leases} loading={leasesLoading} variant="recent" />
+
+				<!-- Templates section: job templates whose flavor matches this cluster -->
+				<div class="border-t border-border/40 pt-8">
+					<ClusterTemplatesTable
+						flavor={cluster?.flavor ?? null}
+						clusterId={resourceId}
+					/>
+				</div>
+			</div>
+		{/if}
 	</div>
 </div>
