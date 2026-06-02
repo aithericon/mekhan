@@ -167,18 +167,26 @@ breaking changes are loud" posture.
 
 A node **binds an asset** with a node-level authoring selection (analogous to
 `resource_alias`). At launch the binding is **version-pinned** exactly like
-`resource_pins` (see §6). At compile time the binding **lowers to
-`InputDeclaration`s**:
+`resource_pins` (see §6). At compile time the binding **lowers to an
+`InputDeclaration`**: the asset's records (the whole collection) are materialized
+into a single staged **`{alias}.json`** input.
 
-- the record data as a staged **JSON (or CSV) file**, plus
-- each `File` field staged alongside (upload-sourced or catalog-sourced — both are
-  `InputSource::StoragePath`).
+**File fields travel as storage-path strings *inside* that record JSON.** A
+`File` value (whether upload-sourced or catalog-sourced) is the S3 `storage_path`
+of the object; it is carried verbatim in the row data, and the consuming node
+fetches it on demand via that path. This is uniform across `object` and
+`collection` cardinalities — a 5000-row table where every row has a file must
+*not* eagerly pre-stage 5000 objects, so the storage-path-in-data model is the
+correct general shape (and mirrors how catalogue files are referenced). Eagerly
+**pre-staging** an individual `File` field to a known local path — convenient for
+the 1-row "simulation script" case so the node receives the script already on
+disk — is a deferred additive enhancement (see §9), not v1.
 
-The consuming node reads them as **ordinary inputs**. Critically, **business data
-never enters the control token** — this honors the control-data token model
-(`docs/10`): only slim control tokens move; the asset's rows are parked/staged,
-not inlined into config. The entire consumption path is *"an asset compiles down
-to input stagings,"* riding the mature staging machinery.
+The consuming node reads the staged input as an **ordinary input**. Critically,
+**business data never enters the control token** — this honors the control-data
+token model (`docs/10`): only slim control tokens move; the asset's rows are
+parked/staged, not inlined into config. The entire consumption path is *"an asset
+compiles down to an input staging,"* riding the mature staging machinery.
 
 **Granularity:** v1 binds the **whole collection** (the node does its own lookup
 in code). Author-picked-row (pick "the `steel` row" at authoring time) is a thin
@@ -305,6 +313,9 @@ None of these are invalidated by the above; each is a later, additive step:
   this lands, it generates a materialized/queryable table off the JSONB rows.
 - **`resource_ref` / `asset_ref` field kinds** (composition). Additive field
   kinds; do not invalidate self-contained records.
+- **Per-file pre-staging** of `File` fields to a known local path at compile time
+  (v1 carries the S3 storage-path inside the record JSON for the node to fetch;
+  see §5).
 - **Author-picked-row binding** (G2) and **runtime filter** (G3).
 - **Real folders table** (per-folder ACL, movable folder objects).
 - **Per-row schema versioning** and **breaking-change migration** of asset types.

@@ -489,6 +489,9 @@ async fn test_app_with_authenticator_and_petri_url(
         resource_resolver: Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
+        asset_resolver: Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(
+            db.clone(),
+        )),
     };
     (build_router(state), db)
 }

@@ -2,6 +2,7 @@
 //! step for one authoring surface; the unified [`super::collect_borrows`]
 //! chains them.
 
+pub(crate) mod asset;
 pub(crate) mod automated_step;
 pub(crate) mod guard;
 pub(crate) mod human_task;

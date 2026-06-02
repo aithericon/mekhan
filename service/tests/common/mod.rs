@@ -174,6 +174,9 @@ pub async fn test_app_with_authenticator(
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -223,6 +226,9 @@ pub async fn test_app_with_introspection(
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -269,6 +275,9 @@ pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
         resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 
@@ -319,6 +328,9 @@ pub async fn test_app() -> (Router, PgPool) {
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -366,6 +378,9 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 
@@ -416,6 +431,9 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 
@@ -477,6 +495,9 @@ pub async fn test_app_waiters(
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
         ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
+        ),
     };
 
     let router = build_router(state);
@@ -536,6 +557,9 @@ pub async fn test_app_with_petri_url_and_triggers(
         resource_store: default_resource_store(),
         resource_resolver: std::sync::Arc::new(
             mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
+        ),
+        asset_resolver: std::sync::Arc::new(
+            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
         ),
     };
 

@@ -55,6 +55,15 @@ pub(crate) fn apply_envelope_borrows(
                 // the expression below indexes that map.
                 (name.clone(), format!(r#"__resources["{name}"]"#))
             }
+            BorrowResolution::AssetStaging { alias, .. } => {
+                // Publish handler splices `let __assets = #{ ... };` at the top
+                // of this transition's logic before AIR is persisted (the asset
+                // resolver materializes the pinned records into that map). The
+                // expression below indexes it. The staged value is the asset's
+                // business data (its record rows) — it rides `job_inputs`
+                // staging, never the control token (docs/10).
+                (alias.clone(), format!(r#"__assets["{alias}"]"#))
+            }
             _ => continue, // unreachable per `EnvelopeStageStrategy::handles`
         };
         pushes.push_str(&format!(

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
+use crate::compiler::asset_refs::{KnownAsset, KnownAssets};
 use crate::compiler::resource_refs::{KnownResource, KnownResources};
 use crate::compiler::{
     compile_to_air_with_options, derive_child_io, generate_py_io_files, make_child_callable,
@@ -147,6 +148,17 @@ impl<'a> PublishService<'a> {
         let known_resources =
             discover_known_resources(self.state, &compiled_graph, files, workspace_id).await?;
 
+        // Discover node-level asset bindings (docs/20 §5). Walks each node's
+        // `asset_bindings` and scope-resolves every `ref_key` (most-specific-
+        // wins through the template's downward-visible scope set) to a stable
+        // `(asset_id, version)` pin. Symmetric with `discover_known_resources`
+        // but reads node DATA (not Python source) — assets are opaque, bound by
+        // selection, never `<head>.<field>`-scanned. The pin rides the AIR so a
+        // post-publish record edit (which bumps the asset version) never bleeds
+        // into an already-published workflow.
+        let known_assets =
+            discover_asset_bindings(self.state, &compiled_graph, template_id, workspace_id).await?;
+
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
         // planner gets the inline source map directly via the `_inline`
@@ -170,6 +182,7 @@ impl<'a> PublishService<'a> {
                 inline_sources: files,
                 sub_air: &sub_air,
                 known_resources: &known_resources,
+                known_assets: &known_assets,
                 config_storage,
             },
         )
@@ -194,6 +207,54 @@ impl<'a> PublishService<'a> {
                 })?;
             let names: Vec<&str> = known_resources.keys().map(String::as_str).collect();
             air_json = splice_resources_into_air(air_json, &envelope, &names);
+        }
+
+        // Materialize every bound asset's pinned records and splice the
+        // `__assets` envelope into the AIR. Symmetric with the resource splice
+        // above: the launcher never touches assets — the persisted AIR already
+        // carries the records for every prepare transition that stages one. The
+        // records are business data and ride `job_inputs` staging (never the
+        // control token — docs/10).
+        if !known_assets.is_empty() {
+            let envelope = self
+                .state
+                .asset_resolver
+                .resolve_known(&known_assets)
+                .await
+                .map_err(|e| {
+                    ApiError::bad_request(format!("asset resolution failed at publish: {e}"))
+                })?;
+            let aliases: Vec<&str> = known_assets.keys().map(String::as_str).collect();
+            air_json = crate::petri::asset_resolver::splice_assets_into_air(
+                air_json, &envelope, &aliases,
+            );
+
+            // Stash the `{alias -> {asset_id, version}}` pin map as a sidecar
+            // key on the AIR JSON. The launcher reads it into
+            // `workflow_instances.asset_pins` at launch (docs/20 §6) and strips
+            // it before handing the AIR to the engine, so the engine never sees
+            // it. This is the launch-time pin record symmetric with
+            // `resource_pins`; the *authoritative* pin is already baked into the
+            // spliced `__assets` records above (the AIR carries the version's
+            // data verbatim), so this sidecar is the replay/debug projection.
+            if let Some(obj) = air_json.as_object_mut() {
+                let pins: serde_json::Map<String, serde_json::Value> = known_assets
+                    .iter()
+                    .map(|(alias, a)| {
+                        (
+                            alias.clone(),
+                            serde_json::json!({
+                                "asset_id": a.asset_id,
+                                "version": a.version,
+                            }),
+                        )
+                    })
+                    .collect();
+                obj.insert(
+                    "__asset_pins".to_string(),
+                    serde_json::Value::Object(pins),
+                );
+            }
         }
 
         let graph_json = serde_json::to_value(graph)
@@ -522,6 +583,163 @@ async fn discover_known_resources(
             format!("workspace resources missing: {summary}"),
             views,
         ));
+    }
+
+    Ok(known)
+}
+
+/// Discover node-level asset bindings (docs/20 §5) and scope-resolve + pin each
+/// to a stable `(asset_id, version)`. The asset analog of
+/// [`discover_known_resources`], but reads node DATA (`asset_bindings`) rather
+/// than source-scanning Python — assets are opaque, bound by selection.
+///
+/// Scope: a binding inside template `T` sees assets owned by `T`, by any
+/// project that contains `T`, or by the workspace (most-specific-wins). Two
+/// equally-specific definitions → `AssetBindingAmbiguous`. An unresolved
+/// declared binding → `AssetBindingUnknown` (hard-fail, symmetric with
+/// `WorkspaceResourceUnknown`).
+///
+/// Returns a [`KnownAssets`] keyed by binding **alias** (the staged-file stem
+/// the compiler indexes via `__assets["<alias>"]`).
+async fn discover_asset_bindings(
+    state: &AppState,
+    graph: &WorkflowGraph,
+    template_id: Uuid,
+    workspace_id: Uuid,
+) -> Result<KnownAssets, ApiError> {
+    use crate::models::asset::ScopeKind;
+    use crate::models::template::AssetBinding;
+    use crate::scope::{visible_scopes_for, Scope, ScopedItem};
+
+    // Pass 1: collect every distinct (node_id, alias, ref_key) declared binding.
+    let mut declared: Vec<(String, AssetBinding)> = Vec::new();
+    for node in &graph.nodes {
+        let bindings: &[AssetBinding] = match &node.data {
+            WorkflowNodeData::AutomatedStep { asset_bindings, .. } => asset_bindings,
+            WorkflowNodeData::Agent { asset_bindings, .. } => asset_bindings,
+            _ => continue,
+        };
+        for b in bindings {
+            if b.alias.trim().is_empty() || b.ref_key.trim().is_empty() {
+                continue;
+            }
+            declared.push((node.id.clone(), b.clone()));
+        }
+    }
+
+    if declared.is_empty() {
+        return Ok(KnownAssets::new());
+    }
+
+    // Compute the template's downward-visible scope set ONCE. The publish
+    // context is a concrete template, so binding visibility is template-scoped:
+    // the template chain-root + every project containing it + the workspace.
+    let visible = visible_scopes_for(&state.db, ScopeKind::Template, template_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("asset scope resolution: {e}")))?;
+
+    // Gather every candidate asset owned by ANY visible scope, in one query.
+    // `(asset_id, type_id, version)` is the pin payload. Soft-deleted assets
+    // are invisible.
+    let ref_keys: Vec<String> = declared
+        .iter()
+        .map(|(_, b)| b.ref_key.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Visible owner scopes flattened to `(scope_kind, scope_id)` pairs for the
+    // SQL membership filter.
+    let mut scope_kinds: Vec<String> = Vec::new();
+    let mut scope_ids: Vec<Uuid> = Vec::new();
+    if let Some(ws) = visible.workspace {
+        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
+        scope_ids.push(ws);
+    }
+    for p in &visible.projects {
+        scope_kinds.push(ScopeKind::Project.as_db().to_string());
+        scope_ids.push(*p);
+    }
+    if let Some(t) = visible.template {
+        scope_kinds.push(ScopeKind::Template.as_db().to_string());
+        scope_ids.push(t);
+    }
+    // `workspace_id` is the fallback workspace owner when the template lookup
+    // didn't surface one (defensive — `visible.workspace` should already carry
+    // it for a real template).
+    if visible.workspace.is_none() {
+        scope_kinds.push(ScopeKind::Workspace.as_db().to_string());
+        scope_ids.push(workspace_id);
+    }
+
+    // Match rows whose (scope_kind, scope_id) appears at the SAME index in the
+    // two unnested arrays — i.e. an owner pair in the visible set.
+    let rows: Vec<(Uuid, Uuid, i32, String, Uuid, String)> = sqlx::query_as(
+        "SELECT a.id, a.type_id, a.version, a.ref_key, a.scope_id, a.scope_kind \
+         FROM assets a \
+         JOIN UNNEST($1::text[], $2::uuid[]) AS s(scope_kind, scope_id) \
+           ON a.scope_kind = s.scope_kind AND a.scope_id = s.scope_id \
+         WHERE a.ref_key = ANY($3) AND a.deleted_at IS NULL",
+    )
+    .bind(&scope_kinds)
+    .bind(&scope_ids)
+    .bind(&ref_keys)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("asset binding lookup: {e}")))?;
+
+    // Build the candidate set keyed by ref_key for the scope resolver.
+    let candidates: Vec<ScopedItem<(Uuid, Uuid, i32)>> = rows
+        .into_iter()
+        .filter_map(|(id, type_id, version, ref_key, scope_id, scope_kind)| {
+            ScopeKind::from_db(&scope_kind).map(|kind| ScopedItem {
+                scope: Scope { kind, id: scope_id },
+                ref_key,
+                item: (id, type_id, version),
+            })
+        })
+        .collect();
+
+    // Resolve each declared binding most-specific-wins; emit one
+    // `KnownAsset` per binding alias. Errors are per-(node, ref_key) so the
+    // editor can highlight the offending node.
+    let mut known = KnownAssets::new();
+    for (node_id, binding) in &declared {
+        let resolved = crate::scope::resolve_one(&binding.ref_key, candidates.clone()).map_err(
+            |clash| {
+                let view = CompileError::AssetBindingAmbiguous {
+                    node_id: node_id.clone(),
+                    ref_key: binding.ref_key.clone(),
+                    detail: clash.to_string(),
+                };
+                ApiError::compile(format!("asset binding ambiguous: {view}"), vec![view.to_view()])
+            },
+        )?;
+
+        match resolved {
+            Some(item) => {
+                let (asset_id, type_id, version) = item.item;
+                known.insert(
+                    binding.alias.clone(),
+                    KnownAsset {
+                        asset_id,
+                        type_id,
+                        ref_key: binding.ref_key.clone(),
+                        version,
+                    },
+                );
+            }
+            None => {
+                let view = CompileError::AssetBindingUnknown {
+                    node_id: node_id.clone(),
+                    ref_key: binding.ref_key.clone(),
+                };
+                return Err(ApiError::compile(
+                    format!("asset binding missing: {view}"),
+                    vec![view.to_view()],
+                ));
+            }
+        }
     }
 
     Ok(known)

@@ -1,3 +1,4 @@
+pub mod asset_refs;
 pub mod backend_configs;
 pub(crate) mod borrow;
 mod compile;

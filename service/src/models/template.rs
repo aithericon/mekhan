@@ -218,6 +218,29 @@ pub struct Position {
     pub y: f64,
 }
 
+/// A node-level asset binding (docs/20 §5). Analogous to `resource_alias`:
+/// the author picks an asset by its scope-resolved `ref_key`, and the compiler
+/// stages the asset's whole record collection as an ordinary input the node
+/// reads under `alias` (`<alias>.json`). Business data never enters the control
+/// token — the records ride the same staging machinery as file inputs.
+///
+/// Whole-collection granularity only in v1 (the node does its own lookup in
+/// code). Author-picked-row / runtime-filter are deferred (docs/20 §9).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetBinding {
+    /// The staged-input name the node code reads (`<alias>.json`). Must be a
+    /// flat identifier so it doesn't collide with a producer slug / resource
+    /// name / control-token field. Defaults to `ref_key` when the author
+    /// doesn't override it.
+    pub alias: String,
+    /// The asset's scope-resolved flat ref-key (`steel`, `materials_db`).
+    /// Resolved at publish time through the scope resolver to a stable
+    /// `(asset_id, version)` pin baked into the AIR.
+    #[serde(rename = "refKey")]
+    pub ref_key: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkflowNodeData {
@@ -342,6 +365,13 @@ pub enum WorkflowNodeData {
         /// `#[serde(default)]` ⇒ existing templates round-trip unchanged.
         #[serde(rename = "streamInput", default)]
         stream_input: bool,
+        /// Node-level asset bindings (docs/20 §5). Each entry stages an asset's
+        /// whole record collection as an ordinary input (`<alias>.json`) the
+        /// node code reads. `#[serde(default)]` ⇒ existing templates (field
+        /// absent → empty) round-trip unchanged (same precedent as
+        /// `deployment_model`/`stream_output`).
+        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        asset_bindings: Vec<AssetBinding>,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -748,6 +778,11 @@ pub enum WorkflowNodeData {
         /// admission is a follow-up (docs/12).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
+        /// Node-level asset bindings (docs/20 §5) — same field, defaults and
+        /// semantics as `AutomatedStep::asset_bindings`. The agent's inference
+        /// turns read the staged asset(s) as ordinary inputs.
+        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        asset_bindings: Vec<AssetBinding>,
     },
     /// Calls another published template as a child net and returns its
     /// terminal result, correlated per invocation. Compiles (via
@@ -2825,6 +2860,8 @@ pub mod dsl {
                         on_tool_error: a.on_tool_error,
                         retry_policy: a.retry_policy,
                         deployment_model: a.deployment_model.clone(),
+                        // DSL does not model asset bindings (yet).
+                        asset_bindings: Vec::new(),
                     })
                 }
                 "automated_step" => {
@@ -2884,6 +2921,8 @@ pub mod dsl {
                         stream_output: false,
                         // DSL does not model streaming input (reducer flag).
                         stream_input: false,
+                        // DSL does not model asset bindings (yet).
+                        asset_bindings: Vec::new(),
                     })
                 }
                 "decision" => {

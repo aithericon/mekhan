@@ -565,7 +565,7 @@ fn build_resources_decl(envelope: &JsonValue, names: &[&str]) -> String {
 /// `build_resources_decl` filters nulls before calling here; this function
 /// only sees nulls inside nested arrays / objects, where it emits `()` so the
 /// surrounding positions stay correct.
-fn json_to_rhai_literal(v: &JsonValue) -> String {
+pub(crate) fn json_to_rhai_literal(v: &JsonValue) -> String {
     match v {
         JsonValue::Null => "()".to_string(),
         JsonValue::Bool(b) => b.to_string(),

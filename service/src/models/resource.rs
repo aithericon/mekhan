@@ -30,6 +30,17 @@ pub struct ResourceRow {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Polymorphic owner kind (docs/20 §2). Backfilled to `'workspace'` for
+    /// existing rows; `scope_id` then equals `workspace_id`.
+    #[serde(default)]
+    pub scope_kind: String,
+    /// Polymorphic owner id. Backfilled = `workspace_id` for legacy rows.
+    #[serde(default)]
+    pub scope_id: Option<Uuid>,
+    /// Virtual folder prefix (docs/20 §3). UI grouping only — never part of
+    /// the ref-key (`path`).
+    #[serde(default)]
+    pub display_path: Option<String>,
 }
 
 /// One row from the `resource_versions` table. Immutable once written;
@@ -198,6 +209,14 @@ pub struct ListResourcesQuery {
     /// no-workspace deployment Just Works; when workspaces land, the auth
     /// layer fills this in.
     pub workspace_id: Option<Uuid>,
+    /// Scope context for downward-visibility resolution (docs/20 §2). Format:
+    /// `workspace`, `project:<uuid>`, or `template:<uuid>`. When present it
+    /// overrides `workspace_id`: the list returns the most-specific-wins
+    /// visible set for the binding context. When absent, the legacy flat
+    /// `workspace_id` filter applies.
+    pub scope: Option<String>,
+    /// Optional virtual-folder prefix filter on `display_path` (docs/20 §3).
+    pub folder: Option<String>,
 }
 
 /// Query params for `GET /api/v1/resources/{id}/audit`.

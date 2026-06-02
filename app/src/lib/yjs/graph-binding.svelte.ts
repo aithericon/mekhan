@@ -223,6 +223,12 @@ export class YjsGraphBinding {
 				// `streamInput` makes the node a streaming reducer (exposes a
 				// "stream" INPUT handle). Same round-trip rationale as streamOutput.
 				const streamInput = config?.streamInput === true;
+				// `assetBindings` binds scope-visible assets the node stages as
+				// inputs (docs/20 §5). Top-level node field → must round-trip here
+				// or the editor reconstruction drops the bindings.
+				const assetBindings = config?.assetBindings as
+					| AutomatedStepNodeData['assetBindings']
+					| undefined;
 				return {
 					...base,
 					type: 'automated_step',
@@ -231,7 +237,8 @@ export class YjsGraphBinding {
 					retryPolicy,
 					...(deploymentModel ? { deploymentModel } : {}),
 					...(streamOutput ? { streamOutput } : {}),
-					...(streamInput ? { streamInput } : {})
+					...(streamInput ? { streamInput } : {}),
+					...(assetBindings && assetBindings.length > 0 ? { assetBindings } : {})
 				};
 			}
 			case 'decision':
@@ -401,7 +408,13 @@ export class YjsGraphBinding {
 					contextStrategy:
 						(config?.contextStrategy as AgentNodeData['contextStrategy']) ?? 'none',
 					onToolError:
-						(config?.onToolError as AgentNodeData['onToolError']) ?? 'feedback'
+						(config?.onToolError as AgentNodeData['onToolError']) ?? 'feedback',
+					...(() => {
+						// `assetBindings` — staged-asset inputs (docs/20 §5). Top-level
+						// node field → must round-trip or the editor drops the bindings.
+						const ab = config?.assetBindings as AgentNodeData['assetBindings'] | undefined;
+						return ab && ab.length > 0 ? { assetBindings: ab } : {};
+					})()
 				};
 			case 'delay':
 				return {
@@ -791,6 +804,13 @@ export class YjsGraphBinding {
 				// the backend's `streamOutput` Y.Map key) so clearing it persists.
 				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
 				config.set('streamInput', (data as AutomatedStepNodeData).streamInput ?? false);
+				// Staged-asset bindings (docs/20 §5). Persist when non-empty; delete
+				// when cleared so the unset state round-trips through publish.
+				if (data.assetBindings && data.assetBindings.length > 0) {
+					config.set('assetBindings', data.assetBindings);
+				} else {
+					config.delete('assetBindings');
+				}
 				break;
 			case 'decision':
 				config.set('conditions', data.conditions);
@@ -915,6 +935,12 @@ export class YjsGraphBinding {
 				}
 				config.set('contextStrategy', data.contextStrategy ?? 'none');
 				config.set('onToolError', data.onToolError ?? 'feedback');
+				// Staged-asset bindings (docs/20 §5). Symmetric with automated_step.
+				if (data.assetBindings && data.assetBindings.length > 0) {
+					config.set('assetBindings', data.assetBindings);
+				} else {
+					config.delete('assetBindings');
+				}
 				break;
 			case 'delay':
 				config.set('durationMsExpr', data.durationMsExpr ?? '5000');

@@ -76,7 +76,9 @@ impl ApplyStrategy for EnvelopeStageStrategy {
     fn handles(&self, r: &BorrowResolution) -> bool {
         matches!(
             r,
-            BorrowResolution::PythonEnvelope | BorrowResolution::ResourceEnvelope { .. }
+            BorrowResolution::PythonEnvelope
+                | BorrowResolution::ResourceEnvelope { .. }
+                | BorrowResolution::AssetStaging { .. }
         )
     }
     fn apply(&self, ctx: &mut ApplyCtx<'_>, consumer: &str, group: &[Borrow]) {

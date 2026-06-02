@@ -99,6 +99,31 @@ pub(crate) enum BorrowResolution {
         latest_version: i32,
     },
 
+    /// Node-level Asset binding (docs/20 §5). Stages `<alias>.json` from the
+    /// compiler-spliced `__assets` envelope — there is no upstream producer to
+    /// wire a read-arc from, so this variant intentionally skips
+    /// `wire_read_arc` (symmetric with [`Self::ResourceEnvelope`]). The publish
+    /// handler scope-resolves the binding to a concrete `(asset_id, version)`
+    /// pin, runs the asset resolver to materialize the records into the
+    /// envelope JSON, and splices `let __assets = #{ ... };` into prepare
+    /// transitions at publish time.
+    ///
+    /// Critically, the staged value is the asset's **business data** (its
+    /// record rows) — it rides the `job_inputs` staging path, NOT the control
+    /// token, honoring the control-data token model (docs/10).
+    AssetStaging {
+        /// Binding alias — the staged file stem (`<alias>.json`) and the
+        /// `__assets` map key the prepare transition indexes.
+        alias: String,
+        /// Pinned asset id — rename-safe across publishes; deleting the asset
+        /// breaks (intentionally).
+        asset_id: Uuid,
+        /// Asset type id — carried for downstream consumers.
+        type_id: Uuid,
+        /// Asset version pinned at publish time.
+        version: i32,
+    },
+
     /// LLM / Kreuzberg AutomatedStep: stage one input file per `(slug, attr)`
     /// via a `job_inputs.push(...)` snippet at `BORROW_MARKER` AND
     /// rewrite the `{{<slug>.<attr>}}` placeholder in the embedded config

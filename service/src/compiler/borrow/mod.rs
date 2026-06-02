@@ -35,6 +35,7 @@ pub(crate) use apply::apply_borrows;
 pub(crate) use shape::BORROW_MARKER;
 pub(crate) use shape::{Borrow, BorrowResolution};
 
+use crate::compiler::asset_refs::KnownAssets;
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::CompileError;
 use crate::models::template::WorkflowGraph;
@@ -51,11 +52,13 @@ pub(crate) fn collect_borrows(
     graph: &WorkflowGraph,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     known_resources: &KnownResources,
+    known_assets: &KnownAssets,
 ) -> Result<Vec<Borrow>, CompileError> {
     let ctx = PlanCtx {
         graph,
         inline_sources,
         known_resources,
+        known_assets,
     };
     let mut out = Vec::new();
     for src in SOURCES {
@@ -95,7 +98,7 @@ mod tests {
         let root = repo_root().join("demos").join("07-ocr-classify-extract");
         let demo = load_demo(&root).expect("07-ocr-classify-extract loads");
         let known = KnownResources::new();
-        let borrows = collect_borrows(&demo.graph, &demo.files, &known).expect("collect_borrows");
+        let borrows = collect_borrows(&demo.graph, &demo.files, &known, &KnownAssets::new()).expect("collect_borrows");
 
         // Kreuzberg consumer 'extract_text' borrows start.document (File kind)
         let kreuzberg = borrows
@@ -220,7 +223,7 @@ mod tests {
         let (graph, files) = make_python_step_graph("", "", "print(local_pg.host)\n");
         let known = known(&[("local_pg", "postgres")]);
 
-        let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
+        let borrows = collect_borrows(&graph, &files, &known, &KnownAssets::new()).expect("collect_borrows");
         let envelope: Vec<&Borrow> = borrows
             .iter()
             .filter(|b| matches!(b.resolution, BorrowResolution::ResourceEnvelope { .. }))
@@ -260,7 +263,7 @@ mod tests {
 
         let (graph, files) = make_python_step_graph("", "", "print(local_pg.host)\n");
         let known = known(&[("local_pg", "postgres")]);
-        let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
+        let borrows = collect_borrows(&graph, &files, &known, &KnownAssets::new()).expect("collect_borrows");
 
         let mut scenario = ScenarioDefinition::new("test");
         scenario.transitions.push(ScenarioTransition {
@@ -321,6 +324,147 @@ mod tests {
         );
     }
 
+    // ── Asset-staging borrows (docs/20 §5) ────────────────────────────────
+
+    use crate::compiler::asset_refs::KnownAsset;
+
+    /// Build a `Start → AutomatedStep(python, assetBindings=[{alias,refKey}]) →
+    /// End` graph. The asset binding is a node-DATA selection (no Python source
+    /// needed — assets are opaque), so the body's source is irrelevant.
+    fn make_asset_bound_step_graph(
+        alias: &str,
+        ref_key: &str,
+    ) -> crate::models::template::WorkflowGraph {
+        let nodes = format!(
+            r#"{{"id":"start","type":"start","position":{{"x":0,"y":0}},
+                 "data":{{"type":"start","label":"Start"}}}},
+                {{"id":"step","type":"automated_step","slug":"step","position":{{"x":0,"y":0}},
+                 "data":{{"type":"automated_step","label":"Step",
+                         "executionSpec":{{"backendType":"python","entrypoint":"main.py","config":{{"entrypoint":"main.py","python":"python3","sdk":true}}}},
+                         "retryPolicy":{{"maxRetries":0,"strategy":{{"type":"immediate"}}}},
+                         "deploymentModel":{{"mode":"executor"}},
+                         "assetBindings":[{{"alias":"{alias}","refKey":"{ref_key}"}}]}}}},
+                {{"id":"end","type":"end","position":{{"x":0,"y":0}},
+                 "data":{{"type":"end","label":"End"}}}}"#,
+        );
+        let edges = r#"{"id":"e_start_step","source":"start","target":"step","type":"sequence"},
+                {"id":"e_step_end","source":"step","target":"end","type":"sequence"}"#;
+        let full = format!(r#"{{"nodes":[{nodes}],"edges":[{edges}]}}"#);
+        serde_json::from_str(&full).expect("deser asset-bound graph")
+    }
+
+    fn known_assets(entries: &[(&str, &str)]) -> KnownAssets {
+        let mut k = KnownAssets::new();
+        for (alias, ref_key) in entries {
+            k.insert(
+                (*alias).to_string(),
+                KnownAsset {
+                    asset_id: Uuid::new_v4(),
+                    type_id: Uuid::new_v4(),
+                    ref_key: (*ref_key).to_string(),
+                    version: 3,
+                },
+            );
+        }
+        k
+    }
+
+    /// A node binding asset `steel` (alias `steel`) against a `KnownAssets` map
+    /// produces exactly one `AssetStaging` borrow keyed by the alias.
+    #[test]
+    fn asset_staging_borrow_for_bound_step() {
+        let graph = make_asset_bound_step_graph("steel", "steel");
+        let files = std::collections::HashMap::new();
+        let known_res = KnownResources::new();
+        let assets = known_assets(&[("steel", "steel")]);
+
+        let borrows =
+            collect_borrows(&graph, &files, &known_res, &assets).expect("collect_borrows");
+        let staging: Vec<&Borrow> = borrows
+            .iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::AssetStaging { .. }))
+            .collect();
+        assert_eq!(
+            staging.len(),
+            1,
+            "expected exactly one AssetStaging borrow; got: {borrows:?}"
+        );
+        match &staging[0].resolution {
+            BorrowResolution::AssetStaging {
+                alias, version, ..
+            } => {
+                assert_eq!(alias, "steel");
+                assert_eq!(*version, 3);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(staging[0].consumer_node_id, "step");
+        assert_eq!(staging[0].slug, "steel");
+    }
+
+    /// The apply step rewrites the prepare transition's `BORROW_MARKER` into a
+    /// `job_inputs.push(...)` reading `__assets["steel"]` — the publish-time
+    /// asset resolver splices the `__assets` declaration separately. This
+    /// proves the asset's business data rides `job_inputs` staging, never the
+    /// control token (docs/10).
+    #[test]
+    fn asset_staging_apply_emits_job_inputs_push() {
+        use crate::compiler::borrow::apply::apply_borrows;
+        use crate::compiler::interface::InterfaceRegistry;
+        use aithericon_sdk::scenario::{ScenarioDefinition, ScenarioTransition, TransitionLogic};
+
+        let graph = make_asset_bound_step_graph("steel", "steel");
+        let files = std::collections::HashMap::new();
+        let known_res = KnownResources::new();
+        let assets = known_assets(&[("steel", "steel")]);
+        let borrows =
+            collect_borrows(&graph, &files, &known_res, &assets).expect("collect_borrows");
+
+        let mut scenario = ScenarioDefinition::new("test");
+        scenario.transitions.push(ScenarioTransition {
+            id: "step/prepare".to_string(),
+            name: "prepare".to_string(),
+            group_id: None,
+            input_ports: vec![],
+            output_ports: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            guard: None,
+            priority: None,
+            logic: TransitionLogic::Rhai {
+                source: format!("let job_inputs = []; {BORROW_MARKER} job_inputs"),
+            },
+            effect_config: None,
+            caused_signals: vec![],
+            input_schema: None,
+            output_schema: None,
+            process_step_started: None,
+            process_step_completed: None,
+        });
+
+        let asset_borrows: Vec<Borrow> = borrows
+            .into_iter()
+            .filter(|b| matches!(b.resolution, BorrowResolution::AssetStaging { .. }))
+            .collect();
+        assert!(!asset_borrows.is_empty(), "fixture must have an asset borrow");
+
+        let interfaces = InterfaceRegistry::new();
+        let mut node_configs = std::collections::HashMap::new();
+        apply_borrows(&mut scenario, &interfaces, asset_borrows, &mut node_configs);
+
+        let TransitionLogic::Rhai { source } = &scenario.transitions[0].logic else {
+            panic!("prepare transition must remain Rhai")
+        };
+        assert!(
+            source.contains(r#"job_inputs.push(#{ "name": "steel.json", "source": #{ "type": "inline", "value": __assets["steel"] } });"#),
+            "spliced source missing the expected asset job_inputs.push; got: {source}"
+        );
+        assert!(
+            !source.contains(BORROW_MARKER),
+            "BORROW_MARKER must be stripped from final AIR; got: {source}"
+        );
+    }
+
     /// Python source touching both a workspace-known resource (`local_pg`)
     /// AND an upstream producer slug (`prev`) must discriminate cleanly:
     /// `local_pg` resolves to a `ResourceEnvelope`, `prev` to the existing
@@ -343,7 +487,7 @@ mod tests {
         );
         let known = known(&[("local_pg", "postgres")]);
 
-        let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
+        let borrows = collect_borrows(&graph, &files, &known, &KnownAssets::new()).expect("collect_borrows");
 
         let resource_borrows: Vec<&Borrow> = borrows
             .iter()
@@ -387,7 +531,7 @@ mod tests {
         let (graph, files) = make_python_step_graph("", "", "x = something_unknown.field\n");
         let known = KnownResources::new();
 
-        let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
+        let borrows = collect_borrows(&graph, &files, &known, &KnownAssets::new()).expect("collect_borrows");
         let resource_borrows: Vec<&Borrow> = borrows
             .iter()
             .filter(|b| matches!(b.resolution, BorrowResolution::ResourceEnvelope { .. }))
@@ -430,7 +574,7 @@ mod tests {
 
         let files = std::collections::HashMap::new();
         let known = KnownResources::new();
-        let borrows = collect_borrows(&graph, &files, &known).expect("collect_borrows");
+        let borrows = collect_borrows(&graph, &files, &known, &KnownAssets::new()).expect("collect_borrows");
 
         let envelope: Vec<&Borrow> = borrows
             .iter()
@@ -472,7 +616,7 @@ mod tests {
                 .len();
             let expected = guard_n + auto_n + ht_n + res_n;
 
-            let unified = collect_borrows(&demo.graph, &demo.files, &known).unwrap();
+            let unified = collect_borrows(&demo.graph, &demo.files, &known, &KnownAssets::new()).unwrap();
             assert_eq!(
                 unified.len(),
                 expected,

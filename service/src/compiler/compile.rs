@@ -248,6 +248,10 @@ pub struct CompileOptions<'a> {
     /// Workspace-resource manifest (publish-time `discover_known_resources`).
     /// Empty by default (preview / tests / analyze).
     pub known_resources: &'a KnownResources,
+    /// Node-level asset-binding manifest (publish-time
+    /// `discover_asset_bindings`, docs/20 §5). Empty by default (preview /
+    /// tests / analyze).
+    pub known_assets: &'a crate::compiler::asset_refs::KnownAssets,
     /// Static-config S3 key context. `ConfigStorage::ephemeral()` by default
     /// (no upload — synthetic nil template id / version 0). The per-node static
     /// config blobs that result are returned via [`CompileArtifacts::node_configs`]
@@ -267,10 +271,13 @@ impl Default for CompileOptions<'_> {
         static EMPTY_INLINE: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
         static EMPTY_SUB_AIR: OnceLock<SubWorkflowAir> = OnceLock::new();
         static EMPTY_KNOWN: OnceLock<KnownResources> = OnceLock::new();
+        static EMPTY_ASSETS: OnceLock<crate::compiler::asset_refs::KnownAssets> = OnceLock::new();
         Self {
             inline_sources: EMPTY_INLINE.get_or_init(HashMap::new),
             sub_air: EMPTY_SUB_AIR.get_or_init(HashMap::new),
             known_resources: EMPTY_KNOWN.get_or_init(KnownResources::new),
+            known_assets: EMPTY_ASSETS
+                .get_or_init(crate::compiler::asset_refs::KnownAssets::new),
             config_storage: ConfigStorage::ephemeral(),
         }
     }
@@ -319,6 +326,7 @@ pub fn compile_to_air_with_options(
         opts.inline_sources,
         opts.sub_air,
         opts.known_resources,
+        opts.known_assets,
         opts.config_storage,
     )?;
     let air = serde_json::to_value(&scenario)
@@ -400,6 +408,7 @@ pub(crate) fn compile_to_scenario_and_interfaces(
     sub_air: &SubWorkflowAir,
     known_resources: &KnownResources,
 ) -> Result<(ScenarioDefinition, InterfaceRegistry), CompileError> {
+    let empty_assets = crate::compiler::asset_refs::KnownAssets::new();
     let (scenario, interfaces, _node_configs) = compile_to_scenario_and_interfaces_with_configs(
         graph,
         name,
@@ -408,6 +417,7 @@ pub(crate) fn compile_to_scenario_and_interfaces(
         inline_sources,
         sub_air,
         known_resources,
+        &empty_assets,
         ConfigStorage::ephemeral(),
     )?;
     Ok((scenario, interfaces))
@@ -430,6 +440,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     inline_sources: &HashMap<String, HashMap<String, String>>,
     sub_air: &SubWorkflowAir,
     known_resources: &KnownResources,
+    known_assets: &crate::compiler::asset_refs::KnownAssets,
     config_storage: ConfigStorage<'_>,
 ) -> Result<
     (
@@ -586,6 +597,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
         &interfaces,
         inline_sources,
         known_resources,
+        known_assets,
         &mut node_configs,
     )?;
 
@@ -1032,6 +1044,7 @@ fn apply_control_data_foundation(
     interfaces: &InterfaceRegistry,
     inline_sources: &HashMap<String, HashMap<String, String>>,
     known_resources: &KnownResources,
+    known_assets: &crate::compiler::asset_refs::KnownAssets,
     node_configs: &mut HashMap<String, serde_json::Value>,
 ) -> Result<(), CompileError> {
     let report = crate::compiler::token_shape::analyze(graph)?;
@@ -1053,8 +1066,12 @@ fn apply_control_data_foundation(
     // scanners (Python AST, HumanTask string walker, JSON-config
     // walker, Rhai AST guard walker) stay per-surface; the rewrite
     // dispatch is unified inside `apply_borrows`.
-    let unified_borrows =
-        crate::compiler::borrow::collect_borrows(graph, inline_sources, known_resources)?;
+    let unified_borrows = crate::compiler::borrow::collect_borrows(
+        graph,
+        inline_sources,
+        known_resources,
+        known_assets,
+    )?;
 
     validate_python_output_fields(graph, &unified_borrows)?;
 
@@ -2263,6 +2280,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -2395,6 +2413,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -2461,6 +2480,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -3415,6 +3435,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                asset_bindings: Vec::new(),
             },
             parent_id: None,
             width: None,
@@ -3974,6 +3995,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
                 &crate::compiler::resource_refs::KnownResources::new(),
+                &crate::compiler::asset_refs::KnownAssets::new(),
                 ConfigStorage::ephemeral(),
             )
             .expect("compile llm-borrow graph");
@@ -4078,6 +4100,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
                 &crate::compiler::resource_refs::KnownResources::new(),
+                &crate::compiler::asset_refs::KnownAssets::new(),
                 ConfigStorage::ephemeral(),
             )
             .expect("compile kreuzberg-borrow graph");
@@ -4686,6 +4709,7 @@ mod tests {
                         deployment_model: Default::default(),
                         stream_output: false,
                         stream_input: false,
+                        asset_bindings: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -4753,6 +4777,7 @@ mod tests {
                         deployment_model: Default::default(),
                         stream_output: false,
                         stream_input: false,
+                        asset_bindings: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -4872,6 +4897,7 @@ mod tests {
                         deployment_model: Default::default(),
                         stream_output: false,
                         stream_input: false,
+                        asset_bindings: Vec::new(),
                     },
                     parent_id: None,
                     width: None,
@@ -4900,6 +4926,7 @@ mod tests {
                 &std::collections::HashMap::new(),
                 &crate::compiler::SubWorkflowAir::new(),
                 &crate::compiler::resource_refs::KnownResources::new(),
+                &crate::compiler::asset_refs::KnownAssets::new(),
                 config_storage,
             )
             .expect("compile must succeed even with deeply-nested response_format schema");

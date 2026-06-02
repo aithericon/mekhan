@@ -497,6 +497,30 @@ pub enum CompileError {
     )]
     WorkspaceResourceUnknown { node_id: String, alias: String },
 
+    /// A node declared an asset binding (`asset_bindings[].ref_key`) that does
+    /// not resolve to any asset visible from the template's scope (docs/20 §5).
+    /// Symmetric with [`Self::WorkspaceResourceUnknown`] — hard-fail at publish
+    /// so the AIR can't build minus the staged asset. The fix is to create the
+    /// asset (or correct the ref-key) before publishing.
+    #[error(
+        "node '{node_id}': asset binding '{ref_key}' is not defined in any scope visible to this \
+         template — create it at /assets before publishing"
+    )]
+    AssetBindingUnknown { node_id: String, ref_key: String },
+
+    /// An asset `ref_key` resolved ambiguously: two equally-specific scopes
+    /// (e.g. two sibling projects containing this template) both define it, so
+    /// picking one would be a silent guess (docs/20 §2). Same posture as
+    /// `SlugConflict` — ambiguity is an error, not a guess.
+    #[error(
+        "node '{node_id}': asset binding '{ref_key}' is ambiguous — {detail}"
+    )]
+    AssetBindingAmbiguous {
+        node_id: String,
+        ref_key: String,
+        detail: String,
+    },
+
     /// An `Inline.pool.alias` resolved to a workspace resource that is not a
     /// `token_pool`. Inline admission is `token_pool`-only: a `datacenter` is a
     /// scheduler resource (bind it under `Scheduled`), and a plain credential
@@ -776,6 +800,8 @@ impl CompileError {
             Self::ResourceAliasCollidesWithSlug { .. } => "resource_alias_collides_with_slug",
             Self::ResourceAliasCollidesWithToken { .. } => "resource_alias_collides_with_token",
             Self::WorkspaceResourceUnknown { .. } => "workspace_resource_unknown",
+            Self::AssetBindingUnknown { .. } => "asset_binding_unknown",
+            Self::AssetBindingAmbiguous { .. } => "asset_binding_ambiguous",
             Self::ResourcePoolNotAPool { .. } => "resource_pool_not_a_pool",
             Self::SchedulerNotADatacenter { .. } => "scheduler_not_a_datacenter",
             Self::DatacenterConnectionIncomplete { .. } => "datacenter_connection_incomplete",
@@ -863,6 +889,8 @@ impl CompileError {
             | Self::LoopAccumulatorDuplicateVar { node_id, .. }
             | Self::LoopAccumulatorExprUnparseable { node_id, .. }
             | Self::WorkspaceResourceUnknown { node_id, .. }
+            | Self::AssetBindingUnknown { node_id, .. }
+            | Self::AssetBindingAmbiguous { node_id, .. }
             | Self::ResourcePoolNotAPool { node_id, .. }
             | Self::SchedulerNotADatacenter { node_id, .. }
             | Self::DatacenterConnectionIncomplete { node_id, .. }

@@ -21,6 +21,7 @@ pub mod process;
 pub mod projections;
 pub mod query;
 pub mod s3;
+pub mod scope;
 pub mod triggers;
 pub mod yjs;
 
@@ -102,6 +103,12 @@ pub struct AppState {
     /// persistence. The launcher never touches this — instances run against
     /// already-spliced AIR.
     pub resource_resolver: Arc<crate::petri::resource_resolver::ResourceResolver>,
+    /// Publish-time asset resolver (docs/20 §5). Materializes the pinned
+    /// records of every node-bound asset into the JSON envelope the publish
+    /// handler splices into the AIR (`__assets`) before persistence. The
+    /// launcher never touches this — instances run against already-spliced AIR,
+    /// symmetric with `resource_resolver`.
+    pub asset_resolver: Arc<crate::petri::asset_resolver::AssetResolver>,
 }
 
 /// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
@@ -260,6 +267,31 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::rotate_resource))
         .routes(routes!(handlers::resources::list_resource_audit))
+        // Assets (docs/20) — user-typed, curated static content. Asset TYPES
+        // are user-defined schemas (`Vec<PortField>`, additive-only evolution);
+        // ASSETS are version-pinned scope-owned collections of schema-validated
+        // JSONB records (+ S3 for File fields). Scope-resolved list endpoints
+        // (most-specific-wins, docs/20 §2). No Vault — record data is plain.
+        .routes(routes!(
+            handlers::assets::list_asset_types,
+            handlers::assets::create_asset_type
+        ))
+        .routes(routes!(
+            handlers::assets::get_asset_type,
+            handlers::assets::update_asset_type,
+            handlers::assets::delete_asset_type
+        ))
+        .routes(routes!(
+            handlers::assets::list_assets,
+            handlers::assets::create_asset
+        ))
+        .routes(routes!(
+            handlers::assets::get_asset,
+            handlers::assets::delete_asset
+        ))
+        .routes(routes!(handlers::assets::put_asset_records))
+        .routes(routes!(handlers::assets::import_asset_csv))
+        .routes(routes!(handlers::assets::upload_asset_file))
         // Triggers (Phase 5)
         .routes(routes!(handlers::triggers::list_triggers))
         .routes(routes!(handlers::triggers::list_template_triggers))

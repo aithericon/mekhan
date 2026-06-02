@@ -198,6 +198,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                         job_template: "petri-executor-worker".to_string(),
                         resources: None,
                     },
+                    asset_bindings: Vec::new(),
                 },
                 parent_id: Some(loop_id.to_string()),
                 width: None,
