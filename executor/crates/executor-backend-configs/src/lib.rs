@@ -6,6 +6,7 @@ pub mod llm;
 pub mod loki;
 pub mod postgres;
 pub mod process;
+pub mod prometheus;
 pub mod python;
 pub mod smtp;
 

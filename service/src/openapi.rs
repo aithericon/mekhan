@@ -116,6 +116,8 @@ use utoipa::OpenApi;
             aithericon_executor_backend_configs::loki::LokiConfig,
             aithericon_executor_backend_configs::loki::LokiOperation,
             aithericon_executor_backend_configs::loki::LokiDirection,
+            aithericon_executor_backend_configs::prometheus::PrometheusConfig,
+            aithericon_executor_backend_configs::prometheus::PrometheusOperation,
             aithericon_executor_backend_configs::kreuzberg::KreuzbergConfig,
             aithericon_executor_backend_configs::kreuzberg::ExtractionMode,
             aithericon_executor_backend_configs::kreuzberg::OcrSettings,

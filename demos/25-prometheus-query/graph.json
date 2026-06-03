@@ -1,0 +1,85 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 120 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Prometheus Query",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "query_up",
+      "type": "automated_step",
+      "slug": "query_up",
+      "position": { "x": 300, "y": 120 },
+      "data": {
+        "type": "automated_step",
+        "label": "Query Up",
+        "description": "Prometheus `query` backend. Runs the instant PromQL query `up` against the `demo_prometheus` resource at the current evaluation time (instant query: no time window — the latest sample per series). `up` is the per-target scrape-health metric Prometheus exposes for every scrape job, so a stock `prom/prometheus` that self-scrapes always has at least one `up` series with no push step required. Output is the fixed Prometheus envelope: `result_type`, `series`, `samples` (array of {metric, value, ts} for `vector` results), `sample_count`, `scalar`, `stats`.",
+        "executionSpec": {
+          "backendType": "prometheus",
+          "config": {
+            "resource_alias": "demo_prometheus",
+            "operation": "query",
+            "query": "up"
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Metrics",
+          "fields": [
+            { "name": "result_type", "label": "Result type", "kind": "text" },
+            { "name": "series", "label": "Series", "kind": "json" },
+            { "name": "samples", "label": "Samples", "kind": "json" },
+            { "name": "sample_count", "label": "Sample count", "kind": "number" },
+            { "name": "scalar", "label": "Scalar", "kind": "json" },
+            { "name": "stats", "label": "Stats", "kind": "json" }
+          ]
+        },
+        "retryPolicy": {
+          "maxRetries": 0,
+          "strategy": { "type": "immediate" }
+        },
+        "deploymentModel": { "mode": "executor" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 560, "y": 120 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "result_type", "expression": "query_up.result_type" },
+          { "targetField": "sample_count", "expression": "query_up.sample_count" },
+          { "targetField": "samples", "expression": "query_up.samples" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_query",
+      "source": "start",
+      "target": "query_up",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_query_end",
+      "source": "query_up",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

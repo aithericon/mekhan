@@ -211,6 +211,21 @@ pub const LOKI_META: BackendMeta = BackendMeta {
     user_authorable: true,
 };
 
+pub const PROMETHEUS_META: BackendMeta = BackendMeta {
+    backend_type: ExecutionBackendType::Prometheus,
+    wire_name: "prometheus",
+    display_name: "Prometheus Query",
+    icon: "activity",
+    dispatch_mode: DispatchMode::ExecutorJob,
+    // Inline-only: the backend issues an in-process HTTP request from the
+    // executor daemon (like postgres/http/loki). No Scheduled (Nomad/Slurm) toggle.
+    schedulable: false,
+    // The bound `prometheus` resource (base_url/token/org_id) is overlaid into
+    // the resolved config.
+    resource_channel: ResourceChannel::ConfigOverlay,
+    user_authorable: true,
+};
+
 /// Every shipped backend. One entry per [`ExecutionBackendType`] variant;
 /// the conformance test in `mekhan-service` asserts bijection.
 pub static BACKENDS: &[&BackendMeta] = &[
@@ -226,6 +241,7 @@ pub static BACKENDS: &[&BackendMeta] = &[
     &CATALOGUE_QUERY_META,
     &POSTGRES_META,
     &LOKI_META,
+    &PROMETHEUS_META,
 ];
 
 /// Look up the cross-crate metadata for a backend. Returns `None` only if
@@ -257,6 +273,7 @@ mod tests {
             ExecutionBackendType::CatalogueQuery,
             ExecutionBackendType::Postgres,
             ExecutionBackendType::Loki,
+            ExecutionBackendType::Prometheus,
         ] {
             let m = lookup(bt).unwrap_or_else(|| panic!("BACKENDS missing entry for {bt:?}"));
             assert_eq!(m.wire_name, bt.as_wire_str());

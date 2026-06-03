@@ -52,6 +52,14 @@ pub enum ExecutionBackendType {
     /// the executor daemon. Inline-only (not schedulable). Produces structured
     /// `entries` / `series` / `result_type` / `stats` output.
     Loki,
+    /// Resource-bound PromQL query against a Prometheus HTTP API. The bound
+    /// `prometheus` resource (`base_url` + optional bearer token + optional
+    /// `org_id` tenant header) is overlaid into the resolved config
+    /// (`ConfigOverlay`); the backend issues an in-process HTTP request from
+    /// the executor daemon. Inline-only (not schedulable). Produces structured
+    /// `result_type` / `series` / `samples` / `sample_count` / `scalar` /
+    /// `stats` output.
+    Prometheus,
 }
 
 impl ExecutionBackendType {
@@ -72,6 +80,7 @@ impl ExecutionBackendType {
             Self::CatalogueQuery => "catalogue_query",
             Self::Postgres => "postgres",
             Self::Loki => "loki",
+            Self::Prometheus => "prometheus",
         }
     }
 
@@ -92,6 +101,7 @@ impl ExecutionBackendType {
             "catalogue_query" => Some(Self::CatalogueQuery),
             "postgres" => Some(Self::Postgres),
             "loki" => Some(Self::Loki),
+            "prometheus" => Some(Self::Prometheus),
             _ => None,
         }
     }

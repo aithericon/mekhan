@@ -123,6 +123,32 @@ pub struct Loki {
     pub org_id: Option<String>,
 }
 
+/// Prometheus HTTP API binding for the `prometheus` metrics-query backend. Bind
+/// it on a `prometheus` AutomatedStep (ConfigOverlay channel) so the executor
+/// reads the endpoint + optional auth from the staged `<alias>.json` and runs
+/// the step's PromQL query against it.
+///
+/// In-cluster Prometheus is frequently unauthenticated, so `token` is optional —
+/// absent means no `Authorization` header is sent. `org_id` is the multi-tenant
+/// `X-Scope-OrgID` header (Thanos/Cortex/Mimir), also optional.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "prometheus", display_name = "Prometheus", icon = "lucide-activity")]
+pub struct Prometheus {
+    /// Base URL of the Prometheus HTTP API, e.g. `http://localhost:9090` (no
+    /// trailing `/api/v1/query` — the backend appends the API path).
+    pub base_url: String,
+    /// Optional bearer token for gateway / hosted-Prometheus auth. Vault-stored.
+    /// Absent → no Authorization header (in-cluster Prometheus is often
+    /// unauthenticated).
+    #[serde(default)]
+    #[resource(secret)]
+    pub token: Option<String>,
+    /// Optional `X-Scope-OrgID` tenant header for multi-tenant Prometheus
+    /// (Thanos/Cortex/Mimir).
+    #[serde(default)]
+    pub org_id: Option<String>,
+}
+
 /// Slack webhook target — v1 only supports incoming-webhook posting. Bot-
 /// token / OAuth Slack flows land in v2.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]

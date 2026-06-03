@@ -3763,7 +3763,7 @@ export interface components {
          *     Both the mekhan compiler and the executor registry key off it.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query" | "postgres" | "loki";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query" | "postgres" | "loki" | "prometheus";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -5373,6 +5373,82 @@ export interface components {
             /** Format: uuid */
             workspace_id: string;
         };
+        /**
+         * @description Configuration for a single Prometheus query job.
+         *
+         *     Deserialised from `ExecutionSpec.config` at runtime by the executor;
+         *     validated against this shape at compile-time by the mekhan compiler.
+         */
+        PrometheusConfig: {
+            /**
+             * @description End of the time window (RFC3339 timestamp or unix seconds).
+             *
+             *     May carry `{{slug.field}}` references. When absent the backend defaults
+             *     to "now" (range queries only).
+             */
+            end?: string | null;
+            /**
+             * @description Instant query vs range query. Defaults to `Query`. The source of
+             *     truth for which Prometheus HTTP API path the backend targets.
+             */
+            operation?: components["schemas"]["PrometheusOperation"];
+            /**
+             * @description The PromQL query.
+             *
+             *     May carry `{{slug.field}}` references resolved at runtime against the
+             *     staged producer envelopes. Interpolated values are escaped for a PromQL
+             *     double-quoted string literal so an upstream value cannot break out of a
+             *     matcher.
+             */
+            query: string;
+            /**
+             * @description Which workspace `prometheus` resource binds the connection. Required —
+             *     this is the connection binding; the compiler errors if absent. The
+             *     resolved resource (base_url/token/org_id) is overlaid into the config
+             *     before execution.
+             */
+            resource_alias: string;
+            /**
+             * @description Relative look-back duration used when `start`/`end` are absent, e.g.
+             *     `"5m"`, `"1h"` (range queries only).
+             */
+            since?: string | null;
+            /**
+             * @description Start of the time window (RFC3339 timestamp or unix seconds).
+             *
+             *     May carry `{{slug.field}}` references. When absent the backend derives
+             *     the start from `since` (range queries only).
+             */
+            start?: string | null;
+            /** @description Query resolution step for range queries, e.g. `"30s"`. */
+            step?: string | null;
+            /**
+             * @description Evaluation timestamp for an instant query (RFC3339 timestamp or unix
+             *     seconds).
+             *
+             *     May carry `{{slug.field}}` references. When absent the backend defaults
+             *     to "now" (instant queries only).
+             */
+            time?: string | null;
+            /**
+             * Format: int64
+             * @description Per-request timeout in milliseconds. Defaults to 30000.
+             *
+             *     Capped at the job-level `RunContext.timeout`.
+             */
+            timeout_ms?: number;
+        };
+        /**
+         * @description Whether the step runs an instant query or a range query.
+         *
+         *     `Query` (the default) hits `/api/v1/query` for an instant query at a single
+         *     point in time — the usual mode for a current metric value. `QueryRange`
+         *     hits `/api/v1/query_range` over a time window for a series of samples. This
+         *     is the source of truth for which Prometheus HTTP API path the backend
+         *     targets.
+         * @enum {string}
+         */
+        PrometheusOperation: "query" | "query_range";
         PromoteToTestRequest: {
             /** @description Name for the new test. Must be unique within the template family. */
             name: string;

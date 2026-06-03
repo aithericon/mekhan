@@ -35,6 +35,8 @@ use aithericon_executor_smtp::SmtpBackend;
 use aithericon_executor_postgres::PostgresBackend;
 #[cfg(feature = "loki")]
 use aithericon_executor_loki::LokiBackend;
+#[cfg(feature = "prometheus")]
+use aithericon_executor_prometheus::PrometheusBackend;
 #[cfg(feature = "opendal")]
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
@@ -690,6 +692,11 @@ fn register_executor_backend(
         "loki" => {
             info!("loki backend registered");
             registry.register(LokiBackend::new())
+        }
+        #[cfg(feature = "prometheus")]
+        "prometheus" => {
+            info!("prometheus backend registered");
+            registry.register(PrometheusBackend::new())
         }
         other => {
             info!(
