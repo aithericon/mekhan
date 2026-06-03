@@ -594,12 +594,23 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
             );
 
         // t_reap — lease expired (allocator TTL already reclaimed the alloc).
-        // Just DROP the hold (correlate grant_id); do NOT re-call release — the
-        // allocation is already gone.
+        // Just DROP the hold; do NOT re-call release — the allocation is already
+        // gone.
+        //
+        // Correlate on `scheduler_job_id`, NOT `grant_id`: the `exp` token is a
+        // watcher-injected SIGNAL, and the watcher payload carries
+        // `scheduler_job_id` (= the dispatched Nomad job id / Slurm job id) but
+        // NOT `grant_id` — the grant_id rides as the signal's `signal_key`
+        // (sibling causality meta), which never lands in the token color. The
+        // held hold's `alloc_id` IS that same dispatched-job / slurm-job id (the
+        // acquire effect stores `dispatched_job_id` / slurm job id as the lease's
+        // `alloc_id`), so `exp.scheduler_job_id == held.alloc_id` is the value
+        // that actually correlates. Matching on `grant_id` here compared
+        // `()` (absent) against the held string and NEVER bound — the hold leaked.
         ctx.transition("t_reap", "Reap Expired Lease")
             .auto_input("exp", &lease_expired)
             .auto_input("held", &in_use)
-            .correlate("exp", "held", "grant_id")
+            .guard("exp.scheduler_job_id == held.alloc_id")
             .auto_output("done", &done)
             .logic(
                 r#"#{ done: #{ grant_id: held.grant_id, alloc_id: held.alloc_id, outcome: "reaped" } }"#,
@@ -622,24 +633,36 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
         ctx.transition("t_lease_done", "Lease Terminal Drain (released)")
             .auto_input("exp", &lease_expired)
             .auto_output("done", &done)
+            // `exp` is a watcher signal; it carries `scheduler_job_id`, not
+            // `grant_id` (that rides as `signal_key`). Record the alloc id for
+            // traceability — `exp.grant_id` was always `()` here.
             .logic(
-                r#"#{ done: #{ grant_id: exp.grant_id, outcome: "lease_done" } }"#,
+                r#"#{ done: #{ alloc_id: exp.scheduler_job_id, outcome: "lease_done" } }"#,
             );
 
         // t_lease_died — held-allocation death (docs/16 §7). The watcher routed
         // the held alloc's terminal signal to `lease_failed`; consume it + the
-        // matching `in_use` hold (correlate grant_id), DROP the hold (the alloc
-        // is already dead — no release call, like reap), record the death in
-        // `done`, AND route a `{ grant_id }` failure token back to the claiming
-        // loop over the "fail" reply channel so it fails fast. The fail token
-        // carries the hold's reply routing (the `in_use` hold is a CLEAN
-        // PLAIN-bridged register, so it does NOT — instead the routing rides the
-        // lease_failed signal which was injected with the claim's reply meta;
-        // see the loop wiring in `lower_loop`).
+        // matching `in_use` hold, DROP the hold (the alloc is already dead — no
+        // release call, like reap), record the death in `done`, AND route a
+        // `{ grant_id }` failure token back to the claiming loop over the "fail"
+        // reply channel so it fails fast.
+        //
+        // Correlation key = `scheduler_job_id`, NOT `grant_id`. The `fail` token
+        // is a watcher-injected SIGNAL whose payload carries `scheduler_job_id`
+        // (the dispatched Nomad job id / Slurm job id) but NOT `grant_id` — the
+        // grant_id rides as the signal's `signal_key` (sibling causality meta)
+        // and never enters the token color, so a `fail.grant_id == held.grant_id`
+        // guard compared `()` against the held string and NEVER bound: held-alloc
+        // deaths were silently dropped instead of failing the loop fast. The
+        // held hold's `alloc_id` is that SAME dispatched-job / slurm-job id (the
+        // acquire effect stores it as the lease `alloc_id`), so
+        // `fail.scheduler_job_id == held.alloc_id` is the field pair that
+        // actually correlates the death signal to its hold — and grant_id (which
+        // the loop's fail inbox needs) is recovered from the matched `held`.
         ctx.transition("t_lease_died", "Lease Died (held alloc failure)")
             .auto_input("fail", &lease_failed)
             .auto_input("held", &in_use)
-            .correlate("fail", "held", "grant_id")
+            .guard("fail.scheduler_job_id == held.alloc_id")
             .auto_output("notify", &fail_outbox)
             .auto_output("done", &done)
             .logic(

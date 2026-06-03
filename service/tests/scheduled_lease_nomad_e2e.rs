@@ -702,3 +702,295 @@ async fn leased_loop_drains_on_one_nomad_alloc() {
         "leased-loop nomad run should have produced engine events"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FAIL-FAST: held-allocation death (docs/16 §7). When the held drain executor's
+// Nomad alloc DIES mid-flight (preemption / node failure — here a SIGKILL of the
+// alloc's task), the leased loop must FAIL FAST: the per-cluster watcher maps the
+// `Killed` task event → JobStatus::Failed → the acquire effect's stamped
+// `failure_routing` routes it to the adapter net's `lease_failed` signal place →
+// `t_lease_died` consumes it + the matching `in_use` hold and routes a failure
+// notice back over the "fail" reply channel → the instance's `t_lp_scope_lease_
+// abort` throws → NetFailed. The instance must reach `failed`, NOT hang on a dead
+// executor and NOT (benignly) complete.
+//
+// This is the regression test for two bugs that made `t_lease_died` dead code
+// (never run live because the only e2e was Slurm-with-accounting, `#[ignore]`):
+//   1. `t_lease_died`/`t_reap` correlated the death SIGNAL against the hold on
+//      `grant_id`, which the watcher payload does NOT carry (it rides as the
+//      signal's `signal_key`); the correct key is `scheduler_job_id == alloc_id`.
+//   2. The fail notice had no reply route back: the clean register-bridged hold
+//      carried no "fail" channel, so `route_output_tokens` hit `BridgeReplyMissing`
+//      and the adapter net retry-wedged. The register bridge now carries "fail".
+// Reaching `failed` exercises BOTH fixes — it is the only route to that state.
+//
+// Unlike the Slurm fail-fast test (which needs `sacct`/accounting to tell a kill
+// from a release), the Nomad watcher streams allocation/task events, so a SIGKILL
+// surfaces as a `Killed` task event with no accounting dependency.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Body that holds the lease open long enough to kill the alloc mid-iteration.
+const SLEEP_PY: &str = r#"import time
+log_info("fail-fast body sleeping to hold the nomad lease")
+time.sleep(90)
+set_output("ran", True)
+"#;
+
+/// An alloc's `client_status` (`pending`/`running`/`complete`/`failed`/`lost`),
+/// or empty on transient error.
+fn alloc_client_status(alloc: &str) -> String {
+    let out = Command::new("nomad")
+        .args(["alloc", "status", "-json", alloc])
+        .output()
+        .ok();
+    out.filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok())
+        .and_then(|v| {
+            v.get("ClientStatus")
+                .and_then(|s| s.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+async fn instance_status(db: &sqlx::PgPool, instance_id: Uuid) -> String {
+    sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+        .bind(instance_id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "live Nomad-lease fail-fast e2e: needs `just dev scheduler-up` + registered \
+            petri-lease-executor. SIGKILLs the held alloc — no accounting dependency."]
+async fn leased_loop_fails_fast_when_held_nomad_alloc_dies() {
+    if !engine_available().await {
+        panic!(
+            "engine not available at {} — start the stack with `just dev scheduler-up`",
+            engine_url()
+        );
+    }
+    nomad_cli(&["job", "status", LEASE_JOB]); // loud if the lease job is not registered
+
+    let engine_nats_url = std::env::var("ENGINE_NATS_URL").unwrap_or_else(|_| common::nats_url());
+    let (app, db) = common::test_app_with_petri_url(&engine_nats_url, &engine_url()).await;
+
+    let listener_nats = MekhanNats::connect(&engine_nats_url, None)
+        .await
+        .expect("nats");
+    let kv = listener_nats
+        .ensure_catalogue_subscriptions_kv()
+        .await
+        .expect("kv");
+    let sub_mgr = std::sync::Arc::new(SubscriptionManager::new(
+        kv,
+        listener_nats.jetstream().clone(),
+    ));
+    let listener_db = db.clone();
+    tokio::spawn(async move {
+        start_lifecycle_listener(
+            listener_nats,
+            listener_db,
+            sub_mgr,
+            None,
+            mekhan_service::triggers::ResultWaiters::new(),
+        )
+        .await;
+    });
+
+    // ── (1) Datacenter resource → auto-deploys `pool-<id>` lease-adapter net.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/resources")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "path": DC_ALIAS,
+                        "resource_type": "datacenter",
+                        "display_name": "Nomad Datacenter (fail-fast e2e)",
+                        "config": {
+                            "scheduler_flavor": "nomad",
+                            "nomad_addr": std::env::var("TEST_NOMAD_ADDR")
+                                .unwrap_or_else(|_| "http://localhost:4646".to_string())
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let dc_status = resp.status();
+    let dc_body = body_json(resp.into_body()).await;
+    assert_eq!(dc_status, StatusCode::CREATED, "create datacenter: {dc_body}");
+    let resource_id: Uuid = dc_body["id"].as_str().unwrap().parse().unwrap();
+
+    let pool_net_id = format!("pool-{resource_id}");
+    let pool_deadline = Instant::now() + Duration::from_secs(60);
+    while !net_running(&pool_net_id).await {
+        if Instant::now() > pool_deadline {
+            panic!("lease-adapter net `{pool_net_id}` did not reach running within 60s");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // ── (2) Publish a leased loop whose body SLEEPS (holds the alloc up).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/templates")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Leased-Loop Nomad Fail-Fast E2E",
+                        "graph": leased_loop_graph("lp", "body"),
+                        "files": { "body": { "main.py": SLEEP_PY } },
+                        "author_id": Uuid::new_v4(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED, "create template");
+    let template_id: Uuid = body_json(resp.into_body()).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/templates/{template_id}/publish"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let pub_body = body_json(resp.into_body()).await;
+    assert_eq!(status, StatusCode::OK, "publish: {pub_body}");
+
+    let baseline_children = dispatched_children();
+
+    // ── (3) Launch the instance.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/instances")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "template_id": template_id, "created_by": Uuid::new_v4(),
+                            "metadata": { "e2e": "lease_fail_fast_nomad" } })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let inst_status = resp.status();
+    let instance = body_json(resp.into_body()).await;
+    assert_eq!(inst_status, StatusCode::CREATED, "create instance: {instance}");
+    let instance_id: Uuid = instance["id"].as_str().unwrap().parse().unwrap();
+
+    // ── (4) Wait for THIS run's dispatched drain executor + its alloc RUNNING
+    //    (the held lease is registered by then — `t_register` ran on the grant).
+    let alloc_deadline = Instant::now() + Duration::from_secs(150);
+    let (drain_child, alloc) = loop {
+        let new_children: Vec<String> = dispatched_children()
+            .into_iter()
+            .filter(|c| !baseline_children.contains(c))
+            .collect();
+        if let Some(child) = new_children.first() {
+            if let Some(alloc) = child_alloc_id(child) {
+                if alloc_client_status(&alloc) == "running" {
+                    break (child.clone(), alloc);
+                }
+            }
+        }
+        let st = instance_status(&db, instance_id).await;
+        assert!(
+            st != "failed" && st != "completed",
+            "instance reached {st} before the held alloc was ever observed running"
+        );
+        if Instant::now() > alloc_deadline {
+            panic!("held Nomad alloc never reached running within 150s — acquire did not dispatch");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    // ── (5) KILL the held alloc out from under the loop — SIGKILL the task so it
+    //    dies UNCLEANLY (a `Killed` task event → Failed → `lease_failed`), never a
+    //    graceful exit-0 (`Completed` → benign `lease_expired` reap, which would
+    //    race the death path and silently drop the hold). Simulates preemption.
+    eprintln!("[fail-fast] SIGKILLing held alloc {alloc} (child {drain_child})");
+    nomad_cli(&["alloc", "signal", "-s", "SIGKILL", &alloc]);
+
+    // ── (6) Fail-fast assertion: the instance must reach `failed` — NOT hang,
+    //    NOT complete. The ONLY route to `failed` here is the held-alloc-death
+    //    path: `lease_failed` → `t_lease_died` (correlate fix) → "fail" reply
+    //    (routing fix) → `t_lp_scope_lease_abort` throw → NetFailed.
+    let fail_deadline = Instant::now() + Duration::from_secs(150);
+    loop {
+        let st = instance_status(&db, instance_id).await;
+        if st == "failed" {
+            break;
+        }
+        assert_ne!(
+            st, "completed",
+            "instance COMPLETED after its held alloc was SIGKILLed — fail-fast did not trigger"
+        );
+        if Instant::now() > fail_deadline {
+            // Diagnostics: dump the adapter net's terminal records so a failure
+            // here shows whether t_lease_died fired (and over which route).
+            let pool_state: Value = reqwest::get(format!("{}/api/nets/{pool_net_id}/state", engine_url()))
+                .await
+                .ok()
+                .map(|r| r.json())
+                .unwrap()
+                .await
+                .unwrap_or(Value::Null);
+            panic!(
+                "instance did not fail within 150s of SIGKILLing the held alloc \
+                 (status: {st}) — the held-alloc-death → lease_failed → t_lease_died \
+                 → fail → t_lease_abort path did not fire. pool-net `{pool_net_id}` \
+                 state:\n{}",
+                serde_json::to_string_pretty(&pool_state).unwrap_or_default()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // ── (7) Confirm it failed via the DEATH path specifically: the instance's
+    //    error text carries the `t_lease_abort` message. Best-effort — the
+    //    primary proof is reaching `failed`, but this pins the exact path.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/instances/{instance_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if resp.status() == StatusCode::OK {
+        let detail = body_json(resp.into_body()).await;
+        eprintln!(
+            "[fail-fast] instance failed. error field: {}",
+            detail.get("error").cloned().unwrap_or(Value::Null)
+        );
+    }
+}

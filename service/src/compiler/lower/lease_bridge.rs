@@ -134,14 +134,30 @@ pub(super) fn emit_lease_bridge(
             ("fail", lease_failed_inbox_place.as_str()),
         ],
     );
-    // Register + release bridges are PLAIN (no reply routing) so the
-    // pool's recycled capacity tokens stay clean (docs/14 taint note).
-    let p_register_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
+    // Register bridge carries ONLY the "fail" reply channel (NOT "grant"). This
+    // is what lets the held-alloc-death notice get back here: the adapter net's
+    // `t_lease_died` consumes the `in_use` hold (which inherits this register
+    // token's reply routing) + the watcher death signal, then routes a
+    // `{ grant_id }` notice over "fail" to `p_{id}_lease_failed`. Without a reply
+    // channel on the hold, `t_lease_died` would fire but `route_output_tokens`
+    // could not resolve the "fail" address (neither the routing-less watcher
+    // signal nor a plain hold carries it) → `BridgeReplyMissing` → the adapter
+    // net wedges in a retry loop and the death is never surfaced.
+    //
+    // The docs/14 "plain register" taint rule (a recycled capacity token must
+    // not carry a holder's reply channel) does NOT apply to the datacenter
+    // adapter: its holds are never recycled as capacity — they terminate in the
+    // adapter's `done`. So carrying "fail" here is taint-free. (The token-pool
+    // register stays plain, in `automated_step.rs`, because ITS units recycle.)
+    let p_register_out: PlaceHandle<DynamicToken> = ctx.bridge_out_reply_channels(
         format!("p_{id}_register_out"),
         format!("{label} - Register Hold"),
         pool_net_id,
         well_known::POOL_REGISTER_INBOX,
+        &[("fail", lease_failed_inbox_place.as_str())],
     );
+    // Release bridge stays PLAIN (no reply routing): it just hands `{ grant_id }`
+    // to the adapter's release path; nothing routes back over it.
     let p_release_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
         format!("p_{id}_release_out"),
         format!("{label} - Release Lease"),

@@ -1,13 +1,12 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import Copy from '@lucide/svelte/icons/copy';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import BookOpen from '@lucide/svelte/icons/book-open';
-	import ProjectApiDrawer from '$lib/components/projects/ProjectApiDrawer.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -25,7 +24,6 @@
 		removeWorkspaceMember,
 		listProjects,
 		createProject,
-		deleteProject,
 		resolveUserByEmail,
 		type WorkspaceSummary,
 		type WorkspaceMember,
@@ -126,26 +124,8 @@
 		}
 	}
 
-	async function handleDeleteProject(p: Project) {
-		if (!confirm(`Delete project '${p.display_name}'?`)) return;
-		try {
-			await deleteProject(p.id);
-			projects = projects.filter((x) => x.id !== p.id);
-		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete project');
-		}
-	}
-
 	function bundleUrl(p: Project): string {
 		return `/api/v1/workspaces/${workspaceId}/projects/${p.id}/openapi.json`;
-	}
-
-	// Per-project API contract drawer (rendered docs + invoke playground).
-	let apiOpen = $state(false);
-	let apiProject = $state<Project | null>(null);
-	function openApi(p: Project) {
-		apiProject = p;
-		apiOpen = true;
 	}
 
 	async function copyBundleUrl(p: Project) {
@@ -289,21 +269,25 @@
 								data-testid={`project-row-${p.slug}`}
 							>
 								<div class="flex items-start justify-between gap-2">
-									<div class="min-w-0 flex-1">
-										<div class="font-medium">{p.display_name}</div>
+									<a
+										href={`/workspaces/${workspaceId}/projects/${p.id}`}
+										class="min-w-0 flex-1"
+										data-testid={`link-project-${p.slug}`}
+									>
+										<div class="font-medium hover:underline">{p.display_name}</div>
 										<div class="truncate text-xs text-muted-foreground">{p.slug}</div>
-									</div>
+									</a>
 									<div class="flex gap-1">
-											<Button
-												variant="outline"
-												size="sm"
-												title="Browse the project's API contract"
-												onclick={() => openApi(p)}
-												data-testid={`btn-api-${p.slug}`}
-											>
-												<BookOpen class="size-3.5" />
-												API
-											</Button>
+										<Button
+											variant="outline"
+											size="sm"
+											title="Open project — API contract, templates, settings"
+											onclick={() => goto(`/workspaces/${workspaceId}/projects/${p.id}`)}
+											data-testid={`btn-api-${p.slug}`}
+										>
+											<BookOpen class="size-3.5" />
+											API
+										</Button>
 										<Button
 											variant="ghost"
 											size="sm"
@@ -323,14 +307,6 @@
 										>
 											<ExternalLink class="size-3.5" />
 										</a>
-										<Button
-											variant="ghost"
-											size="sm"
-											onclick={() => handleDeleteProject(p)}
-											data-testid={`btn-delete-project-${p.slug}`}
-										>
-											<Trash2 class="size-3.5 text-muted-foreground" />
-										</Button>
 									</div>
 								</div>
 							</li>
@@ -346,11 +322,3 @@
 	{/if}
 </div>
 
-{#if apiProject}
-	<ProjectApiDrawer
-		bind:open={apiOpen}
-		{workspaceId}
-		projectId={apiProject.id}
-		projectName={apiProject.display_name}
-	/>
-{/if}
