@@ -50,7 +50,10 @@
 	async function refreshScopes() {
 		scopeBusy = true;
 		try {
-			const result = await fetchNodeScopes(binding.graph);
+			const result = await fetchNodeScopes(binding.graph, {
+				templateId,
+				workspaceId: template?.workspace_id
+			});
 			nodeScopes = result.scopes;
 			graphOk = result.graphOk;
 			scopeRequestFailed = result.requestFailed;
@@ -103,6 +106,13 @@
 				(template?.graph as { definitions?: Record<string, unknown> } | undefined)?.definitions ??
 					null
 			);
+			// Re-fetch scopes now that workspace_id is known. The first
+			// refreshScopes() call fires before load() completes (both run in
+			// concurrent $effects on mount), so that call has no workspace_id
+			// and returns an empty Globals group. Calling again here ensures
+			// assets + resources are returned in the Globals scope once we
+			// have the template's workspace context.
+			void refreshScopes();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
 		}
@@ -424,6 +434,7 @@
 					nodeId={selectedNodeId}
 					readonly={template?.published ?? false}
 					scope={nodeScopes.get(selectedNodeId) ?? []}
+					{templateId}
 					scopeBusy={scopeBusy}
 					onRefreshScope={refreshScopes}
 					oninsertref={editorApi ? (s) => editorApi?.insertAtCursor(s) : undefined}

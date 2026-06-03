@@ -193,6 +193,23 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // Presence controller (Phase 3 — presence-lease pool capacity). Subscribes
+    // to `runner.*.presence` and drives every `presence_pool` net: admits one
+    // pool unit per live runner via the `presence_acquire` bridge on the
+    // absent→present edge, and a background sweep injects a bare
+    // `presence_expired` signal on a TTL miss. NATS is always connected here
+    // (mekhan can't boot without it), so this is unconditional like the other
+    // NATS-backed background tasks.
+    // Construct the shared presence handle ONCE: the controller tasks mutate it
+    // and the AppState read API (`GET /api/v1/runners/presence`) reads through it.
+    let runner_presence = mekhan_service::runners_presence::RunnerPresence::new();
+    mekhan_service::runners_presence::spawn_presence_controller(
+        runner_presence.clone(),
+        mekhan_nats.clone(),
+        db.clone(),
+        petri.clone(),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder
@@ -268,6 +285,21 @@ async fn main() -> anyhow::Result<()> {
     let resource_resolver =
         Arc::new(mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()));
 
+    // Phase 2 (Lab Runner Fleet) — resolve the NATS account signing key. Logs
+    // the account public key at INFO. Precedence: RUNNERS_NATS_SIGNING_SEED env
+    // → local seed file ({MEKHAN_DATA_DIR|~/.aithericon/mekhan}) → best-effort
+    // Vault → generate+persist. Never blocks startup on Vault.
+    let runner_nats_signer = Arc::new(mekhan_service::runners_nats::RunnerNatsSigner::resolve());
+    tracing::info!(
+        account = %runner_nats_signer.account_public_key(),
+        "runner NATS signer ready"
+    );
+    // Asset resolver — publish-time materialization of node-bound asset records
+    // into the spliced `__assets` envelope (docs/20 §5). Same `Arc`-shared
+    // shape as `resource_resolver`.
+    let asset_resolver =
+        Arc::new(mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()));
+
     let state = AppState {
         db,
         petri,
@@ -289,6 +321,9 @@ async fn main() -> anyhow::Result<()> {
         result_waiters,
         resource_store,
         resource_resolver,
+        runner_nats_signer,
+        runner_presence,
+        asset_resolver,
     };
 
     // Seed built-in demos before the listener accepts requests. Idempotent

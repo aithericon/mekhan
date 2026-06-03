@@ -49,7 +49,7 @@ pub(crate) fn lower_lease_scope(cx: &mut LoweringCtx) -> Result<(), CompileError
         id,
         alias,
         lease.request.as_ref(),
-        "datacenter",
+        &["datacenter"],
         cx.known_resources,
         // A container spec keyed on the LeaseScope holder id is merged into the
         // lease claim `request` so the held alloc's persistent drain executor

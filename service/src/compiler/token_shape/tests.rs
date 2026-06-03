@@ -163,7 +163,7 @@ mod scope_reachability_tests {
     #[test]
     fn decision_scope_agrees_with_readarc_synthesis_and_diagnostics() {
         let g = invoice_graph();
-        let report = analyze(&g).expect("analyze");
+        let report = analyze(&g, &Default::default()).expect("analyze");
 
         // (1) Picker offers the upstream parked producer's field,
         //     producer-namespaced as `review.invoice_amount` — not the
@@ -189,7 +189,7 @@ mod scope_reachability_tests {
 
         // (2) The read-arc synthesis resolves the IDENTICAL reference to the
         //     same producer (the compiler-as-borrow-checker).
-        let binds = guard_readarc_plan(&g).expect("readarc plan");
+        let binds = guard_readarc_plan(&g, &Default::default()).expect("readarc plan");
         assert!(
             binds.iter().any(|b| b.consumer_node_id == "check-amount"
                 && b.referenced == "review.invoice_amount"
@@ -274,7 +274,7 @@ mod scope_reachability_tests {
     #[test]
     fn collision_distinct_parked_producers_get_distinct_qualified_paths() {
         let g = two_producer_graph("rev_a.amount > 0");
-        let report = analyze(&g).expect("analyze");
+        let report = analyze(&g, &Default::default()).expect("analyze");
         let scope = report.scopes.get("dec").expect("decision scope");
         let paths: std::collections::BTreeSet<&str> =
             scope.iter().map(|e| e.path.as_str()).collect();
@@ -297,7 +297,7 @@ mod scope_reachability_tests {
 
         // The qualified guard binds to its named producer — the farther one,
         // proving a nearer parked/forwarding node does not mask it.
-        let binds = guard_readarc_plan(&g).expect("readarc plan");
+        let binds = guard_readarc_plan(&g, &Default::default()).expect("readarc plan");
         assert!(
             binds
                 .iter()
@@ -313,7 +313,7 @@ mod scope_reachability_tests {
         // error at compile, naming the qualified forms to use; and the same
         // node reports it unresolved for the editor.
         let g2 = two_producer_graph("input.amount > 0");
-        match guard_readarc_plan(&g2) {
+        match guard_readarc_plan(&g2, &Default::default()) {
             Err(CompileError::GuardUnresolved {
                 node_id,
                 identifier,
@@ -329,7 +329,7 @@ mod scope_reachability_tests {
             }
             other => panic!("expected GuardUnresolved, got {other:?}"),
         }
-        let report2 = analyze(&g2).expect("analyze g2");
+        let report2 = analyze(&g2, &Default::default()).expect("analyze g2");
         assert!(
             report2.diagnostics.iter().any(|d| matches!(d,
                 ShapeDiagnostic::UnresolvedGuardPath { node_id, referenced, .. }
@@ -369,7 +369,7 @@ mod scope_reachability_tests {
     #[test]
     fn start_is_parked_producer_and_control_leaves_grouped_as_process() {
         let g = start_producer_graph("start.note == \"ok\"");
-        let report = analyze(&g).expect("analyze");
+        let report = analyze(&g, &Default::default()).expect("analyze");
         let scope = report.scopes.get("dec").expect("decision scope");
 
         // (1) Start's declared input is borrow-reachable, namespaced by the
@@ -412,7 +412,7 @@ mod scope_reachability_tests {
         // (3) The read-arc synthesis binds the IDENTICAL ref to the Start's
         //     parked data place (`apply_control_data_foundation` borrows
         //     `p_start_data`) — picker == compiler.
-        let binds = guard_readarc_plan(&g).expect("readarc plan");
+        let binds = guard_readarc_plan(&g, &Default::default()).expect("readarc plan");
         assert!(
             binds.iter().any(|b| b.consumer_node_id == "dec"
                 && b.referenced == "start.note"
@@ -1000,7 +1000,7 @@ mod scope_reachability_tests {
           ]
         }"#;
         let g: WorkflowGraph = serde_json::from_str(json).expect("deser file-envelope graph");
-        let report = analyze(&g).expect("analyze");
+        let report = analyze(&g, &Default::default()).expect("analyze");
         let scope = report.scopes.get("ocr").expect("ocr scope");
         let by_path: std::collections::BTreeMap<&str, &ScopeEntry> =
             scope.iter().map(|e| (e.path.as_str(), e)).collect();

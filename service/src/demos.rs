@@ -667,6 +667,243 @@ async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
     }
 }
 
+/// Best-effort content-type from a bundled file's extension, for the asset
+/// File-field seed upload. Falls back to `application/octet-stream`.
+fn guess_content_type(filename: &str) -> &'static str {
+    match filename
+        .rsplit('.')
+        .next()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("txt") => "text/plain",
+        Some("csv") => "text/csv",
+        Some("json") => "application/json",
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        _ => "application/octet-stream",
+    }
+}
+
+/// One asset fixture: a self-contained asset-type schema + the asset (ref-key)
+/// + its records. The type is created (or reused if a same-named type already
+/// exists in the demo workspace) before the asset, so several fixtures can
+/// share a type without ordering ceremony. A record's `File`-field value may be
+/// `{"__file": "<path-relative-to-demos/assets>"}` — the seeder uploads that
+/// bundled file and substitutes the resulting storage path.
+#[derive(serde::Deserialize)]
+struct AssetFixture {
+    asset_type: crate::models::asset::CreateAssetTypeRequest,
+    ref_key: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    records: Vec<serde_json::Value>,
+}
+
+/// Provision the curated assets that demos reference (docs/20), from
+/// `demos/assets/*.json`, into the demo workspace. Mirrors
+/// [`seed_demo_resources`]: runs BEFORE the demo loop so a demo that binds /
+/// reads an asset (e.g. `21-asset-consume`'s `metals_db`, `22-asset-ref`'s
+/// `steel_spec`) can resolve it at publish time. Idempotent — an asset whose
+/// ref-key already exists is left as-is (records are NOT rewritten, so a
+/// developer's live edits survive a reseed). Best-effort: a fixture failure is
+/// logged, never fatal — the dependent demo simply won't seed.
+async fn seed_demo_assets(state: &crate::AppState, root: &Path) {
+    use crate::models::asset::{CreateAssetRequest, ScopeKind};
+
+    let dir = root.join("assets");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return, // no fixtures directory — nothing to provision
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+
+    let scope_kind = ScopeKind::Workspace;
+    let scope_id = DEMO_WORKSPACE_ID;
+
+    for path in paths {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo asset: read failed");
+                continue;
+            }
+        };
+        let fixture: AssetFixture = match serde_json::from_str(&raw) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo asset: parse failed");
+                continue;
+            }
+        };
+
+        // Resolve (or create) the asset type by name within the demo workspace.
+        let type_name = fixture.asset_type.name.clone();
+        let existing_type: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
+            "SELECT id FROM asset_types \
+             WHERE scope_kind = $1 AND scope_id = $2 AND name = $3 AND deleted_at IS NULL",
+        )
+        .bind(scope_kind.as_db())
+        .bind(scope_id)
+        .bind(&type_name)
+        .fetch_optional(&state.db)
+        .await;
+        let type_id = match existing_type {
+            Ok(Some((id,))) => id,
+            Ok(None) => {
+                match crate::handlers::assets::create_asset_type_internal(
+                    state,
+                    &fixture.asset_type,
+                    scope_kind,
+                    scope_id,
+                    DEMO_SEEDER_AUTHOR_ID,
+                )
+                .await
+                {
+                    Ok(detail) => {
+                        tracing::info!(asset_type = %type_name, "demo asset type seeded");
+                        detail.id
+                    }
+                    Err(e) => {
+                        tracing::warn!(asset_type = %type_name, "demo asset type seed failed: {e:?}");
+                        continue;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(asset_type = %type_name, error = %e, "demo asset: type lookup failed");
+                continue;
+            }
+        };
+
+        // Idempotent: an existing asset (by ref-key) is left untouched.
+        let existing_asset: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
+            "SELECT id FROM assets \
+             WHERE scope_kind = $1 AND scope_id = $2 AND ref_key = $3 AND deleted_at IS NULL",
+        )
+        .bind(scope_kind.as_db())
+        .bind(scope_id)
+        .bind(&fixture.ref_key)
+        .fetch_optional(&state.db)
+        .await;
+        match existing_asset {
+            Ok(Some(_)) => {
+                tracing::info!(asset = %fixture.ref_key, "demo asset already present — leaving as-is");
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(asset = %fixture.ref_key, error = %e, "demo asset: existence check failed");
+                continue;
+            }
+        }
+
+        let create = CreateAssetRequest {
+            type_id,
+            ref_key: fixture.ref_key.clone(),
+            display_name: fixture.display_name.clone(),
+            display_path: None,
+            scope_kind: None,
+            scope_id: None,
+        };
+        let asset = match crate::handlers::assets::create_asset_internal(
+            state,
+            &create,
+            scope_kind,
+            scope_id,
+            DEMO_SEEDER_AUTHOR_ID,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(asset = %fixture.ref_key, "demo asset seed failed: {e:?}");
+                continue;
+            }
+        };
+
+        if !fixture.records.is_empty() {
+            // Resolve `File`-field `{"__file": "<rel>"}` directives: upload the
+            // bundled file (relative to `demos/assets/`) and substitute the
+            // storage path, so a seeded asset carries real File-field content
+            // (demo 24 then always exercises `File.retrieve()`). Collected
+            // first, then uploaded, to avoid borrowing the record map across
+            // the await.
+            let mut records = fixture.records.clone();
+            let mut directives: Vec<(usize, String, String)> = Vec::new();
+            for (i, rec) in records.iter().enumerate() {
+                if let Some(obj) = rec.as_object() {
+                    for (field, val) in obj {
+                        if let Some(rel) = val
+                            .as_object()
+                            .and_then(|o| o.get("__file"))
+                            .and_then(|v| v.as_str())
+                        {
+                            directives.push((i, field.clone(), rel.to_string()));
+                        }
+                    }
+                }
+            }
+            let mut upload_ok = true;
+            for (i, field, rel) in directives {
+                let file_path = dir.join(&rel);
+                let bytes = match std::fs::read(&file_path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(asset = %fixture.ref_key, file = %file_path.display(), error = %e, "demo asset: bundled File read failed");
+                        upload_ok = false;
+                        break;
+                    }
+                };
+                let filename = file_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("upload.bin")
+                    .to_string();
+                match state
+                    .s3
+                    .upload_asset_file(
+                        asset.id,
+                        asset.version,
+                        &field,
+                        &filename,
+                        &bytes,
+                        guess_content_type(&filename),
+                    )
+                    .await
+                {
+                    Ok(key) => {
+                        if let Some(o) = records[i].as_object_mut() {
+                            o.insert(field, serde_json::Value::String(key));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(asset = %fixture.ref_key, %field, "demo asset: File upload failed: {e:?}");
+                        upload_ok = false;
+                        break;
+                    }
+                }
+            }
+            if !upload_ok {
+                continue;
+            }
+            if let Err(e) =
+                crate::handlers::assets::replace_records_internal(state, asset.id, &records).await
+            {
+                tracing::warn!(asset = %fixture.ref_key, "demo asset records seed failed: {e:?}");
+                continue;
+            }
+        }
+        tracing::info!(asset = %fixture.ref_key, rows = fixture.records.len(), "demo asset seeded");
+    }
+}
+
 pub async fn seed_all(
     state: &crate::AppState,
     root: &Path,
@@ -686,6 +923,7 @@ pub async fn seed_all(
         tracing::warn!(error = %e, "demo seeder: ensure workspace membership failed");
     }
     seed_demo_resources(state, root).await;
+    seed_demo_assets(state, root).await;
     // A SubWorkflow demo can reference a CHILD demo whose directory sorts
     // AFTER it (e.g. `09-agent-tool-loop` -> `09b-collect-feedback`: `-` <
     // `b`, so the parent is attempted first and its child isn't published
@@ -1984,6 +2222,7 @@ mod tests {
             },
         );
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let known_globals = crate::compiler::named_global::globals_from_resources(&known);
         let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
             &demo.metadata.name,
@@ -1991,7 +2230,7 @@ mod tests {
             &files,
             CompileOptions {
                 inline_sources: &inline,
-                known_resources: &known,
+                known_globals: &known_globals,
                 ..Default::default()
             },
         )
@@ -2039,7 +2278,6 @@ mod tests {
     #[test]
     fn http_call_demo_loads_and_compiles_with_borrow() {
         use crate::compiler::node_files_inline;
-        use crate::compiler::resource_refs::KnownResources;
         use crate::compiler::{compile_to_air_with_options, CompileArtifacts, CompileOptions};
         use std::collections::HashMap;
 
@@ -2052,9 +2290,8 @@ mod tests {
         );
 
         let files = node_files_inline(&demo.files);
-        // HTTP binds no workspace resource — empty known map, like any
+        // HTTP binds no workspace resource — empty globals, like any
         // resource-free step.
-        let known = KnownResources::new();
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
         let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
@@ -2063,7 +2300,6 @@ mod tests {
             &files,
             CompileOptions {
                 inline_sources: &inline,
-                known_resources: &known,
                 ..Default::default()
             },
         )
@@ -2133,6 +2369,7 @@ mod tests {
             },
         );
         let inline: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let known_globals = crate::compiler::named_global::globals_from_resources(&known);
         let CompileArtifacts { air, .. } = compile_to_air_with_options(
             &demo.graph,
             &demo.metadata.name,
@@ -2140,7 +2377,7 @@ mod tests {
             &files,
             CompileOptions {
                 inline_sources: &inline,
-                known_resources: &known,
+                known_globals: &known_globals,
                 ..Default::default()
             },
         )

@@ -23,6 +23,8 @@ members = [
     "crates/executor-http",
     "crates/executor-python",
     "crates/executor-smtp",
+    "crates/executor-loki",
+    "crates/executor-prometheus",
 ]
 
 [workspace.package]
@@ -56,6 +58,8 @@ aithericon-executor-docker = { path = "crates/executor-docker" }
 aithericon-executor-http = { path = "crates/executor-http" }
 aithericon-executor-python = { path = "crates/executor-python" }
 aithericon-executor-smtp = { path = "crates/executor-smtp" }
+aithericon-executor-loki = { path = "crates/executor-loki" }
+aithericon-executor-prometheus = { path = "crates/executor-prometheus" }
 aithericon-secrets = { path = "../shared/secrets" }
 # Cross-crate backend metadata — the same `&'static [&BackendMeta]` slice
 # the mekhan compiler keys off. Driving `build_executor` from this list

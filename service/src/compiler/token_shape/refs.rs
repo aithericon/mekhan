@@ -109,6 +109,45 @@ fn is_ident(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
+/// True if `name` occurs in `src` as an identifier **head** — a standalone
+/// token (`metals_db`) or the root of a dotted / indexed access
+/// (`metals_db.density`, `metals_db[0]`) — but NOT as an attribute tail
+/// (`x.metals_db`) and NOT as a substring of a longer identifier
+/// (`metals_db_backup`).
+///
+/// This is the bare-reference complement to [`scan_dotted_refs`], which only
+/// yields a head when at least one `.<segment>` follows it. A collection asset
+/// is naturally used bare (`len(metals_db)`, `for m in metals_db`), so the
+/// dotted scanner misses it; named-global discovery and the borrow source scan
+/// step bodies with this against the *known* asset ref-keys, so only a curated
+/// library name (never an arbitrary local) is matched. Best-effort text scan —
+/// it does not strip strings/comments, so a ref-key named inside a string still
+/// matches (harmless: stages an unused asset).
+pub(crate) fn references_head_token(src: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let hay: Vec<char> = src.chars().collect();
+    let needle: Vec<char> = name.chars().collect();
+    let n = needle.len();
+    if hay.len() < n {
+        return false;
+    }
+    let mut i = 0;
+    while i + n <= hay.len() {
+        if hay[i..i + n] == needle[..] {
+            let before_ok = i == 0 || (!is_ident(hay[i - 1]) && hay[i - 1] != '.');
+            let after = i + n;
+            let after_ok = after >= hay.len() || !is_ident(hay[after]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Peek past whitespace + a comparison operator and classify the next literal.
 fn sniff_rhs_literal(b: &[char], mut i: usize) -> Option<LitTy> {
     while i < b.len() && b[i].is_whitespace() {
@@ -141,4 +180,42 @@ fn sniff_rhs_literal(b: &[char], mut i: usize) -> Option<LitTy> {
         return Some(LitTy::Number);
     }
     None
+}
+
+#[cfg(test)]
+mod head_token_tests {
+    use super::references_head_token;
+
+    #[test]
+    fn matches_bare_token() {
+        // The case the dotted scanner misses: a collection asset used bare.
+        assert!(references_head_token("material_count = len(metals_db)", "metals_db"));
+        assert!(references_head_token("for m in metals_db:\n    pass", "metals_db"));
+        assert!(references_head_token("metals_db", "metals_db"));
+    }
+
+    #[test]
+    fn matches_dotted_and_indexed_root() {
+        assert!(references_head_token("x = steel_spec.yield_strength", "steel_spec"));
+        assert!(references_head_token("first = metals_db[0]", "metals_db"));
+    }
+
+    #[test]
+    fn rejects_attribute_tail() {
+        // `metals_db` as an attribute of something else is NOT a head reference.
+        assert!(!references_head_token("x = other.metals_db", "metals_db"));
+    }
+
+    #[test]
+    fn rejects_longer_identifier() {
+        assert!(!references_head_token("x = metals_db_backup", "metals_db"));
+        assert!(!references_head_token("x = my_metals_db", "metals_db"));
+    }
+
+    #[test]
+    fn rejects_absent_and_empty() {
+        assert!(!references_head_token("x = len(rows)", "metals_db"));
+        assert!(!references_head_token("", "metals_db"));
+        assert!(!references_head_token("anything", ""));
+    }
 }

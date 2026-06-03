@@ -13,6 +13,7 @@
 	import type { LeaseRuntime } from '$lib/stores/instance-marking.svelte';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
+	import StepLogs from './StepLogs.svelte';
 	import Server from '@lucide/svelte/icons/server';
 	import Cpu from '@lucide/svelte/icons/cpu';
 
@@ -132,6 +133,43 @@
 	);
 	const nodeDescription = $derived<string | null>(
 		node?.data?.description ?? null
+	);
+
+	// ── Step-scoped logs ──────────────────────────────────────────────────────
+	// The `StepExecution` row has no execution_id of its own; it lives on the
+	// parked output envelope (executor-backed steps) and is the reliable key for
+	// scoping `hpi_logs` to this exact step+iteration. Derive it (+ the executor-
+	// reported log summary) so the Logs section can fetch precisely.
+	const stepOutputs = $derived<Record<string, unknown> | null>(
+		step?.outputs && typeof step.outputs === 'object'
+			? (step.outputs as Record<string, unknown>)
+			: null
+	);
+	const stepExecutionId = $derived<string | null>(
+		typeof stepOutputs?.execution_id === 'string' ? (stepOutputs.execution_id as string) : null
+	);
+	const stepLogsSummary = $derived.by<{ total: number | null; byLevel: Record<string, number> | null }>(() => {
+		const d = stepOutputs?.detail;
+		const logs =
+			d && typeof d === 'object' ? (d as Record<string, unknown>).logs : undefined;
+		if (!logs || typeof logs !== 'object') return { total: null, byLevel: null };
+		const l = logs as Record<string, unknown>;
+		return {
+			total: typeof l.total_entries === 'number' ? l.total_entries : null,
+			byLevel:
+				l.count_by_level && typeof l.count_by_level === 'object'
+					? (l.count_by_level as Record<string, number>)
+					: null
+		};
+	});
+	// Show the Logs section for executor-backed steps (those carry an
+	// execution_id or a reported log count); control-flow nodes (Start /
+	// Condition / End) have no executor logs, so we skip the section entirely
+	// rather than render an always-empty one.
+	const showStepLogs = $derived<boolean>(
+		!!instanceId &&
+			!!step?.started_at &&
+			(!!stepExecutionId || (stepLogsSummary.total ?? 0) > 0)
 	);
 
 	let configOpen = $state(false);
@@ -432,6 +470,29 @@
 					</section>
 				{/if}
 
+				{#if showStepLogs}
+					<!-- First-class, step+iteration-scoped logs for the selected node.
+					     Fetches `hpi_logs` narrowed to this step's execution_id (the
+					     reliable per-step key) over its time window — the same lines
+					     the Logs tab shows globally, but scoped to what's selected. -->
+					<section data-testid="step-logs">
+						<!-- Remount per step+iteration: the drawer reuses one drawer
+						     instance across node selections, so a fresh key resets the
+						     cached log lines for the newly-selected step. -->
+						{#key `${step.node_id}:${step.iteration_index}`}
+							<StepLogs
+								{instanceId}
+								executionId={stepExecutionId}
+								startedAt={step.started_at}
+								completedAt={step.completed_at}
+								expectedCount={stepLogsSummary.total}
+								countByLevel={stepLogsSummary.byLevel}
+								defaultOpen={(stepLogsSummary.total ?? 0) > 0}
+							/>
+						{/key}
+					</section>
+				{/if}
+
 				<section>
 					<h3 class="text-sm font-semibold text-foreground mb-2">
 						Inputs
@@ -494,7 +555,11 @@
 								nodeKind: step.node_kind,
 								instanceId,
 								stepStartedAt: step.started_at ?? undefined,
-								stepCompletedAt: step.completed_at ?? undefined
+								stepCompletedAt: step.completed_at ?? undefined,
+								// The drawer renders its own first-class Logs section
+								// above; tell the envelope not to also show its inline
+								// logs block (same execution → same lines).
+								suppressLogs: showStepLogs
 							}}
 						/>
 					{/if}

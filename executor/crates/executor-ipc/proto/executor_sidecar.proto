@@ -18,6 +18,13 @@ service ExecutorSidecar {
     // `for chunk in aithericon.chunks()` live-reducer loop. The stream ends
     // when an in-band EOF sentinel (`ChunkMessage{is_eof:true}`) is reached.
     rpc StreamChunks(StreamChunksRequest) returns (stream ChunkMessage);
+
+    // Inbound file retrieval: the child asks the sidecar (which holds storage
+    // credentials — the child does not) to download a storage-path object into
+    // the run directory and return its local path. Backs the Python SDK's
+    // `aithericon.File.retrieve()` — e.g. lazily fetching an asset record's
+    // `File`-field value (a storage path) only for the row the code selected.
+    rpc RetrieveFile(RetrieveFileRequest) returns (RetrieveFileResponse);
 }
 
 enum ArtifactCategory {
@@ -128,6 +135,20 @@ message ShutdownAckRequest {
 message SidecarResponse {
     ResponseStatus status = 1;
     string error_message = 2;
+}
+
+message RetrieveFileRequest {
+    // Storage path to fetch (an `InputSource::StoragePath` key — e.g. an asset
+    // record's `File`-field value).
+    string storage_path = 1;
+}
+
+message RetrieveFileResponse {
+    ResponseStatus status = 1;
+    string error_message = 2;
+    // Absolute local path the object was written to (under the run dir).
+    // Empty unless status == RESPONSE_STATUS_OK.
+    string local_path = 3;
 }
 
 // Request to open the inbound chunk feed. Carries no parameters — the

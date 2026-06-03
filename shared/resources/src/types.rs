@@ -99,6 +99,56 @@ pub struct Anthropic {
     pub base_url: Option<String>,
 }
 
+/// Grafana Loki HTTP API binding for the `loki` log-query backend. Bind it on
+/// a `loki` AutomatedStep (ConfigOverlay channel) so the executor reads the
+/// endpoint + optional auth from the staged `<alias>.json` and runs the step's
+/// LogQL query against it.
+///
+/// In-cluster Loki is frequently unauthenticated, so `token` is optional —
+/// absent means no `Authorization` header is sent. `org_id` is the
+/// multi-tenant `X-Scope-OrgID` header, also optional.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "loki", display_name = "Loki", icon = "lucide-scroll-text")]
+pub struct Loki {
+    /// Base URL of the Loki HTTP API, e.g. `http://localhost:3100` (no trailing
+    /// `/loki/api/...` — the backend appends the API path).
+    pub base_url: String,
+    /// Optional bearer token for gateway / Grafana Cloud auth. Vault-stored.
+    /// Absent → no Authorization header (in-cluster Loki is often unauthenticated).
+    #[serde(default)]
+    #[resource(secret)]
+    pub token: Option<String>,
+    /// Optional `X-Scope-OrgID` tenant header for multi-tenant Loki.
+    #[serde(default)]
+    pub org_id: Option<String>,
+}
+
+/// Prometheus HTTP API binding for the `prometheus` metrics-query backend. Bind
+/// it on a `prometheus` AutomatedStep (ConfigOverlay channel) so the executor
+/// reads the endpoint + optional auth from the staged `<alias>.json` and runs
+/// the step's PromQL query against it.
+///
+/// In-cluster Prometheus is frequently unauthenticated, so `token` is optional —
+/// absent means no `Authorization` header is sent. `org_id` is the multi-tenant
+/// `X-Scope-OrgID` header (Thanos/Cortex/Mimir), also optional.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(name = "prometheus", display_name = "Prometheus", icon = "lucide-activity")]
+pub struct Prometheus {
+    /// Base URL of the Prometheus HTTP API, e.g. `http://localhost:9090` (no
+    /// trailing `/api/v1/query` — the backend appends the API path).
+    pub base_url: String,
+    /// Optional bearer token for gateway / hosted-Prometheus auth. Vault-stored.
+    /// Absent → no Authorization header (in-cluster Prometheus is often
+    /// unauthenticated).
+    #[serde(default)]
+    #[resource(secret)]
+    pub token: Option<String>,
+    /// Optional `X-Scope-OrgID` tenant header for multi-tenant Prometheus
+    /// (Thanos/Cortex/Mimir).
+    #[serde(default)]
+    pub org_id: Option<String>,
+}
+
 /// Slack webhook target — v1 only supports incoming-webhook posting. Bot-
 /// token / OAuth Slack flows land in v2.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
@@ -341,11 +391,12 @@ pub enum Datacenter {
 /// Container image reference + optional registry pull credentials. For the
 /// container-staging pipeline (docs/22): a `Scheduled` job template binds a
 /// `container_image` resource; mekhan materializes `image_ref` to an Apptainer
-/// `.sif` on the cluster and runs the executor inside it. `image_ref` is a
-/// registry reference WITHOUT the transport prefix (e.g. `ghcr.io/org/img:tag`)
-/// — the engine prepends `docker://` when it pulls. The credential fields are
-/// Vault-stored and fed to `apptainer pull` via `--docker-login`
-/// (`APPTAINER_DOCKER_USERNAME` / `_PASSWORD`); both optional for public images.
+/// `.sif` on the cluster and runs the executor inside it. `image_ref` MUST carry
+/// the transport scheme (e.g. `docker://ghcr.io/org/img:tag`, `oras://…`,
+/// `library://…`) — the engine pulls it VERBATIM and the compiler derives the
+/// by-ref `.sif` stem from the same scheme-bearing ref (so the two agree). The
+/// credential fields are Vault-stored and fed to `apptainer pull` via
+/// `APPTAINER_DOCKER_USERNAME`/`_PASSWORD`; both optional for public images.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
 #[resource(
     name = "container_image",
@@ -353,9 +404,8 @@ pub enum Datacenter {
     icon = "lucide-package"
 )]
 pub struct ContainerImage {
-    /// Registry image reference without transport prefix, e.g.
-    /// `ghcr.io/org/img:tag` or `python:3.12-slim`. The engine pulls
-    /// `docker://<image_ref>`.
+    /// Registry image reference WITH transport scheme, e.g.
+    /// `docker://ghcr.io/org/img:tag` or `docker://python:3.12-slim`.
     pub image_ref: String,
     /// Registry username for private pulls. Vault-stored. Optional (public).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -365,6 +415,29 @@ pub struct ContainerImage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[resource(secret)]
     pub registry_password: Option<String>,
+}
+
+/// Presence-driven capacity pool (Phase 3). Like [`TokenPool`] it is a
+/// platform-owned, credential-less *contended-capacity* kind — but its capacity
+/// is NOT a configured count. Instead it is driven by **runner presence**: each
+/// live runner that checks in is admitted as one pool unit, and its unit is
+/// reaped when the runner's presence lease lapses. The backing net
+/// (`build_presence_pool_net`) seeds NOTHING; mekhan's presence controller
+/// injects/expires units. Therefore there is deliberately **no `capacity`
+/// field** — capacity is emergent, not declared. See `docs/20` + the Phase-3
+/// presence-lease design.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "presence_pool",
+    display_name = "Presence Pool",
+    icon = "lucide-radio-tower"
+)]
+pub struct PresencePool {
+    /// Optional human label for one unit (e.g. `"runner"`, `"GPU node"`).
+    /// Cosmetic — drives dashboard / picker copy, never admission (admission is
+    /// presence-driven). Symmetric with [`TokenPool::unit_label`].
+    #[serde(default)]
+    pub unit_label: Option<String>,
 }
 
 // ─── Kv — the dynamic-fields escape hatch ────────────────────────────────────

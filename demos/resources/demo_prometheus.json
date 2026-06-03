@@ -1,0 +1,8 @@
+{
+  "path": "demo_prometheus",
+  "resource_type": "prometheus",
+  "display_name": "Demo Prometheus (dev)",
+  "config": {
+    "base_url": "http://localhost:9090"
+  }
+}

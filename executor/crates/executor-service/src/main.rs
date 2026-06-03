@@ -33,18 +33,24 @@ use aithericon_executor_python::PythonBackend;
 use aithericon_executor_smtp::SmtpBackend;
 #[cfg(feature = "postgres")]
 use aithericon_executor_postgres::PostgresBackend;
+#[cfg(feature = "loki")]
+use aithericon_executor_loki::LokiBackend;
+#[cfg(feature = "prometheus")]
+use aithericon_executor_prometheus::PrometheusBackend;
 #[cfg(feature = "opendal")]
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 use aithericon_executor_worker::{
-    drain_signal, handle_execution, BackendRegistry, BatchRunner, CancellationRegistry,
-    ChunkRegistry, CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource,
-    Lifetime, NatsCancelListener, NatsChunkListener, NixEnvironmentHook, SidecarLogConfig,
-    StatusReporter,
+    drain_signal, handle_execution, spawn_presence_task, BackendRegistry, BatchRunner,
+    CancellationRegistry, ChunkRegistry, CompletionTracker, DrainConfig, ExecutorConfig,
+    JobExecutor, JobSource, Lifetime, NatsCancelListener, NatsChunkListener, NixEnvironmentHook,
+    SidecarLogConfig, StatusReporter,
 };
 use tokio_util::sync::CancellationToken;
+
+mod register;
 
 /// Connect to NATS, optionally using a credentials file.
 ///
@@ -117,13 +123,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match args.get(1).map(String::as_str) {
         #[cfg(feature = "python")]
         Some("warm-venv") => return warm_venv().await,
+        Some("register") => return register::register().await,
+        Some("refresh-creds") => return register::refresh_creds().await,
         Some("--help") | Some("-h") => {
-            println!("usage: aithericon-executor [warm-venv]");
+            println!("usage: aithericon-executor [warm-venv | register | refresh-creds]");
             println!();
             println!("Without arguments, runs as a worker. With `warm-venv`,");
             println!("populates the venv cache from $EXECUTOR_WARM_REQUIREMENTS");
             println!("and exits. See [python] config / EXECUTOR_PYTHON__* env vars");
             println!("for cache_dir and prefer_uv knobs.");
+            println!();
+            println!("With `register --url <mekhan> --token rt_... --name <n>`,");
+            println!("enrolls this executor into a mekhan lab-runner fleet and");
+            println!("persists the credential under {{base_dir}}/runner/.");
+            println!();
+            println!("With `refresh-creds --url <mekhan>`, mints/rotates this");
+            println!("runner's scoped NATS creds and writes {{base_dir}}/runner/runner.creds.");
             return Ok(());
         }
         Some(other) if other.starts_with("--") => {
@@ -185,6 +200,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cancel_http = config.cancel.http,
         target_exec_id = ?config.target_exec_id,
         consumer_mode = if config.target_exec_id.is_some() { "PerJob" } else { "Pool" },
+        runner_id = ?config.runner_id,
+        presence_interval_secs = config.presence_interval_secs,
         "configuration loaded"
     );
 
@@ -297,6 +314,25 @@ async fn run_nats_daemon(
     )
     .await?;
     info!("NATS chunk listener started");
+
+    // Phase 3 (presence-lease pool capacity): a registered runner advertises
+    // liveness so mekhan keeps its presence-pool unit alive. Reuses the daemon's
+    // already-connected, runner-scoped NATS client (no second connection) and
+    // the cancel/chunk-listener shutdown token. No-op for a non-enrolled daemon
+    // (no runner identity → no presence task), so behavior is unchanged there.
+    if let Some(runner_id) = config.runner_id.clone() {
+        spawn_presence_task(
+            nats_client_for_cancel.clone(),
+            runner_id.clone(),
+            config.presence_interval(),
+            cancel_shutdown.clone(),
+        );
+        info!(
+            %runner_id,
+            interval_secs = config.presence_interval_secs,
+            "runner presence heartbeat started"
+        );
+    }
 
     // Build the JobExecutor
     let executor = Arc::new(build_executor(
@@ -683,6 +719,16 @@ fn register_executor_backend(
         "postgres" => {
             info!("postgres backend registered");
             registry.register(PostgresBackend::new())
+        }
+        #[cfg(feature = "loki")]
+        "loki" => {
+            info!("loki backend registered");
+            registry.register(LokiBackend::new())
+        }
+        #[cfg(feature = "prometheus")]
+        "prometheus" => {
+            info!("prometheus backend registered");
+            registry.register(PrometheusBackend::new())
         }
         other => {
             info!(

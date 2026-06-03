@@ -70,6 +70,208 @@ pub fn register_pluck(engine: &mut Engine) {
     });
 }
 
+/// Register `satisfies(requirements, caps) -> bool` — the ClassAd-style
+/// requirements matcher used by presence-pool `t_grant` guards.
+///
+/// A presence-pool grant transition carries the Rhai guard
+/// `satisfies(claim.requirements, unit.caps)`. `claim.requirements` is the
+/// authored Step `Requirements` object (`#{ constraints: [ Constraint ] }`,
+/// or `#{}` when none) and `unit.caps` is the runner's advertised
+/// `capabilities` map (`#{ "<capability_name>": #{ "<field>": <value> } }`).
+///
+/// Semantics (must mirror the Phase-4 shared contract EXACTLY):
+/// - `requirements["constraints"]` is read as an array. Empty/absent ⇒ `true`
+///   (a step with no requirements matches any unit).
+/// - Each constraint is a map `#{ capability, field, op, value }`. We fetch
+///   `caps[capability]` (must itself be a Map) then `[field]` (a Dynamic):
+///     * `op == "exists"` ⇒ satisfied iff the field is present (any value);
+///     * any other `op` ⇒ the field must be present AND `op(field_value, value)`
+///       must hold. A missing capability or missing field ⇒ constraint fails.
+/// - Numeric comparisons (`gt`/`gte`/`lt`/`lte`) coerce INT⇄FLOAT (compared as
+///   `f64` when either side is numeric). `eq`/`neq` use deep value equality.
+///   `in` requires `value` to be an Array and `field_value` to be a member
+///   (by the same equality).
+/// - ALL constraints are AND-ed.
+/// - NEVER panics: any type surprise / missing data is treated as
+///   not-satisfied (`false`) for that constraint; only truly-empty constraints
+///   short-circuit to `true`.
+pub fn register_satisfies(engine: &mut Engine) {
+    engine.register_fn("satisfies", |requirements: Map, caps: Map| -> bool {
+        satisfies_impl(&requirements, &caps)
+    });
+}
+
+/// Deep equality between two Rhai `Dynamic` values, routed through JSON so
+/// numeric int/float that represent the same value compare equal and nested
+/// maps/arrays compare structurally. Any value that can't be lowered to JSON
+/// falls back to its string form. Never panics.
+fn dynamic_eq(a: &Dynamic, b: &Dynamic) -> bool {
+    // Fast path for numerics: coerce both to f64 when either is numeric so
+    // `5` (int) == `5.0` (float).
+    if let (Some(x), Some(y)) = (dynamic_as_f64(a), dynamic_as_f64(b)) {
+        return x == y;
+    }
+    dynamic_to_json_value(a) == dynamic_to_json_value(b)
+}
+
+/// Coerce a `Dynamic` to `f64` if it is an int or float; otherwise `None`.
+fn dynamic_as_f64(v: &Dynamic) -> Option<f64> {
+    if let Ok(i) = v.as_int() {
+        Some(i as f64)
+    } else {
+        v.as_float().ok()
+    }
+}
+
+/// Lower a `Dynamic` to `serde_json::Value` for structural equality. Standalone
+/// (not the `RhaiRuntime` method) so the matcher stays a free pure function;
+/// integers and floats both lower to JSON numbers so cross-type equality works.
+/// Unconvertible values fall back to their string form — never panics.
+fn dynamic_to_json_value(v: &Dynamic) -> JsonValue {
+    if v.is_unit() {
+        JsonValue::Null
+    } else if let Ok(b) = v.as_bool() {
+        JsonValue::Bool(b)
+    } else if let Ok(i) = v.as_int() {
+        JsonValue::Number(i.into())
+    } else if let Ok(f) = v.as_float() {
+        serde_json::Number::from_f64(f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null)
+    } else if v.is_string() {
+        JsonValue::String(v.clone().into_string().unwrap_or_default())
+    } else if v.is_array() {
+        let arr = v.clone().into_array().unwrap_or_default();
+        JsonValue::Array(arr.iter().map(dynamic_to_json_value).collect())
+    } else if v.is_map() {
+        let map: Map = v.clone().cast();
+        let mut obj = serde_json::Map::new();
+        for (k, val) in map.iter() {
+            obj.insert(k.to_string(), dynamic_to_json_value(val));
+        }
+        JsonValue::Object(obj)
+    } else {
+        JsonValue::String(v.to_string())
+    }
+}
+
+/// Evaluate a single constraint's operator against a present `field_value`.
+/// `op` is one of eq|neq|gt|gte|lt|lte|in (exists is handled by the caller).
+/// Unknown ops / type surprises ⇒ `false` (never panics).
+fn eval_op(op: &str, field_value: &Dynamic, expected: &Dynamic) -> bool {
+    match op {
+        "eq" => dynamic_eq(field_value, expected),
+        "neq" => !dynamic_eq(field_value, expected),
+        "gt" | "gte" | "lt" | "lte" => {
+            match (dynamic_as_f64(field_value), dynamic_as_f64(expected)) {
+                (Some(a), Some(b)) => match op {
+                    "gt" => a > b,
+                    "gte" => a >= b,
+                    "lt" => a < b,
+                    "lte" => a <= b,
+                    _ => false,
+                },
+                // Non-numeric operand on a numeric op ⇒ not satisfied.
+                _ => false,
+            }
+        }
+        "in" => {
+            // `value` must be an array; field_value must be a member by equality.
+            if !expected.is_array() {
+                return false;
+            }
+            let arr = expected.clone().into_array().unwrap_or_default();
+            arr.iter().any(|member| dynamic_eq(field_value, member))
+        }
+        // Unknown operator ⇒ not satisfied.
+        _ => false,
+    }
+}
+
+/// Pure matcher backing the registered `satisfies` fn. Separated so unit tests
+/// can exercise it directly with constructed Rhai `Map`s.
+fn satisfies_impl(requirements: &Map, caps: &Map) -> bool {
+    // Read `requirements["constraints"]` as an array; empty/absent ⇒ true.
+    let constraints = match requirements.get("constraints") {
+        Some(c) if c.is_array() => c.clone().into_array().unwrap_or_default(),
+        // Absent constraints key, or a non-array value, ⇒ no constraints ⇒ true.
+        _ => return true,
+    };
+    if constraints.is_empty() {
+        return true;
+    }
+
+    for c in &constraints {
+        // Each constraint must be a map; anything else ⇒ constraint fails.
+        if !c.is_map() {
+            return false;
+        }
+        let constraint: Map = c.clone().cast();
+
+        let capability = match constraint.get("capability").and_then(|d| {
+            if d.is_string() {
+                d.clone().into_string().ok()
+            } else {
+                None
+            }
+        }) {
+            Some(s) => s,
+            None => return false,
+        };
+        let field = match constraint.get("field").and_then(|d| {
+            if d.is_string() {
+                d.clone().into_string().ok()
+            } else {
+                None
+            }
+        }) {
+            Some(s) => s,
+            None => return false,
+        };
+        let op = match constraint.get("op").and_then(|d| {
+            if d.is_string() {
+                d.clone().into_string().ok()
+            } else {
+                None
+            }
+        }) {
+            Some(s) => s,
+            None => return false,
+        };
+
+        // Look up caps[capability] — must be a Map (malformed ⇒ not satisfied).
+        let cap_map = match caps.get(capability.as_str()) {
+            Some(cap) if cap.is_map() => cap.clone().cast::<Map>(),
+            // Missing capability, or a non-map value, ⇒ constraint fails.
+            _ => return false,
+        };
+
+        // Look up the field within the capability.
+        let field_value = cap_map.get(field.as_str());
+
+        if op == "exists" {
+            // Satisfied iff the field is present (any value).
+            if field_value.is_none() {
+                return false;
+            }
+            continue;
+        }
+
+        // All other ops require the field present AND op(field, value) holds.
+        let field_value = match field_value {
+            Some(v) => v,
+            None => return false,
+        };
+        let expected = constraint.get("value").cloned().unwrap_or(Dynamic::UNIT);
+        if !eval_op(op.as_str(), field_value, &expected) {
+            return false;
+        }
+    }
+
+    // All constraints satisfied.
+    true
+}
+
 /// A sandboxed Rhai runtime with JSON conversion utilities.
 ///
 /// Provides:
@@ -114,6 +316,12 @@ impl RhaiRuntime {
         // don't have to ship a script-side definition for every emit
         // site — see `register_pluck` for the migration rationale.
         register_pluck(&mut engine);
+
+        // Presence-pool requirements matcher. Registered on the SAME engine that
+        // `TransitionExecutor::new()` (and thus `binding.rs`'s guard-eval path)
+        // builds from `RhaiRuntime::new()`, so `satisfies(claim.requirements,
+        // unit.caps)` resolves when a presence-pool `t_grant` guard is evaluated.
+        register_satisfies(&mut engine);
 
         Self { engine }
     }
@@ -578,6 +786,244 @@ mod tests {
     /// user-defined version takes precedence over the native registration
     /// — proving the migration off the prelude is safe to roll out
     /// incrementally (old AIR untouched, new AIR doesn't ship the helper).
+    /// Helper: evaluate `satisfies(req, caps)` end-to-end through the actual
+    /// guard engine (the one `binding.rs` uses), with `req`/`caps` pushed into
+    /// scope exactly as `claim.requirements` / `unit.caps` would be at runtime.
+    fn satisfies_via_engine(req: JsonValue, caps: JsonValue) -> bool {
+        let runtime = RhaiRuntime::new();
+        let mut scope = Scope::new();
+        scope.push_dynamic("req", runtime.json_to_dynamic(&req));
+        scope.push_dynamic("caps", runtime.json_to_dynamic(&caps));
+        runtime
+            .engine()
+            .eval_with_scope::<bool>(&mut scope, "satisfies(req, caps)")
+            .expect("satisfies(...) must evaluate to a bool and never throw")
+    }
+
+    fn xrd_caps() -> JsonValue {
+        json!({ "xrd": { "max_2theta": 180.0, "source": "synchrotron", "detectors": 4 } })
+    }
+
+    fn one_constraint(capability: &str, field: &str, op: &str, value: JsonValue) -> JsonValue {
+        json!({ "constraints": [ { "capability": capability, "field": field, "op": op, "value": value } ] })
+    }
+
+    #[test]
+    fn satisfies_empty_constraints_is_true() {
+        // Truly-empty constraints array.
+        assert!(satisfies_via_engine(
+            json!({ "constraints": [] }),
+            xrd_caps()
+        ));
+        // Absent constraints key (the `#{}` no-requirements literal).
+        assert!(satisfies_via_engine(json!({}), xrd_caps()));
+        // Empty requirements still matches an empty caps map.
+        assert!(satisfies_via_engine(json!({}), json!({})));
+    }
+
+    #[test]
+    fn satisfies_eq_hit_and_miss() {
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "source", "eq", json!("synchrotron")),
+            xrd_caps()
+        ));
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "source", "eq", json!("lab")),
+            xrd_caps()
+        ));
+    }
+
+    #[test]
+    fn satisfies_neq_hit_and_miss() {
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "source", "neq", json!("lab")),
+            xrd_caps()
+        ));
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "source", "neq", json!("synchrotron")),
+            xrd_caps()
+        ));
+    }
+
+    #[test]
+    fn satisfies_gt_gte_lt_lte_hits_and_misses() {
+        // gt
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "gt", json!(100)),
+            xrd_caps()
+        ));
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "gt", json!(180)),
+            xrd_caps()
+        ));
+        // gte (boundary)
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "gte", json!(180)),
+            xrd_caps()
+        ));
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "gte", json!(181)),
+            xrd_caps()
+        ));
+        // lt
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "lt", json!(200)),
+            xrd_caps()
+        ));
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "lt", json!(180)),
+            xrd_caps()
+        ));
+        // lte (boundary)
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "lte", json!(180)),
+            xrd_caps()
+        ));
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "lte", json!(179)),
+            xrd_caps()
+        ));
+    }
+
+    #[test]
+    fn satisfies_int_vs_float_coercion() {
+        // requirement gte 140 (INT) vs caps max_2theta 180.0 (FLOAT) => true.
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "max_2theta", "gte", json!(140)),
+            xrd_caps()
+        ));
+        // eq across int/float: caps detectors 4 (int) == requirement 4.0 (float).
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "detectors", "eq", json!(4.0)),
+            xrd_caps()
+        ));
+    }
+
+    #[test]
+    fn satisfies_in_hit_and_miss() {
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "source", "in", json!(["lab", "synchrotron"])),
+            xrd_caps()
+        ));
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "source", "in", json!(["lab", "home"])),
+            xrd_caps()
+        ));
+        // numeric membership with int/float coercion (4 int member of [4.0,8.0]).
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "detectors", "in", json!([4.0, 8.0])),
+            xrd_caps()
+        ));
+        // `in` with a non-array value => not satisfied (never panics).
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "source", "in", json!("synchrotron")),
+            xrd_caps()
+        ));
+    }
+
+    #[test]
+    fn satisfies_exists_hit_and_miss() {
+        // exists on a present field => true (value ignored).
+        assert!(satisfies_via_engine(
+            one_constraint("xrd", "source", "exists", json!(null)),
+            xrd_caps()
+        ));
+        // exists on a missing field => false.
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "wavelength", "exists", json!(null)),
+            xrd_caps()
+        ));
+        // exists on a missing capability => false.
+        assert!(!satisfies_via_engine(
+            one_constraint("raman", "shift", "exists", json!(null)),
+            xrd_caps()
+        ));
+    }
+
+    #[test]
+    fn satisfies_missing_capability_is_false() {
+        // Capability the runner doesn't advertise at all.
+        assert!(!satisfies_via_engine(
+            one_constraint("raman", "laser_nm", "eq", json!(532)),
+            xrd_caps()
+        ));
+        // Against an entirely empty caps map.
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "source", "eq", json!("synchrotron")),
+            json!({})
+        ));
+    }
+
+    #[test]
+    fn satisfies_missing_field_is_false() {
+        // Capability present, field absent — non-exists op fails.
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "wavelength", "eq", json!(1.54)),
+            xrd_caps()
+        ));
+        // And exists on the same missing field is also false.
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "wavelength", "exists", json!(null)),
+            xrd_caps()
+        ));
+    }
+
+    #[test]
+    fn satisfies_malformed_caps_capability_is_false_not_panic() {
+        // caps[capability] is NOT a map (it's a scalar) => constraint fails,
+        // and crucially the call must NOT panic (eval_with_scope unwraps a bool).
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "source", "eq", json!("synchrotron")),
+            json!({ "xrd": "not-a-map" })
+        ));
+        // caps[capability] is an array => also not-a-map => false.
+        assert!(!satisfies_via_engine(
+            one_constraint("xrd", "source", "exists", json!(null)),
+            json!({ "xrd": [1, 2, 3] })
+        ));
+    }
+
+    #[test]
+    fn satisfies_all_constraints_anded() {
+        let req = json!({ "constraints": [
+            { "capability": "xrd", "field": "max_2theta", "op": "gte", "value": 140 },
+            { "capability": "xrd", "field": "source",     "op": "eq",  "value": "synchrotron" },
+            { "capability": "xrd", "field": "detectors",  "op": "exists", "value": null }
+        ] });
+        assert!(satisfies_via_engine(req, xrd_caps()));
+
+        // One failing constraint flips the whole AND to false.
+        let req_fail = json!({ "constraints": [
+            { "capability": "xrd", "field": "max_2theta", "op": "gte", "value": 140 },
+            { "capability": "xrd", "field": "source",     "op": "eq",  "value": "lab" }
+        ] });
+        assert!(!satisfies_via_engine(req_fail, xrd_caps()));
+    }
+
+    #[test]
+    fn satisfies_malformed_constraint_entries_are_false_not_panic() {
+        // A constraint that is not a map at all.
+        let runtime = RhaiRuntime::new();
+        let mut req = Map::new();
+        req.insert("constraints".into(), Dynamic::from(vec![Dynamic::from(42_i64)]));
+        let caps: Map = runtime.json_to_dynamic(&xrd_caps()).cast();
+        assert!(!satisfies_impl(&req, &caps));
+
+        // A constraint map missing the `op` key.
+        let mut bad = Map::new();
+        bad.insert("capability".into(), Dynamic::from("xrd"));
+        bad.insert("field".into(), Dynamic::from("source"));
+        let mut req2 = Map::new();
+        req2.insert("constraints".into(), Dynamic::from(vec![Dynamic::from(bad)]));
+        assert!(!satisfies_impl(&req2, &caps));
+
+        // A `constraints` value that is not even an array => treated as no
+        // constraints => true (matches anything).
+        let mut req3 = Map::new();
+        req3.insert("constraints".into(), Dynamic::from("nonsense"));
+        assert!(satisfies_impl(&req3, &caps));
+    }
+
     #[test]
     fn script_defined_pluck_shadows_native_with_identical_semantics() {
         let runtime = RhaiRuntime::new();

@@ -22,7 +22,10 @@ pub struct TypeSurface {
 /// gets full type surfacing here — feedback lands while editing, not at
 /// publish when it's too late. This is what `POST /api/v1/compile` (or a sibling
 /// `/api/v1/analyze`) should additionally return on every edit.
-pub fn surface_types(graph: &WorkflowGraph) -> TypeSurface {
+pub fn surface_types(
+    graph: &WorkflowGraph,
+    known_globals: &crate::compiler::named_global::KnownGlobals,
+) -> TypeSurface {
     // Resolve Agent `response_format` `$ref`s so the variable picker / scope
     // sees the schema's fields (not the default envelope) — the same pre-pass
     // the compile path runs. Best-effort: a draft mid-edit may carry a
@@ -31,7 +34,7 @@ pub fn surface_types(graph: &WorkflowGraph) -> TypeSurface {
     let normalized = crate::compiler::schema_refs::inline_agent_response_format_refs(graph)
         .unwrap_or(std::borrow::Cow::Borrowed(graph));
     let graph = normalized.as_ref();
-    match analyze(graph) {
+    match analyze(graph, known_globals) {
         Ok(r) => TypeSurface {
             place_schemas: r.place_schemas,
             scopes: r.scopes,
@@ -97,7 +100,7 @@ impl ScalarTy {
 pub fn node_input_field_kinds(
     graph: &WorkflowGraph,
 ) -> Result<std::collections::HashMap<String, BTreeMap<String, FieldKind>>, CompileError> {
-    let report = analyze(graph)?;
+    let report = analyze(graph, &Default::default())?;
     let mut out = std::collections::HashMap::new();
     for (nid, shape) in &report.node_in {
         let mut m: BTreeMap<String, FieldKind> = BTreeMap::new();
@@ -157,7 +160,7 @@ pub fn node_namespace_scopes(
     std::collections::HashMap<String, BTreeMap<String, BTreeMap<String, FieldKind>>>,
     CompileError,
 > {
-    let report = analyze(graph)?;
+    let report = analyze(graph, &Default::default())?;
     let slugs = slug_index(graph)?;
     let mut out: std::collections::HashMap<String, BTreeMap<String, BTreeMap<String, FieldKind>>> =
         std::collections::HashMap::new();

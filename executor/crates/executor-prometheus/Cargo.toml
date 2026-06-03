@@ -1,0 +1,34 @@
+[package]
+name = "aithericon-executor-prometheus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+aithericon-executor-backend-configs = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+
+# Serde
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Errors / observability
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# HTTP client + templating (mirrors executor-http's reqwest + Tera mechanics).
+reqwest = { workspace = true }
+tera = { version = "1", default-features = false }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = "3"

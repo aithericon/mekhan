@@ -35,7 +35,7 @@ nomad_jobs_dir := ".dev/nomad-jobs"
 # included so demo 07 (OCR + LLM classification) works out of the box —
 # first build pulls heavy pdfium deps, but the cached rebuild cost is
 # normal.
-executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,postgres,vault"
+executor_features := "docker,python,http,http-cancel,file-ops,opendal-s3,url-inputs,llm,kreuzberg,smtp,postgres,loki,prometheus,vault"
 
 # Local infra + daemon endpoints. These read the per-worktree env exported by
 # just/scripts/dev-ports.sh (via direnv / .envrc), falling back to the historical

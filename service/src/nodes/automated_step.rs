@@ -107,6 +107,7 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         deployment_model,
         stream_output,
         stream_input,
+        requirements,
         ..
     } = data
     else {
@@ -148,4 +149,16 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         "streamInput",
         json_value_to_any(&serde_json::Value::Bool(*stream_input)),
     );
+    // `requirements` is `Option<Requirements>` (`#[serde(default,
+    // skip_serializing_if = Option::is_none)]`). Like deploymentModel it must be
+    // written explicitly or the graph→Y.Doc seed (createTemplate / seeded demos)
+    // + the Y.Doc→graph reconstruction (`doc_to_graph`) would silently drop the
+    // authored placement constraints. Mirror the serde `skip_if_none`: write the
+    // serialized requirements ONLY when present so `None` round-trips as an
+    // absent key (which `doc_to_graph` reads back as `None`) — byte-identical to
+    // a step that never authored requirements.
+    if let Some(req) = requirements {
+        let req_val = serde_json::to_value(req).unwrap_or_default();
+        config.insert(txn, "requirements", json_value_to_any(&req_val));
+    }
 }

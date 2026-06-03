@@ -51,6 +51,30 @@ use utoipa::OpenApi;
             crate::models::resource::UpdateResourceRequest,
             crate::models::resource::RotateResourceRequest,
             crate::models::resource::ResourceAuditEntry,
+            // docs/20 — Asset layer DTOs. Request/response shapes for asset
+            // types + assets + records. Several appear only inside `Vec<_>` or
+            // as request bodies, so register them explicitly for frontend
+            // codegen. The schema field language reuses `PortField` wholesale.
+            crate::models::asset::ScopeKind,
+            crate::models::asset::Cardinality,
+            crate::models::asset::AssetTypeSummary,
+            crate::models::asset::AssetTypeDetail,
+            crate::models::asset::CreateAssetTypeRequest,
+            crate::models::asset::UpdateAssetTypeRequest,
+            crate::models::asset::AssetSummary,
+            crate::models::asset::AssetDetail,
+            crate::models::asset::CreateAssetRequest,
+            crate::models::asset::ReplaceRecordsRequest,
+            crate::models::asset::AssetUsageItem,
+            crate::handlers::assets::AssetFileUploadResponse,
+            crate::handlers::assets::CsvImportBody,
+            crate::handlers::assets::AssetFileUpload,
+            // The shared field language assets reuse — registered here because
+            // the asset DTOs are the first explicit referents (ports reach
+            // these transitively via template handler signatures).
+            crate::models::template::PortField,
+            crate::models::template::FieldKind,
+            crate::models::template::SelectOption,
             // Phase 3 (B-model) — Job-template CRUD DTOs. Nested types
             // (CommonSpec / EscapeHatch / TemplateParameter inside the version
             // shapes; TemplateStaging inside the detail + Vec<_> response) are
@@ -70,6 +94,39 @@ use utoipa::OpenApi;
             // the explicit-target request body.
             crate::models::image_materialization::ImageMaterialization,
             crate::handlers::container_images::MaterializeRequest,
+            // Phase 1 (Lab Runner Fleet) — runner + registration-token DTOs.
+            // The list/get bodies refer to the summaries via PaginatedResponse<_>
+            // / Vec<_>, which utoipa's auto-discovery doesn't fully walk, so
+            // register them explicitly for frontend codegen.
+            crate::models::runner::RunnerSummary,
+            crate::models::runner::RunnerDetail,
+            crate::models::runner::EnrollRequest,
+            crate::models::runner::EnrolledRunner,
+            crate::models::runner::RunnerNatsCreds,
+            crate::models::runner::CreateRegistrationTokenRequest,
+            crate::models::runner::CreatedRegistrationToken,
+            crate::models::runner::RegistrationTokenSummary,
+            // Phase 5 — live presence snapshot row. The handler returns it via
+            // `Vec<_>`, which utoipa's auto-discovery doesn't fully walk, so
+            // register it explicitly for frontend codegen.
+            crate::models::runner::RunnerPresenceSnapshot,
+            // Phase 4 (typed capability registry) — capability type DTOs +
+            // the CapabilityField sub-shape. The list/detail bodies refer to
+            // these via PaginatedResponse<_> / nested Vec<_>, which utoipa's
+            // auto-discovery doesn't fully walk, so register them explicitly
+            // for frontend codegen.
+            crate::models::capability::CapabilityField,
+            crate::models::capability::CapabilityTypeSummary,
+            crate::models::capability::CapabilityTypeDetail,
+            crate::models::capability::CreateCapabilityTypeRequest,
+            // Phase 4 (placement requirements) — the AutomatedStep `requirements`
+            // sub-shape. Nested inside WorkflowNodeData::AutomatedStep (carried
+            // over Yjs, not a direct request body), so register explicitly so
+            // frontend codegen emits the matching TS types for the editor's
+            // requirements authoring panel + the typed claim payload.
+            crate::models::template::Requirements,
+            crate::models::template::Constraint,
+            crate::models::template::ConstraintOp,
             // Executor backend config DTOs — the JSON shape each AutomatedStep
             // backend's `spec.config` carries. Registered so the SPA's generic
             // schema-driven config form can read them off the OpenAPI document
@@ -93,6 +150,11 @@ use utoipa::OpenApi;
             aithericon_executor_backend_configs::postgres::PostgresConfig,
             aithericon_executor_backend_configs::postgres::PgOperation,
             aithericon_executor_backend_configs::postgres::RlsContext,
+            aithericon_executor_backend_configs::loki::LokiConfig,
+            aithericon_executor_backend_configs::loki::LokiOperation,
+            aithericon_executor_backend_configs::loki::LokiDirection,
+            aithericon_executor_backend_configs::prometheus::PrometheusConfig,
+            aithericon_executor_backend_configs::prometheus::PrometheusOperation,
             aithericon_executor_backend_configs::kreuzberg::KreuzbergConfig,
             aithericon_executor_backend_configs::kreuzberg::ExtractionMode,
             aithericon_executor_backend_configs::kreuzberg::OcrSettings,
@@ -145,6 +207,7 @@ use utoipa::OpenApi;
         (name = "triggers", description = "Workflow triggers — cron/catalog/lifecycle/webhook/manual entry points."),
         (name = "auth-tokens", description = "Embedded per-user automation tokens (Zitadel-backed PATs)."),
         (name = "resources", description = "Typed credential CRUD (`postgres`, `openai`, `s3`, `slack`, `google_oauth`). Workflows bind aliases to resources at launch; secrets live in Vault."),
+        (name = "assets", description = "User-typed, curated static content (docs/20). Asset types are user-defined `PortField` schemas; assets are version-pinned, scope-owned collections of schema-validated JSONB records (+ S3 for File fields), consumed by nodes as staged inputs."),
         (name = "job-templates", description = "Versioned cluster job-spec entity (flavor-tagged `slurm`/`nomad`) — typed common spec + flavor escape hatch + declared parameters, staged onto datacenter resources. No secret coupling."),
         (name = "container-images", description = "Container image materialization onto datacenter clusters."),
         (name = "backends", description = "AutomatedStep backend registry — display metadata, default config, default output port, dispatch mode."),
@@ -156,6 +219,8 @@ use utoipa::OpenApi;
         (name = "users", description = "Directory lookups — email → OIDC subject resolver for member admin."),
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),
         (name = "clusters", description = "Multi-cluster scheduling control plane — live datacenter cluster clients (connection health, watcher state, active leases) + force-reconnect / drain (read-through of the engine `ClusterRegistry`)."),
+        (name = "runners", description = "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."),
+        (name = "capability-types", description = "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."),
     ),
 )]
 pub struct ApiDoc;

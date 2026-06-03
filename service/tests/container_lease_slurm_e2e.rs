@@ -218,6 +218,8 @@ fn container_leased_loop_graph(
                     retry_policy: Default::default(),
                     stream_output: false,
                     stream_input: false,
+                    requirements: None,
+                    asset_bindings: Vec::new(),
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: None,
                         job_template: slug.to_string(),

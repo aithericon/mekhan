@@ -1877,9 +1877,43 @@ pub struct TypeSurfaceResponse {
     tag = "templates",
 )]
 pub async fn analyze_graph(
+    State(state): State<AppState>,
+    _user: AuthUser,
     Json(body): Json<CompileRequest>,
 ) -> Result<Json<TypeSurfaceResponse>, ApiError> {
-    let s = crate::compiler::surface_types(&body.graph);
+    // Server-authoritative named-global registry: when the editor sends the
+    // draft's workspace (resources) / template (assets) ids, resolve them so the
+    // picker + diagnostics see `<resource>.<field>` / `<asset>.<field>` as a
+    // "Globals" scope rather than a false-unresolved error. This is the
+    // **registry-only** discovery half — no graph mutation, no DB writes. It must
+    // never 500 the analyze endpoint: a discovery failure (transient DB error,
+    // mid-edit draft) degrades to the empty registry (producer-only surface), so
+    // the editor keeps getting feedback on every keystroke.
+    let known_globals = if body.workspace_id.is_some() || body.template_id.is_some() {
+        // Registry-only: empty inline sources (no Python bodies on the editor
+        // path) and non-strict (a mid-edit draft must never hard-fail).
+        match crate::process::discover::discover_named_globals(
+            &state,
+            &body.graph,
+            body.workspace_id,
+            body.template_id,
+            &std::collections::HashMap::new(),
+            false,
+        )
+        .await
+        {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::warn!(
+                    "analyze named-global discovery failed (degrading to empty registry): {e:?}"
+                );
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
+    };
+    let s = crate::compiler::surface_types(&body.graph, &known_globals);
     let scopes = s
         .scopes
         .into_iter()

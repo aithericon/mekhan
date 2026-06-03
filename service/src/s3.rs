@@ -166,6 +166,38 @@ impl ArtifactStore {
         format!("templates/{template_id}/v{version}/{node_id}/node-config.json")
     }
 
+    /// Upload a file for an asset `File` field and return the S3 key.
+    /// Key format: `assets/{asset_id}/v{version}/{field}/{filename}`. The key
+    /// is publish-stable (immutable-per-version, like `upload_file`) so a
+    /// running instance pinned to `version` keeps resolving the same object
+    /// even after the asset is edited into a newer version (docs/20 §5/§6).
+    pub async fn upload_asset_file(
+        &self,
+        asset_id: Uuid,
+        version: i32,
+        field: &str,
+        filename: &str,
+        content: &[u8],
+        content_type: &str,
+    ) -> Result<String, ArtifactStoreError> {
+        let key = format!("assets/{asset_id}/v{version}/{field}/{filename}");
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .body(ByteStream::from(content.to_vec()))
+            .content_type(content_type)
+            .cache_control("immutable")
+            .send()
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("upload asset file {key}: {e}")))?;
+
+        tracing::debug!(key = %key, content_type = %content_type, "uploaded asset file to S3");
+
+        Ok(key)
+    }
+
     /// Retrieve a file from S3 by key. Returns (bytes, content_type).
     pub async fn get_file(&self, key: &str) -> Result<(Vec<u8>, String), ArtifactStoreError> {
         let resp = self

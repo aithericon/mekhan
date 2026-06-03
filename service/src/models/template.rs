@@ -218,6 +218,29 @@ pub struct Position {
     pub y: f64,
 }
 
+/// A node-level asset binding (docs/20 §5). Analogous to `resource_alias`:
+/// the author picks an asset by its scope-resolved `ref_key`, and the compiler
+/// stages the asset's whole record collection as an ordinary input the node
+/// reads under `alias` (`<alias>.json`). Business data never enters the control
+/// token — the records ride the same staging machinery as file inputs.
+///
+/// Whole-collection granularity only in v1 (the node does its own lookup in
+/// code). Author-picked-row / runtime-filter are deferred (docs/20 §9).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetBinding {
+    /// The staged-input name the node code reads (`<alias>.json`). Must be a
+    /// flat identifier so it doesn't collide with a producer slug / resource
+    /// name / control-token field. Defaults to `ref_key` when the author
+    /// doesn't override it.
+    pub alias: String,
+    /// The asset's scope-resolved flat ref-key (`steel`, `materials_db`).
+    /// Resolved at publish time through the scope resolver to a stable
+    /// `(asset_id, version)` pin baked into the AIR.
+    #[serde(rename = "refKey")]
+    pub ref_key: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkflowNodeData {
@@ -342,6 +365,29 @@ pub enum WorkflowNodeData {
         /// `#[serde(default)]` ⇒ existing templates round-trip unchanged.
         #[serde(rename = "streamInput", default)]
         stream_input: bool,
+        /// Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of
+        /// typed [`Constraint`]s over the pool unit's advertised `caps` (the
+        /// `runners.capabilities` blob keyed by capability name). At claim time
+        /// the compiler injects these into the claim payload as a Rhai literal
+        /// and the presence pool's `t_grant` guard
+        /// (`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner
+        /// whose caps satisfy every constraint. `None` (the default) ⇒ no
+        /// placement constraint (matches any unit) and the claim carries an
+        /// empty `#{ constraints: [] }`. Ignored on token_pool / Scheduled /
+        /// inline deployments (the claim there is unchanged; publish-time
+        /// validation still checks the constraint shapes). Plain
+        /// `#[serde(default, skip_serializing_if)]` ⇒ existing templates
+        /// round-trip unchanged (same precedent as `retry_policy` /
+        /// `deployment_model`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requirements: Option<Requirements>,
+        /// Node-level asset bindings (docs/20 §5). Each entry stages an asset's
+        /// whole record collection as an ordinary input (`<alias>.json`) the
+        /// node code reads. `#[serde(default)]` ⇒ existing templates (field
+        /// absent → empty) round-trip unchanged (same precedent as
+        /// `deployment_model`/`stream_output`).
+        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        asset_bindings: Vec<AssetBinding>,
     },
     #[serde(rename = "decision")]
     Decision {
@@ -748,6 +794,11 @@ pub enum WorkflowNodeData {
         /// admission is a follow-up (docs/12).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
+        /// Node-level asset bindings (docs/20 §5) — same field, defaults and
+        /// semantics as `AutomatedStep::asset_bindings`. The agent's inference
+        /// turns read the staged asset(s) as ordinary inputs.
+        #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
+        asset_bindings: Vec<AssetBinding>,
     },
     /// Calls another published template as a child net and returns its
     /// terminal result, correlated per invocation. Compiles (via
@@ -1791,6 +1842,47 @@ impl FieldKind {
     }
 }
 
+/// Phase 4 — placement Requirements authored on a PRESENCE-pooled
+/// `AutomatedStep`. A set of typed [`Constraint`]s over the runner-advertised
+/// `caps`. Empty `constraints` (the default) matches any pool unit. The engine
+/// matcher (`satisfies(requirements, caps)`) AND-s every constraint.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Requirements {
+    /// AND-ed constraints. Empty ⇒ matches anything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<Constraint>,
+}
+
+/// One placement constraint over a `<capability>.<field>` of a runner's
+/// advertised caps. `op == Exists` ignores `value`; every other op compares the
+/// present `caps[capability][field]` against `value` per [`ConstraintOp`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Constraint {
+    /// Capability name — must be a defined `capability_type` in the workspace.
+    pub capability: String,
+    /// Field within that capability's typed schema.
+    pub field: String,
+    pub op: ConstraintOp,
+    /// Comparison operand. Ignored when `op == Exists`. Defaults to `null`.
+    #[serde(default)]
+    pub value: serde_json::Value,
+}
+
+/// Comparison operator for a [`Constraint`]. Wire values are lowercase so they
+/// match the engine `satisfies` matcher's op strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ConstraintOp {
+    Eq,
+    Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    In,
+    Exists,
+}
+
 /// A single field within a typed `Port`. Identifier-like `name` is the wire
 /// key in the token; `label` is for display.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -2388,6 +2480,18 @@ pub struct CompileRequest {
     pub graph: WorkflowGraph,
     #[serde(default)]
     pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// Workspace the draft belongs to. When present, `POST /api/v1/analyze`
+    /// resolves workspace-scoped **resources** referenced by the graph so the
+    /// editor picker / diagnostics see resource public fields (`<resource>.<field>`)
+    /// as a known "Globals" scope instead of a false unresolved. Absent on the
+    /// stateless `/api/v1/compile` path (which has no DB context).
+    #[serde(default)]
+    pub workspace_id: Option<uuid::Uuid>,
+    /// Template the draft belongs to. When present, `/api/v1/analyze` resolves
+    /// template-visible **assets** referenced by the graph (`<asset>.<field>`)
+    /// into the same "Globals" scope.
+    #[serde(default)]
+    pub template_id: Option<uuid::Uuid>,
 }
 
 /// Git provenance recorded on a version published via `mekhan apply`.
@@ -2854,6 +2958,8 @@ pub mod dsl {
                         on_tool_error: a.on_tool_error,
                         retry_policy: a.retry_policy,
                         deployment_model: a.deployment_model.clone(),
+                        // DSL does not model asset bindings (yet).
+                        asset_bindings: Vec::new(),
                     })
                 }
                 "automated_step" => {
@@ -2913,6 +3019,9 @@ pub mod dsl {
                         stream_output: false,
                         // DSL does not model streaming input (reducer flag).
                         stream_input: false,
+                        requirements: None,
+                        // DSL does not model asset bindings (yet).
+                        asset_bindings: Vec::new(),
                     })
                 }
                 "decision" => {

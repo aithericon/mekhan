@@ -24,8 +24,14 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 shellexpand = "3"
+serde = { workspace = true }
 serde_json = { workspace = true }
 tower = { workspace = true }
+# `register` subcommand (Phase 1 — Lab Runner Fleet): clap for the CLI flags,
+# reqwest for the enroll POST, nkeys to generate the runner's NATS user nkey.
+clap = { workspace = true }
+reqwest = { workspace = true }
+nkeys = "0.4.5"
 axum = { workspace = true, optional = true }
 aithericon-executor-docker = { workspace = true, optional = true }
 aithericon-executor-http = { workspace = true, optional = true }
@@ -36,6 +42,8 @@ aithericon-executor-kreuzberg = { workspace = true, optional = true }
 aithericon-executor-surya = { workspace = true, optional = true }
 aithericon-executor-smtp = { workspace = true, optional = true }
 aithericon-executor-postgres = { workspace = true, optional = true }
+aithericon-executor-loki = { workspace = true, optional = true }
+aithericon-executor-prometheus = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
 # Shared backend metadata — drives `build_executor`'s registration loop.
 aithericon-backends = { workspace = true }
@@ -58,6 +66,8 @@ kreuzberg = ["dep:aithericon-executor-kreuzberg", "aithericon-executor-kreuzberg
 surya = ["dep:aithericon-executor-surya"]
 smtp = ["dep:aithericon-executor-smtp"]
 postgres = ["dep:aithericon-executor-postgres"]
+loki = ["dep:aithericon-executor-loki"]
+prometheus = ["dep:aithericon-executor-prometheus"]
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }

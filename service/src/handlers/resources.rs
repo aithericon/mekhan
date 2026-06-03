@@ -326,6 +326,19 @@ where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    // Record which secret fields actually got a value, so the resolver only
+    // emits `{{secret:…#field}}` templates for secrets that exist in Vault.
+    // Without this an optional secret left unset (e.g. a `loki` token) would
+    // be templated and fail firing-time resolution. See
+    // [`crate::petri::resource_resolver::SECRET_KEYS_MARKER`].
+    let mut public_config = public.clone();
+    let mut secret_keys: Vec<String> = secret.keys().cloned().collect();
+    secret_keys.sort();
+    public_config.insert(
+        crate::petri::resource_resolver::SECRET_KEYS_MARKER.to_string(),
+        Value::Array(secret_keys.into_iter().map(Value::String).collect()),
+    );
+
     let insert_version = sqlx::query(
         "INSERT INTO resource_versions \
             (resource_id, version, vault_path, public_config, created_by) \
@@ -334,7 +347,7 @@ where
     .bind(resource_id)
     .bind(version)
     .bind(vault_path)
-    .bind(Value::Object(public.clone()))
+    .bind(Value::Object(public_config))
     .bind(principal_id)
     .execute(db)
     .await;
@@ -470,6 +483,13 @@ pub async fn list_resources(
     user: AuthUser,
     Query(params): Query<ListResourcesQuery>,
 ) -> Result<Json<PaginatedResponse<ResourceSummary>>, ApiError> {
+    // docs/20 §2: when `?scope=` is present, resolve the downward-visible,
+    // most-specific-wins set across the binding context's owner scopes. Absent
+    // scope keeps the legacy flat `workspace_id` filter.
+    if let Some(scope_raw) = params.scope.as_deref() {
+        return list_resources_scoped(&state, &user, &params, scope_raw).await;
+    }
+
     let workspace_id = params
         .workspace_id
         .unwrap_or_else(|| caller_workspace(&user));
@@ -520,6 +540,138 @@ pub async fn list_resources(
     let dyn_keys = fetch_dynamic_keys(&state.db, &rows).await?;
     Ok(Json(PaginatedResponse {
         items: rows_to_summaries(rows, &dyn_keys),
+        total,
+        page: params.page,
+        per_page: params.per_page,
+    }))
+}
+
+/// Scope-resolved resource list (docs/20 §2). Fetches every resource owned by a
+/// scope in the binding context's downward-visible set, applies
+/// most-specific-wins (`template > project > workspace`), then optional
+/// type/folder filters. Used when `GET /api/v1/resources` carries `?scope=`.
+async fn list_resources_scoped(
+    state: &AppState,
+    user: &AuthUser,
+    params: &ListResourcesQuery,
+    scope_raw: &str,
+) -> Result<Json<PaginatedResponse<ResourceSummary>>, ApiError> {
+    use crate::models::asset::ScopeKind;
+    use crate::scope::{self, Scope, ScopedItem};
+
+    // Parse the scope token: `workspace`, `project:<uuid>`, `template:<uuid>`.
+    let (kind, scope_id) = {
+        let raw = scope_raw.trim();
+        if raw.is_empty() || raw == "workspace" {
+            (
+                ScopeKind::Workspace,
+                params
+                    .workspace_id
+                    .unwrap_or_else(|| caller_workspace(user)),
+            )
+        } else {
+            let (k, ids) = raw.split_once(':').ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "invalid scope '{raw}' — expected `workspace`, `project:<uuid>`, or `template:<uuid>`"
+                ))
+            })?;
+            let kind = ScopeKind::from_db(k)
+                .ok_or_else(|| ApiError::bad_request(format!("unknown scope kind '{k}'")))?;
+            let id = Uuid::parse_str(ids)
+                .map_err(|_| ApiError::bad_request(format!("scope id '{ids}' is not a uuid")))?;
+            (kind, id)
+        }
+    };
+
+    let visible = scope::visible_scopes_for(&state.db, kind, scope_id).await?;
+
+    // Gather candidates owned by any visible scope.
+    let mut kinds: Vec<String> = Vec::new();
+    let mut ids: Vec<Uuid> = Vec::new();
+    if let Some(ws) = visible.workspace {
+        kinds.push("workspace".to_string());
+        ids.push(ws);
+    }
+    for p in &visible.projects {
+        kinds.push("project".to_string());
+        ids.push(*p);
+    }
+    if let Some(t) = visible.template {
+        kinds.push("template".to_string());
+        ids.push(t);
+    }
+    if kinds.is_empty() {
+        return Ok(Json(PaginatedResponse {
+            items: Vec::new(),
+            total: 0,
+            page: params.page,
+            per_page: params.per_page,
+        }));
+    }
+
+    let rows = if let Some(ref ty) = params.resource_type {
+        sqlx::query_as::<_, ResourceRow>(
+            "SELECT * FROM resources \
+             WHERE deleted_at IS NULL AND resource_type = $3 \
+               AND (scope_kind, scope_id) IN (SELECT * FROM UNNEST($1::text[], $2::uuid[]))",
+        )
+        .bind(&kinds)
+        .bind(&ids)
+        .bind(ty)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as::<_, ResourceRow>(
+            "SELECT * FROM resources \
+             WHERE deleted_at IS NULL \
+               AND (scope_kind, scope_id) IN (SELECT * FROM UNNEST($1::text[], $2::uuid[]))",
+        )
+        .bind(&kinds)
+        .bind(&ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let items: Vec<ScopedItem<ResourceRow>> = rows
+        .into_iter()
+        .filter_map(|r| {
+            let kind = ScopeKind::from_db(&r.scope_kind)?;
+            let sid = r.scope_id?;
+            Some(ScopedItem {
+                scope: Scope { kind, id: sid },
+                ref_key: r.path.clone(),
+                item: r,
+            })
+        })
+        .collect();
+
+    let resolved = scope::resolve_visible(&visible, items)
+        .map_err(|c| ApiError::conflict(c.to_string()))?;
+
+    // Optional folder prefix filter on display_path.
+    let mut winning: Vec<ResourceRow> = resolved
+        .into_values()
+        .map(|si| si.item)
+        .filter(|r| match params.folder.as_deref() {
+            None => true,
+            Some(prefix) if prefix.is_empty() => true,
+            Some(prefix) => r
+                .display_path
+                .as_deref()
+                .map(|dp| dp == prefix || dp.starts_with(&format!("{prefix}/")))
+                .unwrap_or(false),
+        })
+        .collect();
+    winning.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let total = winning.len() as i64;
+    let offset = ((params.page - 1).max(0) * params.per_page).max(0) as usize;
+    let per = params.per_page.max(0) as usize;
+    let page_rows: Vec<ResourceRow> = winning.into_iter().skip(offset).take(per).collect();
+
+    let dyn_keys = fetch_dynamic_keys(&state.db, &page_rows).await?;
+    Ok(Json(PaginatedResponse {
+        items: rows_to_summaries(page_rows, &dyn_keys),
         total,
         page: params.page,
         per_page: params.per_page,
@@ -614,10 +766,15 @@ pub(crate) async fn create_resource_internal(
 
     // Lay down `resources` first — its UNIQUE(workspace_id, path) constraint
     // is the canonical conflict gate.
+    // docs/20 §2: every resource carries a polymorphic owner. v1 create is
+    // always workspace-scoped (scope_id = workspace_id); the project/template
+    // scopes are authored later. The transitional `workspace_id` column is kept
+    // in lockstep so legacy reads + the old unique constraint still work.
     let insert_resource = sqlx::query(
         "INSERT INTO resources \
-            (id, workspace_id, path, resource_type, display_name, latest_version, created_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            (id, workspace_id, path, resource_type, display_name, latest_version, created_by, \
+             scope_kind, scope_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'workspace', $2)",
     )
     .bind(resource_id)
     .bind(workspace_id)
@@ -722,6 +879,9 @@ pub(crate) async fn create_resource_internal(
 ///   (`allocator_url` from `public_config`; the token as a
 ///   `{{secret:<vault_path>#token}}` template the engine resolves at fire time —
 ///   `vault_path` from `(workspace_id, resource_id, version)`).
+/// - `presence_pool` → [`crate::petri::presence_pool_net::ensure_presence_pool_net_deployed`]
+///   (Phase 3; capacity-less — the net seeds nothing, so no config is read; the
+///   presence controller injects/expires units at runtime).
 async fn ensure_pool_net_for_kind(
     state: &AppState,
     resource_type: &str,
@@ -779,6 +939,18 @@ async fn ensure_pool_net_for_kind(
             };
 
             crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
+        }
+        "presence_pool" => {
+            // Phase 3: a presence pool is capacity-LESS — its backing net seeds
+            // nothing and reads no config. mekhan's presence controller injects
+            // one unit per live runner (presence_acquire) and reaps it on
+            // presence-lease expiry (presence_expired). Deploy is idempotent +
+            // engine-down-tolerant, exactly like the token_pool path.
+            crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
+                &state.petri,
+                resource_id,
+            )
+            .await;
         }
         _ => {}
     }

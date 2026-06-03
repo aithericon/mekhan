@@ -20,7 +20,10 @@ pub mod petri;
 pub mod process;
 pub mod projections;
 pub mod query;
+pub mod runners_nats;
+pub mod runners_presence;
 pub mod s3;
+pub mod scope;
 pub mod triggers;
 pub mod yjs;
 
@@ -102,6 +105,21 @@ pub struct AppState {
     /// persistence. The launcher never touches this — instances run against
     /// already-spliced AIR.
     pub resource_resolver: Arc<crate::petri::resource_resolver::ResourceResolver>,
+    /// Phase 2 (Lab Runner Fleet) — mints scoped per-runner NATS *user* JWTs
+    /// signed by the `runners`-account signing key. Always present: resolved
+    /// at startup (auto-generates + persists a stable dev seed on a miss).
+    pub runner_nats_signer: Arc<crate::runners_nats::RunnerNatsSigner>,
+    /// Phase 5 (Lab Runner Fleet) — shared handle to the presence controller's
+    /// in-memory `PresenceMap`. The same map the Phase-3 subscriber/sweep tasks
+    /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
+    /// capacity (which runners hold an admitted unit right now).
+    pub runner_presence: crate::runners_presence::RunnerPresence,
+    /// Publish-time asset resolver (docs/20 §5). Materializes the pinned
+    /// records of every node-bound asset into the JSON envelope the publish
+    /// handler splices into the AIR (`__assets`) before persistence. The
+    /// launcher never touches this — instances run against already-spliced AIR,
+    /// symmetric with `resource_resolver`.
+    pub asset_resolver: Arc<crate::petri::asset_resolver::AssetResolver>,
 }
 
 /// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
@@ -110,7 +128,12 @@ pub struct AppState {
 /// uptime monitors, or container orchestrators need to reach without a session
 /// cookie belongs here.
 fn build_public_openapi_router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::<AppState>::new().routes(routes!(handlers::health::liveness))
+    OpenApiRouter::<AppState>::new()
+        .routes(routes!(handlers::health::liveness))
+        // Runner enrollment — PUBLIC by design: authed by the `rt_`
+        // registration token in the body, not the session cookie, so a fresh
+        // runner can bootstrap its `rnr_` credential before it has one.
+        .routes(routes!(handlers::runners::enroll_runner))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -264,6 +287,73 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::rotate_resource))
         .routes(routes!(handlers::resources::list_resource_audit))
+        // Runners (Phase 1, Lab Runner Fleet) — workspace-scoped runner fleet
+        // + GitLab-style enrollment. `enroll` is mounted on the PUBLIC router
+        // (authed by the `rt_` token in the body); everything here is behind
+        // the auth gate. The literal `registration-tokens` routes are
+        // registered BEFORE `{id}` so matchit prefers the literal segment over
+        // the `{id}` wildcard (same trie-ordering caveat as templates'
+        // `apply-air`). Heartbeat is runner-token authed (the `rnr_` bearer
+        // resolves to a `runner:{id}` principal via require_auth_middleware).
+        .routes(routes!(
+            handlers::runners::create_registration_token,
+            handlers::runners::list_registration_tokens
+        ))
+        .routes(routes!(handlers::runners::revoke_registration_token))
+        // Phase 5 — live in-memory presence snapshot. Registered BEFORE the
+        // `{id}` routes so matchit prefers the literal `presence` segment over
+        // the `{id}` wildcard (same trie-ordering caveat as `registration-tokens`).
+        .routes(routes!(handlers::runners::runner_presence))
+        .routes(routes!(handlers::runners::list_runners))
+        .routes(routes!(handlers::runners::heartbeat_runner))
+        // Phase 2 — self-service NATS scoped-creds mint/rotation. Runner-token
+        // authed, self-only (subject == runner:{id}), same boundary as
+        // heartbeat. Mints a fresh user JWT from the stored nats_public_key.
+        .routes(routes!(handlers::runners::issue_runner_nats_creds))
+        .routes(routes!(
+            handlers::runners::get_runner,
+            handlers::runners::revoke_runner
+        ))
+        // Capability types (Phase 4 — typed capability registry). Admin-curated,
+        // workspace-scoped vocabulary the enroll path validates runner caps
+        // against and the publish path validates step Requirements against.
+        // List/create on the collection, get/revoke on `{id}`. Create + revoke
+        // are cookie-only (browser admin boundary, same as registration-token
+        // mint) so a machine token can't curate the vocabulary.
+        .routes(routes!(
+            handlers::capabilities::list_capability_types,
+            handlers::capabilities::create_capability_type
+        ))
+        .routes(routes!(
+            handlers::capabilities::get_capability_type,
+            handlers::capabilities::delete_capability_type
+        ))
+        // Assets (docs/20) — user-typed, curated static content. Asset TYPES
+        // are user-defined schemas (`Vec<PortField>`, additive-only evolution);
+        // ASSETS are version-pinned scope-owned collections of schema-validated
+        // JSONB records (+ S3 for File fields). Scope-resolved list endpoints
+        // (most-specific-wins, docs/20 §2). No Vault — record data is plain.
+        .routes(routes!(
+            handlers::assets::list_asset_types,
+            handlers::assets::create_asset_type
+        ))
+        .routes(routes!(
+            handlers::assets::get_asset_type,
+            handlers::assets::update_asset_type,
+            handlers::assets::delete_asset_type
+        ))
+        .routes(routes!(
+            handlers::assets::list_assets,
+            handlers::assets::create_asset
+        ))
+        .routes(routes!(
+            handlers::assets::get_asset,
+            handlers::assets::delete_asset
+        ))
+        .routes(routes!(handlers::assets::put_asset_records))
+        .routes(routes!(handlers::assets::import_asset_csv))
+        .routes(routes!(handlers::assets::upload_asset_file))
+        .routes(routes!(handlers::assets::asset_usage))
         // Job templates (Phase 3, B-model) — versioned cluster job-spec entity
         // (flavor-tagged slurm/nomad) + staging join. Mirrors the resources
         // CRUD + versioning pattern but with NO Vault coupling. DB-only.

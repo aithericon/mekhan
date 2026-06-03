@@ -13,6 +13,7 @@
 #   file-ops                                   (storage file ops backend)
 #   kreuzberg                                  (75+ format document extraction)
 #   smtp                                       (Tera-templated SMTP send)
+#   prometheus                                 (PromQL metrics query)
 #
 # Build context: the monorepo root (path dependencies on ../shared/*).
 #
@@ -100,7 +101,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cd /build/executor; \
     CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --release \
         --bin aithericon-executor-service \
-        --features "opendal-s3 opendal-gcs opendal-azblob url-inputs docker python http http-cancel llm vault file-ops kreuzberg surya smtp"; \
+        --features "opendal-s3 opendal-gcs opendal-azblob url-inputs docker python http http-cancel llm vault file-ops kreuzberg surya smtp postgres loki prometheus"; \
     mkdir -p /out; \
     cp target/release/aithericon-executor-service /out/aithericon-executor-service; \
     strip /out/aithericon-executor-service || true

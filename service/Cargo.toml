@@ -63,6 +63,12 @@ base64 = "0.22"
 # JWT validation (Zitadel adapter)
 jsonwebtoken = "9"
 
+# NATS user-JWT minting for the Lab Runner Fleet (Phase 2). `nats-io-jwt`
+# builds + signs scoped NATS *user* JWTs; `nkeys` (0.4.x, matching the version
+# async-nats pins transitively) provides the account signing keypair.
+nats-io-jwt = "0.1.1"
+nkeys = "0.4"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -92,6 +98,10 @@ aithericon-backends = { path = "../shared/backends" }
 # Path-format regex for the B.9 Resource CRUD validator
 # (`POST /api/v1/resources`).
 regex = "1"
+
+# CSV parsing for the asset-import endpoint
+# (`POST /api/v1/assets/{id}/import-csv`, docs/20 §8).
+csv = "1"
 
 schemars = "0.8"
 # Publish-time validation of `resourcePool.request` against a pool kind's

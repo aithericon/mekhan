@@ -28,6 +28,8 @@ import FileOpsConfigPanel from '$lib/components/editor/panels/property-sections/
 import KreuzbergConfigPanel from '$lib/components/editor/panels/property-sections/automated/KreuzbergConfigPanel.svelte';
 import SmtpConfigPanel from '$lib/components/editor/panels/property-sections/automated/SmtpConfigPanel.svelte';
 import PostgresConfigPanel from '$lib/components/editor/panels/property-sections/automated/PostgresConfigPanel.svelte';
+import LokiConfigPanel from '$lib/components/editor/panels/property-sections/automated/LokiConfigPanel.svelte';
+import PrometheusConfigPanel from '$lib/components/editor/panels/property-sections/automated/PrometheusConfigPanel.svelte';
 import CatalogueQueryConfigPanel from '$lib/components/editor/panels/property-sections/automated/CatalogueQueryConfigPanel.svelte';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -40,5 +42,7 @@ export const BACKEND_PANELS: Partial<Record<ExecutionBackendType, Component<any>
 	kreuzberg: KreuzbergConfigPanel,
 	smtp: SmtpConfigPanel,
 	postgres: PostgresConfigPanel,
+	loki: LokiConfigPanel,
+	prometheus: PrometheusConfigPanel,
 	catalogue_query: CatalogueQueryConfigPanel
 };
