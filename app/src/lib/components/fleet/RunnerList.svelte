@@ -1,11 +1,12 @@
 <script lang="ts">
-	// Fleet → Runner list, SPLIT INTO ITS GROUPS.
+	// Fleet → Runner list, split into its groups.
 	// On mount: load listRunners() + getRunnerPresence() + the runner_group
 	// resources, then groupFleet() into sections (one per backed group, then any
-	// unbacked aliases, then ungrouped). A runner's `group` is only meaningful
-	// when backed by a `runner_group` resource — that resource carries the
-	// presence-pool net the runner's unit is admitted into — so the enroll dialog
-	// only lets you pick an EXISTING group (or create one inline first).
+	// unbacked aliases, then ungrouped) — rendered via the shared GroupSectionHeader
+	// (same split as the Live board). A runner's `group` is only meaningful when
+	// backed by a `runner_group` resource — that resource carries the presence-pool
+	// net the runner's unit is admitted into — so the enroll dialog only lets you
+	// pick an EXISTING group (or create one inline first).
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -26,7 +27,6 @@
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Terminal from '@lucide/svelte/icons/terminal';
 	import Info from '@lucide/svelte/icons/info';
-	import RadioTower from '@lucide/svelte/icons/radio-tower';
 	import {
 		listRunners,
 		getRunner,
@@ -43,6 +43,11 @@
 	} from '$lib/api/runners';
 	import { listResources, createResource, type ResourceSummary } from '$lib/api/resources';
 	import { groupFleet, type FleetSection } from './grouping';
+	import { fmtMsAgo, fmtDate } from './format';
+	import StatusDot from './StatusDot.svelte';
+	import BackendChips from './BackendChips.svelte';
+	import GroupSectionHeader from './GroupSectionHeader.svelte';
+	import FleetEmpty from './FleetEmpty.svelte';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -232,19 +237,6 @@
 
 	// ── Formatting helpers ─────────────────────────────────────────────────────
 
-	function fmtDate(ts: string | null | undefined): string {
-		if (!ts) return '—';
-		const d = new Date(ts);
-		return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
-	}
-
-	function fmtMsAgo(ms: number): string {
-		if (ms < 2000) return 'just now';
-		if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
-		if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
-		return `${Math.round(ms / 3_600_000)}h ago`;
-	}
-
 	/** Produce a compact key=value capability summary string. */
 	function capsSummary(caps: Record<string, unknown> | null | undefined): string {
 		if (!caps) return '—';
@@ -334,80 +326,42 @@
 
 	<!-- ── Sectioned runner list (one block per group) ──────────────────────────── -->
 	{#if loading}
-		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
-			Loading…
-		</div>
+		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">Loading…</div>
 	{:else if runners.length === 0 && groups.length === 0}
-		<div
-			class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16"
-		>
-			<Server class="size-10 text-muted-foreground/40" />
-			<p class="mt-3 text-sm text-muted-foreground">No runners enrolled yet.</p>
-			<Button variant="outline" size="sm" class="mt-4 gap-1.5" onclick={openEnroll}>
-				<Plus class="size-4" />
-				Enroll your first runner
-			</Button>
-		</div>
+		<FleetEmpty message="No runners enrolled yet.">
+			{#snippet icon()}<Server class="size-10 text-muted-foreground/40" />{/snippet}
+			{#snippet action()}
+				<Button variant="outline" size="sm" class="gap-1.5" onclick={openEnroll}>
+					<Plus class="size-4" />
+					Enroll your first runner
+				</Button>
+			{/snippet}
+		</FleetEmpty>
 	{:else}
 		<div class="space-y-6">
 			{#each sections as section (section.kind + ':' + (section.alias ?? '∅'))}
 				{@const rows = shown(section)}
 				<section data-testid="group-section-{section.alias ?? 'ungrouped'}">
-					<!-- Section header -->
-					{#if section.kind === 'unbacked'}
-						<div
-							class="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
-						>
-							<TriangleAlert class="size-4 shrink-0 text-amber-600" />
-							<span class="font-medium text-amber-800 dark:text-amber-400">{section.alias}</span>
-							<Badge variant="outline" class="border-amber-500/50 text-amber-700 dark:text-amber-400"
-								>no pool · unbacked</Badge
-							>
-							<span class="text-xs text-amber-700/90 dark:text-amber-400/80">
-								These runners heartbeat but are admitted to no pool — no
-								<code class="font-mono">runner_group</code> resource backs this alias.
-							</span>
-							<Button
-								variant="outline"
-								size="sm"
-								class="ml-auto h-7 gap-1 border-amber-500/50 text-amber-800 hover:bg-amber-500/20 dark:text-amber-300"
-								onclick={() => section.alias && handleBackGroup(section.alias)}
-								disabled={backingGroup === section.alias}
-							>
-								<Plus class="size-3.5" />
-								{backingGroup === section.alias ? 'Creating…' : 'Create group'}
-							</Button>
-						</div>
-					{:else if section.kind === 'ungrouped'}
-						<div class="mb-2 flex items-center gap-2 border-b border-border pb-1.5">
-							<span class="text-sm font-semibold text-muted-foreground">Ungrouped</span>
-							<span class="text-xs text-muted-foreground">· not assigned to a group</span>
-						</div>
-					{:else}
-						<div class="mb-2 flex flex-wrap items-center gap-2 border-b border-border pb-1.5">
-							<RadioTower class="size-4 shrink-0 text-muted-foreground" />
-							<span class="text-sm font-semibold text-foreground">{section.alias}</span>
-							<Badge variant="outline" class="text-xs">pool ready</Badge>
-							<span class="text-xs text-muted-foreground tabular-nums">
-								{section.onlineCount}/{section.runners.length} online
-							</span>
-							{#if section.backends.length > 0}
-								<span class="ml-1 text-xs text-muted-foreground">covers</span>
-								<div class="flex flex-wrap gap-1">
-									{#each section.backends as be (be)}
-										<Badge
-											variant="outline"
-											class="px-1.5 py-0 text-[10px] font-normal text-muted-foreground">{be}</Badge
-										>
-									{/each}
-								</div>
+					<GroupSectionHeader {section}>
+						{#snippet action()}
+							{#if section.kind === 'unbacked'}
+								<Button
+									variant="outline"
+									size="sm"
+									class="h-8 gap-1 border-amber-500/50 text-amber-800 hover:bg-amber-500/20 dark:text-amber-300"
+									onclick={() => section.alias && handleBackGroup(section.alias)}
+									disabled={backingGroup === section.alias}
+								>
+									<Plus class="size-3.5" />
+									{backingGroup === section.alias ? 'Creating…' : 'Create group'}
+								</Button>
 							{/if}
-						</div>
-					{/if}
+						{/snippet}
+					</GroupSectionHeader>
 
 					<!-- Section rows -->
 					{#if rows.length === 0}
-						<p class="px-1 py-2 text-xs text-muted-foreground">
+						<p class="px-1 py-2 text-sm text-muted-foreground">
 							{#if section.runners.length === 0}
 								No runners enrolled in this group yet.
 							{:else}
@@ -428,11 +382,7 @@
 										<Tooltip.Provider>
 											<Tooltip.Root>
 												<Tooltip.Trigger>
-													<span
-														class="mt-1 inline-block size-2.5 shrink-0 rounded-full {online
-															? 'bg-emerald-500'
-															: 'bg-muted-foreground/30'}"
-													></span>
+													<StatusDot tone={online ? 'live' : 'idle'} class="mt-1" />
 												</Tooltip.Trigger>
 												<Tooltip.Content>
 													{#if online && snap}
@@ -447,18 +397,18 @@
 										<!-- Detail -->
 										<div class="min-w-0 flex-1">
 											<div class="flex flex-wrap items-center gap-2">
-												<span class="font-medium text-foreground">{runner.name}</span>
-												<Badge variant="outline">{runner.status}</Badge>
+												<span class="text-sm font-medium text-foreground">{runner.name}</span>
+												<Badge variant="outline" class="text-sm">{runner.status}</Badge>
 											</div>
-											<p class="mt-1 truncate font-mono text-xs text-muted-foreground">
+											<p class="mt-1 truncate font-mono text-sm text-muted-foreground">
 												{runner.id}
 											</p>
-											<p class="mt-0.5 truncate text-xs text-muted-foreground">
+											<p class="mt-0.5 truncate text-sm text-muted-foreground">
 												Caps: <span class="font-mono"
 													>{capsSummary(runner.capabilities as Record<string, unknown>)}</span
 												>
 											</p>
-											<p class="mt-0.5 truncate text-xs text-muted-foreground">
+											<p class="mt-0.5 truncate text-sm text-muted-foreground">
 												Enrolled {fmtDate(runner.enrolled_at)}
 											</p>
 										</div>
@@ -511,16 +461,16 @@
 						<div class="min-w-0 space-y-0.5">
 							<div class="flex flex-wrap items-center gap-2">
 								{#if token.group}
-									<Badge variant="secondary">{token.group}</Badge>
+									<Badge variant="secondary" class="text-sm">{token.group}</Badge>
 								{/if}
-								<Badge variant="outline">
+								<Badge variant="outline" class="text-sm">
 									{token.reusable ? 'reusable' : `1-shot · ${token.uses} used`}
 								</Badge>
 								{#if token.max_uses}
-									<span class="text-xs text-muted-foreground">max {token.max_uses}</span>
+									<span class="text-sm text-muted-foreground">max {token.max_uses}</span>
 								{/if}
 							</div>
-							<p class="text-xs text-muted-foreground">
+							<p class="text-sm text-muted-foreground">
 								Created {fmtDate(token.created_at)}
 								{#if token.expires_at}· Expires {fmtDate(token.expires_at)}{/if}
 							</p>
@@ -558,7 +508,7 @@
 				</SheetTitle>
 				<SheetDescription class="text-sm text-muted-foreground">
 					Mint a one-time registration token. Hand it to the executor — it enrolls itself using
-					<code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+					<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">
 						aithericon-executor register
 					</code>.
 				</SheetDescription>
@@ -573,7 +523,7 @@
 						Runner name
 					</label>
 					<Input id="enroll-name" bind:value={enrollName} required placeholder="e.g. gpu-node-01" />
-					<p class="text-xs text-muted-foreground">
+					<p class="text-sm text-muted-foreground">
 						Required — the generated <code>register</code> command needs
 						<code>--name</code>.
 					</p>
@@ -616,12 +566,12 @@
 							placeholder="new group name, e.g. gpu_lab"
 							data-testid="enroll-new-group"
 						/>
-						<p class="text-xs text-muted-foreground">
+						<p class="text-sm text-muted-foreground">
 							Creates a <code class="font-mono">runner_group</code> resource (snake_case) and deploys
 							its pool net before minting the token.
 						</p>
 					{:else}
-						<p class="text-xs text-muted-foreground">
+						<p class="text-sm text-muted-foreground">
 							A group must be backed by a <code class="font-mono">runner_group</code> resource — its
 							pool net is where the runner's unit is admitted.
 						</p>
@@ -707,7 +657,7 @@
 			{#if revealed}
 				<!-- Token secret -->
 				<div>
-					<p class="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token</p>
+					<p class="mb-1 text-sm font-medium uppercase tracking-wide text-muted-foreground">Token</p>
 					<div class="flex items-center gap-2">
 						<code
 							class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-sm text-foreground"
@@ -721,11 +671,11 @@
 
 				<!-- CLI enroll line -->
 				<div>
-					<p class="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+					<p class="mb-1 text-sm font-medium uppercase tracking-wide text-muted-foreground">
 						Ready-to-paste CLI command
 					</p>
 					<div class="flex items-start gap-2">
-						<code class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-xs text-foreground">
+						<code class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-sm text-foreground">
 							{cliLine(revealed.token, revealed.name, revealed.group)}
 						</code>
 						<CopyButton text={cliLine(revealed.token, revealed.name, revealed.group)} />
@@ -757,7 +707,7 @@
 					<Server class="size-4" />
 					{detail?.name ?? 'Runner'}
 				</SheetTitle>
-				<SheetDescription class="font-mono text-xs">{detail?.id}</SheetDescription>
+				<SheetDescription class="font-mono text-sm">{detail?.id}</SheetDescription>
 			</div>
 
 			{#if detailError}
@@ -773,7 +723,7 @@
 				{@const snap = presenceById[detail.id]}
 				<dl class="grid grid-cols-3 gap-x-3 gap-y-2 text-sm">
 					<dt class="text-muted-foreground">Status</dt>
-					<dd class="col-span-2"><Badge variant="outline">{detail.status}</Badge></dd>
+					<dd class="col-span-2"><Badge variant="outline" class="text-sm">{detail.status}</Badge></dd>
 
 					<dt class="text-muted-foreground">Online</dt>
 					<dd class="col-span-2">
@@ -786,22 +736,16 @@
 
 					<dt class="text-muted-foreground">Group</dt>
 					<dd class="col-span-2">
-						{#if detail.group}<Badge variant="secondary">{detail.group}</Badge>{:else}—{/if}
+						{#if detail.group}<Badge variant="secondary" class="text-sm">{detail.group}</Badge
+							>{:else}—{/if}
 					</dd>
 
 					<dt class="text-muted-foreground">Backends</dt>
 					<dd class="col-span-2">
-						{#if snap && (snap.backends?.length ?? 0) > 0}
-							<div class="flex flex-wrap gap-1">
-								{#each snap.backends ?? [] as be (be)}
-									<Badge variant="outline" class="text-xs font-normal">{be}</Badge>
-								{/each}
-							</div>
-						{:else}
-							<span class="text-muted-foreground"
-								>{snap?.present ? '—' : 'offline (advertised on connect)'}</span
-							>
-						{/if}
+						<BackendChips
+							backends={snap?.present ? (snap.backends ?? []) : []}
+							empty={snap?.present ? '—' : 'offline (advertised on connect)'}
+						/>
 					</dd>
 
 					<dt class="text-muted-foreground">Last seen</dt>
@@ -812,14 +756,14 @@
 
 					{#if detail.nats_public_key}
 						<dt class="text-muted-foreground">NATS key</dt>
-						<dd class="col-span-2 break-all font-mono text-xs">{detail.nats_public_key}</dd>
+						<dd class="col-span-2 break-all font-mono text-sm">{detail.nats_public_key}</dd>
 					{/if}
 				</dl>
 
 				<div class="space-y-1">
 					<h3 class="text-sm font-medium text-muted-foreground">Capabilities</h3>
 					<pre
-						class="max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs">{capsPretty(
+						class="max-h-72 overflow-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-sm">{capsPretty(
 							detail.capabilities
 						)}</pre>
 				</div>
