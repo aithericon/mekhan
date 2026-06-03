@@ -1,8 +1,11 @@
 <script lang="ts">
-	// Fleet → Runner list.
-	// On mount: load listRunners() + getRunnerPresence() and join by runner id.
-	// Mirrors ResourceList.svelte patterns: $effect-driven load, error box, empty
-	// state, hover actions. Reveal-once token Sheet clones AccessTokens.svelte.
+	// Fleet → Runner list, SPLIT INTO ITS GROUPS.
+	// On mount: load listRunners() + getRunnerPresence() + the runner_group
+	// resources, then groupFleet() into sections (one per backed group, then any
+	// unbacked aliases, then ungrouped). A runner's `group` is only meaningful
+	// when backed by a `runner_group` resource — that resource carries the
+	// presence-pool net the runner's unit is admitted into — so the enroll dialog
+	// only lets you pick an EXISTING group (or create one inline first).
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -23,6 +26,7 @@
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Terminal from '@lucide/svelte/icons/terminal';
 	import Info from '@lucide/svelte/icons/info';
+	import RadioTower from '@lucide/svelte/icons/radio-tower';
 	import {
 		listRunners,
 		getRunner,
@@ -37,27 +41,33 @@
 		type RegistrationTokenSummary,
 		type CreatedRegistrationToken
 	} from '$lib/api/runners';
+	import { listResources, createResource, type ResourceSummary } from '$lib/api/resources';
+	import { groupFleet, type FleetSection } from './grouping';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
 	let runners = $state<RunnerSummary[]>([]);
 	let presence = $state<RunnerPresenceSnapshot[]>([]);
+	let groups = $state<ResourceSummary[]>([]);
 	let tokens = $state<RegistrationTokenSummary[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
 	// Filters
-	let poolFilter = $state('');
 	let onlineFilter = $state<'all' | 'online'>('all');
 
 	// Revoke
 	let revoking = $state<string | null>(null);
 	let revokingToken = $state<string | null>(null);
+	let backingGroup = $state<string | null>(null);
 
-	// Enroll modal
+	// Enroll modal. `enrollGroupSel` is one of: '' (no group), an existing group
+	// alias, or the '__new__' sentinel (create a new group inline before minting).
+	const NEW_GROUP = '__new__';
 	let enrollOpen = $state(false);
 	let enrollName = $state('');
-	let enrollPool = $state('');
+	let enrollGroupSel = $state('');
+	let enrollNewGroup = $state('');
 	let enrollMaxUses = $state('');
 	let enrollReusable = $state(false);
 	let enrollExpiresAt = $state('');
@@ -74,26 +84,16 @@
 	// ── Derived ────────────────────────────────────────────────────────────────
 
 	/** Fast lookup: runner_id → presence snapshot */
-	const presenceById = $derived(
-		Object.fromEntries(presence.map((p) => [p.runner_id, p]))
-	);
+	const presenceById = $derived(Object.fromEntries(presence.map((p) => [p.runner_id, p])));
 
-	/** Distinct group values across all runners for the filter dropdown */
-	const allPools = $derived(
-		[...new Set(runners.map((r) => r.group).filter((p): p is string => !!p))].sort()
-	);
+	/** The fleet split into ordered sections (backed → unbacked → ungrouped). */
+	const sections = $derived(groupFleet(runners, presenceById, groups));
 
-	/** Filtered runner list */
-	const filteredRunners = $derived(
-		runners.filter((r) => {
-			if (poolFilter && r.group !== poolFilter) return false;
-			if (onlineFilter === 'online') {
-				const snap = presenceById[r.id];
-				if (!snap?.present) return false;
-			}
-			return true;
-		})
-	);
+	/** Apply the online-only filter to a section's runners for display. */
+	function shown(section: FleetSection): RunnerSummary[] {
+		if (onlineFilter !== 'online') return section.runners;
+		return section.runners.filter((r) => presenceById[r.id]?.present);
+	}
 
 	// ── Load ───────────────────────────────────────────────────────────────────
 
@@ -101,13 +101,15 @@
 		loading = true;
 		error = null;
 		try {
-			const [rPage, pSnaps, tPage] = await Promise.all([
+			const [rPage, pSnaps, gPage, tPage] = await Promise.all([
 				listRunners({ perPage: 200 }),
 				getRunnerPresence(),
+				listResources({ resource_type: 'runner_group', perPage: 200 }),
 				listRegistrationTokens({ perPage: 200 })
 			]);
 			runners = rPage.items;
 			presence = pSnaps;
+			groups = gPage.items;
 			tokens = tPage.items;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load runners';
@@ -140,7 +142,7 @@
 
 	async function handleRevokeToken(token: RegistrationTokenSummary) {
 		if (revokingToken) return;
-		if (!confirm('Revoke this registration token? Runners that haven\'t enrolled yet won\'t be able to use it.')) return;
+		if (!confirm("Revoke this registration token? Runners that haven't enrolled yet won't be able to use it.")) return;
 		revokingToken = token.id;
 		try {
 			await revokeRegistrationToken(token.id);
@@ -153,9 +155,26 @@
 		}
 	}
 
+	/** Back an UNBACKED group: create its `runner_group` resource (deploys the
+	    pool net), upgrading present-but-unadmitted runners on the next heartbeat. */
+	async function handleBackGroup(alias: string) {
+		if (backingGroup) return;
+		backingGroup = alias;
+		try {
+			await createResource({ path: alias, resource_type: 'runner_group', config: {} });
+			toast.success(`Group "${alias}" created — pool net deployed.`);
+			await load();
+		} catch (e) {
+			toast.error(`Could not create group: ${e instanceof Error ? e.message : e}`);
+		} finally {
+			backingGroup = null;
+		}
+	}
+
 	function openEnroll() {
 		enrollName = '';
-		enrollPool = '';
+		enrollGroupSel = '';
+		enrollNewGroup = '';
 		enrollMaxUses = '';
 		enrollReusable = false;
 		enrollExpiresAt = '';
@@ -167,8 +186,31 @@
 		if (enrolling) return;
 		enrolling = true;
 		try {
+			// Resolve the chosen group. Creating a new one deploys its pool net
+			// BEFORE the token is minted, so the backend's backed-group check passes
+			// and the enrolled runner is guaranteed a pool to be admitted into.
+			let group: string | undefined;
+			if (enrollGroupSel === NEW_GROUP) {
+				const path = enrollNewGroup.trim();
+				if (!path) {
+					toast.error('Enter a name for the new group.');
+					enrolling = false;
+					return;
+				}
+				try {
+					await createResource({ path, resource_type: 'runner_group', config: {} });
+				} catch (ce) {
+					// A 409 (already exists) is fine — reuse it; anything else aborts.
+					const msg = ce instanceof Error ? ce.message : String(ce);
+					if (!msg.includes('409')) throw ce;
+				}
+				group = path;
+			} else if (enrollGroupSel) {
+				group = enrollGroupSel;
+			}
+
 			const created = await createRegistrationToken({
-				group: enrollPool.trim() || undefined,
+				group,
 				// Always send the explicit checkbox value: the backend defaults an
 				// OMITTED `reusable` to `true`, so `enrollReusable || undefined` would
 				// silently mint a reusable token whenever the box is left unchecked.
@@ -177,7 +219,7 @@
 				expires_at: enrollExpiresAt ? `${enrollExpiresAt}T23:59:59Z` : undefined
 			});
 			// Stash the name/group alongside the revealed token so the CLI snippet can use them.
-			revealed = { ...created, name: enrollName.trim(), group: enrollPool.trim() };
+			revealed = { ...created, name: enrollName.trim(), group: group ?? '' };
 			enrollOpen = false;
 			toast.success('Token minted — copy it now.');
 			await load();
@@ -253,26 +295,6 @@
 <!-- ── Toolbar ──────────────────────────────────────────────────────────────── -->
 <div class="space-y-4" data-testid="runner-list">
 	<div class="flex flex-wrap items-center gap-3">
-		<!-- Group filter -->
-		<div class="flex items-center gap-2">
-			<span class="text-sm font-medium text-muted-foreground">Group</span>
-			<Select.Root
-				type="single"
-				value={poolFilter}
-				onValueChange={(v) => (poolFilter = v ?? '')}
-			>
-				<Select.Trigger class="h-9 min-w-[160px]">
-					{poolFilter || 'All groups'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="All groups" />
-					{#each allPools as p (p)}
-						<Select.Item value={p} label={p} />
-					{/each}
-				</Select.Content>
-			</Select.Root>
-		</div>
-
 		<!-- Online/all filter -->
 		<div class="flex items-center gap-2">
 			<span class="text-sm font-medium text-muted-foreground">Status</span>
@@ -310,106 +332,169 @@
 		</div>
 	{/if}
 
-	<!-- ── Runner table ────────────────────────────────────────────────────────── -->
+	<!-- ── Sectioned runner list (one block per group) ──────────────────────────── -->
 	{#if loading}
 		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
 			Loading…
 		</div>
-	{:else if filteredRunners.length === 0}
+	{:else if runners.length === 0 && groups.length === 0}
 		<div
 			class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16"
 		>
 			<Server class="size-10 text-muted-foreground/40" />
-			<p class="mt-3 text-sm text-muted-foreground">
-				{runners.length === 0 ? 'No runners enrolled yet.' : 'No runners match the current filters.'}
-			</p>
-			{#if runners.length === 0}
-				<Button variant="outline" size="sm" class="mt-4 gap-1.5" onclick={openEnroll}>
-					<Plus class="size-4" />
-					Enroll your first runner
-				</Button>
-			{/if}
+			<p class="mt-3 text-sm text-muted-foreground">No runners enrolled yet.</p>
+			<Button variant="outline" size="sm" class="mt-4 gap-1.5" onclick={openEnroll}>
+				<Plus class="size-4" />
+				Enroll your first runner
+			</Button>
 		</div>
 	{:else}
-		<div class="space-y-2">
-			{#each filteredRunners as runner (runner.id)}
-				{@const snap = presenceById[runner.id]}
-				{@const online = snap?.present ?? false}
-				<div
-					class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/40"
-					data-testid="runner-item-{runner.id}"
-				>
-					<div class="flex min-w-0 flex-1 items-start gap-3">
-						<!-- Online dot -->
-						<Tooltip.Provider>
-							<Tooltip.Root>
-								<Tooltip.Trigger>
-									<span
-										class="mt-1 inline-block size-2.5 shrink-0 rounded-full {online
-											? 'bg-emerald-500'
-											: 'bg-muted-foreground/30'}"
-									></span>
-								</Tooltip.Trigger>
-								<Tooltip.Content>
-									{#if online && snap}
-										Online · last heartbeat {fmtMsAgo(snap.last_seen_ms_ago)}
-									{:else}
-										Offline · last seen {fmtDate(runner.last_seen_at)}
-									{/if}
-								</Tooltip.Content>
-							</Tooltip.Root>
-						</Tooltip.Provider>
-
-						<!-- Detail -->
-						<div class="min-w-0 flex-1">
-							<div class="flex flex-wrap items-center gap-2">
-								<span class="font-medium text-foreground">{runner.name}</span>
-								{#if runner.group}
-									<Badge variant="secondary">{runner.group}</Badge>
-								{/if}
-								<Badge variant="outline">{runner.status}</Badge>
-							</div>
-							<p class="mt-1 truncate font-mono text-xs text-muted-foreground">
-								{runner.id}
-							</p>
-							<p class="mt-0.5 truncate text-xs text-muted-foreground">
-								Caps: <span class="font-mono"
-									>{capsSummary(runner.capabilities as Record<string, unknown>)}</span
-								>
-							</p>
-							<p class="mt-0.5 truncate text-xs text-muted-foreground">
-								Enrolled {fmtDate(runner.enrolled_at)}
-							</p>
+		<div class="space-y-6">
+			{#each sections as section (section.kind + ':' + (section.alias ?? '∅'))}
+				{@const rows = shown(section)}
+				<section data-testid="group-section-{section.alias ?? 'ungrouped'}">
+					<!-- Section header -->
+					{#if section.kind === 'unbacked'}
+						<div
+							class="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+						>
+							<TriangleAlert class="size-4 shrink-0 text-amber-600" />
+							<span class="font-medium text-amber-800 dark:text-amber-400">{section.alias}</span>
+							<Badge variant="outline" class="border-amber-500/50 text-amber-700 dark:text-amber-400"
+								>no pool · unbacked</Badge
+							>
+							<span class="text-xs text-amber-700/90 dark:text-amber-400/80">
+								These runners heartbeat but are admitted to no pool — no
+								<code class="font-mono">runner_group</code> resource backs this alias.
+							</span>
+							<Button
+								variant="outline"
+								size="sm"
+								class="ml-auto h-7 gap-1 border-amber-500/50 text-amber-800 hover:bg-amber-500/20 dark:text-amber-300"
+								onclick={() => section.alias && handleBackGroup(section.alias)}
+								disabled={backingGroup === section.alias}
+							>
+								<Plus class="size-3.5" />
+								{backingGroup === section.alias ? 'Creating…' : 'Create group'}
+							</Button>
 						</div>
-					</div>
+					{:else if section.kind === 'ungrouped'}
+						<div class="mb-2 flex items-center gap-2 border-b border-border pb-1.5">
+							<span class="text-sm font-semibold text-muted-foreground">Ungrouped</span>
+							<span class="text-xs text-muted-foreground">· not assigned to a group</span>
+						</div>
+					{:else}
+						<div class="mb-2 flex flex-wrap items-center gap-2 border-b border-border pb-1.5">
+							<RadioTower class="size-4 shrink-0 text-muted-foreground" />
+							<span class="text-sm font-semibold text-foreground">{section.alias}</span>
+							<Badge variant="outline" class="text-xs">pool ready</Badge>
+							<span class="text-xs text-muted-foreground tabular-nums">
+								{section.onlineCount}/{section.runners.length} online
+							</span>
+							{#if section.backends.length > 0}
+								<span class="ml-1 text-xs text-muted-foreground">covers</span>
+								<div class="flex flex-wrap gap-1">
+									{#each section.backends as be (be)}
+										<Badge
+											variant="outline"
+											class="px-1.5 py-0 text-[10px] font-normal text-muted-foreground">{be}</Badge
+										>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
 
-					<!-- Hover actions -->
-					<div
-						class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
-					>
-						<Button
-							variant="ghost"
-							size="sm"
-							class="text-muted-foreground"
-							onclick={() => openDetail(runner.id)}
-							title="Runner details"
-						>
-							<Info class="size-3.5" />
-							Details
-						</Button>
-						<Button
-							variant="ghost"
-							size="sm"
-							class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-							onclick={() => handleRevoke(runner)}
-							disabled={revoking === runner.id}
-							title="Revoke runner"
-						>
-							<Trash2 class="size-3.5" />
-							{revoking === runner.id ? 'Revoking…' : 'Revoke'}
-						</Button>
-					</div>
-				</div>
+					<!-- Section rows -->
+					{#if rows.length === 0}
+						<p class="px-1 py-2 text-xs text-muted-foreground">
+							{#if section.runners.length === 0}
+								No runners enrolled in this group yet.
+							{:else}
+								No online runners in this group.
+							{/if}
+						</p>
+					{:else}
+						<div class="space-y-2">
+							{#each rows as runner (runner.id)}
+								{@const snap = presenceById[runner.id]}
+								{@const online = snap?.present ?? false}
+								<div
+									class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/40"
+									data-testid="runner-item-{runner.id}"
+								>
+									<div class="flex min-w-0 flex-1 items-start gap-3">
+										<!-- Online dot -->
+										<Tooltip.Provider>
+											<Tooltip.Root>
+												<Tooltip.Trigger>
+													<span
+														class="mt-1 inline-block size-2.5 shrink-0 rounded-full {online
+															? 'bg-emerald-500'
+															: 'bg-muted-foreground/30'}"
+													></span>
+												</Tooltip.Trigger>
+												<Tooltip.Content>
+													{#if online && snap}
+														Online · last heartbeat {fmtMsAgo(snap.last_seen_ms_ago)}
+													{:else}
+														Offline · last seen {fmtDate(runner.last_seen_at)}
+													{/if}
+												</Tooltip.Content>
+											</Tooltip.Root>
+										</Tooltip.Provider>
+
+										<!-- Detail -->
+										<div class="min-w-0 flex-1">
+											<div class="flex flex-wrap items-center gap-2">
+												<span class="font-medium text-foreground">{runner.name}</span>
+												<Badge variant="outline">{runner.status}</Badge>
+											</div>
+											<p class="mt-1 truncate font-mono text-xs text-muted-foreground">
+												{runner.id}
+											</p>
+											<p class="mt-0.5 truncate text-xs text-muted-foreground">
+												Caps: <span class="font-mono"
+													>{capsSummary(runner.capabilities as Record<string, unknown>)}</span
+												>
+											</p>
+											<p class="mt-0.5 truncate text-xs text-muted-foreground">
+												Enrolled {fmtDate(runner.enrolled_at)}
+											</p>
+										</div>
+									</div>
+
+									<!-- Hover actions -->
+									<div
+										class="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100"
+									>
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-muted-foreground"
+											onclick={() => openDetail(runner.id)}
+											title="Runner details"
+										>
+											<Info class="size-3.5" />
+											Details
+										</Button>
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+											onclick={() => handleRevoke(runner)}
+											disabled={revoking === runner.id}
+											title="Revoke runner"
+										>
+											<Trash2 class="size-3.5" />
+											{revoking === runner.id ? 'Revoking…' : 'Revoke'}
+										</Button>
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</section>
 			{/each}
 		</div>
 	{/if}
@@ -487,32 +572,63 @@
 					>
 						Runner name
 					</label>
-					<Input
-						id="enroll-name"
-						bind:value={enrollName}
-						required
-						placeholder="e.g. gpu-node-01"
-					/>
+					<Input id="enroll-name" bind:value={enrollName} required placeholder="e.g. gpu-node-01" />
 					<p class="text-xs text-muted-foreground">
 						Required — the generated <code>register</code> command needs
 						<code>--name</code>.
 					</p>
 				</div>
 
-				<div class="grid gap-3 sm:grid-cols-2">
-					<div class="space-y-1">
-						<label
-							for="enroll-pool"
-							class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
-						>
-							Group <span class="normal-case">(optional)</span>
-						</label>
+				<!-- Group: pick an existing runner_group, none, or create one inline. -->
+				<div class="space-y-1">
+					<label
+						for="enroll-group"
+						class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
+					>
+						Group
+					</label>
+					<Select.Root
+						type="single"
+						value={enrollGroupSel}
+						onValueChange={(v) => (enrollGroupSel = v ?? '')}
+					>
+						<Select.Trigger id="enroll-group" class="h-9 w-full" data-testid="enroll-group-select">
+							{#if enrollGroupSel === NEW_GROUP}
+								Create new group…
+							{:else if enrollGroupSel}
+								{enrollGroupSel}
+							{:else}
+								No group
+							{/if}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No group" />
+							{#each groups as g (g.id)}
+								<Select.Item value={g.path} label={g.path} />
+							{/each}
+							<Select.Item value={NEW_GROUP} label="＋ Create new group…" />
+						</Select.Content>
+					</Select.Root>
+					{#if enrollGroupSel === NEW_GROUP}
 						<Input
-							id="enroll-pool"
-							bind:value={enrollPool}
-							placeholder="e.g. gpu"
+							class="mt-1"
+							bind:value={enrollNewGroup}
+							placeholder="new group name, e.g. gpu_lab"
+							data-testid="enroll-new-group"
 						/>
-					</div>
+						<p class="text-xs text-muted-foreground">
+							Creates a <code class="font-mono">runner_group</code> resource (snake_case) and deploys
+							its pool net before minting the token.
+						</p>
+					{:else}
+						<p class="text-xs text-muted-foreground">
+							A group must be backed by a <code class="font-mono">runner_group</code> resource — its
+							pool net is where the runner's unit is admitted.
+						</p>
+					{/if}
+				</div>
+
+				<div class="grid gap-3 sm:grid-cols-2">
 					<div class="space-y-1">
 						<label
 							for="enroll-max"
@@ -528,9 +644,6 @@
 							placeholder="unlimited"
 						/>
 					</div>
-				</div>
-
-				<div class="grid gap-3 sm:grid-cols-2">
 					<div class="space-y-1">
 						<label
 							for="enroll-expires"
@@ -540,17 +653,16 @@
 						</label>
 						<Input id="enroll-expires" type="date" bind:value={enrollExpiresAt} />
 					</div>
-					<div class="flex items-end gap-2 pb-1">
-						<input
-							id="enroll-reusable"
-							type="checkbox"
-							bind:checked={enrollReusable}
-							class="size-4 rounded border-border"
-						/>
-						<label for="enroll-reusable" class="text-sm text-muted-foreground">
-							Reusable token
-						</label>
-					</div>
+				</div>
+
+				<div class="flex items-center gap-2">
+					<input
+						id="enroll-reusable"
+						type="checkbox"
+						bind:checked={enrollReusable}
+						class="size-4 rounded border-border"
+					/>
+					<label for="enroll-reusable" class="text-sm text-muted-foreground"> Reusable token </label>
 				</div>
 
 				<div class="flex gap-2 pt-1">
@@ -595,9 +707,7 @@
 			{#if revealed}
 				<!-- Token secret -->
 				<div>
-					<p class="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-						Token
-					</p>
+					<p class="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token</p>
 					<div class="flex items-center gap-2">
 						<code
 							class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-sm text-foreground"
@@ -615,9 +725,7 @@
 						Ready-to-paste CLI command
 					</p>
 					<div class="flex items-start gap-2">
-						<code
-							class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-xs text-foreground"
-						>
+						<code class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-xs text-foreground">
 							{cliLine(revealed.token, revealed.name, revealed.group)}
 						</code>
 						<CopyButton text={cliLine(revealed.token, revealed.name, revealed.group)} />
@@ -670,9 +778,7 @@
 					<dt class="text-muted-foreground">Online</dt>
 					<dd class="col-span-2">
 						{#if snap?.present}
-							<span class="text-emerald-600"
-								>● online · {fmtMsAgo(snap.last_seen_ms_ago)}</span
-							>
+							<span class="text-emerald-600">● online · {fmtMsAgo(snap.last_seen_ms_ago)}</span>
 						{:else}
 							<span class="text-muted-foreground">○ offline</span>
 						{/if}

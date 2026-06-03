@@ -57,6 +57,36 @@ fn is_safe_group(group: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Whether a live `runner_group` resource named `alias` exists in `workspace_id`.
+///
+/// A runner's `group` is only meaningful if it is BACKED by a `runner_group`
+/// resource: that resource is what carries the presence-pool net
+/// (`pool-<resource_id>`, deployed at resource-create) the presence controller
+/// admits the runner's unit into. Without it, a heartbeating runner is tracked
+/// "liveness-only" and is never admitted to any capacity pool — a silent
+/// dangling reference. We forbid minting a registration token for an unbacked
+/// group so the dangling reference can't be created at its source; the operator
+/// must create the group (a `runner_group` resource) first. Matches the same
+/// `(workspace_id, path, resource_type='runner_group', deleted_at IS NULL)`
+/// lookup `runners_presence::resolve_pool_net_id` uses, so the gate and the
+/// runtime admission agree on what "the group exists" means.
+async fn runner_group_exists(
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    alias: &str,
+) -> Result<bool, ApiError> {
+    let found: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT id FROM resources \
+         WHERE workspace_id = $1 AND path = $2 AND resource_type = 'runner_group' \
+           AND deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(alias)
+    .fetch_optional(db)
+    .await?;
+    Ok(found.is_some())
+}
+
 // ── Query params ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -546,6 +576,18 @@ pub async fn create_registration_token(
             return Err(ApiError::bad_request(
                 "group must be a single token of [A-Za-z0-9_-] (no '.', '*', '>', or whitespace)",
             ));
+        }
+        // A group is only meaningful when BACKED by a `runner_group` resource —
+        // that resource carries the presence-pool net a runner's unit is
+        // admitted into. Reject minting a token for an unbacked group so we
+        // never enroll a runner that heartbeats but is admitted to no pool
+        // (the silent dangling reference). The operator creates the group
+        // (a `runner_group` resource) first; the UI offers that inline.
+        if !runner_group_exists(&state.db, workspace_id, group).await? {
+            return Err(ApiError::bad_request(format!(
+                "no runner group '{group}' exists in this workspace — create the group \
+                 (a `runner_group` resource) first, then mint a token for it"
+            )));
         }
     }
 

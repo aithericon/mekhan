@@ -1,0 +1,129 @@
+// Fleet grouping — the one place the "split the fleet into its groups" logic
+// lives, shared by the Runners list and the Live board so they can't drift.
+//
+// A runner's `group` is an alias string. It is only meaningful when BACKED by a
+// `runner_group` *resource* (the thing that carries the presence-pool net the
+// runner's unit is admitted into). This helper joins the three live inputs —
+// the runners, their presence snapshot, and the `runner_group` resources — into
+// ordered sections an operator can read at a glance:
+//
+//   1. backed     — one per `runner_group` resource (shown even with 0 members,
+//                    so a created-but-empty group is visible), sorted by alias.
+//   2. unbacked    — a group alias some runner carries that resolves to NO
+//                    resource → NO pool net → those runners heartbeat but are
+//                    admitted to nothing. Surfaced loudly; should be unreachable
+//                    via the UI now that token-mint requires a backing group,
+//                    but legacy rows (or a deleted group resource) land here.
+//   3. ungrouped   — runners with no group at all (last).
+//
+// Backend-coverage + online counts are computed from the live presence snapshot
+// (only a PRESENT runner advertises backends / counts as online).
+import type { RunnerSummary, RunnerPresenceSnapshot } from '$lib/api/runners';
+import type { ResourceSummary } from '$lib/api/resources';
+
+export type FleetSectionKind = 'backed' | 'unbacked' | 'ungrouped';
+
+export interface FleetSection {
+	kind: FleetSectionKind;
+	/** Group alias (the `runner_group` resource path); `null` for the ungrouped bucket. */
+	alias: string | null;
+	/** The backing `runner_group` resource — present only for `kind === 'backed'`. */
+	resource: ResourceSummary | null;
+	/** Runners in this section. */
+	runners: RunnerSummary[];
+	/** How many of this section's runners are currently present (online). */
+	onlineCount: number;
+	/** Union of executor backends advertised by this section's PRESENT runners. */
+	backends: string[];
+}
+
+type PresenceById = Record<string, RunnerPresenceSnapshot | undefined>;
+
+/**
+ * Group the fleet into ordered sections. Pure — no Svelte, no fetching.
+ *
+ * @param runners        all enrolled runners (each may carry a `group` alias)
+ * @param presenceById   runner_id → live presence snapshot (for online + backends)
+ * @param groupResources the `runner_group` resources (the backed groups)
+ */
+export function groupFleet(
+	runners: RunnerSummary[],
+	presenceById: PresenceById,
+	groupResources: ResourceSummary[]
+): FleetSection[] {
+	// alias → backing resource (a `runner_group` resource's `path` is its alias).
+	const resourceByAlias = new Map<string, ResourceSummary>();
+	for (const r of groupResources) resourceByAlias.set(r.path, r);
+
+	// Bucket runners by their group alias (null → ungrouped).
+	const byAlias = new Map<string | null, RunnerSummary[]>();
+	for (const runner of runners) {
+		const key = runner.group ?? null;
+		const bucket = byAlias.get(key);
+		if (bucket) bucket.push(runner);
+		else byAlias.set(key, [runner]);
+	}
+
+	const onlineOf = (rs: RunnerSummary[]) =>
+		rs.filter((r) => presenceById[r.id]?.present).length;
+	const backendsOf = (rs: RunnerSummary[]) => {
+		const set = new Set<string>();
+		for (const r of rs) {
+			const snap = presenceById[r.id];
+			if (!snap?.present) continue;
+			for (const be of snap.backends ?? []) set.add(be);
+		}
+		return [...set].sort();
+	};
+
+	const backed: FleetSection[] = [];
+	const unbacked: FleetSection[] = [];
+
+	// Backed: one per resource (sorted by alias), even when it has no members.
+	const backedAliases = [...resourceByAlias.keys()].sort();
+	for (const alias of backedAliases) {
+		const rs = byAlias.get(alias) ?? [];
+		backed.push({
+			kind: 'backed',
+			alias,
+			resource: resourceByAlias.get(alias) ?? null,
+			runners: rs,
+			onlineCount: onlineOf(rs),
+			backends: backendsOf(rs)
+		});
+	}
+
+	// Unbacked: a runner's alias that has no backing resource. Sorted by alias.
+	const unbackedAliases = [...byAlias.keys()]
+		.filter((k): k is string => k !== null && !resourceByAlias.has(k))
+		.sort();
+	for (const alias of unbackedAliases) {
+		const rs = byAlias.get(alias) ?? [];
+		unbacked.push({
+			kind: 'unbacked',
+			alias,
+			resource: null,
+			runners: rs,
+			onlineCount: onlineOf(rs),
+			backends: backendsOf(rs)
+		});
+	}
+
+	// Ungrouped (last) — only when some runner carries no group.
+	const ungroupedRunners = byAlias.get(null) ?? [];
+	const ungrouped: FleetSection[] =
+		ungroupedRunners.length > 0
+			? [
+					{
+						kind: 'ungrouped',
+						alias: null,
+						resource: null,
+						runners: ungroupedRunners,
+						onlineCount: onlineOf(ungroupedRunners),
+						backends: backendsOf(ungroupedRunners)
+					}
+				]
+			: [];
+
+	return [...backed, ...unbacked, ...ungrouped];
+}
