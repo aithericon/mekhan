@@ -1,8 +1,9 @@
 # 22 — Container Staging: Materialize OCI → Apptainer `.sif`, Run the Executor Inside It on HPC Slurm
 
-Status: **PARTIALLY BUILT** (grilled + Phases 1–3 built offline-green 2026-06-02; compiler frag +
-materialize trigger now built offline-green; **Phase 4 live Slurm e2e pending**). Extends the staging
-pipeline from
+Status: **BUILT; live-proven through materialize + lease-acquire + apptainer-wrap on 2026-06-03**. The
+final in-container exec is blocked only by Apple Silicon amd64 emulation on the dev cluster (apptainer
+exec ⇒ EINVAL); it runs on a native x86_64 Linux cluster. See "Live Phase 4 run" below. Extends the
+staging pipeline from
 [20-control-plane-gaps](20-control-plane-gaps.md) to carry a *run environment* — an OCI image
 materialized to an Apptainer/Singularity `.sif` on the cluster — and to run the drain executor
 **inside** that container on its allocation. Builds on
@@ -65,9 +66,30 @@ Phase 4 infra built (offline; live run pending):
   executor is `apptainer exec`-wrapped (ps probe), all N iterations drain in-container, and the per-image
   venv cache warms.
 
-Pending:
-- **Live Phase 4 run** — `just dev slurm-up` (slot-5 worktree) + run `container_lease_slurm_e2e`
-  `--ignored`; tune assertions against real apptainer behavior. Needs the user's live env.
+Live Phase 4 run (2026-06-03) — proven up to in-container exec; blocked there by Apple Silicon emulation:
+- **PROVEN live** on `just dev slurm-up` (slot-5): publish fires `resolve_container_specs` +
+  `auto_materialize_images`; the `materialize_image` effect runs `apptainer pull docker://python:3.12-slim`
+  on the login node → content-addressed `.sif` + by-ref symlink; `image_materializations` → `ready`; the
+  lease acquires (one held salloc) and the drain-executor srun is `apptainer exec`-wrapped with the
+  resolved binds; apptainer **creates** the container (squashfuse mounts).
+- **BLOCKED at `apptainer exec`** of the container process: `exec … failed: invalid argument`. The dev
+  Slurm container is `linux/amd64` under Docker Desktop Rosetta/qemu on the arm64 Mac; apptainer's fresh
+  mount/user namespace doesn't inherit the emulation's binfmt interpreter, so exec of any amd64 binary
+  inside the `.sif` fails (`/bin/true` too), while the container's own amd64 processes run fine. This is
+  an emulation limitation, NOT a code defect — it runs on a native x86_64 Linux cluster (the real target).
+- **Live findings fixed along the way** (all committed): the `materialize_image` SSH ran the pull
+  synchronously and the long-held channel was dropped mid-pull (watcher polling + CPU-heavy squashfs) →
+  reworked to **launch-detached + poll a log** (`render_apptainer_pull_launch` / `materialize_log_path` /
+  `parse_materialize_done`); a **double `docker://`** (script hard-coded the scheme onto an already-scheme
+  ed `image_ref`) → pull `image_ref` verbatim; the compiler emitted **non-existent bind sources**
+  (`/tmp/petri-scratch`, `/shared/venv-cache/<ref>`) → apptainer requires bind sources to exist, trimmed
+  to the provisioned `/opt/petri` tree (covers `bin`/`aithericon-sdk`/`templates`); the e2e's `slurm_ssh`
+  used a CWD-relative key path → anchored to `CARGO_MANIFEST_DIR`.
+
+Pending (real-cluster or arm64-native dev cluster):
+- Run `container_lease_slurm_e2e` to green on a native x86_64 cluster (or convert the dev cluster to
+  arm64-native: arm64 slurm image + `aarch64-unknown-linux-musl` executor + arm64 image pull → no
+  emulation). The latter is a sizable infra change; the former just needs a real cluster.
 
 ### v1 caveat — no dispatch readiness gate
 

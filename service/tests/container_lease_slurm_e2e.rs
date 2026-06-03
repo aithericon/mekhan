@@ -44,6 +44,17 @@
 //!       -- --ignored --test-threads=1 --nocapture
 //!
 //! `#[ignore]` so the default lane (no live stack) skips it. Run serially.
+//!
+//! ── Apple Silicon limitation ──
+//!
+//! Needs a NATIVE x86_64 Linux cluster for the in-container assertions. On an
+//! arm64 Mac the dev Slurm container is `linux/amd64` under Docker Desktop's
+//! Rosetta/qemu emulation; `apptainer pull` + `.sif` conversion work, and the
+//! `apptainer exec` wrap launches, but exec of the container's amd64 process
+//! fails with `exec … failed: invalid argument` — apptainer's fresh mount/user
+//! namespace doesn't inherit the emulation's binfmt interpreter. The materialize
+//! + lease-acquire + apptainer-wrap path is fully exercised up to that exec; the
+//! in-container execution itself only runs on a real x86_64 host.
 
 mod common;
 
@@ -321,8 +332,12 @@ async fn net_running(net_id: &str) -> bool {
 /// SSH into the dev Slurm container and run `remote_cmd`; returns stdout (panics
 /// on non-zero so a missing prerequisite is loud).
 fn slurm_ssh(remote_cmd: &str) -> String {
-    let key = std::env::var("TEST_SLURM_SSH_KEY")
-        .unwrap_or_else(|_| "engine/infra/slurm/ssh/slurm_test".to_string());
+    // Absolute by default: `cargo test` runs the binary with CWD = the package
+    // dir (service/), so a repo-relative path misses. Mirror the PEM read's
+    // CARGO_MANIFEST_DIR anchor.
+    let key = std::env::var("TEST_SLURM_SSH_KEY").unwrap_or_else(|_| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../engine/infra/slurm/ssh/slurm_test").to_string()
+    });
     let out = Command::new("ssh")
         .args([
             "-o",

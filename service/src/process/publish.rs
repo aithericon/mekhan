@@ -782,13 +782,18 @@ fn build_container_spec(image_ref: &str, nv: bool) -> crate::compiler::CompilerC
     use crate::compiler::container_ref;
     crate::compiler::CompilerContainerSpec {
         sif_path: container_ref::by_ref_sif_path(image_ref),
-        binds: vec![
-            "/opt/petri/bin".into(),
-            "/opt/petri/aithericon-sdk".into(),
-            "/opt/petri/bin/uv".into(),
-            "/tmp/petri-scratch".into(),
-            container_ref::venv_cache_bind(image_ref),
-        ],
+        // Bind the whole provisioned `/opt/petri` tree (one bind, one existing
+        // source): the static `executor` binary + `uv` (`bin/`), the Python SDK
+        // (`aithericon-sdk/`), AND the lease-executor entry script the wrapped
+        // srun runs as `/bin/bash /opt/petri/templates/…` (`templates/`). apptainer
+        // REQUIRES every bind source to already exist (unlike Docker), so we emit
+        // only provisioned paths — NOT runtime-created scratch/venv dirs. The
+        // executor writes its work dir + venvs to the container's own /tmp, which
+        // persists across iterations within the single long-lived drain executor
+        // (warm reuse for free); a per-image cross-LEASE venv cache via
+        // `/shared/venv-cache/<ref>` is a v1 follow-up (it also needs
+        // EXECUTOR_PYTHON__CACHE_DIR pointed at the bound path).
+        binds: vec!["/opt/petri".into()],
         nv,
     }
 }
@@ -1452,16 +1457,7 @@ mod container_spec_tests {
     fn spec_shape_matches_engine_contract() {
         let spec = build_container_spec("python:3.12-slim", false);
         assert_eq!(spec.sif_path, "/shared/sif/by-ref/python_3_12_slim.sif");
-        assert_eq!(
-            spec.binds,
-            vec![
-                "/opt/petri/bin".to_string(),
-                "/opt/petri/aithericon-sdk".to_string(),
-                "/opt/petri/bin/uv".to_string(),
-                "/tmp/petri-scratch".to_string(),
-                "/shared/venv-cache/python_3_12_slim".to_string(),
-            ]
-        );
+        assert_eq!(spec.binds, vec!["/opt/petri".to_string()]);
         assert!(!spec.nv);
         // serde_json field names must match the engine's ContainerSpec exactly.
         let v = serde_json::to_value(&spec).unwrap();

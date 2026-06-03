@@ -146,37 +146,6 @@ impl SlurmAllocatorClient {
         }
     }
 
-    /// As [`Self::exec`] but with an explicit per-call timeout. The session's
-    /// default `command_timeout_secs` (~60s) is tuned for quick allocator
-    /// commands (`salloc`/`squeue`/`scancel`) and is too short for an
-    /// `apptainer pull` that downloads + converts a multi-hundred-MB OCI image
-    /// to a `.sif` — see `materialize_image`.
-    async fn exec_with_timeout(
-        &self,
-        command: &str,
-        timeout: std::time::Duration,
-    ) -> Result<String, SshError> {
-        let mut guard = self.ssh.lock().await;
-
-        if guard.is_none() {
-            *guard = Some(SshSession::connect(&self.config).await?);
-        }
-
-        match guard.as_ref().unwrap().exec_with_timeout(command, timeout).await {
-            Ok(output) => Ok(output),
-            Err(SshError::Connection(_)) => {
-                tracing::warn!("Slurm allocator SSH connection lost, reconnecting for retry");
-                *guard = Some(SshSession::connect(&self.config).await?);
-                guard
-                    .as_ref()
-                    .unwrap()
-                    .exec_with_timeout(command, timeout)
-                    .await
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     /// Acquire (or reuse) a held allocation, resolve its node, launch ONE
     /// persistent drain executor on it (Pool mode, lease-scoped namespace), and
     /// return the lease JSON (`alloc_id`/`node?`/`expiry?`/`executor_namespace`/`scheduler`)
@@ -368,35 +337,62 @@ impl SlurmAllocatorClient {
         &self,
         args: &MaterializeImageArgs,
     ) -> Result<MaterializeOutcome, SlurmAllocError> {
-        let script = alloc::render_apptainer_pull_script(
+        // Launch the pull DETACHED and poll a log file. A pull takes minutes and
+        // its squashfs conversion saturates the container CPU, which (together
+        // with the watcher's concurrent squeue/sacct polling) starves the SSH
+        // connection's keepalive and drops a long-held channel mid-pull ("the
+        // remote process has terminated"). Detaching keeps every SSH command
+        // sub-second: one launch + periodic `cat`s of the log. See
+        // `alloc::render_apptainer_pull_launch`.
+        let launch = alloc::render_apptainer_pull_launch(
             &args.image_ref,
             args.registry_username.as_deref(),
             args.registry_password.as_deref(),
             SHARED_SIF_ROOT,
             SHARED_APPTAINER_CACHE,
         );
-        // Image pulls are slow (download + squashfs conversion); use a generous
-        // timeout, NOT the ~60s default tuned for quick allocator commands — a
-        // first pull of even a small image (e.g. python:3.12-slim, ~70s)
-        // otherwise trips the default and the SSH session is torn down.
-        let stdout = self
-            .exec_with_timeout(&script, std::time::Duration::from_secs(MATERIALIZE_PULL_TIMEOUT_SECS))
-            .await?;
-        let (digest, sif_path, size_bytes) = alloc::parse_materialize_output(&stdout)
-            .ok_or_else(|| SlurmAllocError::BadOutput(format!(
-                "apptainer pull produced no PETRI_MATERIALIZE line: {stdout}"
-            )))?;
-        tracing::info!(
-            image_ref = %args.image_ref,
-            digest = %digest,
-            sif_path = %sif_path,
-            "slurm materialize_image: pulled image to .sif",
-        );
-        Ok(MaterializeOutcome {
-            digest,
-            sif_path,
-            size_bytes,
-        })
+        let log_path = alloc::materialize_log_path(&args.image_ref);
+        self.exec(&launch).await?;
+
+        let poll = format!("cat '{}' 2>/dev/null || true", log_path.replace('\'', "'\\''"));
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(MATERIALIZE_PULL_TIMEOUT_SECS);
+        loop {
+            let log = self.exec(&poll).await?;
+            if let Some(rc) = alloc::parse_materialize_done(&log) {
+                if rc != 0 {
+                    return Err(SlurmAllocError::BadOutput(format!(
+                        "apptainer pull exited rc={rc} for {}; log:\n{log}",
+                        args.image_ref
+                    )));
+                }
+                let (digest, sif_path, size_bytes) =
+                    alloc::parse_materialize_output(&log).ok_or_else(|| {
+                        SlurmAllocError::BadOutput(format!(
+                            "pull finished rc=0 but no PETRI_MATERIALIZE line for {}; log:\n{log}",
+                            args.image_ref
+                        ))
+                    })?;
+                tracing::info!(
+                    image_ref = %args.image_ref,
+                    digest = %digest,
+                    sif_path = %sif_path,
+                    "slurm materialize_image: pulled image to .sif (detached)",
+                );
+                return Ok(MaterializeOutcome {
+                    digest,
+                    sif_path,
+                    size_bytes,
+                });
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(SlurmAllocError::BadOutput(format!(
+                    "apptainer pull for {} did not finish within {}s; log tail:\n{log}",
+                    args.image_ref, MATERIALIZE_PULL_TIMEOUT_SECS
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
     }
 }
 

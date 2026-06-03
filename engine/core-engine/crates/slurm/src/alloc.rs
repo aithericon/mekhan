@@ -370,6 +370,11 @@ pub fn sanitize_image_ref(image_ref: &str) -> String {
 /// `<sif_root>/<digest>.sif`, repoints `<sif_root>/by-ref/<stem>.sif`, and prints
 /// a single `PETRI_MATERIALIZE digest=… sif=… size=…` line parsed by
 /// [`parse_materialize_output`]. Pure render (no SSH) so it is unit-testable.
+///
+/// `image_ref` is passed to `apptainer pull` VERBATIM, so it must carry the
+/// scheme (`docker://…`, `oras://…`, `library://…`); the compiler embeds the
+/// by-ref path from the SAME scheme-bearing ref via `sanitize_image_ref`, so the
+/// two agree.
 pub fn render_apptainer_pull_script(
     image_ref: &str,
     username: Option<&str>,
@@ -393,7 +398,7 @@ pub fn render_apptainer_pull_script(
          {creds}\
          mkdir -p '{root}/by-ref' '{cache}'\n\
          tmp=$(mktemp '{root}/.pull.XXXXXX.sif')\n\
-         apptainer pull --force \"$tmp\" 'docker://{image}'\n\
+         apptainer pull --force \"$tmp\" '{image}'\n\
          digest=$(sha256sum \"$tmp\" | cut -c1-64)\n\
          final='{root}/'\"$digest\"'.sif'\n\
          mv -f \"$tmp\" \"$final\"\n\
@@ -429,6 +434,62 @@ pub fn parse_materialize_output(stdout: &str) -> Option<(String, String, Option<
         }
     }
     Some((digest?, sif?, size))
+}
+
+/// Deterministic remote log path for a detached materialize of `image_ref`.
+/// Both the launcher ([`render_apptainer_pull_launch`]) and the caller's poll
+/// loop compute it from the sanitized stem so they agree without threading state.
+pub fn materialize_log_path(image_ref: &str) -> String {
+    format!("/tmp/petri-materialize-{}.log", sanitize_image_ref(image_ref))
+}
+
+/// Build a fire-and-forget launcher that runs the apptainer pull DETACHED on the
+/// remote, tee-ing its output plus a final `PETRI_DONE rc=<code>` sentinel to
+/// [`materialize_log_path`]. The caller execs this (returns in <1s), then polls
+/// the log with quick `cat`s until the sentinel appears.
+///
+/// Why not just hold one SSH command open for the whole pull? A pull legitimately
+/// takes minutes (download + squashfs conversion), and that conversion saturates
+/// the container's CPU; combined with the watcher's concurrent `squeue`/`sacct`
+/// polling it starves the SSH connection's keepalive and the multiplexed channel
+/// is dropped mid-pull ("the remote process has terminated"). Detaching means no
+/// long-lived channel: the launch + each poll are sub-second commands.
+///
+/// The pull body is written to a remote script via a QUOTED heredoc
+/// (`<<'PETRI_PULL_EOF'`), so its single-quoted paths need no re-escaping, then
+/// `nohup`'d with every fd redirected so the SSH session can close without
+/// SIGHUP'ing the pull. The `bash -c 'bash "$0"; echo PETRI_DONE rc=$?' SCRIPT`
+/// form appends the sentinel with the script's real exit code even though the
+/// body runs under `set -e`.
+pub fn render_apptainer_pull_launch(
+    image_ref: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    sif_root: &str,
+    cache_dir: &str,
+) -> String {
+    let body = render_apptainer_pull_script(image_ref, username, password, sif_root, cache_dir);
+    let stem = sanitize_image_ref(image_ref);
+    let log = materialize_log_path(image_ref);
+    let script = format!("/tmp/petri-materialize-{stem}.sh");
+    format!(
+        "set -e\n\
+         cat > '{script}' <<'PETRI_PULL_EOF'\n\
+{body}\n\
+         PETRI_PULL_EOF\n\
+         rm -f '{log}'\n\
+         nohup bash -c 'bash \"$0\"; echo \"PETRI_DONE rc=$?\"' '{script}' > '{log}' 2>&1 < /dev/null &\n\
+         echo dispatched\n",
+    )
+}
+
+/// Parse the `PETRI_DONE rc=<code>` sentinel out of a detached-pull log. Returns
+/// `Some(rc)` once the pull has finished, `None` while still running.
+pub fn parse_materialize_done(log: &str) -> Option<i32> {
+    let line = log.lines().rev().find(|l| l.contains("PETRI_DONE rc="))?;
+    line.rsplit("PETRI_DONE rc=")
+        .next()
+        .and_then(|s| s.trim().parse::<i32>().ok())
 }
 
 /// Wrap a command for fire-and-forget detached execution over SSH.
