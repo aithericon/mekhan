@@ -1,0 +1,7 @@
+{
+  "name": "xrd",
+  "fields": [
+    { "name": "max_2theta", "kind": "number", "required": true },
+    { "name": "source", "kind": "text", "required": false }
+  ]
+}

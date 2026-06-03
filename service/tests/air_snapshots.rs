@@ -334,6 +334,16 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // resolved by the publish handler; bare `compile_to_air` has no
         // KnownResources for it. Proven live by the publish path + `mekhan test`.
         "25-prometheus-query",
+        // 26-runner-pool / 27-runner-xrd target a `presence_pool` resource
+        // (`lab_fleet`) via `deploymentModel.pool.alias`; lowering the pooled
+        // body needs that resource resolved (publish handler / KnownResources),
+        // which bare `compile_to_air` lacks. 27 additionally references the
+        // `xrd` capability registry for its placement Requirements. The pooled-
+        // lowering AIR shape is pinned by `compiler_e2e`'s aliased-pool tests;
+        // the presence-pool routing + capability match are proven live by
+        // `just dev runner-up` + `mekhan test`.
+        "26-runner-pool",
+        "27-runner-xrd",
     ]
     .into_iter()
     .collect();

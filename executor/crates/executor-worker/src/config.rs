@@ -545,20 +545,24 @@ impl ExecutorConfig {
             self.runner_token_path = Some(runner_dir.join("runner.token"));
         }
 
-        // Phase 3 (presence-lease pool capacity): a registered runner drains
-        // its own per-runner namespace so presence-pool grants — which stamp
-        // `executor_namespace = "runner.{runner_id}"` — route to exactly this
-        // daemon. Default the drain namespace to `runner.{runner_id}` only when
-        // the operator hasn't explicitly set one. This matches the runner's JWT
-        // sub-allow (`runner.{id}.>`) and the grant's stamped namespace. The
-        // apalis subject becomes `runner.{id}.{prio}.{exec}`. Non-breaking: an
-        // explicit `EXECUTOR_NAMESPACE` / config value still wins (we only fill
-        // the field when it's still at its `default_namespace()` sentinel), and
-        // a non-enrolled daemon keeps the historical `executor_jobs` namespace.
-        if let Some(runner_id) = &self.runner_id {
-            if self.namespace == default_namespace() {
-                self.namespace = format!("runner.{runner_id}");
-            }
+        // Phase 3 (presence-lease pool capacity): a registered runner drains a
+        // SHARED `runner-jobs` stream, PARTITIONED to its own runner id, so
+        // presence-pool grants route to exactly this daemon WITHOUT a JetStream
+        // stream per runner (the fleet is unbounded — a stream-per-runner would
+        // explode the stream count). The drain namespace is the shared
+        // [`RUNNER_JOBS_NAMESPACE`] (= the apalis stream key); the per-runner
+        // partition is `runner_id`, applied as the `PartitionedPool` consumer
+        // filter `runner-jobs.{prio}.{runner_id}.>` in `build_apalis_nats_config`.
+        // The engine producer publishes to `runner-jobs.{prio}.{runner_id}.{exec}`
+        // (it parses the grant's `executor_namespace = "runner-jobs/{runner_id}"`
+        // into stream + partition). The presence *subject* stays dotted
+        // (`runner.{id}.presence`) — that's a core NATS subject, not a stream
+        // name. Non-breaking: an explicit `EXECUTOR_NAMESPACE` / config value
+        // still wins (we only fill the field when it's still at its
+        // `default_namespace()` sentinel), and a non-enrolled daemon keeps the
+        // historical `executor_jobs` namespace.
+        if self.runner_id.is_some() && self.namespace == default_namespace() {
+            self.namespace = RUNNER_JOBS_NAMESPACE.to_string();
         }
 
         // Phase 2 (lab-runner NATS scoped creds): if the `register` /
@@ -618,6 +622,14 @@ fn default_name() -> String {
 fn default_namespace() -> String {
     "executor_jobs".into()
 }
+
+/// Shared apalis stream key for lab-runner-fleet job delivery. A registered
+/// runner drains this ONE stream-set (`runner-jobs_{priority}`), partitioned to
+/// its own runner id via a `PartitionedPool` consumer filter — so an unbounded
+/// fleet shares a single stream-set instead of one stream-set per runner. Must
+/// byte-match the engine producer's parse of `executor_namespace =
+/// "runner-jobs/{runner_id}"` and mekhan's presence-controller stamp.
+pub const RUNNER_JOBS_NAMESPACE: &str = "runner-jobs";
 
 fn default_concurrency() -> usize {
     4
@@ -808,7 +820,9 @@ mod tests {
         config.runner_id = Some("rnr-123".into());
         assert_eq!(config.namespace, default_namespace());
         config.normalize();
-        assert_eq!(config.namespace, "runner.rnr-123");
+        // Shared stream key (partition = runner_id is applied at consumer build,
+        // not baked into the namespace) — see RUNNER_JOBS_NAMESPACE.
+        assert_eq!(config.namespace, RUNNER_JOBS_NAMESPACE);
     }
 
     #[test]

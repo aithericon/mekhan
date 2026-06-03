@@ -591,6 +591,93 @@ async fn ensure_seeder_workspace_membership(state: &crate::AppState) -> Result<(
     Ok(())
 }
 
+/// Provision the capability types a presence-pooled demo's placement
+/// Requirements reference, from `<root>/capability-types/*.json`. Each file is
+/// a [`crate::models::capability::CreateCapabilityTypeRequest`] (name + typed
+/// fields); the workspace is forced to the demo workspace and the row is
+/// inserted as the seeder principal — the same DB shape the cookie-gated
+/// `POST /api/v1/capability-types` handler writes, minus the HTTP boundary.
+/// Idempotent: a same-named LIVE type is left as-is (never re-inserted).
+///
+/// Runs BEFORE the demo loop so that (a) a presence-pooled step whose
+/// `requirements` name a capability passes `validate_requirements_against_registry`
+/// at publish time, and (b) a runner enrolling with `--capabilities '{"<cap>":…}'`
+/// passes enroll-time `validate_caps_against_types`. Best-effort: a fixture
+/// failure is logged, never fatal — the dependent demo simply won't seed.
+async fn seed_demo_capability_types(state: &crate::AppState, root: &Path) {
+    use crate::models::capability::CreateCapabilityTypeRequest;
+    let dir = root.join("capability-types");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return, // no fixtures directory — nothing to provision
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo capability-type: read failed");
+                continue;
+            }
+        };
+        let req: CreateCapabilityTypeRequest = match serde_json::from_str(&raw) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(fixture = %path.display(), error = %e, "demo capability-type: parse failed");
+                continue;
+            }
+        };
+        let name = req.name.trim().to_string();
+        let existing: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
+            "SELECT id FROM capability_types \
+             WHERE workspace_id = $1 AND name = $2 AND revoked_at IS NULL",
+        )
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(&name)
+        .fetch_optional(&state.db)
+        .await;
+        match existing {
+            Ok(Some(_)) => {
+                tracing::info!(capability_type = %name, "demo capability-type already present — left as-is");
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(capability_type = %name, error = %e, "demo capability-type: existence check failed");
+                continue;
+            }
+        }
+        let fields_json = match serde_json::to_value(&req.fields) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(capability_type = %name, error = %e, "demo capability-type: serialize fields failed");
+                continue;
+            }
+        };
+        let insert = sqlx::query(
+            "INSERT INTO capability_types (id, workspace_id, name, fields, created_by) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(DEMO_WORKSPACE_ID)
+        .bind(&name)
+        .bind(&fields_json)
+        .bind(DEMO_SEEDER_AUTHOR_ID)
+        .execute(&state.db)
+        .await;
+        match insert {
+            Ok(_) => tracing::info!(capability_type = %name, "demo capability-type seeded"),
+            Err(e) => {
+                tracing::warn!(capability_type = %name, "demo capability-type seed failed: {e:?}")
+            }
+        }
+    }
+}
+
 /// Provision the resource fixtures demos bind, from `<root>/resources/*.json`.
 /// Each file is a [`CreateResourceRequest`] (path + resource_type + config);
 /// the workspace is forced to the demo workspace and the resource is created
@@ -923,6 +1010,7 @@ pub async fn seed_all(
         tracing::warn!(error = %e, "demo seeder: ensure workspace membership failed");
     }
     seed_demo_resources(state, root).await;
+    seed_demo_capability_types(state, root).await;
     seed_demo_assets(state, root).await;
     // A SubWorkflow demo can reference a CHILD demo whose directory sorts
     // AFTER it (e.g. `09-agent-tool-loop` -> `09b-collect-feedback`: `-` <

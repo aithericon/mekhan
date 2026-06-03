@@ -143,6 +143,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
         self
     }
@@ -161,6 +162,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
         self
     }
@@ -176,6 +178,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
         self
     }
@@ -194,6 +197,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
         self
     }
@@ -243,6 +247,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
         self
@@ -284,6 +289,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
         self
@@ -315,6 +321,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
         self
@@ -358,6 +365,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: true,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
         self
@@ -403,6 +411,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: true,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
         self
@@ -460,6 +469,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: Some(count_from.to_string()),
             correlate_on: correlate_on.map(|s| s.to_string()),
+            reset_reply_routing: false,
         });
 
         self
@@ -491,8 +501,25 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
+        self
+    }
+
+    /// Mark an already-wired OUTPUT arc (by port name) so its produced token is
+    /// emitted WITHOUT inheriting the firing's consumed reply-routing (it starts
+    /// routing-less). Call after the matching `auto_output(...)`. Use for a
+    /// recycled resource token that must stay re-grantable — e.g. a presence
+    /// pool's `t_release` returning a freed unit. No-op if the port has no
+    /// output arc. See engine `Arc::reset_reply_routing`.
+    pub fn reset_reply_routing_on(mut self, port_name: impl Into<String>) -> Self {
+        let name = port_name.into();
+        for arc in self.outputs.iter_mut() {
+            if arc.port == name {
+                arc.reset_reply_routing = true;
+            }
+        }
         self
     }
 
@@ -533,6 +560,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
         self
@@ -573,6 +601,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
 
         self
@@ -609,6 +638,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
         self
     }

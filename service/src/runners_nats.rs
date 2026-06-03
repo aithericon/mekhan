@@ -221,6 +221,12 @@ impl RunnerNatsSigner {
                 pub_allow.push(format!("{pool}.claim"));
             }
         }
+        // Control/presence-adjacent subjects for this runner. Job delivery is
+        // NOT a core-NATS subscribe: presence-pool grants land on the SHARED
+        // `runner-jobs` JetStream stream, drained via a partition-filtered pull
+        // consumer (`runner-jobs.{prio}.{runner_id}.>`). Scoping that pull
+        // (JetStream `$JS.API.*` perms for the shared stream + this runner's
+        // durable) is a separate prod-hardening concern; dev NATS is open.
         let sub_allow = vec![format!("runner.{runner_id}.>")];
 
         let pub_perm: Permission = Permission::builder()

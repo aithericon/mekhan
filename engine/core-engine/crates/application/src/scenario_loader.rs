@@ -125,6 +125,9 @@ pub struct ScenarioArcInput {
     pub count_from: Option<String>,
     /// Gather barrier: optional correlate field matched against result tokens.
     pub correlate_on: Option<String>,
+    /// Output arc only: emit the produced token routing-less (don't inherit the
+    /// firing's consumed reply-routing). See domain `Arc::reset_reply_routing`.
+    pub reset_reply_routing: bool,
 }
 
 /// Input for a scenario transition.
@@ -359,7 +362,8 @@ impl ScenarioParser {
                     .get(&output_arc.place)
                     .ok_or_else(|| ScenarioLoadError::UnknownPlace(output_arc.place.clone()))?;
                 let arc = PetriArc::output(tid.clone(), &output_arc.port, pid.clone())
-                    .with_weight(output_arc.weight);
+                    .with_weight(output_arc.weight)
+                    .with_reset_reply_routing(output_arc.reset_reply_routing);
                 arcs.push(arc);
             }
         }

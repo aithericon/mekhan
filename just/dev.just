@@ -81,6 +81,7 @@ up:
     @just dev::_wait-engine-stream
     @just dev::up-mekhan
     @just dev::up-app
+    @just dev::up-runner || true
     @just dev::_summary
 
 # Same as `up` but with auth ENABLED: mekhan-service runs in BFF mode (real
@@ -96,6 +97,7 @@ up-auth:
     @just dev::_wait-engine-stream
     @just dev::up-mekhan bff
     @just dev::up-app
+    @just dev::up-runner || true
     @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
 
 # Stop everything: native daemons first, then infra
@@ -104,6 +106,7 @@ down:
     @just dev::down-mekhan   || true
     @just dev::down-engine   || true
     @just dev::down-executor || true
+    @just dev::_kill runner  || true
     @just dev::down-ollama   || true
     @just dev::_kill nomad   || true
     @just dev::_infra-down
@@ -133,7 +136,7 @@ status:
     docker compose ps --format "table {{ '{{.Name}}' }}\t{{ '{{.Status}}' }}\t{{ '{{.Ports}}' }}" 2>/dev/null || echo "  (compose not running)"
     echo ""
     echo "── native daemons ─────────────────────────────────────"
-    for name in ollama executor engine nomad mekhan app; do
+    for name in ollama executor runner engine nomad mekhan app; do
       pf="{{pid_dir}}/$name.pid"
       if [ -s "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
         printf "  %-10s up  (pid %s)\n" "$name" "$(cat "$pf")"
@@ -587,6 +590,141 @@ up-executor:
 
 down-executor:
     @just dev::_kill executor
+
+# ── Lab-runner fleet (presence-pool runner, daemon mode) ─────────────────────
+#
+# Enrolls + starts ONE dev lab runner that joins the `lab_fleet` PRESENCE pool
+# (seeded from demos/resources/lab_fleet.json) and advertises the `xrd`
+# capability (demos/capability-types/xrd.json), so the presence-pool demos
+# (26-runner-pool, 27-runner-xrd) can be granted a unit and run. This is wired
+# into `just dev` (the `up` recipe) so the demos work out of the box — you don't
+# need to run it by hand; it's exposed as `up-runner`/`down-runner` for manual
+# restarts. It mints a registration token via mekhan's API, enrolls via
+# `aithericon-executor register`, then launches a runner-mode executor daemon.
+# `runner_id` self-discovers from the `identity.json` the enroll writes, so the
+# daemon drains the SHARED `runner-jobs` stream partitioned to its own id and
+# heartbeats `runner.{id}.presence`; mekhan's presence controller turns that
+# heartbeat into one pool unit. Connects to the open dev NATS ANONYMOUSLY — the
+# scoped runner JWT mekhan mints is written to disk but unused in dev (dev NATS
+# has no auth). Re-runnable: each call stops the prior runner and enrolls a
+# fresh, uniquely-named one; `just dev reset` wipes the rows. The runner uses its
+# own base_dir (separate venvs/artifacts) and no HTTP cancel port (the
+# worker-pool executor owns that), so it coexists with the default `executor`.
+up-runner:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev::_dirs
+    # Wait for mekhan to be ready AND to have seeded the `lab_fleet` pool + the
+    # `xrd` capability-type (the runner enrolls into the demo workspace and
+    # advertises xrd — both must exist first). Soft-skip (exit 0) if they never
+    # appear so `just dev` is never blocked by a runner that can't enroll.
+    echo "▶ waiting for mekhan + lab-fleet seed…"
+    ready=""
+    for _ in $(seq 1 60); do
+      if curl -fsS "{{service_url}}/api/v1/capability-types" 2>/dev/null \
+           | jq -e '.items[]? | select(.name=="xrd")' >/dev/null 2>&1; then
+        ready=1; break
+      fi
+      sleep 1
+    done
+    if [ -z "$ready" ]; then
+      echo "  ⚠ mekhan/lab_fleet seed not ready after 60s — skipping lab runner" >&2
+      echo "    (presence-pool demos 26/27 have no capacity until 'just dev up-runner')" >&2
+      exit 0
+    fi
+    # Reuse the executor binary the worker-pool daemon built (same features).
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    if [ ! -x "$bin" ]; then
+      echo "▶ building executor (features: {{executor_features}})…"
+      (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
+    fi
+    # Keep exactly one heartbeating unit: stop a previous dev runner.
+    if [ -s "{{pid_dir}}/runner.pid" ] && kill -0 "$(cat {{pid_dir}}/runner.pid)" 2>/dev/null; then
+      echo "  stopping previous runner (pid $(cat {{pid_dir}}/runner.pid))"
+      just dev::_kill runner || true
+    fi
+
+    runner_base="$PWD/{{work_dir}}/runner-fleet"
+    mkdir -p "$runner_base"
+    # Runner-mode executor.toml. Distinct base_dir; [cancel] omitted so it
+    # defaults to nats=true / http=false (no clash with the worker-pool
+    # executor's HTTP cancel port); [metrics] omitted (optional). NATS is
+    # anonymous — no `nats_creds`, so the open dev server accepts it. CRUCIAL:
+    # `namespace` is LEFT UNSET so it stays at the `executor_jobs` sentinel —
+    # config `normalize()` only rewrites it to the shared `runner-jobs` stream
+    # (drained PARTITIONED to this runner id, where presence-pool grants route)
+    # when it's still the sentinel. Pinning it here would suppress that override
+    # and the runner would drain a dead namespace.
+    cat > "$runner_base/executor.toml" <<EOF
+    name        = "dev-lab-runner"
+    nats_url    = "{{nats_url}}"
+    base_dir    = "$runner_base"
+    concurrency = 2
+
+    [storage]
+    backend  = "s3"
+    endpoint = "{{s3_endpoint}}"
+    bucket   = "mekhan-artifacts"
+    region   = "us-east-1"
+
+    [storage.credentials]
+    access_key = "rustfsadmin"
+    secret_key = "rustfsadmin"
+
+    [logs]
+    enabled = true
+    sinks   = [{ type = "file" }, { type = "nats", min_level = "info" }]
+
+    [python]
+    enabled    = true
+    prefer_uv  = true
+    EOF
+
+    # Reuse a STABLE runner identity across restarts. A data-preserving
+    # `down`/`up` (or `restart`) keeps the runner row AND its pool unit, but
+    # mekhan loses its in-memory presence map on restart and never reaps a unit
+    # for a runner it no longer tracks. Enrolling a FRESH id each time would
+    # then orphan the prior id's unit in the pool — and a claim granted to that
+    # dead partition hangs (the demo times out). So if a local identity exists
+    # and its runner row is still live, REUSE it: the same id re-acquires
+    # (idempotent), so exactly one live unit owns the partition. Only re-enroll
+    # when the row is gone (e.g. `just dev reset` wiped Postgres).
+    identity="$runner_base/runner/identity.json"
+    reuse=""
+    if [ -f "$identity" ]; then
+      rid=$(jq -r '.runner_id // empty' "$identity" 2>/dev/null || true)
+      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" >/dev/null 2>&1; then
+        echo "▶ reusing enrolled runner $rid (row still live)"
+        reuse=1
+      fi
+    fi
+
+    if [ -z "$reuse" ]; then
+      rm -rf "$runner_base/runner"   # drop any stale identity (e.g. post-reset)
+      echo "▶ minting registration token (pool=lab_fleet)…"
+      rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
+          -H 'content-type: application/json' -d '{"pool":"lab_fleet"}' | jq -r '.token')
+      if [ -z "$rt" ] || [ "$rt" = "null" ]; then
+        echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
+        exit 1
+      fi
+      name="dev-lab-$(date +%s)"
+      echo "▶ enrolling runner '$name' (caps: xrd.max_2theta=180)…"
+      ( cd "$runner_base" && env MEKHAN_URL="{{service_url}}" "$bin" register \
+          --token "$rt" --name "$name" --pool lab_fleet \
+          --capabilities '{"xrd":{"max_2theta":180,"source":"dev-diffractometer"}}' )
+    fi
+
+    echo "▶ starting lab runner daemon…"
+    pid=$(just/scripts/spawn-daemon.sh runner "{{pid_dir}}/runner.pid" "{{log_dir}}/runner.log" \
+      -- env RUST_LOG="info,aithericon_executor=debug" \
+        VAULT_ADDR="{{vault_addr}}" \
+        bash -c 'cd "'"$runner_base"'" && exec "$0"' "$bin")
+    echo "  ✓ lab runner (pid $pid)  log: {{log_dir}}/runner.log"
+    echo "  presence-pool demos now grantable: 26-runner-pool, 27-runner-xrd"
+
+down-runner:
+    @just dev::_kill runner
 
 # ── Engine (engine/core-engine) ──────────────────────────────────────────────
 
@@ -1348,13 +1486,14 @@ _summary auth="DISABLED (dev_noop) — every request is the dev user":
     @echo "  vault      → {{vault_addr}}      (dev mode; root token: root; KV v2 at secret/)"
     @echo "  ollama     → http://localhost:11434      (shared across worktrees; native /api/chat)"
     @echo "  executor   → daemon (NATS-driven)        (cancel: http://localhost:{{cancel_port}})"
+    @echo "  lab runner → daemon (presence pool)      (lab_fleet · demos 26/27 · 'just dev down-runner')"
     @echo "  engine     → {{engine_url}}"
     @echo "  mekhan     → {{service_url}}"
     @echo "  app (dev)  → http://localhost:{{app_port}}"
     @echo ""
     @echo "  auth       → {{auth}}"
     @echo ""
-    @echo "  logs   : just dev logs <ollama|executor|engine|mekhan|app|infra>"
+    @echo "  logs   : just dev logs <ollama|executor|runner|engine|mekhan|app|infra>"
     @echo "  status : just dev status"
     @echo "  stop   : just dev down"
     @echo "  wipe   : just dev reset   (destroys pg/nats/rustfs data)"

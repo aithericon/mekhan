@@ -1,0 +1,6 @@
+{
+  "path": "lab_fleet",
+  "resource_type": "presence_pool",
+  "display_name": "Lab Fleet (dev)",
+  "config": {}
+}

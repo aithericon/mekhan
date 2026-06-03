@@ -1,0 +1,76 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Measure {{ sample }}",
+        "initial": {
+          "id": "in",
+          "label": "Sample",
+          "fields": [
+            {
+              "name": "sample",
+              "label": "Sample ID",
+              "kind": "text",
+              "required": true,
+              "placeholder": "e.g. specimen-A"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "measure",
+      "type": "automated_step",
+      "position": { "x": 360, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Measure (on lab fleet)",
+        "description": "Runs on whichever enrolled runner the `lab_fleet` presence pool grants. No placement Requirements — any live runner satisfies the claim. The compiler wraps this body behind a claim/grant/release against the pool's backing net; the granted unit's `executor_namespace` routes the job to that runner.",
+        "deploymentModel": {
+          "mode": "executor",
+          "pool": { "alias": "lab_fleet" }
+        },
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Measurement",
+          "fields": [
+            { "name": "result", "label": "Result", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 680, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "result", "expression": "measure.result" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_measure", "source": "start", "target": "measure", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_measure_end",   "source": "measure", "target": "end",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

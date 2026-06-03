@@ -61,6 +61,22 @@ pub struct Arc {
     /// iterations don't mix. `None` (the default) preserves today's behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlate_on: Option<String>,
+
+    /// If true, a token produced onto this output arc is emitted WITHOUT
+    /// inheriting the firing's consumed reply-routing (it starts routing-less).
+    /// Only meaningful on TransitionToPlace arcs into an internal place. The
+    /// default (false) keeps the historical behavior: output tokens inherit the
+    /// merged reply-routing of the consumed input tokens.
+    ///
+    /// Needed when a transition consumes a reply-routed token but produces a
+    /// RECYCLED resource token that must stay re-grantable. Example: a presence
+    /// pool's `t_release` consumes the held unit (which carries the holder's
+    /// `fail` reply channel) and returns a free unit to the pool — that free
+    /// unit must be routing-less, else a later grant binding merges it with the
+    /// next claim's `fail` channel, hits a reply-routing conflict, and the
+    /// binding is silently skipped (the unit can never be re-granted).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reset_reply_routing: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -88,6 +104,7 @@ impl Arc {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         }
     }
 
@@ -107,6 +124,7 @@ impl Arc {
             read: false,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         }
     }
 
@@ -132,6 +150,14 @@ impl Arc {
     /// used to group them into a single gather).
     pub fn with_correlate_on(mut self, correlate_on: impl Into<String>) -> Self {
         self.correlate_on = Some(correlate_on.into());
+        self
+    }
+
+    /// Mark this output arc so its produced token does NOT inherit the firing's
+    /// consumed reply-routing (the token starts routing-less). See
+    /// [`Arc::reset_reply_routing`].
+    pub fn with_reset_reply_routing(mut self, reset: bool) -> Self {
+        self.reset_reply_routing = reset;
         self
     }
 

@@ -332,7 +332,18 @@ async fn handle_presence(
         return;
     };
 
-    let executor_namespace = format!("runner.{runner_id}");
+    // `{shared-stream}/{partition}` — the granted job routes to the SHARED
+    // `runner-jobs` apalis stream, PARTITIONED to this runner id. The engine
+    // producer (`executor` client `split_namespace`) splits on `/`: it ensures
+    // the shared stream `runner-jobs_{prio}` and publishes to
+    // `runner-jobs.{prio}.{runner_id}.{exec}`, which the runner daemon's
+    // `PartitionedPool` consumer filter (`runner-jobs.{prio}.{runner_id}.>`)
+    // drains exclusively. This keeps ONE stream-set for an unbounded fleet
+    // instead of a stream per runner. The `/` is a pure stamping delimiter — it
+    // never reaches a NATS subject/stream name. Must byte-match the runner
+    // daemon's `RUNNER_JOBS_NAMESPACE` + partition (`runner_id`). The presence
+    // *subject* (`runner.{id}.presence`) stays dotted — it's a NATS subject.
+    let executor_namespace = format!("runner-jobs/{runner_id}");
     let caps = runner.capabilities.clone();
 
     inject_acquire(nats, &pool_net_id, runner_id, &executor_namespace, &caps).await;

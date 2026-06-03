@@ -225,18 +225,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 /// Build the apalis-nats `Config` shared by NATS-queue paths.
 ///
-/// The `consumer_mode` is derived from `target_exec_id`:
-/// - `Some(id)` → `PerJob { exec_id: id }`: ephemeral consumer with exact filter
-///   `{namespace}.{priority}.{id}`. The dispatcher (Slurm sbatch) is expected
-///   to set `EXECUTOR_TARGET_EXEC_ID` to the same id the engine published with,
-///   so this consumer pulls exactly its dispatched message and exits.
-/// - `None` → `Pool`: durable shared consumer (legacy daemon-mode behavior).
+/// The `consumer_mode` is derived from `target_exec_id` then `runner_id`:
+/// - `target_exec_id = Some(id)` → `PerJob { exec_id: id }`: ephemeral consumer
+///   with exact filter `{namespace}.{priority}.{id}`. The dispatcher (Slurm
+///   sbatch) sets `EXECUTOR_TARGET_EXEC_ID` to the same id the engine published
+///   with, so this consumer pulls exactly its dispatched message and exits.
+/// - else `runner_id = Some(rid)` → `PartitionedPool { partition: rid }`: a
+///   registered lab runner drains the SHARED `runner-jobs` stream filtered to
+///   its own partition `runner-jobs.{priority}.{rid}.>` (exclusive routing,
+///   one shared stream-set for the whole fleet). `config.namespace` is already
+///   `runner-jobs` (set in `ExecutorConfig::normalize`).
+/// - else → `Pool`: durable shared consumer (legacy daemon-mode behavior).
 fn build_apalis_nats_config(config: &ExecutorConfig) -> apalis_nats::Config {
-    let consumer_mode = match &config.target_exec_id {
-        Some(id) => apalis_nats::ConsumerMode::PerJob {
+    let consumer_mode = match (&config.target_exec_id, &config.runner_id) {
+        (Some(id), _) => apalis_nats::ConsumerMode::PerJob {
             exec_id: id.clone(),
         },
-        None => apalis_nats::ConsumerMode::Pool,
+        (None, Some(runner_id)) => apalis_nats::ConsumerMode::PartitionedPool {
+            partition: runner_id.clone(),
+        },
+        (None, None) => apalis_nats::ConsumerMode::Pool,
     };
 
     apalis_nats::Config {
@@ -420,8 +428,9 @@ async fn run_nats_daemon(
             "worker presence heartbeat started"
         );
     } else {
-        // Runner-presence (`runner.{id}`) or PerJob/lease (`target_exec_id`)
-        // path — historical single-namespace storage + worker, byte-for-byte.
+        // Runner-presence (shared `runner-jobs` stream, partitioned to this
+        // runner) or PerJob/lease (`target_exec_id`) path — single-storage +
+        // worker. `build_apalis_nats_config` picks the consumer mode/filter.
         let nats_config = build_apalis_nats_config(&config);
         let storage =
             NatsStorage::<ExecutionJob>::new_with_config(nats_client, nats_config).await?;

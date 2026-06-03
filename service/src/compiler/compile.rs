@@ -150,6 +150,7 @@ pub(super) fn wire_read_arc(
             read: true,
             count_from: None,
             correlate_on: None,
+            reset_reply_routing: false,
         });
     }
     Some(var)
@@ -1353,6 +1354,7 @@ fn align_decision_deadends(
                         read: true,
                         count_from: None,
                         correlate_on: None,
+                        reset_reply_routing: false,
                     });
                 }
             }

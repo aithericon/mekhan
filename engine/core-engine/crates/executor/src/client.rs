@@ -80,11 +80,38 @@ fn stream_name_for(namespace: &str, priority: ApalisPriority) -> String {
     format!("{}_{}", namespace, priority.as_str())
 }
 
-/// Per-job publish subject `{namespace}.{priority}.{execution_id}`. A per-job
-/// namespace (`lease-<grant_id>`) targets the lease-scoped queue drained by a
-/// persistent executor; the fixed daemon namespace is byte-identical.
-fn subject_for(namespace: &str, priority: ApalisPriority, execution_id: &str) -> String {
-    format!("{}.{}.{}", namespace, priority.as_str(), execution_id)
+/// Split a stamped executor namespace into `(stream_namespace, Option<partition>)`.
+///
+/// A `runner-jobs/{runner_id}` form (mekhan's presence-controller stamp for a
+/// lab-runner-fleet grant) routes to the SHARED `runner-jobs` stream but a
+/// per-runner subject partition, so an unbounded runner fleet shares ONE
+/// stream-set (`runner-jobs_{priority}`) instead of one per runner. A namespace
+/// without `/` — worker pool (`executor-<wire>`), lease (`lease-<grant>`), or
+/// the daemon default (`executor_jobs`) — is unpartitioned and routes exactly
+/// as before. The `/` is purely a stamping delimiter; it never reaches a NATS
+/// subject or stream name (those use the split-off `stream_namespace`).
+fn split_namespace(namespace: &str) -> (&str, Option<&str>) {
+    match namespace.split_once('/') {
+        Some((stream_ns, partition)) => (stream_ns, Some(partition)),
+        None => (namespace, None),
+    }
+}
+
+/// Per-job publish subject. Unpartitioned: `{stream_ns}.{priority}.{execution_id}`
+/// (lease/daemon/worker-pool, byte-identical to before). Partitioned:
+/// `{stream_ns}.{priority}.{partition}.{execution_id}` — the partition segment
+/// (a runner id) precedes the job suffix so the runner's `PartitionedPool`
+/// consumer filter `{stream_ns}.{priority}.{partition}.>` drains exactly it.
+fn subject_for(
+    stream_ns: &str,
+    priority: ApalisPriority,
+    partition: Option<&str>,
+    execution_id: &str,
+) -> String {
+    match partition {
+        Some(p) => format!("{}.{}.{}.{}", stream_ns, priority.as_str(), p, execution_id),
+        None => format!("{}.{}.{}", stream_ns, priority.as_str(), execution_id),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,8 +370,14 @@ impl ExecutorClient for ExecutorNatsClient {
         // fixed namespace for the daemon path.
         let ns = request.namespace.as_deref().unwrap_or(&self.namespace);
 
+        // A `runner-jobs/{runner_id}` namespace routes to the SHARED `runner-jobs`
+        // stream but a per-runner subject partition; unpartitioned namespaces
+        // (lease/daemon/worker-pool) route exactly as before. The stream is keyed
+        // by `stream_ns` only — many partitions share one stream-set.
+        let (stream_ns, partition) = split_namespace(ns);
+
         // Ensure the target stream exists (idempotent, cached per stream name).
-        self.ensure_stream(priority, ns).await?;
+        self.ensure_stream(priority, stream_ns).await?;
 
         let routing = self.build_routing_meta(
             &request.signal_key,
@@ -394,17 +427,18 @@ impl ExecutorClient for ExecutorNatsClient {
             priority: priority.as_json_str(),
             attempts: 0,
             created_at: Utc::now(),
-            namespace: ns,
+            namespace: stream_ns,
         };
 
         let payload = serde_json::to_vec(&envelope).map_err(|e| {
             ExecutorError::Fatal(format!("Failed to serialize NatsJob envelope: {}", e))
         })?;
 
-        // Per-job subject: `{namespace}.{priority}.{execution_id}`. Pool
-        // consumers (daemon mode) match via `{ns}.{prio}.>` wildcard; PerJob
-        // consumers (one-shot sbatch) exact-match their assigned exec_id.
-        let subject = subject_for(ns, priority, &execution_id);
+        // Per-job subject (partition-aware). Pool consumers (daemon mode) match
+        // via `{ns}.{prio}.>`; PerJob consumers (one-shot sbatch) exact-match
+        // their exec_id; PartitionedPool consumers (lab runners) match
+        // `{ns}.{prio}.{partition}.>`.
+        let subject = subject_for(stream_ns, priority, partition, &execution_id);
 
         let mut headers = async_nats::HeaderMap::new();
         headers.insert("Nats-Msg-Id", execution_id.as_str());
@@ -571,12 +605,14 @@ mod tests {
         // Mirror submit()'s resolution: prefer the per-job ns, else fixed.
         let ns = req_ns.as_deref().unwrap_or(fixed);
         assert_eq!(ns, "lease-x");
+        let (stream_ns, partition) = split_namespace(ns);
+        assert_eq!((stream_ns, partition), ("lease-x", None));
         assert_eq!(
-            subject_for(ns, ApalisPriority::Medium, "exec-42"),
+            subject_for(stream_ns, ApalisPriority::Medium, partition, "exec-42"),
             "lease-x.medium.exec-42"
         );
         assert_eq!(
-            stream_name_for(ns, ApalisPriority::Medium),
+            stream_name_for(stream_ns, ApalisPriority::Medium),
             "lease-x_medium"
         );
 
@@ -584,13 +620,36 @@ mod tests {
         let none_ns: Option<String> = None;
         let ns = none_ns.as_deref().unwrap_or(fixed);
         assert_eq!(ns, "executor_jobs");
+        let (stream_ns, partition) = split_namespace(ns);
+        assert_eq!((stream_ns, partition), ("executor_jobs", None));
         assert_eq!(
-            subject_for(ns, ApalisPriority::Medium, "exec-42"),
+            subject_for(stream_ns, ApalisPriority::Medium, partition, "exec-42"),
             "executor_jobs.medium.exec-42"
         );
         assert_eq!(
-            stream_name_for(ns, ApalisPriority::Medium),
+            stream_name_for(stream_ns, ApalisPriority::Medium),
             "executor_jobs_medium"
+        );
+    }
+
+    #[test]
+    fn test_runner_partition_namespace_routes_shared_stream() {
+        // A presence-pool grant stamps `request.namespace =
+        // Some("runner-jobs/{runner_id}")`: the SHARED `runner-jobs` stream, a
+        // per-runner subject partition.
+        let ns = "runner-jobs/8327fc93";
+        let (stream_ns, partition) = split_namespace(ns);
+        assert_eq!((stream_ns, partition), ("runner-jobs", Some("8327fc93")));
+        // Shared stream key — one stream-set for the whole fleet.
+        assert_eq!(
+            stream_name_for(stream_ns, ApalisPriority::Medium),
+            "runner-jobs_medium"
+        );
+        // Partitioned subject — the runner's PartitionedPool filter
+        // (`runner-jobs.medium.8327fc93.>`) drains exactly this.
+        assert_eq!(
+            subject_for(stream_ns, ApalisPriority::Medium, partition, "exec-42"),
+            "runner-jobs.medium.8327fc93.exec-42"
         );
     }
 }

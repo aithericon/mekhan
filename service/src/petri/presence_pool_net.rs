@@ -201,11 +201,23 @@ pub fn build_presence_pool_net(resource_id: Uuid) -> ScenarioDefinition {
         // matched by grant_id. The returned unit re-exposes executor_namespace +
         // caps so it can be re-granted to the next claimant (the runner is still
         // present — only this hold ended).
+        //
+        // `reset_reply_routing_on("unit")` is LOAD-BEARING: the consumed `held`
+        // token carries the holder's "fail" reply channel (R2 registers the hold
+        // over a fail-channel bridge so `t_reap_held` can fail a crashed holder).
+        // Without the reset, the recycled unit inherits that stale "fail"
+        // routing; the NEXT claim carries its own "fail" channel, and `t_grant`
+        // binding then hits a reply-routing merge conflict and is silently
+        // skipped — so the freed unit can never be re-granted (the pool wedges
+        // after one grant). Resetting makes the recycled unit routing-less, like
+        // a freshly presence-acquired one. (token_pool sidesteps this by keeping
+        // its hold routing-less; the presence pool's reap-fail channel can't.)
         ctx.transition("t_release", "Release Capacity")
             .auto_input("req", &release_inbox)
             .auto_input("held", &in_use)
             .correlate("req", "held", "grant_id")
             .auto_output("unit", &pool)
+            .reset_reply_routing_on("unit")
             .auto_output("done", &done)
             .logic(
                 r#"#{

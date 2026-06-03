@@ -256,8 +256,18 @@ pub(crate) fn route_output_tokens(
                         continue;
                     }
                     _ => {
-                        if let Some(ref meta) = consumed_reply_routing {
-                            token = token.with_reply_routing(meta.clone());
+                        // Output tokens inherit the firing's merged consumed
+                        // reply-routing — UNLESS this arc opts out via
+                        // `reset_reply_routing`. A recycled resource token (e.g.
+                        // a presence pool's freed unit) opts out so it returns
+                        // routing-less; otherwise a later grant binding would
+                        // merge the stale (holder) reply channel with the next
+                        // claim's, hit a conflict, and skip the binding —
+                        // wedging re-grant. See `Arc::reset_reply_routing`.
+                        if !output_arc.reset_reply_routing {
+                            if let Some(ref meta) = consumed_reply_routing {
+                                token = token.with_reply_routing(meta.clone());
+                            }
                         }
                     }
                 }

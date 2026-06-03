@@ -107,6 +107,24 @@ pub enum ConsumerMode {
         /// `{namespace}.{priority}.{exec_id}` for this consumer to receive.
         exec_id: String,
     },
+    /// Durable consumer SHARED-STREAM but PARTITION-scoped: it binds the same
+    /// per-priority streams as `Pool` (`{namespace}_{priority}`) yet filters to
+    /// one partition `{namespace}.{priority}.{partition}.>` and uses a
+    /// partition-scoped durable name `{namespace}_{priority}_{partition}_consumer`.
+    ///
+    /// This gives EXCLUSIVE routing to one logical consumer (e.g. one lab
+    /// runner) without a stream per consumer: many partitions share the one
+    /// `{namespace}` stream-set, each draining only its own partition's
+    /// subjects. The publisher must publish to
+    /// `{namespace}.{priority}.{partition}.{exec_id}` (the partition segment
+    /// precedes the job suffix). Suits an unbounded fleet of exclusively-routed
+    /// workers where `Pool`'s shared queue (any worker wins) is wrong and
+    /// `PerJob`'s stream-per-namespace would explode the stream count.
+    PartitionedPool {
+        /// The partition key this consumer drains (e.g. a runner id). Only
+        /// subjects under `{namespace}.{priority}.{partition}.>` are delivered.
+        partition: String,
+    },
 }
 
 impl Default for ConsumerMode {
@@ -625,6 +643,22 @@ where
                         None, // ephemeral — no durable_name
                         format!("{}.{}", priority_subject, exec_id),
                         Duration::from_secs(60), // shorter TTL for one-shot
+                    )
+                }
+                ConsumerMode::PartitionedPool { partition } => {
+                    // Shared stream (same as Pool), partition-scoped durable +
+                    // filter. The filter `{ns}.{prio}.{partition}.>` keeps this
+                    // consumer exclusive to its partition while the stream stays
+                    // shared across all partitions of this namespace.
+                    let name = format!(
+                        "{}_{}_{}_consumer",
+                        self.config.namespace, priority, partition
+                    );
+                    (
+                        name.clone(),
+                        Some(name),
+                        format!("{}.{}.>", priority_subject, partition),
+                        Duration::from_secs(300), // durable, like Pool
                     )
                 }
             };

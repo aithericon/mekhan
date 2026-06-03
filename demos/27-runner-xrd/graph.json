@@ -1,0 +1,81 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Scan {{ sample }}",
+        "initial": {
+          "id": "in",
+          "label": "Scan Request",
+          "fields": [
+            {
+              "name": "sample",
+              "label": "Sample ID",
+              "kind": "text",
+              "required": true,
+              "placeholder": "e.g. perovskite-7"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "scan",
+      "type": "automated_step",
+      "position": { "x": 360, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Diffraction Scan",
+        "description": "Runs on a `lab_fleet` runner that satisfies `xrd.max_2theta >= 120`. The Requirement is matched against each present runner's advertised caps by the presence pool's `t_grant` guard (`satisfies`). Only a diffractometer with sufficient 2theta range is granted the scan.",
+        "deploymentModel": {
+          "mode": "executor",
+          "pool": { "alias": "lab_fleet" }
+        },
+        "requirements": {
+          "constraints": [
+            { "capability": "xrd", "field": "max_2theta", "op": "gte", "value": 120 }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Scan Result",
+          "fields": [
+            { "name": "summary", "label": "Summary", "kind": "text", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 680, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "summary", "expression": "scan.summary" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_scan", "source": "start", "target": "scan", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_scan_end",   "source": "scan", "target": "end",   "targetHandle": "in", "type": "sequence" }
+  ]
+}

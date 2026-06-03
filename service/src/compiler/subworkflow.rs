@@ -63,6 +63,7 @@ fn arc(place: &str, port: &str) -> ScenarioArc {
         read: false,
         count_from: None,
         correlate_on: None,
+        reset_reply_routing: false,
     }
 }
 

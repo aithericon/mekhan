@@ -229,6 +229,12 @@ pub struct ScenarioArc {
     /// `count_from`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlate_on: Option<String>,
+    /// Output arc only: emit the produced token WITHOUT inheriting the firing's
+    /// consumed reply-routing (it starts routing-less). `false` (default) keeps
+    /// today's inherit-and-merge behavior. Set for a recycled resource token
+    /// that must stay re-grantable (see engine `Arc::reset_reply_routing`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reset_reply_routing: bool,
 }
 
 fn default_weight() -> usize {
