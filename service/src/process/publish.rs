@@ -231,6 +231,13 @@ impl<'a> PublishService<'a> {
         // fleet state — a satisfying runner may enroll later), and never error.
         warn_on_empty_fleet(self.state, &compiled_graph, workspace_id).await;
 
+        // Worker-coverage WARNING (non-blocking, best-effort): for every
+        // default worker-pool `AutomatedStep` whose `ExecutorJob` backend has NO
+        // live worker advertising it, log a warning — the job would otherwise sit
+        // silently at `submitted` until a covering worker connects. Never errors
+        // (transient fleet state).
+        warn_on_uncovered_backends(self.state, &compiled_graph).await;
+
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
         // planner gets the inline source map directly via the `_inline`
@@ -494,6 +501,63 @@ async fn warn_on_empty_fleet(state: &AppState, graph: &WorkflowGraph, workspace_
                 runner_count = caps_rows.len(),
                 "publish: step requirements are satisfied by NO currently-enrolled runner — \
                  instances will queue at claim time until a matching runner checks in"
+            );
+        }
+    }
+}
+
+/// Worker-pool feature — best-effort uncovered-backend WARNING. For each
+/// default worker-pool `AutomatedStep` (i.e. `DeploymentModel::Executor { pool:
+/// None }`) whose backend dispatches as an `ExecutorJob`, check whether ANY live
+/// worker (TTL-swept presence over `worker.*.presence`) advertises that backend.
+/// If none does, log a warning — instances will queue at `submitted` until a
+/// covering worker connects.
+///
+/// Scope is deliberately narrow (locked design invariant): we ONLY warn on the
+/// default worker-pool path.
+/// - `Scheduled` steps route to a cluster (`lease-<grant>`), not the work queue.
+/// - Pooled (`Executor { pool: Some }`) and presence-pool steps route to
+///   `runner.{id}` / held units, which the separate empty-fleet/presence path
+///   already covers.
+/// - `EngineEffect` backends (e.g. catalogue_query) never hit the work queue.
+///
+/// NEVER hard-fails (a publish must not depend on transient fleet state).
+async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
+    use crate::models::template::DeploymentModel;
+    use aithericon_backends::DispatchMode;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            execution_spec,
+            deployment_model,
+            ..
+        } = &node.data
+        else {
+            continue;
+        };
+
+        // Only the default worker-pool path partitions by backend coverage.
+        if !matches!(deployment_model, DeploymentModel::Executor { pool: None }) {
+            continue;
+        }
+
+        // Only `ExecutorJob` backends reach the work queue. EngineEffect (e.g.
+        // catalogue_query) is handled inline by the engine.
+        let Some(meta) = crate::backends::lookup(execution_spec.backend_type) else {
+            continue;
+        };
+        if !matches!(meta.dispatch_mode(), DispatchMode::ExecutorJob) {
+            continue;
+        }
+
+        let wire = meta.executor_wire_name();
+        if !state.worker_coverage.is_covered(wire).await {
+            tracing::warn!(
+                node_id = %node.id,
+                backend = wire,
+                "publish: backend `{wire}` is covered by NO live worker — \
+                 instances of this step will queue at `submitted` until a worker \
+                 serving `{wire}` connects"
             );
         }
     }

@@ -43,10 +43,10 @@ use aithericon_executor_storage::OpenDalArtifactStore;
 use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 use aithericon_executor_worker::{
-    drain_signal, handle_execution, spawn_presence_task, BackendRegistry, BatchRunner,
-    CancellationRegistry, ChunkRegistry, CompletionTracker, DrainConfig, ExecutorConfig,
-    JobExecutor, JobSource, Lifetime, NatsCancelListener, NatsChunkListener, NixEnvironmentHook,
-    SidecarLogConfig, StatusReporter,
+    drain_signal, handle_execution, spawn_presence_task, spawn_worker_presence_task,
+    BackendRegistry, BatchRunner, CancellationRegistry, ChunkRegistry, CompletionTracker,
+    DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime, NatsCancelListener,
+    NatsChunkListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -269,12 +269,14 @@ async fn run_nats_daemon(
     )
     .await?;
 
-    let nats_config = build_apalis_nats_config(&config);
+    // The worker-pool default (non-enrolled, non-PerJob) fans the daemon out
+    // across one `executor.{wire}` namespace per backend it serves (built
+    // below, after the executor's backend set is known). The runner-presence
+    // (`runner.{id}`) and PerJob/lease (`target_exec_id`) paths keep the
+    // historical single-namespace storage built from `config.namespace`.
+    let worker_pool_mode = config.runner_id.is_none() && config.target_exec_id.is_none();
 
     let nats_client_for_cancel = nats_client.clone();
-    let storage = NatsStorage::<ExecutionJob>::new_with_config(nats_client, nats_config).await?;
-
-    info!("apalis NATS storage ready");
 
     // Set up cancellation registry and listeners
     let cancel_registry = CancellationRegistry::new();
@@ -334,31 +336,116 @@ async fn run_nats_daemon(
         );
     }
 
-    // Build the JobExecutor
-    let executor = Arc::new(build_executor(
+    // Build the JobExecutor. `registered_wires` is the set of backend
+    // wire-names that actually registered (feature-gated arms may skip) —
+    // exactly the set the worker pool can serve.
+    let (executor, registered_wires) = build_executor(
         &config,
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
         chunk_registry,
-    )?);
+    )?;
+    let executor = Arc::new(executor);
 
-    let worker = build_worker!(
-        &config.name,
-        config.concurrency,
-        config.heartbeat_interval(),
-        executor,
-        storage
-    );
+    let mut monitor = Monitor::new();
+
+    if worker_pool_mode {
+        // Worker-pool fan-out: bind ONE Pool consumer per `executor.{wire}`
+        // namespace for every backend this binary actually registered. Each
+        // gets its own NatsStorage (auto-creates the namespace's streams) +
+        // worker (unique name `{config.name}-{wire}`) sharing the SAME
+        // Arc<JobExecutor>. All register on the single Monitor.
+        if registered_wires.is_empty() {
+            return Err(
+                "worker-pool daemon has no ExecutorJob backends compiled in — nothing to drain; \
+                 check the executor-service feature set"
+                    .into(),
+            );
+        }
+
+        for wire in &registered_wires {
+            let namespace = aithericon_backends::executor_pool_namespace(wire);
+            // Pool (competing-consumers) config for this backend's namespace.
+            // No target_exec_id here by construction (worker_pool_mode), so the
+            // mode is always Pool.
+            let nats_config = apalis_nats::Config {
+                namespace: namespace.clone(),
+                max_deliver: config.max_deliver,
+                ack_wait: config.ack_wait(),
+                max_ack_pending: config.max_ack_pending,
+                num_replicas: 1,
+                enable_dlq: true,
+                consumer_mode: apalis_nats::ConsumerMode::Pool,
+                ..Default::default()
+            };
+
+            let storage = NatsStorage::<ExecutionJob>::new_with_config(
+                nats_client.clone(),
+                nats_config,
+            )
+            .await?;
+
+            let worker_name = format!("{}-{wire}", config.name);
+            let worker = build_worker!(
+                &worker_name,
+                config.concurrency,
+                config.heartbeat_interval(),
+                executor.clone(),
+                storage
+            );
+            monitor = monitor.register(worker);
+            info!(%namespace, worker = %worker_name, "worker-pool backend consumer bound");
+        }
+
+        // Worker presence: advertise the backend set this pool worker drains.
+        // `config.name` is the process-stable worker id — it is the operator-
+        // facing label for this daemon and is already unique per deployment
+        // (k8s pod name / systemd unit / dev slot); reusing it keeps the
+        // presence subject stable across restarts of the same worker without
+        // minting a fresh uuid each boot (which would leak stale presence
+        // rows on the watcher side). The backend set is wire-truth here.
+        let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
+        spawn_worker_presence_task(
+            nats_client_for_cancel.clone(),
+            config.name.clone(),
+            backends.clone(),
+            config.presence_interval(),
+            cancel_shutdown.clone(),
+        );
+        info!(
+            worker_id = %config.name,
+            ?backends,
+            interval_secs = config.presence_interval_secs,
+            "worker presence heartbeat started"
+        );
+    } else {
+        // Runner-presence (`runner.{id}`) or PerJob/lease (`target_exec_id`)
+        // path — historical single-namespace storage + worker, byte-for-byte.
+        let nats_config = build_apalis_nats_config(&config);
+        let storage =
+            NatsStorage::<ExecutionJob>::new_with_config(nats_client, nats_config).await?;
+        info!("apalis NATS storage ready");
+
+        let worker = build_worker!(
+            &config.name,
+            config.concurrency,
+            config.heartbeat_interval(),
+            executor,
+            storage
+        );
+        monitor = monitor.register(worker);
+    }
 
     info!(
         concurrency = config.concurrency,
-        "worker built, starting monitor"
+        worker_pool_mode,
+        backends = registered_wires.len(),
+        "worker(s) built, starting monitor"
     );
 
     // Run with graceful shutdown on Ctrl+C
-    Monitor::new()
-        .register(worker)
+    monitor
         .shutdown_timeout(Duration::from_secs(30))
         .run_with_signal(async {
             tokio::signal::ctrl_c()
@@ -434,7 +521,10 @@ async fn run_nats_drain(
     let drain_rx = tracker.subscribe();
     let tracker_for_exit = tracker.clone();
 
-    let mut executor = build_executor(
+    // Drain mode is PerJob (Slurm/Nomad-dispatched, exact-filter) or a
+    // single-namespace pool drain — it does not fan out per backend, so the
+    // registered wire set is unused here.
+    let (mut executor, _registered_wires) = build_executor(
         &config,
         reporter,
         &nats_client_for_cancel,
@@ -558,13 +648,16 @@ async fn run_manifest(
     // populated (no `NatsChunkListener`); reducer jobs aren't a manifest path.
     let cancel_registry = CancellationRegistry::new();
     let chunk_registry = ChunkRegistry::new();
-    let executor = Arc::new(build_executor(
+    // Manifest mode is its own single-namespace dispatcher — no per-backend
+    // fan-out, so the registered wire set is unused here.
+    let (executor, _registered_wires) = build_executor(
         &config,
         reporter.clone(),
         &nats_client,
         cancel_registry,
         chunk_registry,
-    )?);
+    )?;
+    let executor = Arc::new(executor);
 
     // Start the apalis worker in the background (same pipeline as daemon)
     let shutdown = CancellationToken::new();
@@ -746,17 +839,27 @@ fn register_executor_backend(
 /// `register_executor_backend`, whose feature-gated match arms own the
 /// `Backend::new(...)` calls. Backends with `dispatch_mode == EngineEffect`
 /// (CatalogueQuery today) are skipped — the engine runs them itself.
+///
+/// Returns the built executor alongside the set of wire-names that *actually*
+/// registered. A feature-gated arm may warn-and-skip (its cargo feature isn't
+/// compiled, or the backend is unavailable at runtime — e.g. docker), so the
+/// "registered" set is a strict subset of the `ExecutorJob` `BACKENDS`. We
+/// detect a successful registration by comparing the registry's backend count
+/// before vs. after each `register_executor_backend` call. The worker-pool
+/// daemon uses this set to bind one `executor.{wire}` Pool consumer per backend
+/// it can actually serve, and to advertise its coverage via worker presence.
 fn build_executor(
     config: &ExecutorConfig,
     reporter: StatusReporter,
     nats_client: &async_nats::Client,
     cancel_registry: CancellationRegistry,
     chunk_registry: ChunkRegistry,
-) -> Result<JobExecutor, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(JobExecutor, Vec<&'static str>), Box<dyn std::error::Error + Send + Sync>> {
     let base_dir = PathBuf::from(&config.base_dir);
 
     #[allow(unused_mut)]
     let mut registry = BackendRegistry::new(config.default_timeout());
+    let mut registered_wires: Vec<&'static str> = Vec::new();
 
     for meta in aithericon_backends::BACKENDS {
         if !matches!(
@@ -765,7 +868,14 @@ fn build_executor(
         ) {
             continue;
         }
+        let before = registry.len();
         registry = register_executor_backend(registry, meta, config, &base_dir);
+        // A feature-gated arm that skipped (unbuilt feature / unavailable
+        // backend) leaves the count unchanged; only count the wire-name when
+        // the backend truly landed in the registry.
+        if registry.len() > before {
+            registered_wires.push(meta.wire_name);
+        }
     }
 
     let registry = Arc::new(registry);
@@ -820,20 +930,23 @@ fn build_executor(
         }
     };
 
-    Ok(JobExecutor {
-        reporter,
-        registry,
-        pipeline,
-        base_dir,
-        artifact_store,
-        cleanup_policy: config.cleanup_policy.clone(),
-        metric_sink,
-        log_sink,
-        cancel_registry,
-        chunk_registry,
-        log_config,
-        completion_tracker: None,
-    })
+    Ok((
+        JobExecutor {
+            reporter,
+            registry,
+            pipeline,
+            base_dir,
+            artifact_store,
+            cleanup_policy: config.cleanup_policy.clone(),
+            metric_sink,
+            log_sink,
+            cancel_registry,
+            chunk_registry,
+            log_config,
+            completion_tracker: None,
+        },
+        registered_wires,
+    ))
 }
 
 /// Build the artifact store based on config.

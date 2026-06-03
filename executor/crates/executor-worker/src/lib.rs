@@ -28,7 +28,9 @@ pub use executor::JobExecutor;
 pub use handler::handle_execution;
 pub use ipc_sidecar::{start_ipc_sidecar, SidecarLogConfig, SidecarResult};
 pub use nix::{NixConfig, NixEnvironmentHook};
-pub use presence::{presence_subject, spawn_presence_task};
+pub use presence::{
+    presence_subject, spawn_presence_task, spawn_worker_presence_task, worker_presence_subject,
+};
 pub use registry::BackendRegistry;
 pub use reporter::StatusReporter;
 pub use staging::{StagingHook, StagingPipeline};

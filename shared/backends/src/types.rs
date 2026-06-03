@@ -62,6 +62,30 @@ pub enum ExecutionBackendType {
     Prometheus,
 }
 
+/// The NATS namespace prefix for worker-pool executor-job routing. A default
+/// (non-pooled, non-leased) `AutomatedStep` whose backend dispatches an
+/// executor job is published to `executor-<wire>`; workers bind one Pool
+/// consumer per backend they support. See
+/// [`ExecutionBackendType::executor_namespace`].
+///
+/// The separator is a HYPHEN, not a dot: apalis-nats derives the JetStream
+/// stream name as `{namespace}_{priority}`, and JetStream stream names cannot
+/// contain `.`. A dotted `executor.python` would yield the invalid stream
+/// `executor.python_high`. The hyphen matches the proven datacenter-lease
+/// convention (`lease-<grant>`, which also sanitizes to hyphens). Backend
+/// `wire_name`s themselves are `[a-z_]` (`file_ops`) — the underscore is valid
+/// in both stream names and NATS subject tokens, so it is left as-is.
+pub const EXECUTOR_NS_PREFIX: &str = "executor-";
+
+/// Build the worker-pool namespace for a backend's snake-case `wire_name`
+/// (`executor-python`). String-keyed companion to
+/// [`ExecutionBackendType::executor_namespace`] for callers (the executor's
+/// `BackendMeta::wire_name` registration loop) that hold the wire tag rather
+/// than the enum.
+pub fn executor_pool_namespace(wire_name: &str) -> String {
+    format!("{EXECUTOR_NS_PREFIX}{wire_name}")
+}
+
 impl ExecutionBackendType {
     /// Canonical snake_case wire string. Keep in lockstep with the
     /// `#[serde(rename_all = "snake_case")]` derive — these strings are what
@@ -82,6 +106,19 @@ impl ExecutionBackendType {
             Self::Loki => "loki",
             Self::Prometheus => "prometheus",
         }
+    }
+
+    /// The worker-pool NATS namespace this backend's executor jobs are routed
+    /// to: `executor-<wire>` (e.g. `executor-python`, `executor-loki`).
+    ///
+    /// This is the **one contract** the compiler (producer — stamps
+    /// `executor_namespace` on a default inline `AutomatedStep`) and the
+    /// executor daemon (consumer — binds a Pool consumer per supported
+    /// backend) must agree on. Defined here so both sides reference a single
+    /// source of truth. See [`executor_pool_namespace`] for the
+    /// string-keyed form the executor's `BackendMeta::wire_name` loop uses.
+    pub fn executor_namespace(&self) -> String {
+        executor_pool_namespace(self.as_wire_str())
     }
 
     /// Inverse of [`Self::as_wire_str`]. Returns `None` for any unknown

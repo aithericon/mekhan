@@ -210,6 +210,17 @@ async fn main() -> anyhow::Result<()> {
         petri.clone(),
     );
 
+    // Worker backend-coverage tracker (worker-pool feature). Subscribes to
+    // `worker.*.presence` and keeps a TTL-swept set of which `ExecutorJob`
+    // backends have ≥1 live worker, so publish can WARN (never fail) when a
+    // step's backend is covered by zero workers. Wire-only; shares the handle
+    // stored in AppState.
+    let worker_coverage = mekhan_service::worker_coverage::BackendCoverage::new();
+    mekhan_service::worker_coverage::spawn_worker_coverage(
+        worker_coverage.clone(),
+        mekhan_nats.clone(),
+    );
+
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
     // Spawn catalogue NATS request-reply responder
@@ -323,6 +334,7 @@ async fn main() -> anyhow::Result<()> {
         resource_resolver,
         runner_nats_signer,
         runner_presence,
+        worker_coverage,
         asset_resolver,
     };
 

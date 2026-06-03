@@ -34,4 +34,7 @@ pub use registry::{
     KREUZBERG_META, LLM_META, LOKI_META, POSTGRES_META, PROCESS_META, PROMETHEUS_META, PYTHON_META,
     SMTP_META, SURYA_META,
 };
-pub use types::{DispatchMode, ExecutionBackendType, ResourceChannel};
+pub use types::{
+    executor_pool_namespace, DispatchMode, ExecutionBackendType, ResourceChannel,
+    EXECUTOR_NS_PREFIX,
+};

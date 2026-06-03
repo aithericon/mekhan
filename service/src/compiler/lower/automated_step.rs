@@ -177,11 +177,49 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // `d_<holder>.lease.executor_namespace`. Only a `Scheduled { Submit }` step
     // is lease-bound (a plain inline `Executor` step inside the scope still runs
     // on the normal worker); no enclosing holder ⇒ no fragment.
-    let ns_frag = enclosing_leased_scope_slug(cx.node, cx.graph)
-        .map(|holder_slug| {
+    //
+    // NON-leased (default inline) path: there is no held lease to borrow from,
+    // so the namespace is a COMPILE-TIME CONSTANT — the per-backend worker-pool
+    // queue `executor.<wire>` from the locked contract
+    // (`ExecutionBackendType::executor_namespace`). We've necessarily reached
+    // this code with an `ExecutorJob` backend: the `EngineEffect` arm above
+    // early-returns via `lower_engine_effect` before any job-token build, so the
+    // DispatchMode gate is STRUCTURAL — no redundant dispatch_mode re-check.
+    // Stamping a plain string literal (no borrow ref) means `logic()`'s
+    // build-time validation still applies (the `ns_frag.is_empty()` branch
+    // below selects `logic()` only when EMPTY — but the leased case is the only
+    // one that needs the `logic_rhai` deferral, so we MUST keep this constant
+    // stamp on the `logic()` side). See the branch-selection note below.
+    let leased_holder = enclosing_leased_scope_slug(cx.node, cx.graph);
+    // Branch selection (preserved): the leased (borrow-carrying) literal must
+    // ride `logic_rhai` (deferred validation, since `apply_guard_borrows` later
+    // rewrites the not-yet-bound `<holder>` root var); the default-inline stamp
+    // is a CONSTANT-string literal with no unbound root var and never matches the
+    // borrowed `<holder>.lease.executor_namespace` shape, so it belongs on the
+    // eager `logic()` side and is a no-op for the borrowed-inputs / read-arc
+    // pipeline. We therefore key the branch below on whether the fragment carries
+    // a borrow (the leased case), NOT on emptiness.
+    let ns_frag_is_borrowed = leased_holder.is_some();
+    let ns_frag = match leased_holder {
+        Some(holder_slug) => {
+            // Leased body: RAW borrow of the holder's lease namespace,
+            // post-build rewritten to `d_<holder>.lease.executor_namespace`.
+            // UNCHANGED.
             format!(r#" d.executor_namespace = {holder_slug}.lease.executor_namespace;"#)
-        })
-        .unwrap_or_default();
+        }
+        None => {
+            // Default inline worker-pool body: stamp the constant per-backend
+            // namespace so the engine routes to `executor.<wire>` instead of the
+            // retired `executor_jobs` fallback. A static literal — no borrow ref.
+            // We've necessarily reached this code with an `ExecutorJob` backend
+            // (the `EngineEffect` arm above early-returns via `lower_engine_effect`
+            // before any job-token build), so the DispatchMode gate is STRUCTURAL.
+            format!(
+                r#" d.executor_namespace = "{ns}";"#,
+                ns = backend_type.executor_namespace()
+            )
+        }
+    };
 
     // Slug forwarding (B-staging, Phase 4): stamp the resolved scheduler
     // `job_template` slug onto the job token as `job_template_id` so the engine's
@@ -352,9 +390,11 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             .transition("prepare", format!("{label} - Prepare"))
             .auto_input("input", &p_input)
             .auto_output("job", &exec_inbox);
-        if ns_frag.is_empty() {
-            // Common path: fail-fast build-time script validation (no borrowed
-            // refs in the literal, so `logic()` can validate variable bindings).
+        if !ns_frag_is_borrowed {
+            // Common path: fail-fast build-time script validation. The literal
+            // carries no borrowed root var — either no `ns_frag` (legacy) or a
+            // constant `executor.<wire>` string literal (default worker-pool) —
+            // so `logic()` can validate variable bindings eagerly.
             prepare.logic(prepare_logic);
         } else {
             // lease-bound body: the literal carries the RAW
@@ -1263,7 +1303,19 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // allocators), we stamp it onto the job token so the engine's submit
     // handler targets the warm executor.
     let lease_stage_push = r#"job_inputs.push(#{ "name": "lease.json", "source": #{ "type": "inline", "value": grant } }); "#;
-    let ns_stamp = r#" if grant.executor_namespace != () { d.executor_namespace = grant.executor_namespace; } "#;
+    // Default-route to the per-backend worker-pool namespace (`executor.<wire>`),
+    // then let a grant-supplied namespace override. A token_pool grant carries
+    // no `executor_namespace` (only `grant_id`/`unit_id`), so without this
+    // default its body would fall back to the RETIRED `executor_jobs` queue —
+    // which the worker-pool daemon no longer consumes — and rot silently. With
+    // the default, token_pool bodies are drained by the shared worker-pool
+    // daemon on `executor.<wire>`. presence grants (`runner.{id}`) and
+    // datacenter/lease grants (`lease-<grant>`) DO carry an `executor_namespace`,
+    // so the override wins and their exclusive routing is unchanged at runtime.
+    let ns_stamp = format!(
+        r#" d.executor_namespace = "{ns}"; if grant.executor_namespace != () {{ d.executor_namespace = grant.executor_namespace; }} "#,
+        ns = backend_type.executor_namespace()
+    );
 
     // Carry the full lease so the hold echo + held parking both keep every
     // lease field; `grant.grant_id` is the correlation key the pool keys

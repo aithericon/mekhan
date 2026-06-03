@@ -25,6 +25,7 @@ pub mod runners_presence;
 pub mod s3;
 pub mod scope;
 pub mod triggers;
+pub mod worker_coverage;
 pub mod yjs;
 
 use std::sync::Arc;
@@ -114,6 +115,13 @@ pub struct AppState {
     /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
     /// capacity (which runners hold an admitted unit right now).
     pub runner_presence: crate::runners_presence::RunnerPresence,
+    /// Worker-pool feature — shared handle to the worker backend-coverage
+    /// tracker's in-memory map. Workers heartbeat on `worker.*.presence`
+    /// advertising which `ExecutorJob` backends they serve; the coverage tasks
+    /// (`crate::worker_coverage`) keep this TTL-swept. Publish reads through it to
+    /// WARN (never fail) on backends covered by zero live workers. No HTTP route
+    /// in v1 — held here for a future fleet-coverage UI.
+    pub worker_coverage: crate::worker_coverage::BackendCoverage,
     /// Publish-time asset resolver (docs/20 §5). Materializes the pinned
     /// records of every node-bound asset into the JSON envelope the publish
     /// handler splices into the AIR (`__assets`) before persistence. The

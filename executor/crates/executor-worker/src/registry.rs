@@ -39,4 +39,18 @@ impl BackendRegistry {
     pub fn default_timeout(&self) -> Duration {
         self.default_timeout
     }
+
+    /// Number of backends currently registered. Used by `build_executor`'s
+    /// registration loop to detect whether a feature-gated arm actually
+    /// registered a backend (some arms warn-and-skip when their cargo feature
+    /// isn't compiled or the backend is unavailable), by comparing the count
+    /// before vs. after each `register_executor_backend` call.
+    pub fn len(&self) -> usize {
+        self.backends.len()
+    }
+
+    /// True when no backends are registered.
+    pub fn is_empty(&self) -> bool {
+        self.backends.is_empty()
+    }
 }
