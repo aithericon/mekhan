@@ -1,10 +1,13 @@
 <script lang="ts">
 	// Fleet → Live presence board (Section F).
 	// Polls getRunnerPresence() + listRunners() every 5 s.
-	// Renders a station GRID: online dot, name, pool, capability keys.
-	// "Held" state is best-effort — presence snapshot carries `present` only;
-	// full net-state link would require resolving the net_id from the engine
-	// at /petri/nets/{id}/state — deferred (see TODO below).
+	// Renders a station GRID: online dot, name, group, and the executor backends
+	// each online runner advertises (the set-membership dimension it heartbeats —
+	// what it can actually run, orthogonal to its typed capabilities).
+	// "Held" state is best-effort — the presence snapshot carries `present` +
+	// `last_seen_ms_ago` + `backends`, but not in-flight job state; a full
+	// net-state link would require resolving the net_id from the engine at
+	// /petri/nets/{id}/state — deferred (see TODO below).
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import Server from '@lucide/svelte/icons/server';
@@ -147,12 +150,34 @@
 										Offline · {fmtDate(runner.last_seen_at)}
 									{/if}
 								</p>
+
+								<!-- Advertised backends (the executor backends this runner
+								     can run — its set-membership dimension). Shown only while
+								     online; an offline runner isn't advertising anything. -->
+								{#if online && snap && (snap.backends?.length ?? 0) > 0}
+									<div
+										class="flex flex-wrap gap-1 pt-0.5"
+										data-testid="station-backends-{runner.id}"
+									>
+										{#each snap.backends ?? [] as be (be)}
+											<Badge
+												variant="outline"
+												class="px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
+											>
+												{be}
+											</Badge>
+										{/each}
+									</div>
+								{/if}
 							</div>
 						</Tooltip.Trigger>
 						<Tooltip.Content side="top">
 							<p class="font-mono text-xs">{runner.id}</p>
 							<p class="text-xs">Status: {runner.status}</p>
 							<p class="text-xs">Enrolled: {fmtDate(runner.enrolled_at)}</p>
+							{#if snap && (snap.backends?.length ?? 0) > 0}
+								<p class="max-w-xs text-xs">Backends: {(snap.backends ?? []).join(', ')}</p>
+							{/if}
 						</Tooltip.Content>
 					</Tooltip.Root>
 				</Tooltip.Provider>

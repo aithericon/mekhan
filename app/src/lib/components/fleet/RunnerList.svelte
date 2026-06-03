@@ -683,6 +683,21 @@
 						{#if detail.group}<Badge variant="secondary">{detail.group}</Badge>{:else}—{/if}
 					</dd>
 
+					<dt class="text-muted-foreground">Backends</dt>
+					<dd class="col-span-2">
+						{#if snap && (snap.backends?.length ?? 0) > 0}
+							<div class="flex flex-wrap gap-1">
+								{#each snap.backends ?? [] as be (be)}
+									<Badge variant="outline" class="text-xs font-normal">{be}</Badge>
+								{/each}
+							</div>
+						{:else}
+							<span class="text-muted-foreground"
+								>{snap?.present ? '—' : 'offline (advertised on connect)'}</span
+							>
+						{/if}
+					</dd>
+
 					<dt class="text-muted-foreground">Last seen</dt>
 					<dd class="col-span-2">{fmtDate(detail.last_seen_at)}</dd>
 
