@@ -209,6 +209,7 @@ fn leased_loop_graph(loop_id: &str, body_id: &str) -> WorkflowGraph {
                     retry_policy: Default::default(),
                     stream_output: false,
                     stream_input: false,
+                    requirements: None,
                     deployment_model: DeploymentModel::Scheduled {
                         scheduler: None,
                         job_template: "mekhan-executor-worker".to_string(),

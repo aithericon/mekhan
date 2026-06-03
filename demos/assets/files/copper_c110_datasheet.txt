@@ -1,0 +1,10 @@
+Copper C110 (Electrolytic Tough Pitch) — Datasheet
+===================================================
+
+Composition : 99.90% Cu (min), 0.04% O (typical)
+Density     : 8.96 g/cm^3
+E-modulus   : 117 GPa
+Conductivity: 101% IACS
+Temper      : H02 (half hard)
+Notes       : Excellent electrical + thermal conductivity; common bus-bar
+              and electrical-contact stock.

@@ -257,6 +257,53 @@ pub struct ExecutorConfig {
     /// Environment variable: `EXECUTOR_TARGET_EXEC_ID=<id>`.
     #[serde(default)]
     pub target_exec_id: Option<String>,
+
+    /// Lab-fleet runner identity (Phase 1 — Lab Runner Fleet).
+    ///
+    /// When this executor was enrolled into a mekhan fleet via
+    /// `aithericon-executor register`, the enrollment persists an
+    /// `identity.json` under `{base_dir}/runner/`. `runner_id` is the
+    /// control-plane UUID for this runner; `runner_token_path` points at the
+    /// `rnr_` bearer-credential file used to authenticate heartbeat/control
+    /// calls. Both are **optional** and have **no effect on job draining in
+    /// Phase 1** — the worker still pulls from NATS with the existing
+    /// shared/anonymous credentials. They are populated either from
+    /// `EXECUTOR_RUNNER_ID` / config, or (when unset) auto-discovered from
+    /// `{base_dir}/runner/identity.json` in `normalize()`.
+    ///
+    /// Environment variable: `EXECUTOR_RUNNER_ID=<uuid>`.
+    #[serde(default)]
+    pub runner_id: Option<String>,
+
+    /// Path to the `rnr_` runner control-plane token (Phase 1 — Lab Runner
+    /// Fleet). Defaults to `{base_dir}/runner/runner.token` when a runner
+    /// identity is present. Optional; unused by job draining in Phase 1.
+    #[serde(default)]
+    pub runner_token_path: Option<std::path::PathBuf>,
+
+    /// Interval in seconds between runner presence heartbeats (Phase 3 —
+    /// presence-lease pool capacity). When a runner identity is present the
+    /// daemon spawns a background task that publishes to
+    /// `runner.{runner_id}.presence` on this interval so mekhan can keep the
+    /// presence-pool unit alive (and expire it when heartbeats stop). Only
+    /// meaningful when `runner_id` is set; ignored otherwise.
+    ///
+    /// Environment variable: `EXECUTOR_PRESENCE_INTERVAL_SECS=10`.
+    #[serde(default = "default_presence_interval_secs")]
+    pub presence_interval_secs: u64,
+}
+
+/// On-disk runner identity persisted by `aithericon-executor register`.
+///
+/// Written to `{base_dir}/runner/identity.json` at enroll time. Read back in
+/// `ExecutorConfig::normalize()` to self-identify the daemon (Phase 1). The
+/// field names match the `register` subcommand's writer exactly.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct RunnerIdentity {
+    pub runner_id: String,
+    #[serde(default)]
+    pub pool: Option<String>,
+    pub workspace_id: String,
 }
 
 /// Configuration for the shared Python venv cache.
@@ -478,6 +525,55 @@ impl ExecutorConfig {
         if let (Some(max), Some(min)) = (self.max_jobs, self.min_jobs) {
             assert!(max >= min, "max_jobs ({max}) must be >= min_jobs ({min})");
         }
+
+        // Lab-fleet self-identify (Phase 1). If no explicit runner_id was given
+        // (env/config), try to read one from the enrollment file the `register`
+        // subcommand wrote at `{base_dir}/runner/identity.json`. This is purely
+        // informational in Phase 1 — it does not change job draining. Failure to
+        // read/parse is silently ignored (a non-enrolled executor is normal).
+        let runner_dir = std::path::Path::new(&self.base_dir).join("runner");
+        if self.runner_id.is_none() {
+            let identity_path = runner_dir.join("identity.json");
+            if let Ok(bytes) = std::fs::read(&identity_path) {
+                if let Ok(identity) = serde_json::from_slice::<RunnerIdentity>(&bytes) {
+                    self.runner_id = Some(identity.runner_id);
+                }
+            }
+        }
+        // Default the token path alongside the identity when we have a runner.
+        if self.runner_id.is_some() && self.runner_token_path.is_none() {
+            self.runner_token_path = Some(runner_dir.join("runner.token"));
+        }
+
+        // Phase 3 (presence-lease pool capacity): a registered runner drains
+        // its own per-runner namespace so presence-pool grants — which stamp
+        // `executor_namespace = "runner.{runner_id}"` — route to exactly this
+        // daemon. Default the drain namespace to `runner.{runner_id}` only when
+        // the operator hasn't explicitly set one. This matches the runner's JWT
+        // sub-allow (`runner.{id}.>`) and the grant's stamped namespace. The
+        // apalis subject becomes `runner.{id}.{prio}.{exec}`. Non-breaking: an
+        // explicit `EXECUTOR_NAMESPACE` / config value still wins (we only fill
+        // the field when it's still at its `default_namespace()` sentinel), and
+        // a non-enrolled daemon keeps the historical `executor_jobs` namespace.
+        if let Some(runner_id) = &self.runner_id {
+            if self.namespace == default_namespace() {
+                self.namespace = format!("runner.{runner_id}");
+            }
+        }
+
+        // Phase 2 (lab-runner NATS scoped creds): if the `register` /
+        // `refresh-creds` flow wrote a `.creds` file and the operator hasn't
+        // explicitly configured `nats_creds`, default to it so a registered
+        // runner automatically connects to NATS with its scoped credentials.
+        // Non-breaking: only fills an unset field, and a plain local dev NATS
+        // (no auth) ignores creds anyway. Independent of `runner_id` discovery
+        // so an explicitly-configured runner still gets its creds defaulted.
+        if self.nats_creds.is_none() {
+            let creds_path = runner_dir.join("runner.creds");
+            if creds_path.exists() {
+                self.nats_creds = Some(creds_path.to_string_lossy().into_owned());
+            }
+        }
     }
 
     pub fn default_timeout(&self) -> Duration {
@@ -498,6 +594,10 @@ impl ExecutorConfig {
 
     pub fn idle_timeout(&self) -> Duration {
         Duration::from_secs(self.idle_timeout_secs)
+    }
+
+    pub fn presence_interval(&self) -> Duration {
+        Duration::from_secs(self.presence_interval_secs)
     }
 }
 
@@ -561,6 +661,10 @@ fn default_idle_timeout_secs() -> u64 {
     30
 }
 
+fn default_presence_interval_secs() -> u64 {
+    10
+}
+
 fn default_cancel_nats() -> bool {
     true
 }
@@ -610,6 +714,9 @@ mod tests {
             idle_timeout_secs: default_idle_timeout_secs(),
             nats_ping_interval_secs: default_nats_ping_interval_secs(),
             target_exec_id: None,
+            runner_id: None,
+            runner_token_path: None,
+            presence_interval_secs: default_presence_interval_secs(),
         }
     }
 
@@ -693,6 +800,34 @@ mod tests {
 
         assert_eq!(config.lifetime, Lifetime::RunToCompletion);
         assert_eq!(config.max_jobs, Some(1));
+    }
+
+    #[test]
+    fn normalize_defaults_namespace_to_runner_when_identity_present() {
+        let mut config = test_config();
+        config.runner_id = Some("rnr-123".into());
+        assert_eq!(config.namespace, default_namespace());
+        config.normalize();
+        assert_eq!(config.namespace, "runner.rnr-123");
+    }
+
+    #[test]
+    fn normalize_keeps_explicit_namespace_over_runner_default() {
+        let mut config = test_config();
+        config.runner_id = Some("rnr-123".into());
+        config.namespace = "custom_ns".into();
+        config.normalize();
+        assert_eq!(
+            config.namespace, "custom_ns",
+            "an explicitly-set namespace wins over the runner.{{id}} default"
+        );
+    }
+
+    #[test]
+    fn normalize_namespace_unchanged_without_runner_identity() {
+        let mut config = test_config();
+        config.normalize();
+        assert_eq!(config.namespace, default_namespace());
     }
 
     #[test]

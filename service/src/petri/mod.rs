@@ -4,6 +4,7 @@ pub mod events;
 pub mod instance;
 pub mod launcher;
 pub mod pool_net;
+pub mod presence_pool_net;
 pub mod proxy;
 pub mod resource_resolver;
 pub mod staging_net;

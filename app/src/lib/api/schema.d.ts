@@ -340,6 +340,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/capability-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/capability-types` — paginated, workspace-scoped (live only). */
+        get: operations["list_capability_types"];
+        put?: never;
+        /**
+         * `POST /api/v1/capability-types` — mint a capability type. Cookie-only
+         *     (browser admin boundary, same as `runners::create_registration_token`).
+         */
+        post: operations["create_capability_type"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/capability-types/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/capability-types/{id}` — admin detail (workspace-scoped). */
+        get: operations["get_capability_type"];
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/capability-types/{id}` — revoke (soft delete: set
+         *     `revoked_at`). Cookie-only, mirroring the create boundary.
+         */
+        delete: operations["delete_capability_type"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalogue": {
         parameters: {
             query?: never;
@@ -1602,6 +1644,180 @@ export interface paths {
          *     `update_resource` with only `config` set, plus a different audit verb.
          */
         post: operations["rotate_resource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/runners` — paginated, workspace-scoped (live runners only). */
+        get: operations["list_runners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/runners/enroll` — GitLab-style enrollment. PUBLIC: authed by
+         *     the `rt_` token in the body. The enrolled runner inherits the registration
+         *     token's `workspace_id` + `pool`; `enrolled_by` is the token's `created_by`.
+         */
+        post: operations["enroll_runner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/runners/presence` — live in-memory presence snapshot (Phase 5).
+         * @description Returns the presence-controller's in-memory `PresenceMap` — the actual
+         *     pool-capacity signal (which runners hold an admitted unit right now), NOT the
+         *     `runners.last_seen_at` column on the list view. Read-only; behind the auth
+         *     gate like the other management reads.
+         *
+         *     The in-memory map is keyed by `runner_id` only and carries no workspace, so
+         *     it is filtered here against the caller's workspace — a presence row is
+         *     returned only for a runner that lives in the caller's workspace. Without this
+         *     the snapshot would leak every workspace's runner ids + liveness timing
+         *     (tenant-isolation break), since every other runner read is workspace-scoped.
+         */
+        get: operations["runner_presence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/registration-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/runners/registration-tokens` — paginated, workspace-scoped
+         *     (live tokens only). Never carries the hash.
+         */
+        get: operations["list_registration_tokens"];
+        put?: never;
+        /**
+         * `POST /api/v1/runners/registration-tokens` — mint a registration token. The
+         *     `token` is returned ONCE. Cookie-only (browser human boundary), mirroring
+         *     `auth_tokens.rs` so a machine token can't mint enrollment secrets.
+         */
+        post: operations["create_registration_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/registration-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/runners/registration-tokens/{id}` — revoke a registration
+         *     token (soft delete; existing runners keep their credentials).
+         */
+        delete: operations["revoke_registration_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/runners/{id}` — admin view (workspace-scoped). */
+        get: operations["get_runner"];
+        put?: never;
+        post?: never;
+        /** `DELETE /api/v1/runners/{id}` — revoke (soft delete + status='revoked'). */
+        delete: operations["revoke_runner"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/runners/{id}/heartbeat` — bump `last_seen_at`. Authorized by
+         *     the runner credential: the principal's subject MUST be `runner:{id}` so a
+         *     runner can only heartbeat itself.
+         */
+        post: operations["heartbeat_runner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runners/{id}/nats-creds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/runners/{id}/nats-creds` — mint/rotate the runner's scoped
+         *     NATS user JWT. Runner-token authed, self-only: the principal's subject MUST
+         *     be `runner:{id}` (same boundary as heartbeat). The JWT is freshly signed
+         *     from the runner row's stored `nats_public_key`; 404 if none is stored.
+         *     Long-lived (no expiry) — calling this again rotates it.
+         */
+        post: operations["issue_runner_nats_creds"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3039,6 +3255,39 @@ export interface components {
          */
         CalloutSeverity: "info" | "warning" | "error" | "success";
         /**
+         * @description One typed field on a capability. `kind` reuses the platform's unified
+         *     [`FieldKind`] vocabulary (the SAME enum the compiler/port model use) — do
+         *     not invent a parallel enum here. `options` carries the enum members when
+         *     `kind == FieldKind::Select`.
+         */
+        CapabilityField: {
+            kind: components["schemas"]["FieldKind"];
+            name: string;
+            /** @description Enum members for `Select`-kind fields. Ignored for other kinds. */
+            options?: string[] | null;
+            required?: boolean;
+        };
+        /** @description Detail view returned by `GET /api/v1/capability-types/{id}`. */
+        CapabilityTypeDetail: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+            fields: components["schemas"]["CapabilityField"][];
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        /** @description Compact list-row shape. Returned by `GET /api/v1/capability-types`. */
+        CapabilityTypeSummary: {
+            /** Format: date-time */
+            created_at: string;
+            fields: components["schemas"]["CapabilityField"][];
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        /**
          * @description Cardinality of an asset type (docs/20 §4.2). `Object` is the 1-row
          *     degenerate case (the builder renders a single-row form instead of a grid);
          *     `Collection` is a many-row table.
@@ -3344,6 +3593,26 @@ export interface components {
             };
         };
         /**
+         * @description One placement constraint over a `<capability>.<field>` of a runner's
+         *     advertised caps. `op == Exists` ignores `value`; every other op compares the
+         *     present `caps[capability][field]` against `value` per [`ConstraintOp`].
+         */
+        Constraint: {
+            /** @description Capability name — must be a defined `capability_type` in the workspace. */
+            capability: string;
+            /** @description Field within that capability's typed schema. */
+            field: string;
+            op: components["schemas"]["ConstraintOp"];
+            /** @description Comparison operand. Ignored when `op == Exists`. Defaults to `null`. */
+            value?: unknown;
+        };
+        /**
+         * @description Comparison operator for a [`Constraint`]. Wire values are lowercase so they
+         *     match the engine `satisfies` matcher's op strings exactly.
+         * @enum {string}
+         */
+        ConstraintOp: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "exists";
+        /**
          * @description Context-window management strategy for an [`WorkflowNodeData::Agent`].
          *     Inert in PR 1's degenerate path; declared upfront so the type stays
          *     stable across the follow-up loop-lowering PR (`docs/12` § 3).
@@ -3390,6 +3659,13 @@ export interface components {
              */
             scope_id?: string | null;
             scope_kind?: null | components["schemas"]["ScopeKind"];
+        };
+        /** @description Request body for `POST /api/v1/capability-types`. */
+        CreateCapabilityTypeRequest: {
+            /** @description Typed field list. */
+            fields?: components["schemas"]["CapabilityField"][];
+            /** @description Capability name, unique within the workspace. */
+            name: string;
         };
         CreateInstanceRequest: {
             /**
@@ -3438,6 +3714,16 @@ export interface components {
             description?: string;
             display_name: string;
             slug: string;
+        };
+        /** @description Request body for `POST /api/v1/runners/registration-tokens`. */
+        CreateRegistrationTokenRequest: {
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: int32 */
+            max_uses?: number | null;
+            pool?: string | null;
+            /** @description Defaults to `true` (reusable) when omitted. */
+            reusable?: boolean | null;
         };
         /**
          * @description Request body for `POST /api/v1/resources`. Carries every field needed to
@@ -3501,6 +3787,21 @@ export interface components {
              *     `name`, shown in the token list.
              */
             name: string;
+        };
+        /**
+         * @description Response for a freshly-minted registration token. `token` is the full
+         *     `rt_{id}.{secret}` credential, returned ONCE.
+         */
+        CreatedRegistrationToken: {
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            max_uses?: number | null;
+            pool?: string | null;
+            reusable: boolean;
+            token: string;
         };
         /**
          * @description Response of `POST /api/v1/auth/tokens`. Identical to [`TokenSummary`] plus the
@@ -3690,6 +3991,39 @@ export interface components {
         EngineStatus: {
             available: boolean;
             run_mode?: string | null;
+        };
+        /**
+         * @description Request body for `POST /api/v1/runners/enroll`. Authenticated by the
+         *     `registration_token` in the body, not by the auth gate.
+         */
+        EnrollRequest: {
+            /** @description Arbitrary self-reported capability blob. Defaults to `{}`. */
+            capabilities?: unknown;
+            /** @description Operator-facing runner name; must be unique within the workspace. */
+            name: string;
+            /** @description Optional NATS account public key the runner will use. */
+            nats_public_key?: string | null;
+            /** @description `rt_{id}.{secret}` registration token. */
+            registration_token: string;
+        };
+        /**
+         * @description Response body for a successful enrollment. `runner_token` is the full
+         *     `rnr_{id}.{secret}` credential, returned ONCE and never stored in plaintext.
+         */
+        EnrolledRunner: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the
+             *     `nats_public_key` the runner sent at enrollment. `null` when no public
+             *     key was supplied OR signing was unavailable; the runner can fetch it
+             *     later via `POST /api/v1/runners/{id}/nats-creds`.
+             */
+            nats_jwt?: string | null;
+            pool?: string | null;
+            runner_token: string;
+            /** Format: uuid */
+            workspace_id: string;
         };
         /**
          * @description Uniform error body returned by every fallible handler. The spec exposes a
@@ -4816,6 +5150,22 @@ export interface components {
             /** Format: int64 */
             total: number;
         };
+        PaginatedResponse_CapabilityTypeSummary: {
+            items: {
+                /** Format: date-time */
+                created_at: string;
+                fields: components["schemas"]["CapabilityField"][];
+                /** Format: uuid */
+                id: string;
+                name: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
         PaginatedResponse_InstanceListItem: {
             items: {
                 /** Format: date-time */
@@ -4871,6 +5221,28 @@ export interface components {
             /** Format: int64 */
             total: number;
         };
+        PaginatedResponse_RegistrationTokenSummary: {
+            items: {
+                /** Format: date-time */
+                created_at: string;
+                /** Format: date-time */
+                expires_at?: string | null;
+                /** Format: uuid */
+                id: string;
+                /** Format: int32 */
+                max_uses?: number | null;
+                pool?: string | null;
+                reusable: boolean;
+                /** Format: int32 */
+                uses: number;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
         PaginatedResponse_ResourceAuditEntry: {
             items: {
                 action: string;
@@ -4916,6 +5288,31 @@ export interface components {
                 resource_type: string;
                 /** Format: date-time */
                 updated_at: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_RunnerSummary: {
+            items: {
+                /**
+                 * @description Advertised capabilities (the same `capabilities` JSON object the runner
+                 *     enrolled with). Included on the list row so the fleet UI can show a caps
+                 *     summary inline without an extra per-runner round-trip. `{}` when none.
+                 */
+                capabilities: unknown;
+                /** Format: date-time */
+                enrolled_at: string;
+                /** Format: uuid */
+                id: string;
+                /** Format: date-time */
+                last_seen_at?: string | null;
+                name: string;
+                pool?: string | null;
+                status: string;
             }[];
             /** Format: int64 */
             page: number;
@@ -5511,6 +5908,21 @@ export interface components {
             /** @description Working directory (defaults to run_dir root). */
             working_dir?: string | null;
         };
+        /** @description Compact list-row for registration tokens. MUST NOT carry `token_hash`. */
+        RegistrationTokenSummary: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            max_uses?: number | null;
+            pool?: string | null;
+            reusable: boolean;
+            /** Format: int32 */
+            uses: number;
+        };
         /**
          * @description Request body for `PUT /api/v1/assets/{id}/records`. Replaces (or appends to)
          *     the record set; bumps `version` and validates each row against the type's
@@ -5527,6 +5939,16 @@ export interface components {
              *     `fields_json` via `Port::json_schema`.
              */
             records: unknown[];
+        };
+        /**
+         * @description Phase 4 — placement Requirements authored on a PRESENCE-pooled
+         *     `AutomatedStep`. A set of typed [`Constraint`]s over the runner-advertised
+         *     `caps`. Empty `constraints` (the default) matches any pool unit. The engine
+         *     matcher (`satisfies(requirements, caps)`) AND-s every constraint.
+         */
+        Requirements: {
+            /** @description AND-ed constraints. Empty ⇒ matches anything. */
+            constraints?: components["schemas"]["Constraint"][];
         };
         ResolveEmailRequest: {
             email: string;
@@ -5801,6 +6223,86 @@ export interface components {
             passed: number;
             runs: components["schemas"]["TemplateTestRun"][];
             total: number;
+        };
+        /**
+         * @description Admin view returned by `GET /api/v1/runners/{id}`. MUST NOT carry
+         *     `token_hash`.
+         */
+        RunnerDetail: {
+            capabilities: unknown;
+            /** Format: date-time */
+            enrolled_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+            name: string;
+            nats_public_key?: string | null;
+            pool?: string | null;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            status: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted
+         *     scoped NATS user JWT plus the issuing account signing key's public key. The
+         *     runner assembles its own `.creds` file from this JWT and its locally-held
+         *     user nkey seed.
+         */
+        RunnerNatsCreds: {
+            /**
+             * @description The runners-account signing key's PUBLIC key (`A…`) — the JWT issuer and
+             *     the value the NATS server's account resolver must trust.
+             */
+            account_public_key: string;
+            /**
+             * @description Freshly signed scoped user JWT, bound to the runner's stored
+             *     `nats_public_key`.
+             */
+            nats_jwt: string;
+        };
+        /**
+         * @description Phase 5 — one row of the live in-memory presence snapshot returned by
+         *     `GET /api/v1/runners/presence`. This reflects the presence-controller's
+         *     in-memory `PresenceMap` (the actual pool-capacity signal), NOT the
+         *     `runners.last_seen_at` column on [`RunnerSummary`] (a best-effort UI bump).
+         */
+        RunnerPresenceSnapshot: {
+            /**
+             * Format: int64
+             * @description Milliseconds since the last presence heartbeat from this runner.
+             */
+            last_seen_ms_ago: number;
+            /**
+             * @description Whether mekhan currently considers the runner PRESENT (one pool unit
+             *     admitted and not yet reaped).
+             */
+            present: boolean;
+            /** Format: uuid */
+            runner_id: string;
+        };
+        /**
+         * @description Compact list-row shape. Returned by `GET /api/v1/runners` — MUST NOT carry
+         *     `token_hash`.
+         */
+        RunnerSummary: {
+            /**
+             * @description Advertised capabilities (the same `capabilities` JSON object the runner
+             *     enrolled with). Included on the list row so the fleet UI can show a caps
+             *     summary inline without an extra per-runner round-trip. `{}` when none.
+             */
+            capabilities: unknown;
+            /** Format: date-time */
+            enrolled_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+            name: string;
+            pool?: string | null;
+            status: string;
         };
         /**
          * @description One reachable, producer-attributed reference the guard picker should
@@ -7042,6 +7544,7 @@ export interface components {
              *     caller needs the canonical backend shape.
              */
             output?: components["schemas"]["Port"];
+            requirements?: null | components["schemas"]["Requirements"];
             /**
              * @description Retry behaviour on execution failure/timeout. Defaults to 3
              *     immediate retries (the historical hardcoded value), so existing
@@ -8432,6 +8935,151 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_capability_types: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated list of capability types */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_CapabilityTypeSummary"];
+                };
+            };
+        };
+    };
+    create_capability_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCapabilityTypeRequest"];
+            };
+        };
+        responses: {
+            /** @description Capability type created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityTypeSummary"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already exists in workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_capability_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Capability type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capability type detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityTypeDetail"];
+                };
+            };
+            /** @description Capability type not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_capability_type: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Capability type id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Capability type revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Capability type not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -11021,6 +11669,328 @@ export interface operations {
             };
             /** @description Secret backend write failed */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_runners: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated list of runners */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_RunnerSummary"];
+                };
+            };
+        };
+    };
+    enroll_runner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollRequest"];
+            };
+        };
+        responses: {
+            /** @description Runner enrolled (runner_token shown once) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrolledRunner"];
+                };
+            };
+            /** @description Invalid registration token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Revoked / expired / exhausted registration token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Runner name already exists in workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    runner_presence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live runner presence snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerPresenceSnapshot"][];
+                };
+            };
+        };
+    };
+    list_registration_tokens: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated registration tokens */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_RegistrationTokenSummary"];
+                };
+            };
+        };
+    };
+    create_registration_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRegistrationTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Registration token created (shown once) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedRegistrationToken"];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_registration_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Registration token id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registration token revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Registration token not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_runner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runner detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerDetail"];
+                };
+            };
+            /** @description Runner not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_runner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runner revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Runner not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    heartbeat_runner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Heartbeat recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Wrong / foreign / revoked runner token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Runner not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    issue_runner_nats_creds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Freshly signed scoped NATS user JWT */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerNatsCreds"];
+                };
+            };
+            /** @description Wrong / foreign / revoked runner token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Runner not found or no stored nats_public_key */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

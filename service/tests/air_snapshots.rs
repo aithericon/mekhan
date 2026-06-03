@@ -325,6 +325,7 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         "12a-bo-catalog-trigger",
         "16-leased-gpu",
         "19-postgres-node",
+        "20-loki-query",
         "21-asset-consume",
         "22-asset-ref",
         "23-resource-ref",

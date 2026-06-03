@@ -75,6 +75,18 @@ fn global_by_name<'a>(
     globals.values().find(|g| g.name == head)
 }
 
+/// Names of an asset global's `File`-kind fields — staged alongside the records
+/// so the runner deep-wraps each into an `aithericon.File`. Empty for resources
+/// or File-less asset types.
+fn asset_file_fields(g: &NamedGlobal) -> Vec<String> {
+    use crate::models::template::FieldKind;
+    g.fields
+        .iter()
+        .filter(|f| f.kind == FieldKind::File)
+        .map(|f| f.name.clone())
+        .collect()
+}
+
 /// Control-flow ConstantInline: scan Decision guards / Loop conditions / End +
 /// Failure result mappings for `<name>.<path>` heads on an `inline_channel`
 /// global, navigate `static_vals` by the dotted path, and emit one
@@ -254,6 +266,7 @@ fn emit_resource_envelopes(
                             asset_id: global.id,
                             type_id: global.type_id.unwrap_or_default(),
                             version: global.version,
+                            file_fields: asset_file_fields(global),
                         },
                     });
                 }
@@ -305,6 +318,7 @@ fn emit_asset_body_tokens(
                     asset_id: global.id,
                     type_id: global.type_id.unwrap_or_default(),
                     version: global.version,
+                    file_fields: asset_file_fields(global),
                 },
             });
         }
@@ -351,6 +365,7 @@ fn emit_asset_stagings(
                     asset_id: global.id,
                     type_id: global.type_id.unwrap_or_default(),
                     version: global.version,
+                    file_fields: asset_file_fields(global),
                 },
             });
         }

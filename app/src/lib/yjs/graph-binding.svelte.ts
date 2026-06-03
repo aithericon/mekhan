@@ -223,6 +223,14 @@ export class YjsGraphBinding {
 				// `streamInput` makes the node a streaming reducer (exposes a
 				// "stream" INPUT handle). Same round-trip rationale as streamOutput.
 				const streamInput = config?.streamInput === true;
+				// `requirements` (Phase 4) carries the step's capability-match
+				// constraints. The whole nested object round-trips as one value —
+				// it MUST be read back (and written below) or a template authored
+				// with requirements silently drops them on the next graph mutation
+				// (the Yjs graph-binding drop-class trap).
+				const requirements = config?.requirements as
+					| AutomatedStepNodeData['requirements']
+					| undefined;
 				// `assetBindings` binds scope-visible assets the node stages as
 				// inputs (docs/20 §5). Top-level node field → must round-trip here
 				// or the editor reconstruction drops the bindings.
@@ -238,6 +246,7 @@ export class YjsGraphBinding {
 					...(deploymentModel ? { deploymentModel } : {}),
 					...(streamOutput ? { streamOutput } : {}),
 					...(streamInput ? { streamInput } : {}),
+					...(requirements ? { requirements } : {}),
 					...(assetBindings && assetBindings.length > 0 ? { assetBindings } : {})
 				};
 			}
@@ -804,6 +813,18 @@ export class YjsGraphBinding {
 				// the backend's `streamOutput` Y.Map key) so clearing it persists.
 				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
 				config.set('streamInput', (data as AutomatedStepNodeData).streamInput ?? false);
+				// `requirements` (Phase 4) round-trips whole, conditionally (mirrors
+				// `output`): persist when the step carries capability constraints so
+				// collaborative edits don't drop them on publish.
+				{
+					const reqs = (data as AutomatedStepNodeData).requirements;
+					// Delete when absent — clearing the last constraint emits node data
+					// with `requirements` stripped, and a bare `if (reqs) set()` would
+					// leave the stale key in Yjs (it would reappear on reload). Mirrors
+					// the other `config.delete(...)` clear paths in this switch.
+					if (reqs) config.set('requirements', reqs);
+					else config.delete('requirements');
+				}
 				// Staged-asset bindings (docs/20 §5). Only touch the Y.Map key when
 				// the incoming data EXPLICITLY carries `assetBindings` (i.e. the
 				// AssetBindingsSection emitted a change). When the field is absent

@@ -667,10 +667,31 @@ async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
     }
 }
 
+/// Best-effort content-type from a bundled file's extension, for the asset
+/// File-field seed upload. Falls back to `application/octet-stream`.
+fn guess_content_type(filename: &str) -> &'static str {
+    match filename
+        .rsplit('.')
+        .next()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("txt") => "text/plain",
+        Some("csv") => "text/csv",
+        Some("json") => "application/json",
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        _ => "application/octet-stream",
+    }
+}
+
 /// One asset fixture: a self-contained asset-type schema + the asset (ref-key)
 /// + its records. The type is created (or reused if a same-named type already
 /// exists in the demo workspace) before the asset, so several fixtures can
-/// share a type without ordering ceremony.
+/// share a type without ordering ceremony. A record's `File`-field value may be
+/// `{"__file": "<path-relative-to-demos/assets>"}` — the seeder uploads that
+/// bundled file and substitutes the resulting storage path.
 #[derive(serde::Deserialize)]
 struct AssetFixture {
     asset_type: crate::models::asset::CreateAssetTypeRequest,
@@ -808,12 +829,72 @@ async fn seed_demo_assets(state: &crate::AppState, root: &Path) {
         };
 
         if !fixture.records.is_empty() {
-            if let Err(e) = crate::handlers::assets::replace_records_internal(
-                state,
-                asset.id,
-                &fixture.records,
-            )
-            .await
+            // Resolve `File`-field `{"__file": "<rel>"}` directives: upload the
+            // bundled file (relative to `demos/assets/`) and substitute the
+            // storage path, so a seeded asset carries real File-field content
+            // (demo 24 then always exercises `File.retrieve()`). Collected
+            // first, then uploaded, to avoid borrowing the record map across
+            // the await.
+            let mut records = fixture.records.clone();
+            let mut directives: Vec<(usize, String, String)> = Vec::new();
+            for (i, rec) in records.iter().enumerate() {
+                if let Some(obj) = rec.as_object() {
+                    for (field, val) in obj {
+                        if let Some(rel) = val
+                            .as_object()
+                            .and_then(|o| o.get("__file"))
+                            .and_then(|v| v.as_str())
+                        {
+                            directives.push((i, field.clone(), rel.to_string()));
+                        }
+                    }
+                }
+            }
+            let mut upload_ok = true;
+            for (i, field, rel) in directives {
+                let file_path = dir.join(&rel);
+                let bytes = match std::fs::read(&file_path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(asset = %fixture.ref_key, file = %file_path.display(), error = %e, "demo asset: bundled File read failed");
+                        upload_ok = false;
+                        break;
+                    }
+                };
+                let filename = file_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("upload.bin")
+                    .to_string();
+                match state
+                    .s3
+                    .upload_asset_file(
+                        asset.id,
+                        asset.version,
+                        &field,
+                        &filename,
+                        &bytes,
+                        guess_content_type(&filename),
+                    )
+                    .await
+                {
+                    Ok(key) => {
+                        if let Some(o) = records[i].as_object_mut() {
+                            o.insert(field, serde_json::Value::String(key));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(asset = %fixture.ref_key, %field, "demo asset: File upload failed: {e:?}");
+                        upload_ok = false;
+                        break;
+                    }
+                }
+            }
+            if !upload_ok {
+                continue;
+            }
+            if let Err(e) =
+                crate::handlers::assets::replace_records_internal(state, asset.id, &records).await
             {
                 tracing::warn!(asset = %fixture.ref_key, "demo asset records seed failed: {e:?}");
                 continue;

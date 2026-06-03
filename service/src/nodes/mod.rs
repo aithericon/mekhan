@@ -643,6 +643,7 @@ mod tests {
             deployment_model: Default::default(),
             stream_output: false,
             stream_input: false,
+            requirements: None,
             asset_bindings: Vec::new(),
         };
         let decl = lookup_by_variant(&data).expect("automated_step registered");
@@ -869,6 +870,7 @@ mod tests {
                 deployment_model: Default::default(),
                 stream_output: false,
                 stream_input: false,
+                requirements: None,
                 asset_bindings: Vec::new(),
             },
             // Rhai-bearing only (no structural validate hook — covered by

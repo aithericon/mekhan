@@ -1381,6 +1381,7 @@ mod tests {
                 deployment_model: DeploymentModel::default(),
                 stream_output: false,
                 stream_input: false,
+                requirements: None,
                 asset_bindings: Vec::new(),
             },
             parent_id: None,

@@ -178,6 +178,19 @@ pub async fn require_auth_middleware(
         }
     }
 
+    // Runner control-plane credential path: a `rnr_`-prefixed bearer resolves
+    // against the local `runners` table (mekhan-native, offline in dev_noop —
+    // never Zitadel introspection). A non-`rnr_` bearer or a failed verify
+    // falls through UNCHANGED to the cookie path below, so browsers and human
+    // PATs are unaffected.
+    if let Some(token) = bearer_token(req.headers()) {
+        if token.starts_with("rnr_") {
+            let user = super::runner_token::verify_runner_token(&state.db, token).await?;
+            req.extensions_mut().insert(user);
+            return Ok(next.run(req).await);
+        }
+    }
+
     let jar = CookieJar::from_headers(req.headers());
     let mut user = state
         .authenticator
