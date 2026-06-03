@@ -727,7 +727,26 @@ async fn seed_demo_resources(state: &crate::AppState, root: &Path) {
         .await;
         match existing {
             Ok(Some(_)) => {
-                tracing::info!(resource = %req.path, "demo resource already present — leaving as-is");
+                // DB row survives a `just dev down/up`, but the in-memory dev
+                // Vault does not — re-assert the fixture's secret so a bound
+                // demo doesn't hit `secret not found …#password` at fire time.
+                // The DB row (config/version/ACL) is left untouched.
+                match crate::handlers::resources::reprovision_resource_secret(
+                    state,
+                    &req,
+                    DEMO_WORKSPACE_ID,
+                )
+                .await
+                {
+                    Ok(()) => tracing::info!(
+                        resource = %req.path,
+                        "demo resource already present — secret re-provisioned, config left as-is"
+                    ),
+                    Err(e) => tracing::warn!(
+                        resource = %req.path,
+                        "demo resource present but secret re-provision failed: {e:?}"
+                    ),
+                }
                 continue;
             }
             Ok(None) => {}

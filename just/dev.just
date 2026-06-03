@@ -80,6 +80,7 @@ up:
     @just dev::up-engine
     @just dev::_wait-engine-stream
     @just dev::up-mekhan
+    @just dev::pg-demo-seed
     @just dev::up-app
     @just dev::up-runner || true
     @just dev::_summary
@@ -96,6 +97,7 @@ up-auth:
     @just dev::up-engine
     @just dev::_wait-engine-stream
     @just dev::up-mekhan bff
+    @just dev::pg-demo-seed
     @just dev::up-app
     @just dev::up-runner || true
     @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
@@ -499,15 +501,28 @@ httpbin-down:
 # table (NEVER mekhan's own application tables). This applies the demo's
 # idempotent seed against the dev Postgres so the demo + its `mekhan test`
 # fixtures have a stable baseline (schema `demo_pg`, three rows: alpha/bravo/
-# charlie). Re-run any time to reset to baseline.
+# charlie).
+#
+# Runs automatically as a step of `up` (and therefore `reset`/`restart`), so a
+# fresh volume always has the fixture and no separate seed command is needed.
+# It lives in the pg volume, which `reset` wipes — without this the demo fails
+# with `relation "demo_pg.widgets" does not exist`. Idempotent (TRUNCATE +
+# re-INSERT), so re-running on every `up` just re-asserts the baseline. Still
+# runnable standalone to reset the three rows.
 #
 # Uses the same {{database_url}} the rest of dev points at (slot-aware via env).
 # The `demo_pg` resource the demo binds hardcodes the slot-0 port (15439); on a
 # slotted worktree edit demos/resources/demo_pg.json to match before going live.
+# `psql` is the only extra tool this needs; if it isn't on PATH the seed is
+# skipped with a hint rather than failing the whole stack `up`.
 pg-demo-seed:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd ..
+    if ! command -v psql >/dev/null 2>&1; then
+      echo "  · pg-demo-seed: psql not on PATH — skipping demo_pg.widgets fixture"
+      echo "    (run \`just dev pg-demo-seed\` after installing libpq/psql if you need demo 19)"
+      exit 0
+    fi
     echo "▶ seeding demo_pg.widgets fixture into {{database_url}}"
     psql "{{database_url}}" -v ON_ERROR_STOP=1 -f demos/19-postgres-node/seed.sql
     echo "  ✓ demo_pg.widgets seeded (schema demo_pg, 3 baseline rows)"

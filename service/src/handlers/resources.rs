@@ -868,6 +868,72 @@ pub(crate) async fn create_resource_internal(
     Ok(summary)
 }
 
+/// Re-provision the secret half of an already-existing resource from the given
+/// config, re-writing its v1 `vault_path`.
+///
+/// Exists for the dev demo seeder: the secret backend in `just dev` is the
+/// in-memory Vault, which is wiped on every `down`/`up` — but the Postgres
+/// `resources` / `resource_versions` rows survive, so the seeder's
+/// "already present → leave as-is" idempotency would otherwise leave a demo
+/// resource pointing at an empty Vault entry (`secret not found …#password`).
+/// Re-asserting the fixture's secret each boot self-heals that without
+/// touching the DB row (config / version / ACL are left exactly as-is).
+///
+/// Two guards keep this from clobbering deliberate edits:
+/// - No-op when the type has no secret fields (e.g. a `datacenter` with an
+///   inline-only connection, or a `loki` with the token unset) — the resolver
+///   never templates an absent secret (see SECRET_KEYS_MARKER), so a missing
+///   Vault entry is harmless there.
+/// - Only acts when the resource is still at `latest_version == 1`. A user who
+///   rotated the secret through the UI has a v2+ whose value the fixture no
+///   longer knows; leave that alone. The common case — a demo resource never
+///   rotated — is exactly v1, and writing the fixture value back is either a
+///   heal (Vault was wiped) or a no-op (identical bytes).
+///
+/// Best-effort: errors are returned for the caller to log, never fatal.
+pub(crate) async fn reprovision_resource_secret(
+    state: &AppState,
+    req: &CreateResourceRequest,
+    workspace_id: Uuid,
+) -> Result<(), ApiError> {
+    let descriptor = descriptor_or_400(&req.resource_type)?;
+    let (_public, secret) = split_config(descriptor, req.config.clone())?;
+    if secret.is_empty() {
+        return Ok(());
+    }
+
+    let row: Option<(Uuid, i32)> = sqlx::query_as(
+        "SELECT id, latest_version FROM resources \
+         WHERE workspace_id = $1 AND path = $2 AND deleted_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(&req.path)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let Some((resource_id, latest_version)) = row else {
+        return Ok(()); // raced away — nothing to heal
+    };
+    if latest_version != 1 {
+        // Rotated/edited since seed — the fixture isn't the source of truth
+        // for this version's secret anymore. Don't touch it.
+        return Ok(());
+    }
+
+    let vault_path = vault_path_for(workspace_id, resource_id, latest_version);
+    state
+        .resource_store
+        .put_version(&vault_path, &secret)
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("secret backend write failed: {e}"),
+            )
+        })?;
+    Ok(())
+}
+
 /// R3/R4b hook: for a pool-backed resource kind, (re)deploy its backing net
 /// `pool-<id>` to the engine. No-op for every other kind. Idempotent +
 /// engine-down-tolerant. Called on create AND version bump so a config change
