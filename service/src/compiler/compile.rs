@@ -566,7 +566,7 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     //     `fixups`. Runs before merges — the grant-inbox place is a
     //     `bridge_reply_channel` state place that no pass-through merge
     //     touches, so typing it here is stable. Deduplicate definitions on the
-    //     same kind name (one `Lease__token_pool` regardless of N pooled
+    //     same kind name (one `Lease__concurrency_limit` regardless of N pooled
     //     nodes).
     for (def_name, schema) in &fixups.lease_definitions {
         scenario

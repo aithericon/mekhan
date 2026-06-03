@@ -517,7 +517,7 @@ async fn warn_on_empty_fleet(state: &AppState, graph: &WorkflowGraph, workspace_
 }
 
 /// Worker-pool feature — best-effort uncovered-backend WARNING. For each
-/// default worker-pool `AutomatedStep` (i.e. `DeploymentModel::Executor { pool:
+/// default worker-pool `AutomatedStep` (i.e. `DeploymentModel::Executor { capacity:
 /// None }`) whose backend dispatches as an `ExecutorJob`, check whether ANY live
 /// worker (TTL-swept presence over `worker.*.presence`) advertises that backend.
 /// If none does, log a warning — instances will queue at `submitted` until a
@@ -526,7 +526,7 @@ async fn warn_on_empty_fleet(state: &AppState, graph: &WorkflowGraph, workspace_
 /// Scope is deliberately narrow (locked design invariant): we ONLY warn on the
 /// default worker-pool path.
 /// - `Scheduled` steps route to a cluster (`lease-<grant>`), not the work queue.
-/// - Pooled (`Executor { pool: Some }`) and presence-pool steps route to
+/// - Pooled (`Executor { capacity: Some }`) and presence-pool steps route to
 ///   `runner.{id}` / held units, which the separate empty-fleet/presence path
 ///   already covers.
 /// - `EngineEffect` backends (e.g. catalogue_query) never hit the work queue.
@@ -547,7 +547,7 @@ async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
         };
 
         // Only the default worker-pool path partitions by backend coverage.
-        if !matches!(deployment_model, DeploymentModel::Executor { pool: None }) {
+        if !matches!(deployment_model, DeploymentModel::Executor { capacity: None }) {
             continue;
         }
 
@@ -576,7 +576,7 @@ async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
 /// Runner-fleet feature — best-effort uncovered-backend WARNING for the
 /// PRESENCE-POOL (instrument) path, the sibling of [`warn_on_uncovered_backends`].
 ///
-/// For each presence-pooled `AutomatedStep` (`DeploymentModel::Executor { pool:
+/// For each presence-pooled `AutomatedStep` (`DeploymentModel::Executor { capacity:
 /// Some(binding) }`) whose backend dispatches as an `ExecutorJob`, check whether
 /// ANY live runner admitted to that pool (`binding.alias`) advertises the step's
 /// backend ([`crate::runners_presence::RunnerPresence::pool_covers`]). If none
@@ -602,9 +602,9 @@ async fn warn_on_uncovered_pool_backends(state: &AppState, graph: &WorkflowGraph
             continue;
         };
 
-        // Only the presence-pool path: `Executor { pool: Some }`. The bound alias
-        // is the `resources.path` shared with the runner's `pool` alias.
-        let DeploymentModel::Executor { pool: Some(binding) } = deployment_model else {
+        // Only the presence-pool path: `Executor { capacity: Some }`. The bound alias
+        // is the `resources.path` shared with the runner's `group` alias.
+        let DeploymentModel::Executor { capacity: Some(binding) } = deployment_model else {
             continue;
         };
 

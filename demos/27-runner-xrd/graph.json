@@ -30,10 +30,10 @@
       "data": {
         "type": "automated_step",
         "label": "Diffraction Scan",
-        "description": "Runs on a `lab_fleet` runner that satisfies `xrd.max_2theta >= 120`. The Requirement is matched against each present runner's advertised caps by the presence pool's `t_grant` guard (`satisfies`). Only a diffractometer with sufficient 2theta range is granted the scan.",
+        "description": "Runs on a `lab_fleet` runner that satisfies `xrd.max_2theta >= 120`. The Requirement is matched against each present runner's advertised caps by the runner group's `t_grant` guard (`satisfies`). Only a diffractometer with sufficient 2theta range is granted the scan.",
         "deploymentModel": {
           "mode": "executor",
-          "pool": { "alias": "lab_fleet" }
+          "capacity": { "alias": "lab_fleet" }
         },
         "requirements": {
           "constraints": [

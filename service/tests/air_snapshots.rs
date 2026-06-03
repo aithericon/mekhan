@@ -48,8 +48,8 @@ const SNAPSHOT_DEMOS: &[&str] = &[
     "12-bo-loop",
     // 13-resource-pool: a plain executor-dispatch Python step. The shared-pool
     // admission showcase moved off the well-known global onto a named
-    // `token_pool` RESOURCE bound via
-    // `deploymentModel: { mode: "executor", pool: { alias } }` (consolidation
+    // `concurrency_limit` RESOURCE bound via
+    // `deploymentModel: { mode: "executor", capacity: { alias } }` (consolidation
     // pivot) — and the demo seeder provisions templates, not resources, so the
     // seeded demo is plain executor dispatch. The pooled-lowering AIR shape is
     // pinned by `compiler_e2e`'s aliased-pool tests instead; the live pool
@@ -334,8 +334,8 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // resolved by the publish handler; bare `compile_to_air` has no
         // KnownResources for it. Proven live by the publish path + `mekhan test`.
         "25-prometheus-query",
-        // 26-runner-pool / 27-runner-xrd target a `presence_pool` resource
-        // (`lab_fleet`) via `deploymentModel.pool.alias`; lowering the pooled
+        // 26-runner-pool / 27-runner-xrd target a `runner_group` resource
+        // (`lab_fleet`) via `deploymentModel.capacity.alias`; lowering the pooled
         // body needs that resource resolved (publish handler / KnownResources),
         // which bare `compile_to_air` lacks. 27 additionally references the
         // `xrd` capability registry for its placement Requirements. The pooled-

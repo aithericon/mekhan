@@ -4952,7 +4952,7 @@ fn automated_step_executor_unchanged_emits_lifecycle_no_bridge() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
-            automated_node_with_deployment("auto", DeploymentModel::Executor { pool: None }),
+            automated_node_with_deployment("auto", DeploymentModel::Executor { capacity: None }),
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
@@ -6508,35 +6508,35 @@ fn automated_step_success_preserves_control_metadata_leaves() {
 /// `DeploymentModel` after the consolidation pivot + the Executor rename:
 /// - plain executor = `{"mode":"executor"}` (pool skipped) — the default + the
 ///   shape every existing template round-trips to;
-/// - `Executor { pool: { alias (required), request? } }`;
+/// - `Executor { capacity: { alias (required), request? } }`;
 /// - `Scheduled` gained `scheduler?` + `operation` (default submit), both
 ///   skipped/defaulted so today's `{"mode":"scheduled","jobTemplate":...}` is
 ///   byte-identical.
 #[test]
 fn deployment_model_surface_round_trips() {
-    use mekhan_service::models::template::{DeploymentModel, ResourcePoolBinding};
+    use mekhan_service::models::template::{DeploymentModel, CapacityBinding};
 
     // Default = plain executor dispatch, no pool. Serializes to a bare
     // `{"mode":"executor"}`.
     let exec_default = DeploymentModel::default();
-    assert_eq!(exec_default, DeploymentModel::Executor { pool: None });
+    assert_eq!(exec_default, DeploymentModel::Executor { capacity: None });
     assert_eq!(
         serde_json::to_value(&exec_default).unwrap(),
         json!({ "mode": "executor" })
     );
     // A bare `{"mode":"executor"}` deserializes back to no-pool.
     let parsed: DeploymentModel = serde_json::from_value(json!({ "mode": "executor" })).unwrap();
-    assert_eq!(parsed, DeploymentModel::Executor { pool: None });
+    assert_eq!(parsed, DeploymentModel::Executor { capacity: None });
 
     // Executor with a pool binding (alias required).
     let pooled: DeploymentModel = serde_json::from_value(
-        json!({ "mode": "executor", "pool": { "alias": "prod_gpu", "request": { "gpu_count": 2 } } }),
+        json!({ "mode": "executor", "capacity": { "alias": "prod_gpu", "request": { "gpu_count": 2 } } }),
     )
-    .expect("executor+pool must parse");
+    .expect("executor+capacity must parse");
     assert_eq!(
         pooled,
         DeploymentModel::Executor {
-            pool: Some(ResourcePoolBinding {
+            capacity: Some(CapacityBinding {
                 alias: "prod_gpu".to_string(),
                 request: Some(json!({ "gpu_count": 2 })),
             })
@@ -6544,9 +6544,9 @@ fn deployment_model_surface_round_trips() {
     );
     // alias is REQUIRED: a `pool` without it is a hard deserialize error.
     assert!(
-        serde_json::from_value::<DeploymentModel>(json!({ "mode": "executor", "pool": {} }))
+        serde_json::from_value::<DeploymentModel>(json!({ "mode": "executor", "capacity": {} }))
             .is_err(),
-        "pool without an alias must fail to deserialize"
+        "capacity without an alias must fail to deserialize"
     );
 
     // Scheduled: today's shape round-trips byte-identically (scheduler skipped,
@@ -6593,9 +6593,9 @@ fn pool_resource_kinds_and_pool_registry() {
     use aithericon_resources::lookup;
     use aithericon_resources::pool::{pool_kind, PoolBackend};
 
-    // token_pool: no secret, capacity public — CRUD's split_config puts
+    // concurrency_limit: no secret, capacity public — CRUD's split_config puts
     // everything in public_config.
-    let tp = lookup("token_pool").expect("token_pool kind registered");
+    let tp = lookup("concurrency_limit").expect("concurrency_limit kind registered");
     assert!(tp.secret_fields.is_empty());
     assert!(tp.public_fields.contains(&"capacity"));
 
@@ -6628,7 +6628,7 @@ fn pool_resource_kinds_and_pool_registry() {
 
     // The pool-kind side-registry keys off the same wire name.
     assert_eq!(
-        pool_kind("token_pool").unwrap().backend,
+        pool_kind("concurrency_limit").unwrap().backend,
         PoolBackend::Tokens
     );
     assert_eq!(

@@ -1,5 +1,15 @@
 # 14 — Resource-pool net: contended infrastructure on the Petri substrate
 
+> **Naming (2026-06-03 capacity-naming refactor).** The user-/API-facing
+> vocabulary was de-collided: the `token_pool` resource kind is now
+> **`concurrency_limit`**, the `Executor.pool` deployment binding is now
+> **`capacity`** (type `ResourcePoolBinding` → `CapacityBinding`). The engine's
+> internal admission-net primitive — the net id `pool-<resource_id>`, its
+> `*_inbox` places and `petri.bridge.pool-<id>.*` subjects — is **intentionally
+> unchanged** (a Petri "pool" of unit tokens is the correct CS name, and it's
+> invisible to users). `token_pool`/`pool` below describe the same concepts
+> under their previous names.
+
 > Status: M1–M5 implemented and green (`feat/resource-pool-net`). M3 (compiler
 > lowering) and M5 (UI contention view + badge) are built and committed; the
 > only un-executed step is the *live* one-command showcase against a dev stack

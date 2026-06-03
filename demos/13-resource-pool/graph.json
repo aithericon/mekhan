@@ -30,7 +30,7 @@
       "data": {
         "type": "automated_step",
         "label": "GPU Render",
-        "description": "A ~12s mock render. The shared-pool admission showcase now lives on a real token_pool RESOURCE: create one at /resources, then set this step's deploymentModel to { mode: \"executor\", pool: { alias: \"<your-pool>\" } }. The compiler then wraps this body behind a claim/grant/release against the pool's backing net (admission control via the Petri firing rule). Seeded here as plain executor dispatch because the demo seeder provisions templates, not resources — see R5 dogfood.",
+        "description": "A ~12s mock render. The shared-admission showcase now lives on a real concurrency_limit RESOURCE: create one at /resources, then set this step's deploymentModel to { mode: \"executor\", capacity: { alias: \"<your-limit>\" } }. The compiler then wraps this body behind a claim/grant/release against the limit's backing net (admission control via the Petri firing rule). Seeded here as plain executor dispatch because the demo seeder provisions templates, not resources — see R5 dogfood.",
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",

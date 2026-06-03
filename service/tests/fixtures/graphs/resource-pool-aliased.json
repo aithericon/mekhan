@@ -23,7 +23,7 @@
 				},
 				"deploymentModel": {
 					"mode": "executor",
-					"pool": {
+					"capacity": {
 						"alias": "prod_gpu",
 						"request": { "units": 1 }
 					}

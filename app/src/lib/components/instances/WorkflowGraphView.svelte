@@ -234,18 +234,18 @@
 		return () => clearInterval(t);
 	});
 
-	// The token_pool AutomatedSteps in this graph (deployment `Executor { pool }`).
+	// The capacity-bound AutomatedSteps in this graph (deployment `Executor { capacity }`).
 	// Gating on NODE KIND — not on `p_<id>_pending` — is the key fix: a LeaseScope
 	// / Scheduled step ALSO emits `p_<id>_pending` (via the shared lease bridge),
-	// so the old place-based gate lit the pool widget for cluster runs. The pool
+	// so the old place-based gate lit the capacity widget for cluster runs. The
 	// overlay is a shared-capacity dashboard and belongs ONLY to genuine
-	// token-pool steps; cluster leases are surfaced in the drawer instead.
+	// concurrency_limit / runner_group steps; cluster leases are surfaced in the drawer instead.
 	const tokenPoolNodes = $derived.by(() => {
 		if (!graph) return [];
 		return graph.nodes.filter((n) => {
-			const dm = (n.data as { deploymentModel?: { mode?: string; pool?: unknown } } | undefined)
+			const dm = (n.data as { deploymentModel?: { mode?: string; capacity?: unknown } } | undefined)
 				?.deploymentModel;
-			return dm?.mode === 'executor' && !!dm.pool;
+			return dm?.mode === 'executor' && !!dm.capacity;
 		});
 	});
 	const hasPooledNodes = $derived(tokenPoolNodes.length > 0);
@@ -321,8 +321,8 @@
 			onNodeClick={openDrawerFor}
 			onPaneClick={closeDrawer}
 		/>
-		<!-- In-context resource-pool dashboard: ONLY for workflows with a genuine
-		     token_pool step (not cluster/lease runs). Pointed at the resolved
+		<!-- In-context capacity-contention dashboard: ONLY for workflows with a genuine
+		     concurrency_limit / runner_group step (not cluster/lease runs). Pointed at the resolved
 		     backing net id (`pool-<resource_id>`) read from the instance topology.
 		     `waitingNodeIds` is the predicate set from this instance's marking. -->
 		{#if hasPooledNodes && poolNetId}

@@ -71,7 +71,7 @@
 {#if isAwaiting}
 	<span
 		class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-sm font-medium ring-1 ring-purple-300 bg-purple-50 text-purple-700"
-		title="Waiting for resource grant — claim queued in pool net"
+		title="Waiting for resource grant — claim queued in the admission net"
 		data-testid="badge-awaiting-resource"
 	>
 		<Hourglass class="size-3" />

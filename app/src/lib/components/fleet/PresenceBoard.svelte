@@ -132,9 +132,9 @@
 											{runner.name}
 										</span>
 									</div>
-									{#if runner.pool}
+									{#if runner.group}
 										<Badge variant="secondary" class="shrink-0 text-xs">
-											{runner.pool}
+											{runner.group}
 										</Badge>
 									{/if}
 								</div>

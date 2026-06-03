@@ -45,14 +45,14 @@ fn caller_workspace(user: &AuthUser) -> Uuid {
     user.workspace_id.unwrap_or_else(Uuid::nil)
 }
 
-/// A `pool` alias is interpolated verbatim into a NATS subject (`{pool}.claim`)
+/// A `group` alias is interpolated verbatim into a NATS subject (`{group}.claim`)
 /// in the minted runner JWT, so it must be a single safe subject token — no
 /// `.` (extra tokens), `*`/`>` (wildcards), or whitespace that would broaden
 /// the granted publish permission. Empty is rejected here; callers treat
-/// `None`/empty as "no pool" before this point.
-fn is_safe_pool(pool: &str) -> bool {
-    !pool.is_empty()
-        && pool
+/// `None`/empty as "no group" before this point.
+fn is_safe_group(group: &str) -> bool {
+    !group.is_empty()
+        && group
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
@@ -86,7 +86,7 @@ fn default_per_page() -> i64 {
 
 /// `POST /api/v1/runners/enroll` — GitLab-style enrollment. PUBLIC: authed by
 /// the `rt_` token in the body. The enrolled runner inherits the registration
-/// token's `workspace_id` + `pool`; `enrolled_by` is the token's `created_by`.
+/// token's `workspace_id` + `group`; `enrolled_by` is the token's `created_by`.
 #[utoipa::path(
     post,
     path = "/api/v1/runners/enroll",
@@ -193,20 +193,20 @@ pub async fn enroll_runner(
         return Err(ApiError::bad_request(msg));
     }
 
-    // 5. Mint the runner credential + insert the row. workspace_id + pool flow
+    // 5. Mint the runner credential + insert the row. workspace_id + group flow
     //    from the (re-read) registration token; enrolled_by = its created_by.
     let runner_id = Uuid::new_v4();
     let minted = mint_token(RUNNER_TOKEN_PREFIX, runner_id);
 
     let insert = sqlx::query(
         "INSERT INTO runners \
-            (id, workspace_id, name, pool, token_hash, nats_public_key, capabilities, enrolled_by) \
+            (id, workspace_id, name, runner_group, token_hash, nats_public_key, capabilities, enrolled_by) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(runner_id)
     .bind(claimed.workspace_id)
     .bind(req.name.trim())
-    .bind(&claimed.pool)
+    .bind(&claimed.group)
     .bind(&minted.token_hash)
     .bind(&req.nats_public_key)
     .bind(&req.capabilities)
@@ -238,7 +238,7 @@ pub async fn enroll_runner(
     let nats_jwt = req.nats_public_key.as_deref().and_then(|pubkey| {
         match state
             .runner_nats_signer
-            .mint_runner_jwt(pubkey, runner_id, claimed.pool.as_deref())
+            .mint_runner_jwt(pubkey, runner_id, claimed.group.as_deref())
         {
             Ok(jwt) => Some(jwt),
             Err(e) => {
@@ -258,7 +258,7 @@ pub async fn enroll_runner(
             id: runner_id,
             runner_token: minted.full_token,
             workspace_id: claimed.workspace_id,
-            pool: claimed.pool,
+            group: claimed.group,
             nats_jwt,
         }),
     ))
@@ -351,7 +351,7 @@ pub async fn issue_runner_nats_creds(
 
     let nats_jwt = state
         .runner_nats_signer
-        .mint_runner_jwt(pubkey, id, row.pool.as_deref())
+        .mint_runner_jwt(pubkey, id, row.group.as_deref())
         .map_err(|e| ApiError::internal(format!("could not mint NATS user JWT: {e}")))?;
 
     Ok(Json(RunnerNatsCreds {
@@ -537,14 +537,14 @@ pub async fn create_registration_token(
         }
     }
 
-    // `pool` becomes a literal NATS subject token (`{pool}.claim`) in the minted
+    // `group` becomes a literal NATS subject token (`{group}.claim`) in the minted
     // runner JWT. Reject anything that isn't a single safe token so a token
     // creator can't broaden the publish grant via wildcards/extra tokens
     // (`*`, `>`, `.`, whitespace). Defended again in `mint_runner_jwt`.
-    if let Some(pool) = req.pool.as_deref() {
-        if !is_safe_pool(pool) {
+    if let Some(group) = req.group.as_deref() {
+        if !is_safe_group(group) {
             return Err(ApiError::bad_request(
-                "pool must be a single token of [A-Za-z0-9_-] (no '.', '*', '>', or whitespace)",
+                "group must be a single token of [A-Za-z0-9_-] (no '.', '*', '>', or whitespace)",
             ));
         }
     }
@@ -554,12 +554,12 @@ pub async fn create_registration_token(
 
     sqlx::query(
         "INSERT INTO runner_registration_tokens \
-            (id, workspace_id, pool, token_hash, reusable, max_uses, expires_at, created_by) \
+            (id, workspace_id, runner_group, token_hash, reusable, max_uses, expires_at, created_by) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(reg_id)
     .bind(workspace_id)
-    .bind(&req.pool)
+    .bind(&req.group)
     .bind(&minted.token_hash)
     .bind(reusable)
     .bind(req.max_uses)
@@ -573,7 +573,7 @@ pub async fn create_registration_token(
         Json(CreatedRegistrationToken {
             id: reg_id,
             token: minted.full_token,
-            pool: req.pool,
+            group: req.group,
             reusable,
             max_uses: req.max_uses,
             expires_at: req.expires_at,

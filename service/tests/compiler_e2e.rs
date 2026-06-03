@@ -464,8 +464,8 @@ fn transition_output_places<'a>(air: &'a Value, tid: &str) -> Vec<&'a str> {
         .unwrap_or_default()
 }
 
-/// A pooled (`Executor { pool: { alias } }`) AutomatedStep lowers to the
-/// claim/register/release handshake against the resolved `token_pool`'s backing
+/// A pooled (`Executor { capacity: { alias } }`) AutomatedStep lowers to the
+/// claim/register/release handshake against the resolved `concurrency_limit`'s backing
 /// net, and — the load-bearing invariant — BOTH terminal exits (success +
 /// error) arc to `release_out`, so the held capacity token is never stranded
 /// (docs/14). The well-known-global fallback is gone, so this drives the
@@ -473,7 +473,7 @@ fn transition_output_places<'a>(air: &'a Value, tid: &str) -> Vec<&'a str> {
 #[test]
 fn resource_pool_step_emits_claim_register_release_with_release_on_every_exit() {
     let air =
-        compile_aliased(&known_with_prod_gpu("token_pool")).expect("pooled step should compile");
+        compile_aliased(&known_with_prod_gpu("concurrency_limit")).expect("pooled step should compile");
     let expected_net = format!("pool-{}", prod_gpu_id());
 
     // Structural sanity the whole suite leans on.
@@ -638,7 +638,7 @@ fn prod_gpu_id() -> uuid::Uuid {
     uuid::Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap()
 }
 
-/// A `KnownResources` map with `prod_gpu` resolving to a `token_pool`. Mirrors
+/// A `KnownResources` map with `prod_gpu` resolving to a `concurrency_limit`. Mirrors
 /// what `discover_known_resources` hands the compiler at publish.
 fn known_with_prod_gpu(type_name: &str) -> KnownResources {
     let mut k = KnownResources::new();
@@ -672,16 +672,16 @@ fn compile_aliased(known: &KnownResources) -> Result<Value, CompileError> {
     .map(|a| a.air)
 }
 
-/// The keystone: an `Executor { pool: { alias } }` step resolves to the
-/// token_pool resource's backing net `pool-<id>`, carries the validated
-/// `request` in the ClaimRequest, declares `Lease__token_pool` in
+/// The keystone: an `Executor { capacity: { alias } }` step resolves to the
+/// concurrency_limit resource's backing net `pool-<id>`, carries the validated
+/// `request` in the ClaimRequest, declares `Lease__concurrency_limit` in
 /// `definitions`, types the grant inbox with it, stages `lease.json` into the
 /// body, and merges the lease into the parked envelope so a downstream
 /// `<slug>.lease.<field>` borrow synthesizes a read-arc.
 #[test]
 fn aliased_pool_resolves_backing_net_and_emits_typed_lease() {
-    let air = compile_aliased(&known_with_prod_gpu("token_pool"))
-        .expect("aliased token_pool step should compile");
+    let air = compile_aliased(&known_with_prod_gpu("concurrency_limit"))
+        .expect("aliased concurrency_limit step should compile");
 
     assert_all_transitions_wired(&air);
     assert_arcs_reference_existing_places(&air);
@@ -712,23 +712,23 @@ fn aliased_pool_resolves_backing_net_and_emits_typed_lease() {
         "aliased path must NOT use the well-known global net"
     );
 
-    // (2) `Lease__token_pool` is in definitions and types the grant inbox.
+    // (2) `Lease__concurrency_limit` is in definitions and types the grant inbox.
     assert!(
-        air["definitions"]["Lease__token_pool"].is_object(),
-        "Lease__token_pool must be registered in definitions, got: {:?}",
+        air["definitions"]["Lease__concurrency_limit"].is_object(),
+        "Lease__concurrency_limit must be registered in definitions, got: {:?}",
         air["definitions"]
     );
-    let lease_props = &air["definitions"]["Lease__token_pool"]["properties"];
+    let lease_props = &air["definitions"]["Lease__concurrency_limit"]["properties"];
     assert!(
         lease_props["unit_id"].is_object(),
-        "token_pool lease must declare unit_id"
+        "concurrency_limit lease must declare unit_id"
     );
     let grant_inbox = places(&air)
         .iter()
         .find(|p| p["id"] == "p_render_grant_inbox")
         .unwrap();
     assert_eq!(
-        grant_inbox["token_schema"], "#/definitions/Lease__token_pool",
+        grant_inbox["token_schema"], "#/definitions/Lease__concurrency_limit",
         "grant inbox place must be typed as the kind's lease"
     );
 
@@ -799,7 +799,7 @@ fn aliased_pool_resolves_backing_net_and_emits_typed_lease() {
 
 /// A `datacenter` under `Executor.pool` is a CompileError — it's a scheduler
 /// resource and belongs under `Scheduled`. The consolidation-pivot split:
-/// executor-pool admission is `token_pool`-only.
+/// executor-pool admission is `concurrency_limit`-only.
 #[test]
 fn datacenter_under_executor_pool_is_compile_error() {
     let err = compile_aliased(&known_with_prod_gpu("datacenter")).unwrap_err();
@@ -834,7 +834,7 @@ fn plain_executor_is_byte_identical_regardless_of_manifest() {
         "",
         &HashMap::new(),
         CompileOptions {
-            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("token_pool")),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("concurrency_limit")),
             ..Default::default()
         },
     )
@@ -851,7 +851,7 @@ fn plain_executor_is_byte_identical_regardless_of_manifest() {
         "plain executor must emit no claim bridge"
     );
     assert!(
-        air_empty["definitions"].get("Lease__token_pool").is_none(),
+        air_empty["definitions"].get("Lease__concurrency_limit").is_none(),
         "plain executor must emit no Lease__ definition"
     );
 }
@@ -880,7 +880,7 @@ fn aliased_pool_non_pool_kind_is_compile_error() {
     }
 }
 
-/// A `request` that violates the token_pool `claim_schema` → CompileError. The
+/// A `request` that violates the concurrency_limit `claim_schema` → CompileError. The
 /// fixture's request is valid (`{units:1}`); we mutate `units` to a wrong type.
 #[test]
 fn aliased_pool_bad_request_is_compile_error() {
@@ -889,7 +889,7 @@ fn aliased_pool_bad_request_is_compile_error() {
         if let mekhan_service::models::template::WorkflowNodeData::AutomatedStep {
             deployment_model:
                 mekhan_service::models::template::DeploymentModel::Executor {
-                    pool: Some(binding),
+                    capacity: Some(binding),
                 },
             ..
         } = &mut node.data
@@ -904,7 +904,7 @@ fn aliased_pool_bad_request_is_compile_error() {
         "",
         &HashMap::new(),
         CompileOptions {
-            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("token_pool")),
+            known_globals: &mekhan_service::compiler::named_global::globals_from_resources(&known_with_prod_gpu("concurrency_limit")),
             ..Default::default()
         },
     )

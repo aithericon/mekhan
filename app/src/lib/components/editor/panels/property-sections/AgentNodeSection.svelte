@@ -173,13 +173,13 @@
 	const isSingleShot = $derived((data.maxTurns ?? 1) <= 1 && !data.stopWhen);
 
 	// Deployment: single-shot agents inherit the full AutomatedStep dispatch
-	// (pool / scheduler / lease) via the byte-identical degenerate lowering.
+	// (capacity / scheduler / lease) via the byte-identical degenerate lowering.
 	// Multi-turn / tool-bearing agents run their turns on the plain executor
-	// pool only in v1 — a non-default deployment there is compile-rejected, so
+	// workers only in v1 — a non-default deployment there is compile-rejected, so
 	// warn in the editor (same idiom as the context-strategy preview warning).
 	const deploymentIsDefault = $derived(
 		!data.deploymentModel ||
-			(data.deploymentModel.mode === 'executor' && data.deploymentModel.pool == null)
+			(data.deploymentModel.mode === 'executor' && data.deploymentModel.capacity == null)
 	);
 	const deploymentRejectedForLoop = $derived(!isSingleShot && !deploymentIsDefault);
 </script>
@@ -428,9 +428,9 @@
 />
 {#if deploymentRejectedForLoop}
 	<p class="text-sm text-destructive" data-testid="agent-deployment-loop-warning">
-		Publish will reject — pooled/scheduled deployment is only supported on single-shot agents
+		Publish will reject — capacity/scheduled deployment is only supported on single-shot agents
 		in v1. Set <code>Max turns</code> to 1 and clear <code>Stop when</code> / tools, or use the
-		<code>Executor (worker pool)</code> default here.
+		<code>Executor (workers)</code> default here.
 	</p>
 {/if}
 

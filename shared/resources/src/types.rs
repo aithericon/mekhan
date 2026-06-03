@@ -296,18 +296,18 @@ pub struct GoogleOauth {
 // Here we declare only the resource's own config surface, exactly like any
 // other kind.
 
-/// Platform-owned in-net capacity pool. A `TokenPool` of capacity N is modelled
+/// Platform-owned in-net capacity pool. A `ConcurrencyLimit` of capacity N is modelled
 /// (in R3) as a deployed pool net holding N identical capacity tokens; the
 /// engine's firing rule then provides admission control + mutual exclusion for
 /// free. No secret — the pool is owned by the platform, not an external system,
 /// so there is no credential to store. See `docs/14`.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
 #[resource(
-    name = "token_pool",
-    display_name = "Token Pool",
+    name = "concurrency_limit",
+    display_name = "Concurrency Limit",
     icon = "lucide-layers"
 )]
-pub struct TokenPool {
+pub struct ConcurrencyLimit {
     /// Number of concurrent holders the pool admits. Surfaces N capacity tokens
     /// in the backing net.
     pub capacity: u32,
@@ -417,7 +417,7 @@ pub struct ContainerImage {
     pub registry_password: Option<String>,
 }
 
-/// Presence-driven capacity pool (Phase 3). Like [`TokenPool`] it is a
+/// Presence-driven capacity pool (Phase 3). Like [`ConcurrencyLimit`] it is a
 /// platform-owned, credential-less *contended-capacity* kind — but its capacity
 /// is NOT a configured count. Instead it is driven by **runner presence**: each
 /// live runner that checks in is admitted as one pool unit, and its unit is
@@ -428,14 +428,14 @@ pub struct ContainerImage {
 /// presence-lease design.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
 #[resource(
-    name = "presence_pool",
-    display_name = "Presence Pool",
+    name = "runner_group",
+    display_name = "Runner Group",
     icon = "lucide-radio-tower"
 )]
-pub struct PresencePool {
+pub struct RunnerGroup {
     /// Optional human label for one unit (e.g. `"runner"`, `"GPU node"`).
     /// Cosmetic — drives dashboard / picker copy, never admission (admission is
-    /// presence-driven). Symmetric with [`TokenPool::unit_label`].
+    /// presence-driven). Symmetric with [`ConcurrencyLimit::unit_label`].
     #[serde(default)]
     pub unit_label: Option<String>,
 }

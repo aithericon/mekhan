@@ -9,7 +9,7 @@
 //!
 //! - **Resources** are workspace-scoped. *Envelope heads* come from the
 //!   Python/config scanners (`collect_resource_heads`, fed the publish-time
-//!   `inline_sources`) plus declared node-data aliases (`Executor.pool`,
+//!   `inline_sources`) plus declared node-data aliases (`Executor.capacity`,
 //!   `Scheduled.scheduler`, `LeaseScope.lease`, backend `resource_alias_paths`).
 //!   *Control-flow heads* come from a Rhai scan (a resource's PUBLIC field can
 //!   drive a guard as a compile-time constant — `demo_pg.port == 5432` — with no
@@ -295,11 +295,11 @@ async fn discover_resource_globals(
             declared.push((node.id.clone(), alias));
         }
 
-        // `Executor.pool.alias` — a declared resource binding on the node data.
+        // `Executor.capacity.alias` — a declared resource binding on the node data.
         if let WorkflowNodeData::AutomatedStep {
             deployment_model:
                 crate::models::template::DeploymentModel::Executor {
-                    pool: Some(binding),
+                    capacity: Some(binding),
                 },
             ..
         } = &node.data

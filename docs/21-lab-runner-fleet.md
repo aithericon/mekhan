@@ -1,5 +1,12 @@
 # 21 · Lab Runner Fleet — wiring physical stations into the platform
 
+> **Naming (2026-06-03 capacity-naming refactor).** The `presence_pool` resource
+> kind is now **`runner_group`**, a runner's `pool` field is now **`group`**, and
+> a step's `Executor.pool` binding is now **`capacity`**. The presence-driven
+> admission net behind a runner group keeps its internal id `pool-<resource_id>`
+> (the engine's pool-net primitive, intentionally unchanged). `presence_pool`/
+> `pool` below describe the same concepts under their previous names.
+
 > Status: **design** (no code yet). Captures the decisions from the 2026-06-02 design
 > dialogue on wiring lab PCs / instrument stations (and later manufacturing stations)
 > into the platform. Builds on [10-control-data-token-model](10-control-data-token-model.md),

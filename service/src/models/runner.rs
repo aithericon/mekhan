@@ -36,7 +36,8 @@ pub struct RunnerRow {
     pub id: Uuid,
     pub workspace_id: Uuid,
     pub name: String,
-    pub pool: Option<String>,
+    #[sqlx(rename = "runner_group")]
+    pub group: Option<String>,
     /// SHA-256 (hex) of the secret half of `rnr_{id}.{secret}`. Never leaves
     /// the server — DTOs deliberately omit it.
     pub token_hash: String,
@@ -55,7 +56,8 @@ pub struct RunnerRow {
 pub struct RunnerRegistrationTokenRow {
     pub id: Uuid,
     pub workspace_id: Uuid,
-    pub pool: Option<String>,
+    #[sqlx(rename = "runner_group")]
+    pub group: Option<String>,
     /// SHA-256 (hex) of the secret half of `rt_{id}.{secret}`.
     pub token_hash: String,
     pub reusable: bool,
@@ -75,8 +77,8 @@ pub struct RunnerRegistrationTokenRow {
 pub struct RunnerSummary {
     pub id: Uuid,
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pool: Option<String>,
+    #[serde(rename = "group", skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub status: String,
     /// Advertised capabilities (the same `capabilities` JSON object the runner
     /// enrolled with). Included on the list row so the fleet UI can show a caps
@@ -92,7 +94,7 @@ impl From<RunnerRow> for RunnerSummary {
         Self {
             id: r.id,
             name: r.name,
-            pool: r.pool,
+            group: r.group,
             status: r.status,
             capabilities: r.capabilities,
             last_seen_at: r.last_seen_at,
@@ -108,8 +110,8 @@ pub struct RunnerDetail {
     pub id: Uuid,
     pub workspace_id: Uuid,
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pool: Option<String>,
+    #[serde(rename = "group", skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nats_public_key: Option<String>,
@@ -127,7 +129,7 @@ impl From<RunnerRow> for RunnerDetail {
             id: r.id,
             workspace_id: r.workspace_id,
             name: r.name,
-            pool: r.pool,
+            group: r.group,
             status: r.status,
             nats_public_key: r.nats_public_key,
             capabilities: r.capabilities,
@@ -165,7 +167,8 @@ pub struct EnrolledRunner {
     pub id: Uuid,
     pub runner_token: String,
     pub workspace_id: Uuid,
-    pub pool: Option<String>,
+    #[serde(rename = "group")]
+    pub group: Option<String>,
     /// Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the
     /// `nats_public_key` the runner sent at enrollment. `null` when no public
     /// key was supplied OR signing was unavailable; the runner can fetch it
@@ -191,8 +194,8 @@ pub struct RunnerNatsCreds {
 /// Request body for `POST /api/v1/runners/registration-tokens`.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct CreateRegistrationTokenRequest {
-    #[serde(default)]
-    pub pool: Option<String>,
+    #[serde(rename = "group", default)]
+    pub group: Option<String>,
     /// Defaults to `true` (reusable) when omitted.
     #[serde(default)]
     pub reusable: Option<bool>,
@@ -208,7 +211,8 @@ pub struct CreateRegistrationTokenRequest {
 pub struct CreatedRegistrationToken {
     pub id: Uuid,
     pub token: String,
-    pub pool: Option<String>,
+    #[serde(rename = "group")]
+    pub group: Option<String>,
     pub reusable: bool,
     pub max_uses: Option<i32>,
     pub expires_at: Option<DateTime<Utc>>,
@@ -218,8 +222,8 @@ pub struct CreatedRegistrationToken {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct RegistrationTokenSummary {
     pub id: Uuid,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pool: Option<String>,
+    #[serde(rename = "group", skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub reusable: bool,
     pub uses: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -255,7 +259,7 @@ impl From<RunnerRegistrationTokenRow> for RegistrationTokenSummary {
     fn from(r: RunnerRegistrationTokenRow) -> Self {
         Self {
             id: r.id,
-            pool: r.pool,
+            group: r.group,
             reusable: r.reusable,
             uses: r.uses,
             max_uses: r.max_uses,

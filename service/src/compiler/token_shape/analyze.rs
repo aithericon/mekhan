@@ -439,14 +439,14 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
     // resolve the kind here — the leaf is findable + the nested `.field` is
     // appended verbatim, which is all the borrow resolver needs. Emitted for
     // BOTH lease-bearing paths (they share `lower_pooled_body`):
-    //   - `Executor { pool: Some }` (token_pool admission, R2/R3), and
+    //   - `Executor { capacity: Some }` (concurrency_limit admission, R2/R3), and
     //   - `Scheduled { operation: Lease }` (datacenter lease, R4).
     // Plain executor dispatch + `Scheduled { operation: Submit }` stage no lease
     // and stay byte-identical.
     let holds_lease = matches!(
         &node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Executor { pool: Some(_) },
+            deployment_model: DeploymentModel::Executor { capacity: Some(_) },
             ..
         }
     );

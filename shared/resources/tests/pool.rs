@@ -1,7 +1,7 @@
 //! R1 pool-kind tests.
 //!
 //! Two halves:
-//!   1. the resource-kind registry exposes `token_pool` + `datacenter` with the
+//!   1. the resource-kind registry exposes `concurrency_limit` + `datacenter` with the
 //!      correct secret/public field split (driven by `#[derive(ResourceType)]`);
 //!   2. the *separate* pool-kind registry (`aithericon_resources::pool`) returns
 //!      a descriptor for each, with the right backend and non-empty claim/lease
@@ -14,27 +14,27 @@
 use aithericon_resources::lookup;
 use aithericon_resources::pool::{pool_kind, PoolBackend};
 
-/// `token_pool` registers as a no-secret kind with `capacity` + `unit_label`
+/// `concurrency_limit` registers as a no-secret kind with `capacity` + `unit_label`
 /// public.
 #[test]
-fn token_pool_kind_registered() {
-    let d = lookup("token_pool").expect("token_pool must be registered");
+fn concurrency_limit_kind_registered() {
+    let d = lookup("concurrency_limit").expect("concurrency_limit must be registered");
 
-    assert_eq!(d.display_name, "Token Pool");
+    assert_eq!(d.display_name, "Concurrency Limit");
     assert_eq!(d.icon, "lucide-layers");
     assert_eq!(d.oauth_provider, None);
     assert!(!d.dynamic_fields);
 
     assert!(
         d.secret_fields.is_empty(),
-        "token_pool is platform-owned — no secret; got {:?}",
+        "concurrency_limit is platform-owned — no secret; got {:?}",
         d.secret_fields
     );
     let public: Vec<&str> = d.public_fields.to_vec();
     for required in ["capacity", "unit_label"] {
         assert!(
             public.contains(&required),
-            "token_pool.public_fields missing `{required}`; got {public:?}"
+            "concurrency_limit.public_fields missing `{required}`; got {public:?}"
         );
     }
 }
@@ -83,9 +83,9 @@ fn datacenter_kind_registered() {
 /// produces non-empty claim/lease schemas. Non-pool kinds return `None`.
 #[test]
 fn pool_kind_registry_backends_and_schemas() {
-    let tokens = pool_kind("token_pool").expect("token_pool pool-kind must exist");
+    let tokens = pool_kind("concurrency_limit").expect("concurrency_limit pool-kind must exist");
     assert_eq!(tokens.backend, PoolBackend::Tokens);
-    assert_eq!(tokens.kind_name, "token_pool");
+    assert_eq!(tokens.kind_name, "concurrency_limit");
 
     let sched = pool_kind("datacenter").expect("datacenter pool-kind must exist");
     assert_eq!(sched.backend, PoolBackend::Scheduler);
@@ -127,7 +127,7 @@ fn pool_kind_registry_backends_and_schemas() {
 /// `<slug>.lease.<field>` borrow surfaces R2 will wire.
 #[test]
 fn lease_schemas_declare_expected_fields() {
-    let tokens_lease = (pool_kind("token_pool").unwrap().lease_schema)();
+    let tokens_lease = (pool_kind("concurrency_limit").unwrap().lease_schema)();
     let tokens_props = tokens_lease["properties"].as_object().unwrap();
     assert!(tokens_props.contains_key("unit_id"));
 

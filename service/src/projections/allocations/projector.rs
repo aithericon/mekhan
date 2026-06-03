@@ -27,7 +27,7 @@
 //!     `requested_tres`, back-fill `node`, and move `status` to
 //!     `failed`/`expired`/`released` per `job_status`.
 //!
-//! - **`token_pool_grant`** (BEST-EFFORT): `TransitionFired` on the pool net's
+//! - **`concurrency_limit_grant`** (BEST-EFFORT): `TransitionFired` on the pool net's
 //!   `t_grant` (→ `held`) / `t_release` (→ `released`), reading the produced
 //!   `Grant`/`Release` token's `grant_id`. This is intentionally minimal — the
 //!   `datacenter_lease` path is the load-bearing one.
@@ -55,14 +55,14 @@ use petri_domain::{DomainEvent, PersistedEvent, TokenColor};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AllocationKind {
     DatacenterLease,
-    TokenPoolGrant,
+    ConcurrencyLimitGrant,
 }
 
 impl AllocationKind {
     pub fn wire_str(self) -> &'static str {
         match self {
             AllocationKind::DatacenterLease => "datacenter_lease",
-            AllocationKind::TokenPoolGrant => "token_pool_grant",
+            AllocationKind::ConcurrencyLimitGrant => "concurrency_limit_grant",
         }
     }
 }
@@ -221,7 +221,7 @@ impl State {
                     persisted.timestamp,
                 );
             }
-            // BEST-EFFORT token_pool_grant: the pool net's grant/release fires.
+            // BEST-EFFORT concurrency_limit_grant: the pool net's grant/release fires.
             DomainEvent::TransitionFired {
                 transition_id,
                 produced_tokens,
@@ -408,15 +408,15 @@ impl State {
         row.last_sequence = sequence;
     }
 
-    /// BEST-EFFORT token_pool_grant: the pool net's `t_grant` produces a
+    /// BEST-EFFORT concurrency_limit_grant: the pool net's `t_grant` produces a
     /// `Grant { grant_id, … }`; `t_release` returns capacity. Project a minimal
     /// row off the produced token's `grant_id`.
     ///
-    /// TODO(token_pool): the grant/release transition ids are the well-known
+    /// TODO(concurrency_limit): the grant/release transition ids are the well-known
     /// `t_grant` / `t_release` on the pool net (see `petri/pool_net.rs`), but a
     /// pool net that is ALSO a datacenter lease adapter carries both surfaces.
     /// We discriminate by handler (lease effects → `datacenter_lease`) above and
-    /// only fall here for plain `token_pool` nets. If that proves too coarse,
+    /// only fall here for plain `concurrency_limit` nets. If that proves too coarse,
     /// inspect the net's resource KIND (requires a DB/registry lookup the pure
     /// projector intentionally avoids) and gate there instead.
     fn fold_pool_fire(
@@ -447,7 +447,7 @@ impl State {
         let row = self
             .rows
             .entry(grant_id.clone())
-            .or_insert_with(|| AllocationRow::new(AllocationKind::TokenPoolGrant, net_id, &grant_id));
+            .or_insert_with(|| AllocationRow::new(AllocationKind::ConcurrencyLimitGrant, net_id, &grant_id));
         if is_grant {
             if row.acquired_at.is_none() {
                 row.acquired_at = Some(ts);
@@ -768,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn token_pool_grant_best_effort() {
+    fn concurrency_limit_grant_best_effort() {
         let net = "pool-22222222-2222-2222-2222-222222222222";
         let grant = "mekhan-xyz:pooled1";
         let fired = |seq, ts_secs, tid: &str| PersistedEvent {
@@ -791,7 +791,7 @@ mod tests {
         };
         let rows = project_allocations(&[fired(1, 100, "t_grant"), fired(2, 200, "t_release")], net);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].kind, AllocationKind::TokenPoolGrant);
+        assert_eq!(rows[0].kind, AllocationKind::ConcurrencyLimitGrant);
         assert_eq!(rows[0].status, AllocationStatus::Released);
         assert_eq!(rows[0].acquired_at, Some(ts(100)));
         assert_eq!(rows[0].released_at, Some(ts(200)));

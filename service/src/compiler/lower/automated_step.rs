@@ -16,9 +16,9 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // take `cx` mutably.
     //
     //   - Scheduled                → standalone lease lifecycle (lower_pooled_body).
-    //   - Executor { pool: Some }  → lower_automated_step_pooled (token_pool
+    //   - Executor { capacity: Some }  → lower_automated_step_pooled (concurrency_limit
     //                                admission, R2/R3 machinery — same wrapping).
-    //   - Executor { pool: None }  → falls through to the plain executor lowering
+    //   - Executor { capacity: None }  → falls through to the plain executor lowering
     //                                below (BYTE-IDENTICAL).
 
     // A `Scheduled` body that runs ON a held lease is NO
@@ -69,7 +69,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Executor { pool: Some(_) },
+            deployment_model: DeploymentModel::Executor { capacity: Some(_) },
             ..
         }
     ) {
@@ -605,8 +605,8 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
 }
 
 
-/// Everything the pooled lowering needs once `Inline.pool.alias` has been
-/// resolved to a `token_pool` resource.
+/// Everything the pooled lowering needs once `Inline.capacity.alias` has been
+/// resolved to a `concurrency_limit` resource.
 pub(super) struct PoolBinding {
     /// Deterministic backing net id (`pool-<resource_id>`) the claim/register/
     /// release bridges target.
@@ -633,7 +633,7 @@ pub(super) struct PoolBinding {
 ///
 /// Shared by the two claim/grant/register/release entry points — they differ
 /// ONLY in which alias they resolve and which kinds they accept:
-/// - `Executor { pool: { alias } }` → `["token_pool", "presence_pool"]`. Both
+/// - `Executor { capacity: { alias } }` → `["concurrency_limit", "runner_group"]`. Both
 ///   are platform-owned in-net capacity pools with the IDENTICAL cross-net
 ///   handshake (same `pool-<id>` net id + claim/register/release inboxes +
 ///   `"grant"` reply), so the downstream body-wrapping is shared; only the
@@ -646,7 +646,7 @@ pub(super) struct PoolBinding {
 /// - alias not in `known_resources` → `WorkspaceResourceUnknown` (normally
 ///   caught earlier at publish by `discover_known_resources`).
 /// - alias resolves to a kind not in `expected_kinds` → a kind-specific
-///   CompileError (`ResourcePoolNotAPool` for the Executor.pool entry,
+///   CompileError (`ResourcePoolNotAPool` for the Executor.capacity entry,
 ///   `SchedulerNotADatacenter` for the Scheduled entry) steering the author to
 ///   the right deployment model.
 /// - `request` fails validation against the kind's `claim_schema` →
@@ -669,7 +669,7 @@ pub(super) fn resolve_binding(
 
     // The `pool_kind` lookup gates "is it a pool kind at all"; the
     // `expected_kinds.contains` gate enforces the Executor/Scheduled split
-    // (token_pool + presence_pool belong under Executor.pool, a datacenter under
+    // (concurrency_limit + runner_group belong under Executor.capacity, a datacenter under
     // Scheduled). A wrong/non-pool kind yields the entry-point-appropriate error.
     // The error variant is keyed on whether the Scheduled entry called us (its
     // only acceptable kind is "datacenter").
@@ -744,7 +744,7 @@ pub(super) fn resolve_binding(
     // The merge happens AFTER schema validation (the container key is not part of
     // the kind's claim_schema). When there is no container OR the kind is not a
     // datacenter, `request_rhai` is byte-identical to the pre-container path
-    // (this is the hard token_pool / no-container invariant).
+    // (this is the hard concurrency_limit / no-container invariant).
     let request_rhai = match container.filter(|_| kind == "datacenter") {
         Some(spec) => {
             let mut map = match validated_req {
@@ -845,9 +845,9 @@ fn sanitize_definition_schema(mut schema: serde_json::Value) -> serde_json::Valu
     schema
 }
 
-/// Pooled (`Executor { pool: Some }`) AutomatedStep: the executor-lifecycle
+/// Pooled (`Executor { capacity: Some }`) AutomatedStep: the executor-lifecycle
 /// body wrapped in a **claim / register / release** handshake against the
-/// resolved `token_pool` resource's backing net (`well_known::pool_net_id`,
+/// resolved `concurrency_limit` resource's backing net (`well_known::pool_net_id`,
 /// built by `mekhan_service::petri::pool_net::build_token_pool_net`). The pool's
 /// `t_grant` fires only when capacity is free, so an empty pool simply leaves
 /// the claim queued — admission control falls straight out of the Petri firing
@@ -916,15 +916,15 @@ fn sanitize_definition_schema(mut schema: serde_json::Value) -> serde_json::Valu
 fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     let WorkflowNodeData::AutomatedStep {
         deployment_model: DeploymentModel::Executor {
-            pool: Some(binding),
+            capacity: Some(binding),
         },
         ..
     } = &cx.node.data
     else {
-        unreachable!("lower_automated_step_pooled only runs for Executor pool:Some")
+        unreachable!("lower_automated_step_pooled only runs for Executor capacity:Some")
     };
-    // Resolve `Executor.pool.alias` (required) against the workspace-resource
-    // manifest: a `token_pool` OR `presence_pool` resource → `{resource_id, kind}`
+    // Resolve `Executor.capacity.alias` (required) against the workspace-resource
+    // manifest: a `concurrency_limit` OR `runner_group` resource → `{resource_id, kind}`
     // → the deterministic backing net `pool-<resource_id>`, validated `request`,
     // and a typed, body-visible lease (R2/R3 + Phase 3). Both kinds share the
     // IDENTICAL claim/grant/register/release handshake; the returned binding's
@@ -934,10 +934,10 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
         &cx.node.id,
         &binding.alias,
         binding.request.as_ref(),
-        &["token_pool", "presence_pool"],
+        &["concurrency_limit", "runner_group"],
         cx.known_resources,
-        // token_pool is OUR worker pool, not a cluster — no container injection;
-        // `None` keeps token_pool claim AIR byte-identical (hard invariant).
+        // concurrency_limit is OUR worker pool, not a cluster — no container injection;
+        // `None` keeps concurrency_limit claim AIR byte-identical (hard invariant).
         None,
     )?;
     lower_pooled_body(cx, pool_binding)
@@ -968,7 +968,7 @@ fn scheduled_job_template_frag(node: &WorkflowNode) -> String {
 }
 
 /// The shared claim/grant/register/release body-wrapping, parameterized by the
-/// resolved [`PoolBinding`]. `Executor { pool: Some }` calls this;
+/// resolved [`PoolBinding`]. `Executor { capacity: Some }` calls this;
 /// the topology + executor job-spec are byte-identical regardless of backend.
 fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<(), CompileError> {
     let id = cx.node.id.clone();
@@ -992,7 +992,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // pool's `t_grant` guard `satisfies(claim.requirements, unit.caps)` can read
     // `requirements.constraints`. `None` (or an empty set) ⇒ `#{ constraints: [] }`
     // (matches anything — the guard short-circuits to true). Gated on
-    // `is_presence` at the claim-payload site so token_pool / Scheduled AIR stays
+    // `is_presence` at the claim-payload site so concurrency_limit / Scheduled AIR stays
     // byte-identical (no `requirements` key in their claim).
     let requirements_rhai = match requirements {
         Some(req) if !req.constraints.is_empty() => {
@@ -1044,7 +1044,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // standalone `Scheduled` datacenter `submit` this is THE path that reaches
     // the engine's `SchedulerSubmitHandler`; stamping `job_template_id` makes it
     // dispatch the registered parameterized job by the resolved slug. Empty for a
-    // token_pool body (not Scheduled) — harmless. Read `cx.node` before reborrow.
+    // concurrency_limit body (not Scheduled) — harmless. Read `cx.node` before reborrow.
     let job_template_frag = scheduled_job_template_frag(cx.node);
 
     // grant_id literal builder (see the doc comment for the replay-safety
@@ -1077,7 +1077,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // that `"fail"` channel (NEVER `"grant"` — preserves the docs/14 taint rule),
     // and emit a register-then-abort pair that throws → NetFailed.
     //
-    // The static `Tokens` (token_pool) and `Scheduler` (datacenter) backends
+    // The static `Tokens` (concurrency_limit) and `Scheduler` (datacenter) backends
     // never emit `presence_expired`, so this whole block is skipped and their
     // AIR is byte-identical to before.
     let is_presence = pool_binding.backend == aithericon_resources::pool::PoolBackend::Presence;
@@ -1125,7 +1125,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         None
     };
 
-    // Claim bridge_out. token_pool/datacenter route ONLY the "grant" reply
+    // Claim bridge_out. concurrency_limit/datacenter route ONLY the "grant" reply
     // (byte-identical to before). A presence pool ALSO routes the "fail" reply
     // (held-runner death) so the death notice reaches THIS instance/holder.
     let p_claim_out: PlaceHandle<DynamicToken> = if is_presence {
@@ -1148,7 +1148,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             &[("grant", grant_inbox_place.as_str())],
         )
     };
-    // Register bridge. token_pool/datacenter register over a PLAIN bridge (no
+    // Register bridge. concurrency_limit/datacenter register over a PLAIN bridge (no
     // reply routing) so recycled capacity tokens stay clean (docs/14 taint).
     // A presence pool registers the hold over a bridge carrying ONLY the "fail"
     // channel — NEVER "grant" — so `t_reap_held` can resolve the holder's fail
@@ -1207,7 +1207,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // PRESENCE pools ONLY additionally carry the step's placement `requirements`
     // so the presence pool's guarded `t_grant`
     // (`satisfies(claim.requirements, unit.caps)`) can admit only a runner whose
-    // advertised caps satisfy every constraint. token_pool (static `Tokens`)
+    // advertised caps satisfy every constraint. concurrency_limit (static `Tokens`)
     // claims get NO `requirements` field — their `t_grant` is UNGUARDED — so
     // their claim AIR stays byte-identical to pre-Phase-4. This is the sole
     // claim-payload divergence between the two backends.
@@ -1304,11 +1304,11 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // handler targets the warm executor.
     let lease_stage_push = r#"job_inputs.push(#{ "name": "lease.json", "source": #{ "type": "inline", "value": grant } }); "#;
     // Default-route to the per-backend worker-pool namespace (`executor.<wire>`),
-    // then let a grant-supplied namespace override. A token_pool grant carries
+    // then let a grant-supplied namespace override. A concurrency_limit grant carries
     // no `executor_namespace` (only `grant_id`/`unit_id`), so without this
     // default its body would fall back to the RETIRED `executor_jobs` queue —
     // which the worker-pool daemon no longer consumes — and rot silently. With
-    // the default, token_pool bodies are drained by the shared worker-pool
+    // the default, concurrency_limit bodies are drained by the shared worker-pool
     // daemon on `executor.<wire>`. presence grants (`runner.{id}`) and
     // datacenter/lease grants (`lease-<grant>`) DO carry an `executor_namespace`,
     // so the override wins and their exclusive routing is unchanged at runtime.
@@ -1408,7 +1408,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // is bridged: `t_reap_held` already dropped the hold from the pool's
     // `in_use`, so a release-by-grant_id would have nothing to correlate.
     //
-    // Skipped entirely for token_pool/datacenter (no `presence_expired` exists),
+    // Skipped entirely for concurrency_limit/datacenter (no `presence_expired` exists),
     // keeping their AIR byte-identical.
     if let Some(p_lease_failed_inbox) = &p_lease_failed_inbox {
         let p_lease_failed: PlaceHandle<DynamicToken> = ctx.state(
@@ -1718,7 +1718,7 @@ mod slug_forwarding_tests {
 
     #[test]
     fn non_scheduled_step_yields_no_frag() {
-        // A token_pool / plain Executor body carries no job-template name.
+        // A concurrency_limit / plain Executor body carries no job-template name.
         assert_eq!(scheduled_job_template_frag(&executor_node()), "");
     }
 

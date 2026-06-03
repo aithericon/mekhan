@@ -8,7 +8,7 @@
 //!   [`EffectCompleted`] events (which fire on the synthetic pool-adapter net
 //!   `pool-<resource_id>`), enriched by the terminal accounting signal the
 //!   per-cluster watcher publishes (`signal_key == grant_id`).
-//! - `token_pool_grant` (BEST-EFFORT) — an admission grant against our own
+//! - `concurrency_limit_grant` (BEST-EFFORT) — an admission grant against our own
 //!   worker-capacity pool. Driven by the pool net's `t_grant` / `t_release`
 //!   [`TransitionFired`] events.
 //!

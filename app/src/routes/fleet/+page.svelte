@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Fleet management page — thin route wrapper.
 	// Three in-page tabs: "Runners" (enrolled lab PCs: list + enroll), "Live
-	// board" (runner presence grid), and "Worker pool" (anonymous
+	// board" (runner presence grid), and "Workers" (anonymous
 	// competing-consumer executor workers + per-backend coverage).
 	import RunnerList from '$lib/components/fleet/RunnerList.svelte';
 	import PresenceBoard from '$lib/components/fleet/PresenceBoard.svelte';
@@ -18,7 +18,7 @@
 		<div class="mb-6">
 			<h1 class="text-2xl font-semibold tracking-tight text-foreground">Fleet</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
-				Lab runners — executor daemons that pick up jobs from your presence pools. Enroll new
+				Lab runners — executor daemons that pick up jobs from your runner groups. Enroll new
 				runners with a one-time registration token and monitor them in real time.
 			</p>
 		</div>
@@ -56,7 +56,7 @@
 						: 'text-muted-foreground hover:text-foreground'}"
 				data-testid="tab-workers"
 			>
-				Worker pool
+				Workers
 			</button>
 		</div>
 

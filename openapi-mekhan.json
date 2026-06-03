@@ -2572,7 +2572,7 @@
           "instances"
         ],
         "summary": "GET /api/v1/instances/:id/allocations",
-        "description": "Lists the resource grants (datacenter leases + token-pool admissions) this\ninstance held over its lifetime, from the `allocations` projection table.\nEach row is one `(net_id, grant_id, kind)` grant: a LeaseScope / Loop body\nholding a Slurm/Nomad/HTTP allocation (`datacenter_lease`), or an admission\nagainst one of our own worker pools (`token_pool_grant`). The instance view\nsurfaces these to show \"what did this run hold, for how long, and at what\ncost\" — `duration_ms` is computed (`released_at - acquired_at`, or live for\na still-`held` grant). Ordered by `acquired_at` (acquisition order).",
+        "description": "Lists the resource grants (datacenter leases + token-pool admissions) this\ninstance held over its lifetime, from the `allocations` projection table.\nEach row is one `(net_id, grant_id, kind)` grant: a LeaseScope / Loop body\nholding a Slurm/Nomad/HTTP allocation (`datacenter_lease`), or an admission\nagainst one of our own worker pools (`concurrency_limit_grant`). The instance view\nsurfaces these to show \"what did this run hold, for how long, and at what\ncost\" — `duration_ms` is computed (`released_at - acquired_at`, or live for\na still-`held` grant). Ordered by `acquired_at` (acquisition order).",
         "operationId": "list_instance_allocations",
         "parameters": [
           {
@@ -5328,7 +5328,7 @@
         "tags": [
           "runners"
         ],
-        "summary": "`POST /api/v1/runners/enroll` — GitLab-style enrollment. PUBLIC: authed by\nthe `rt_` token in the body. The enrolled runner inherits the registration\ntoken's `workspace_id` + `pool`; `enrolled_by` is the token's `created_by`.",
+        "summary": "`POST /api/v1/runners/enroll` — GitLab-style enrollment. PUBLIC: authed by\nthe `rt_` token in the body. The enrolled runner inherits the registration\ntoken's `workspace_id` + `group`; `enrolled_by` is the token's `created_by`.",
         "operationId": "enroll_runner",
         "requestBody": {
           "content": {
@@ -8547,7 +8547,7 @@
       },
       "AllocationResponse": {
         "type": "object",
-        "description": "Response shape for `GET /api/v1/instances/{id}/allocations` and\n`GET /api/v1/clusters/{id}/leases`.\n\nOne row of the `allocations` projection table — a resource grant on the\nPetri substrate: either a `datacenter_lease` (an external-cluster\nSlurm/Nomad/HTTP allocation held by a LeaseScope / Loop body) or a\n`token_pool_grant` (an admission against one of our own worker pools).\nMaterialized field-for-field by the allocations projection consumer\n(sequence-guarded upsert keyed on `(net_id, grant_id, kind)`), with a\ncomputed `duration_ms` overlaid the same way `StepExecutionResponse` does.\n\nEvery nullable column mirrors a `NULL`-able DB column: pool grants carry no\n`cluster_resource_id` / `scheduler_flavor`; pool-management nets carry no\n`instance_id`; timing/accounting fields fill in as the grant progresses.",
+        "description": "Response shape for `GET /api/v1/instances/{id}/allocations` and\n`GET /api/v1/clusters/{id}/leases`.\n\nOne row of the `allocations` projection table — a resource grant on the\nPetri substrate: either a `datacenter_lease` (an external-cluster\nSlurm/Nomad/HTTP allocation held by a LeaseScope / Loop body) or a\n`concurrency_limit_grant` (an admission against one of our own worker pools).\nMaterialized field-for-field by the allocations projection consumer\n(sequence-guarded upsert keyed on `(net_id, grant_id, kind)`), with a\ncomputed `duration_ms` overlaid the same way `StepExecutionResponse` does.\n\nEvery nullable column mirrors a `NULL`-able DB column: pool grants carry no\n`cluster_resource_id` / `scheduler_flavor`; pool-management nets carry no\n`instance_id`; timing/accounting fields fill in as the grant progresses.",
         "required": [
           "id",
           "kind",
@@ -8578,7 +8578,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Datacenter resource; `None` for `token_pool_grant`."
+            "description": "Datacenter resource; `None` for `concurrency_limit_grant`."
           },
           "cpu_seconds": {
             "type": [
@@ -8649,7 +8649,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "`\"datacenter_lease\" | \"token_pool_grant\"`."
+            "description": "`\"datacenter_lease\" | \"concurrency_limit_grant\"`."
           },
           "last_error": {
             "type": [
@@ -9649,6 +9649,22 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CapacityBinding": {
+        "type": "object",
+        "description": "A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.capacity`, expressing \"no\ncapacity binding\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a `concurrency_limit` or `runner_group` resource.",
+        "required": [
+          "alias"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string",
+            "description": "Which `concurrency_limit`/`runner_group` resource (by workspace alias) to claim against.\nRequired. Resolved at publish to a backing net id (`pool-<resource_id>`),\nkind, and claim/lease schemas."
+          },
+          "request": {
+            "description": "Claim-schema-shaped request params (the kind's `claim_schema` in\n`aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`\nand validated against the kind's `claim_schema`. `None` ⇒ the kind's\ndefault placement (e.g. one token)."
           }
         }
       },
@@ -10667,18 +10683,18 @@
             ],
             "format": "date-time"
           },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "max_uses": {
             "type": [
               "integer",
               "null"
             ],
             "format": "int32"
-          },
-          "pool": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "reusable": {
             "type": [
@@ -10842,6 +10858,12 @@
             ],
             "format": "date-time"
           },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -10852,12 +10874,6 @@
               "null"
             ],
             "format": "int32"
-          },
-          "pool": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "reusable": {
             "type": "boolean"
@@ -11124,25 +11140,25 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Dispatch to our executor daemon pool over the NATS work queue (jobs are\npulled by the long-running executor workers — NOT in-process). `pool:\nNone` is the plain path: our worker pool is currently unbounded (no\ncontrol plane gating concurrency yet), so a job runs as soon as a worker\nis free. `pool: Some` adds BOUNDED admission on top — a `token_pool`\nclaim/register/release handshake so contended infrastructure (GPUs, lab\nmachines, LLM slots) is admission-controlled by the Petri firing rule\n(R3). The bound alias MUST be a `token_pool` resource — a `datacenter`\nbelongs under [`DeploymentModel::Scheduled`].",
+            "description": "Dispatch to our executor daemon pool over the NATS work queue (jobs are\npulled by the long-running executor workers — NOT in-process). `capacity:\nNone` is the plain path: our worker pool is currently unbounded (no\ncontrol plane gating concurrency yet), so a job runs as soon as a worker\nis free. `capacity: Some` adds BOUNDED admission on top — a `concurrency_limit`\nclaim/register/release handshake so contended infrastructure (GPUs, lab\nmachines, LLM slots) is admission-controlled by the Petri firing rule\n(R3). The bound alias MUST be a `concurrency_limit` OR `runner_group` resource — a `datacenter`\nbelongs under [`DeploymentModel::Scheduled`].",
             "required": [
               "mode"
             ],
             "properties": {
-              "mode": {
-                "type": "string",
-                "enum": [
-                  "executor"
-                ]
-              },
-              "pool": {
+              "capacity": {
                 "oneOf": [
                   {
                     "type": "null"
                   },
                   {
-                    "$ref": "#/components/schemas/ResourcePoolBinding"
+                    "$ref": "#/components/schemas/CapacityBinding"
                   }
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "executor"
                 ]
               }
             }
@@ -11196,7 +11212,7 @@
             }
           }
         ],
-        "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a `token_pool` admission lives under [`DeploymentModel::Executor`]'s `pool`\n  (the body runs on our executor pool holding the typed lease — R1–R3\n  machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
+        "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a `concurrency_limit` admission lives under [`DeploymentModel::Executor`]'s `capacity`\n  (the body runs on our executor pool holding the typed lease — R1–R3\n  machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
       },
       "DispatchMode": {
         "oneOf": [
@@ -11412,6 +11428,12 @@
           "workspace_id"
         ],
         "properties": {
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -11422,12 +11444,6 @@
               "null"
             ],
             "description": "Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the runner sent at enrollment. `null` when no public\nkey was supplied OR signing was unavailable; the runner can fetch it\nlater via `POST /api/v1/runners/{id}/nats-creds`."
-          },
-          "pool": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "runner_token": {
             "type": "string"
@@ -13053,7 +13069,7 @@
       },
       "LeaseBinding": {
         "type": "object",
-        "description": "A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives\nunder [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`\nhoist the claim/grant/register/release handshake to loop scope — ONE\nallocation held across all iterations, released exactly once on exit.\n\nMirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +\n`request: Option<Value>` and [`ResourcePoolBinding`] so the existing\n`resolve_binding(..., \"datacenter\", ...)` + lease-definition machinery\napplies unchanged. The field is named `scheduler` (not `alias`) for symmetry\nwith the `Scheduled` lease path the loop body would otherwise inherit\nper-step.",
+        "description": "A binding to a `datacenter` resource for a loop-scoped lease (L3). Lives\nunder [`WorkflowNodeData::Loop`]'s `lease`; its presence makes `lower_loop`\nhoist the claim/grant/register/release handshake to loop scope — ONE\nallocation held across all iterations, released exactly once on exit.\n\nMirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +\n`request: Option<Value>` and [`CapacityBinding`] so the existing\n`resolve_binding(..., \"datacenter\", ...)` + lease-definition machinery\napplies unchanged. The field is named `scheduler` (not `alias`) for symmetry\nwith the `Scheduled` lease path the loop body would otherwise inherit\nper-step.",
         "required": [
           "scheduler"
         ],
@@ -14431,6 +14447,12 @@
                   ],
                   "format": "date-time"
                 },
+                "group": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "id": {
                   "type": "string",
                   "format": "uuid"
@@ -14441,12 +14463,6 @@
                     "null"
                   ],
                   "format": "int32"
-                },
-                "pool": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
                 },
                 "reusable": {
                   "type": "boolean"
@@ -14657,6 +14673,12 @@
                   "type": "string",
                   "format": "date-time"
                 },
+                "group": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "id": {
                   "type": "string",
                   "format": "uuid"
@@ -14670,12 +14692,6 @@
                 },
                 "name": {
                   "type": "string"
-                },
-                "pool": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
                 },
                 "status": {
                   "type": "string"
@@ -15899,6 +15915,12 @@
             ],
             "format": "date-time"
           },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -15909,12 +15931,6 @@
               "null"
             ],
             "format": "int32"
-          },
-          "pool": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "reusable": {
             "type": "boolean"
@@ -16156,22 +16172,6 @@
             ],
             "format": "int64",
             "description": "Memory limit in bytes."
-          }
-        }
-      },
-      "ResourcePoolBinding": {
-        "type": "object",
-        "description": "A binding to a `token_pool` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `pool`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.pool`, expressing \"no\npool\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a `token_pool` resource.",
-        "required": [
-          "alias"
-        ],
-        "properties": {
-          "alias": {
-            "type": "string",
-            "description": "Which `token_pool` resource (by workspace alias) to claim against.\nRequired. Resolved at publish to a backing net id (`pool-<resource_id>`),\nkind, and claim/lease schemas."
-          },
-          "request": {
-            "description": "Claim-schema-shaped request params (the kind's `claim_schema` in\n`aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`\nand validated against the kind's `claim_schema`. `None` ⇒ the kind's\ndefault placement (e.g. one token)."
           }
         }
       },
@@ -16434,6 +16434,12 @@
             "type": "string",
             "format": "date-time"
           },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -16449,12 +16455,6 @@
             "type": "string"
           },
           "nats_public_key": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "pool": {
             "type": [
               "string",
               "null"
@@ -16544,6 +16544,12 @@
             "type": "string",
             "format": "date-time"
           },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -16557,12 +16563,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "pool": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "status": {
             "type": "string"
@@ -19193,7 +19193,7 @@
               },
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `token_pool`\nadmission (`Executor.pool`). `Scheduled` = lease through an external\ncluster (a `datacenter` resource, docs/13).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.pool` here (post-R3\nconsolidation pivot)."
+                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `concurrency_limit`\nadmission (`Executor.capacity`). `Scheduled` = lease through an external\ncluster (a `datacenter` resource, docs/13).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.capacity` here (post-R3\nconsolidation pivot)."
               },
               "description": {
                 "type": [
@@ -19222,7 +19222,7 @@
                   },
                   {
                     "$ref": "#/components/schemas/Requirements",
-                    "description": "Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of\ntyped [`Constraint`]s over the pool unit's advertised `caps` (the\n`runners.capabilities` blob keyed by capability name). At claim time\nthe compiler injects these into the claim payload as a Rhai literal\nand the presence pool's `t_grant` guard\n(`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner\nwhose caps satisfy every constraint. `None` (the default) ⇒ no\nplacement constraint (matches any unit) and the claim carries an\nempty `#{ constraints: [] }`. Ignored on token_pool / Scheduled /\ninline deployments (the claim there is unchanged; publish-time\nvalidation still checks the constraint shapes). Plain\n`#[serde(default, skip_serializing_if)]` ⇒ existing templates\nround-trip unchanged (same precedent as `retry_policy` /\n`deployment_model`)."
+                    "description": "Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of\ntyped [`Constraint`]s over the pool unit's advertised `caps` (the\n`runners.capabilities` blob keyed by capability name). At claim time\nthe compiler injects these into the claim payload as a Rhai literal\nand the presence pool's `t_grant` guard\n(`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner\nwhose caps satisfy every constraint. `None` (the default) ⇒ no\nplacement constraint (matches any unit) and the claim carries an\nempty `#{ constraints: [] }`. Ignored on concurrency_limit / Scheduled /\ninline deployments (the claim there is unchanged; publish-time\nvalidation still checks the constraint shapes). Plain\n`#[serde(default, skip_serializing_if)]` ⇒ existing templates\nround-trip unchanged (same precedent as `retry_policy` /\n`deployment_model`)."
                   }
                 ]
               },
@@ -19799,7 +19799,7 @@
               },
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how each inference turn is dispatched — same field, defaults\nand semantics as `AutomatedStep::deployment_model`. On the\ndegenerate single-shot path it reaches the full\n`Executor{pool}` / `Scheduled{lease}` dispatch in\n`lower_automated_step`. The multi-turn loop path supports\n`Executor { pool: None }` only in v1 and compile-rejects the rest\n(mirrors the `context_strategy` gate); per-turn pooled/scheduled\nadmission is a follow-up (docs/12)."
+                "description": "Where/how each inference turn is dispatched — same field, defaults\nand semantics as `AutomatedStep::deployment_model`. On the\ndegenerate single-shot path it reaches the full\n`Executor{capacity}` / `Scheduled{lease}` dispatch in\n`lower_automated_step`. The multi-turn loop path supports\n`Executor { capacity: None }` only in v1 and compile-rejects the rest\n(mirrors the `context_strategy` gate); per-turn pooled/scheduled\nadmission is a follow-up (docs/12)."
               },
               "description": {
                 "type": [

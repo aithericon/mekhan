@@ -735,7 +735,7 @@ pub async fn list_instance_children(
 /// instance held over its lifetime, from the `allocations` projection table.
 /// Each row is one `(net_id, grant_id, kind)` grant: a LeaseScope / Loop body
 /// holding a Slurm/Nomad/HTTP allocation (`datacenter_lease`), or an admission
-/// against one of our own worker pools (`token_pool_grant`). The instance view
+/// against one of our own worker pools (`concurrency_limit_grant`). The instance view
 /// surfaces these to show "what did this run hold, for how long, and at what
 /// cost" — `duration_ms` is computed (`released_at - acquired_at`, or live for
 /// a still-`held` grant). Ordered by `acquired_at` (acquisition order).

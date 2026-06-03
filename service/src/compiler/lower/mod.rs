@@ -288,8 +288,8 @@ pub(crate) struct LoweringCtx<'a, 'c> {
     pub(crate) config_storage: ConfigStorage<'a>,
     /// Workspace-resource manifest the publish handler resolved
     /// (`discover_known_resources`). A pooled AutomatedStep reads its
-    /// `Inline.pool.alias` out of here to learn `{resource_id, kind}` and
-    /// bridge to the `token_pool`'s backing pool net. Empty for tests / previews
+    /// `Inline.capacity.alias` out of here to learn `{resource_id, kind}` and
+    /// bridge to the `concurrency_limit`'s backing pool net. Empty for tests / previews
     /// that don't resolve resources — a pooled step then fails with
     /// `WorkspaceResourceUnknown` (no well-known-global fallback any more).
     pub(crate) known_resources: &'a crate::compiler::resource_refs::KnownResources,

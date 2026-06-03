@@ -13,16 +13,16 @@
 	const hasFields = $derived(fields.length > 0);
 	const outputId = $derived(data.output?.id ?? 'out');
 	// Deployment chip — surfaces the resource binding at a glance:
-	//   Executor + pool   → "Pool: <alias>"
-	//   Scheduled + submit → "Scheduled"
-	//   Scheduled + lease  → "Lease: <scheduler>"
-	// Executor without a pool shows no chip (the default, unbounded path).
+	//   Executor + capacity → "Capacity: <alias>"
+	//   Scheduled + submit  → "Scheduled"
+	//   Scheduled + lease   → "Lease: <scheduler>"
+	// Executor without a capacity binding shows no chip (the default, unbounded path).
 	const deployChip = $derived.by(() => {
 		const dm = data.deploymentModel;
 		if (!dm) return null;
 		if (dm.mode === 'executor') {
-			if (dm.pool == null) return null;
-			return { text: `Pool: ${dm.pool.alias || '—'}`, title: `Holds a unit from the "${dm.pool.alias}" token pool while running` };
+			if (dm.capacity == null) return null;
+			return { text: `Capacity: ${dm.capacity.alias || '—'}`, title: `Holds a unit from the "${dm.capacity.alias}" capacity while running` };
 		}
 		// scheduled — always lease pattern now
 		const sched = dm.scheduler ?? '';

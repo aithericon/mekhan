@@ -73,15 +73,15 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     }
 
     // Deployment gate: the multi-turn loop path inlines one plain
-    // `executor_lifecycle` per turn (`Executor { pool: None }`). Pooled
-    // admission (`Executor { pool: Some }`) and external scheduling
+    // `executor_lifecycle` per turn (`Executor { capacity: None }`). Pooled
+    // admission (`Executor { capacity: Some }`) and external scheduling
     // (`Scheduled { .. }`) need that lease/claim topology interleaved with
     // the turn loop — a follow-up (docs/12). The degenerate single-shot path
     // ALREADY supports all of them (it routes through `lower_automated_step`),
     // so this gate only bites multi-turn / tool-bearing agents. Reject at
     // compile so a mis-authored template fails at publish, not mid-loop —
     // same idiom as the `context_strategy` gate above.
-    if !matches!(deployment_model, DeploymentModel::Executor { pool: None }) {
+    if !matches!(deployment_model, DeploymentModel::Executor { capacity: None }) {
         return Err(CompileError::Compilation(format!(
             "agent node '{}': deployment_model {:?} is not yet supported for \
              multi-turn / tool-bearing agents (v1 runs loop turns on the plain \

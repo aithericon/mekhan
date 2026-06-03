@@ -64,7 +64,7 @@
 	let enrolling = $state(false);
 
 	// Reveal-once token sheet
-	let revealed = $state<(CreatedRegistrationToken & { name: string; pool: string }) | null>(null);
+	let revealed = $state<(CreatedRegistrationToken & { name: string; group: string }) | null>(null);
 
 	// Detail drawer (full record incl. capabilities + nats_public_key)
 	let detail = $state<RunnerDetail | null>(null);
@@ -78,15 +78,15 @@
 		Object.fromEntries(presence.map((p) => [p.runner_id, p]))
 	);
 
-	/** Distinct pool values across all runners for the filter dropdown */
+	/** Distinct group values across all runners for the filter dropdown */
 	const allPools = $derived(
-		[...new Set(runners.map((r) => r.pool).filter((p): p is string => !!p))].sort()
+		[...new Set(runners.map((r) => r.group).filter((p): p is string => !!p))].sort()
 	);
 
 	/** Filtered runner list */
 	const filteredRunners = $derived(
 		runners.filter((r) => {
-			if (poolFilter && r.pool !== poolFilter) return false;
+			if (poolFilter && r.group !== poolFilter) return false;
 			if (onlineFilter === 'online') {
 				const snap = presenceById[r.id];
 				if (!snap?.present) return false;
@@ -168,7 +168,7 @@
 		enrolling = true;
 		try {
 			const created = await createRegistrationToken({
-				pool: enrollPool.trim() || undefined,
+				group: enrollPool.trim() || undefined,
 				// Always send the explicit checkbox value: the backend defaults an
 				// OMITTED `reusable` to `true`, so `enrollReusable || undefined` would
 				// silently mint a reusable token whenever the box is left unchecked.
@@ -176,8 +176,8 @@
 				max_uses: enrollMaxUses ? parseInt(enrollMaxUses, 10) : undefined,
 				expires_at: enrollExpiresAt ? `${enrollExpiresAt}T23:59:59Z` : undefined
 			});
-			// Stash the name/pool alongside the revealed token so the CLI snippet can use them.
-			revealed = { ...created, name: enrollName.trim(), pool: enrollPool.trim() };
+			// Stash the name/group alongside the revealed token so the CLI snippet can use them.
+			revealed = { ...created, name: enrollName.trim(), group: enrollPool.trim() };
 			enrollOpen = false;
 			toast.success('Token minted — copy it now.');
 			await load();
@@ -241,11 +241,11 @@
 	}
 
 	/** Build the CLI enroll line shown in the reveal sheet. */
-	function cliLine(token: string, name: string, pool: string): string {
+	function cliLine(token: string, name: string, group: string): string {
 		const origin = typeof window !== 'undefined' ? window.location.origin : '';
 		let cmd = `aithericon-executor register --url ${origin} --token ${token}`;
 		if (name) cmd += ` --name ${name}`;
-		if (pool) cmd += ` --pool ${pool}`;
+		if (group) cmd += ` --group ${group}`;
 		return cmd;
 	}
 </script>
@@ -253,19 +253,19 @@
 <!-- ── Toolbar ──────────────────────────────────────────────────────────────── -->
 <div class="space-y-4" data-testid="runner-list">
 	<div class="flex flex-wrap items-center gap-3">
-		<!-- Pool filter -->
+		<!-- Group filter -->
 		<div class="flex items-center gap-2">
-			<span class="text-sm font-medium text-muted-foreground">Pool</span>
+			<span class="text-sm font-medium text-muted-foreground">Group</span>
 			<Select.Root
 				type="single"
 				value={poolFilter}
 				onValueChange={(v) => (poolFilter = v ?? '')}
 			>
 				<Select.Trigger class="h-9 min-w-[160px]">
-					{poolFilter || 'All pools'}
+					{poolFilter || 'All groups'}
 				</Select.Trigger>
 				<Select.Content>
-					<Select.Item value="" label="All pools" />
+					<Select.Item value="" label="All groups" />
 					{#each allPools as p (p)}
 						<Select.Item value={p} label={p} />
 					{/each}
@@ -364,8 +364,8 @@
 						<div class="min-w-0 flex-1">
 							<div class="flex flex-wrap items-center gap-2">
 								<span class="font-medium text-foreground">{runner.name}</span>
-								{#if runner.pool}
-									<Badge variant="secondary">{runner.pool}</Badge>
+								{#if runner.group}
+									<Badge variant="secondary">{runner.group}</Badge>
 								{/if}
 								<Badge variant="outline">{runner.status}</Badge>
 							</div>
@@ -425,8 +425,8 @@
 					>
 						<div class="min-w-0 space-y-0.5">
 							<div class="flex flex-wrap items-center gap-2">
-								{#if token.pool}
-									<Badge variant="secondary">{token.pool}</Badge>
+								{#if token.group}
+									<Badge variant="secondary">{token.group}</Badge>
 								{/if}
 								<Badge variant="outline">
 									{token.reusable ? 'reusable' : `1-shot · ${token.uses} used`}
@@ -505,7 +505,7 @@
 							for="enroll-pool"
 							class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
 						>
-							Pool <span class="normal-case">(optional)</span>
+							Group <span class="normal-case">(optional)</span>
 						</label>
 						<Input
 							id="enroll-pool"
@@ -618,9 +618,9 @@
 						<code
 							class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-xs text-foreground"
 						>
-							{cliLine(revealed.token, revealed.name, revealed.pool)}
+							{cliLine(revealed.token, revealed.name, revealed.group)}
 						</code>
-						<CopyButton text={cliLine(revealed.token, revealed.name, revealed.pool)} />
+						<CopyButton text={cliLine(revealed.token, revealed.name, revealed.group)} />
 					</div>
 				</div>
 			{/if}
@@ -678,9 +678,9 @@
 						{/if}
 					</dd>
 
-					<dt class="text-muted-foreground">Pool</dt>
+					<dt class="text-muted-foreground">Group</dt>
 					<dd class="col-span-2">
-						{#if detail.pool}<Badge variant="secondary">{detail.pool}</Badge>{:else}—{/if}
+						{#if detail.group}<Badge variant="secondary">{detail.group}</Badge>{:else}—{/if}
 					</dd>
 
 					<dt class="text-muted-foreground">Last seen</dt>

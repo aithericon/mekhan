@@ -718,7 +718,7 @@ up-runner:
       rm -rf "$runner_base/runner"   # drop any stale identity (e.g. post-reset)
       echo "▶ minting registration token (pool=lab_fleet)…"
       rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
-          -H 'content-type: application/json' -d '{"pool":"lab_fleet"}' | jq -r '.token')
+          -H 'content-type: application/json' -d '{"group":"lab_fleet"}' | jq -r '.token')
       if [ -z "$rt" ] || [ "$rt" = "null" ]; then
         echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
         exit 1

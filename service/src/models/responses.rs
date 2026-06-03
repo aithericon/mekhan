@@ -100,7 +100,7 @@ pub struct StepExecutionResponse {
 /// One row of the `allocations` projection table — a resource grant on the
 /// Petri substrate: either a `datacenter_lease` (an external-cluster
 /// Slurm/Nomad/HTTP allocation held by a LeaseScope / Loop body) or a
-/// `token_pool_grant` (an admission against one of our own worker pools).
+/// `concurrency_limit_grant` (an admission against one of our own worker pools).
 /// Materialized field-for-field by the allocations projection consumer
 /// (sequence-guarded upsert keyed on `(net_id, grant_id, kind)`), with a
 /// computed `duration_ms` overlaid the same way `StepExecutionResponse` does.
@@ -111,7 +111,7 @@ pub struct StepExecutionResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
 pub struct AllocationResponse {
     pub id: Uuid,
-    /// `"datacenter_lease" | "token_pool_grant"`.
+    /// `"datacenter_lease" | "concurrency_limit_grant"`.
     pub kind: String,
     pub net_id: String,
     /// Resolved owning instance; `None` for pool-management nets.
@@ -120,7 +120,7 @@ pub struct AllocationResponse {
     pub node_id: Option<String>,
     /// Engine grant key (`instance_id:node_id`); equals the accounting signal key.
     pub grant_id: String,
-    /// Datacenter resource; `None` for `token_pool_grant`.
+    /// Datacenter resource; `None` for `concurrency_limit_grant`.
     pub cluster_resource_id: Option<Uuid>,
     /// `"slurm" | "nomad" | "http"`; `None` for pool grants.
     pub scheduler_flavor: Option<String>,

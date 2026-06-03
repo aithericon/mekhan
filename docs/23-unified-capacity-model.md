@@ -1,5 +1,15 @@
 # 23 · Unified Capacity Model — one substrate for workers, instruments, HPC, LLMs, and humans
 
+> **Naming (2026-06-03 capacity-naming refactor).** A first step toward this
+> model's vocabulary shipped: the overloaded word "pool" was de-collided at the
+> user-/API-facing layer. `token_pool` → **`concurrency_limit`**, `presence_pool`
+> → **`runner_group`**, the generic `Executor.pool` deployment binding →
+> **`capacity`**, and a runner's `pool` field → **`group`**. The "worker pool"
+> (the §6 default-queue fix) is surfaced in the UI simply as **Workers**. The
+> engine's internal admission-net primitive (`pool-<resource_id>`) is unchanged.
+> Where this doc says `token_pool`/`presence_pool`/"pool" below, read the new
+> names.
+
 > Status: **design** (no code yet). Captures the 2026-06-03 design dialogue on folding every
 > kind of work-executing thing — our worker pools, physical instrument stations, HPC
 > allocations, LLM/HTTP endpoints, and human operator pools — into a single

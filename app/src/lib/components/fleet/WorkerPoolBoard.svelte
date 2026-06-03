@@ -66,7 +66,7 @@
 	<!-- Header bar -->
 	<div class="flex items-center justify-between">
 		<div class="flex items-center gap-3">
-			<h3 class="text-sm font-medium text-foreground">Worker pool</h3>
+			<h3 class="text-sm font-medium text-foreground">Workers</h3>
 			<span class="text-sm text-muted-foreground">
 				{workers.length} worker{workers.length === 1 ? '' : 's'} · {coveredCount} / {backends.length}
 				backends covered

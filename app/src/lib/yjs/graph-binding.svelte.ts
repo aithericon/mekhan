@@ -209,8 +209,8 @@ export class YjsGraphBinding {
 					| { id: string; label: string; fields: unknown[] }
 					| undefined;
 				// `deploymentModel` carries the executor/scheduled split AND (post-R3
-				// consolidation) the executor-pool token admission under
-				// `Executor.pool` + the scheduled `scheduler`/`operation` knobs.
+				// consolidation) the executor capacity admission under
+				// `Executor.capacity` + the scheduled `scheduler`/`operation` knobs.
 				// The whole nested object round-trips as one value.
 				const deploymentModel = config?.deploymentModel as
 					| AutomatedStepNodeData['deploymentModel']
@@ -803,9 +803,9 @@ export class YjsGraphBinding {
 					'retryPolicy',
 					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
 				);
-				// `deploymentModel` round-trips whole — the nested `Executor.pool`
-				// (token-pool admission) and scheduled `scheduler`/`operation`
-				// knobs travel with it. Default = plain executor dispatch.
+				// `deploymentModel` round-trips whole — the nested `Executor.capacity`
+				// (concurrency_limit / runner_group admission) and scheduled
+				// `scheduler`/`operation` knobs travel with it. Default = plain executor dispatch.
 				config.set('deploymentModel', data.deploymentModel ?? { mode: 'executor' });
 				// PROTOTYPE — persist the streaming-output flag so toggling the
 				// "Stream output" checkbox survives the Y.Doc round-trip and the

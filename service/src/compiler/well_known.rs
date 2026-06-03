@@ -2,15 +2,15 @@
 //! to (deployed once by ops, not spawned per-instance).
 
 /// Deterministic backing-net id for a registry-resolved pool resource. A pooled
-/// AutomatedStep (`Executor { pool: { alias } }`) whose alias resolves to a
-/// `token_pool` resource `<resource_id>` bridges its claim/register/release
+/// AutomatedStep (`Executor { capacity: { alias } }`) whose alias resolves to a
+/// `concurrency_limit` resource `<resource_id>` bridges its claim/register/release
 /// handshake to this id. R3 (tokens backend) deploys a net with exactly this id
 /// via `build_token_pool_net`; the resource *kind* decides what that net IS, but
 /// the id scheme is shared so the compiler stays backend-agnostic. Pure function
 /// of the resource id ⇒ replay-safe + diff-stable in the AIR.
 ///
 /// The prototype's single well-known global (`resource-pool-net`) is gone — the
-/// consolidation pivot requires every pool to be a named `token_pool` resource.
+/// consolidation pivot requires every pool to be a named `concurrency_limit` resource.
 pub fn pool_net_id(resource_id: uuid::Uuid) -> String {
     format!("pool-{resource_id}")
 }
@@ -64,9 +64,9 @@ pub const POOL_REGISTER_INBOX: &str = "register_inbox";
 /// arcs to release_out" structurally (`lower_automated_step_pooled`).
 pub const POOL_RELEASE_INBOX: &str = "release_inbox";
 
-// ── presence_pool (Phase 3) ──────────────────────────────────────────────────
+// ── runner_group (Phase 3) ────────────────────────────────────────────────────────────────────────────────────────────────────
 //
-// A `presence_pool` resource is a capacity-LESS pool: its capacity is driven by
+// A `runner_group` resource is a capacity-LESS pool: its capacity is driven by
 // runner *presence*, not a seeded count. Its backing net reuses the SAME net id
 // scheme (`pool_net_id` = `pool-<resource_id>`) and the SAME claim/register/
 // release inboxes + `"grant"` reply channel as the token pool — so the R2

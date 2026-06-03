@@ -1,6 +1,6 @@
 //! Presence controller (Phase 3 — presence-lease pool capacity).
 //!
-//! A `presence_pool` resource is a capacity-LESS pool ([`crate::petri::presence_pool_net`]):
+//! A `runner_group` resource is a capacity-LESS pool ([`crate::petri::presence_pool_net`]):
 //! its capacity is not a seeded count but is driven by runner **presence**. This
 //! module is mekhan's controller that turns the runner data-plane heartbeat into
 //! pool-net admission/reap:
@@ -86,9 +86,9 @@ pub(crate) struct PresenceEntry {
     /// Resolved once on the acquire edge and cached so the sweep can inject the
     /// expire signal without another DB round-trip.
     pool_net_id: String,
-    /// The runner's `pool` alias (the `resources.path` of its `presence_pool`),
+    /// The runner's `group` alias (the `resources.path` of its `runner_group`),
     /// cached from the trusted DB row on the acquire edge. This is the SAME
-    /// alias string a step's `ResourcePoolBinding.alias` carries, so the
+    /// alias string a step's `CapacityBinding.alias` carries, so the
     /// publish-time backend-coverage warning can match a presence-pool step to
     /// the live runners in its target pool ([`RunnerPresence::pool_covers`])
     /// without resolving net ids. `None` for a liveness-only runner (no pool).
@@ -163,7 +163,7 @@ impl RunnerPresence {
     /// default worker pool): it answers "is this presence-pool step's backend
     /// covered by a live runner in its target pool?" for the best-effort
     /// publish-time warning. Matches by the `pool` alias (the `resources.path`
-    /// shared by `runner.pool` and `ResourcePoolBinding.alias`), so no net-id
+    /// shared by `runner.group` and `CapacityBinding.alias`), so no net-id
     /// resolution is needed. Advisory only — a `false` here never blocks a
     /// publish, it just logs a queue-risk warning.
     pub async fn pool_covers(&self, pool_alias: &str, wire: &str) -> bool {
@@ -182,19 +182,19 @@ impl Default for RunnerPresence {
     }
 }
 
-/// Resolve a runner's `pool` alias to its backing `presence_pool` net id.
+/// Resolve a runner's `group` alias to its backing `runner_group` net id.
 ///
-/// `runner.pool` is an alias string (the `resources.path` column). It maps to a
-/// `resources` row in the runner's workspace with `resource_type = 'presence_pool'`
+/// `runner.group` is an alias string (the `resources.path` column). It maps to a
+/// `resources` row in the runner's workspace with `resource_type = 'runner_group'`
 /// and `path = <alias>`; the net id is then [`well_known::pool_net_id`] over that
 /// resource's id. Returns `None` (with a skip log at the call site) when the
-/// runner has no pool alias, or the alias resolves to no presence_pool resource
+/// runner has no group alias, or the alias resolves to no runner_group resource
 /// in its workspace.
 async fn resolve_pool_net_id(db: &PgPool, runner: &RunnerRow) -> Option<String> {
-    let alias = runner.pool.as_deref()?;
+    let alias = runner.group.as_deref()?;
     let resource_id: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
         "SELECT id FROM resources \
-         WHERE workspace_id = $1 AND path = $2 AND resource_type = 'presence_pool' \
+         WHERE workspace_id = $1 AND path = $2 AND resource_type = 'runner_group' \
            AND deleted_at IS NULL",
     )
     .bind(runner.workspace_id)
@@ -210,7 +210,7 @@ async fn resolve_pool_net_id(db: &PgPool, runner: &RunnerRow) -> Option<String> 
 /// Look up a non-revoked runner row by id. Returns `None` if missing or revoked.
 async fn load_live_runner(db: &PgPool, runner_id: Uuid) -> Option<RunnerRow> {
     let row: Option<RunnerRow> = sqlx::query_as::<_, RunnerRow>(
-        "SELECT id, workspace_id, name, pool, token_hash, nats_public_key, capabilities, \
+        "SELECT id, workspace_id, name, runner_group, token_hash, nats_public_key, capabilities, \
                 status, last_seen_at, enrolled_by, enrolled_at, revoked_at \
          FROM runners WHERE id = $1",
     )
@@ -349,8 +349,8 @@ async fn handle_presence(
     let Some(pool_net_id) = resolve_pool_net_id(db, &runner).await else {
         tracing::debug!(
             %runner_id,
-            pool = ?runner.pool,
-            "runner present but no presence_pool resource in its workspace; tracking liveness only"
+            group = ?runner.group,
+            "runner present but no runner_group resource in its workspace; tracking liveness only"
         );
         // No pool to admit into, but the runner IS heartbeating — record it as
         // present with an empty pool_net_id so the fleet "online" view (the read
@@ -364,7 +364,7 @@ async fn handle_presence(
                 PresenceEntry {
                     last_seen: Instant::now(),
                     pool_net_id: String::new(),
-                    pool_alias: runner.pool.clone(),
+                    pool_alias: runner.group.clone(),
                     backends: backends.clone(),
                     present: true,
                 },
@@ -399,7 +399,7 @@ async fn handle_presence(
             PresenceEntry {
                 last_seen: Instant::now(),
                 pool_net_id: pool_net_id.clone(),
-                pool_alias: runner.pool.clone(),
+                pool_alias: runner.group.clone(),
                 backends: backends.clone(),
                 present: true,
             },

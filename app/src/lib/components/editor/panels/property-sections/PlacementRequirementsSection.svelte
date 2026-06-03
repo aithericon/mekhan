@@ -157,7 +157,7 @@
 
 	{#if constraints.length === 0}
 		<p class="text-sm italic text-muted-foreground">
-			No constraints — matches any runner in the pool.
+			No constraints — matches any runner in the group.
 		</p>
 	{:else}
 		<div class="space-y-3">
@@ -363,6 +363,6 @@
 
 	<p class="text-sm italic text-muted-foreground">
 		Constraints are AND-ed. Only runners whose advertised capabilities satisfy all constraints can
-		claim this step. Applies to presence-pooled steps only — token-pool steps ignore requirements.
+		claim this step. Applies to runner-group steps only — concurrency-limit steps ignore requirements.
 	</p>
 </div>

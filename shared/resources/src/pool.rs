@@ -5,7 +5,7 @@
 //!
 //! Claim and lease shapes are **pool semantics**, not a universal property of
 //! every resource. A Postgres / SMTP / S3 credential has no notion of a "claim
-//! schema" or a "lease" — only contended-capacity kinds (`token_pool`,
+//! schema" or a "lease" — only contended-capacity kinds (`concurrency_limit`,
 //! `datacenter`) do. Hanging an `Option<fn() -> Value>` claim/lease pair onto
 //! [`crate::registry::ResourceTypeDescriptor`] would:
 //!
@@ -15,7 +15,7 @@
 //!   populate (or default) those fields.
 //!
 //! Instead we keep them in a focused side-registry, keyed by the **resource-kind
-//! wire name** (`"token_pool"` / `"datacenter"`). The two registries are
+//! wire name** (`"concurrency_limit"` / `"datacenter"`). The two registries are
 //! independent: the resource-kind registry owns the config/secret surface and
 //! CRUD; this one owns the claim/lease typing the compiler (R2) and the backends
 //! (R3/R4) read. Lookup is by the same wire name, so a pool resource's kind
@@ -44,9 +44,9 @@ pub enum PoolBackend {
     Presence,
 }
 
-// ─── token_pool — Tokens backend ─────────────────────────────────────────────
+// ─── concurrency_limit — Tokens backend ─────────────────────────────────────────────────────────────────────────────────
 
-/// Request params for a claim against a [`crate::types::TokenPool`]. v1 admits a
+/// Request params for a claim against a [`crate::types::ConcurrencyLimit`]. v1 admits a
 /// single unit per claim; `units` is reserved for weighted/heterogeneous claims.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TokenPoolClaim {
@@ -55,7 +55,7 @@ pub struct TokenPoolClaim {
     pub units: Option<u32>,
 }
 
-/// The lease a granted `token_pool` claim holds: an opaque identity for the
+/// The lease a granted `concurrency_limit` claim holds: an opaque identity for the
 /// admitted capacity unit, staged into the step body so downstream
 /// `<slug>.lease.<field>` borrows resolve (R2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -64,9 +64,9 @@ pub struct TokenPoolLease {
     pub unit_id: String,
 }
 
-// ─── presence_pool — Presence backend ────────────────────────────────────────
+// ─── runner_group — Presence backend ───────────────────────────────────────────────────────────────────────────────
 
-/// Request params for a claim against a [`crate::types::PresencePool`]. v1 admits
+/// Request params for a claim against a [`crate::types::RunnerGroup`]. v1 admits
 /// a single unit per claim; `units` is reserved for weighted claims. Symmetric
 /// with [`TokenPoolClaim`] — a pooled step claims a presence pool exactly as it
 /// claims a token pool (the cross-net handshake is identical; only the backend
@@ -78,7 +78,7 @@ pub struct PresencePoolClaim {
     pub units: Option<u32>,
 }
 
-/// The lease a granted `presence_pool` claim holds: the identity of the admitted
+/// The lease a granted `runner_group` claim holds: the identity of the admitted
 /// runner unit (`unit_id == runner_id`) plus the runner's drain
 /// `executor_namespace` (`runner.<runner_id>`) and its `caps`. Staged into the
 /// step body so downstream `<slug>.lease.<field>` borrows resolve (R2). The
@@ -250,7 +250,7 @@ fn schema_value<T: JsonSchema>() -> JsonValue {
 /// than discovered at link time.
 static POOL_KINDS: &[PoolKindDescriptor] = &[
     PoolKindDescriptor {
-        kind_name: "token_pool",
+        kind_name: "concurrency_limit",
         backend: PoolBackend::Tokens,
         claim_schema: schema_value::<TokenPoolClaim>,
         lease_schema: schema_value::<TokenPoolLease>,
@@ -262,7 +262,7 @@ static POOL_KINDS: &[PoolKindDescriptor] = &[
         lease_schema: schema_value::<DatacenterLease>,
     },
     PoolKindDescriptor {
-        kind_name: "presence_pool",
+        kind_name: "runner_group",
         backend: PoolBackend::Presence,
         claim_schema: schema_value::<PresencePoolClaim>,
         lease_schema: schema_value::<PresencePoolLease>,

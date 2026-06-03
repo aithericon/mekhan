@@ -332,14 +332,14 @@ pub enum WorkflowNodeData {
         #[serde(rename = "retryPolicy", default)]
         retry_policy: RetryPolicy,
         /// Where/how the job is dispatched. `Executor` (default) = our executor
-        /// daemon pool over the NATS work queue, optionally under a `token_pool`
-        /// admission (`Executor.pool`). `Scheduled` = lease through an external
+        /// daemon pool over the NATS work queue, optionally under a `concurrency_limit`
+        /// admission (`Executor.capacity`). `Scheduled` = lease through an external
         /// cluster (a `datacenter` resource, docs/13).
         /// `#[serde(default)]` + the `Executor` default ⇒ every existing
         /// template round-trips unchanged (same precedent as `retry_policy`).
         ///
         /// Resource admission *is* scheduling, so the former standalone
-        /// `resourcePool` field folded into `Executor.pool` here (post-R3
+        /// `resourcePool` field folded into `Executor.capacity` here (post-R3
         /// consolidation pivot).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
@@ -373,7 +373,7 @@ pub enum WorkflowNodeData {
         /// (`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner
         /// whose caps satisfy every constraint. `None` (the default) ⇒ no
         /// placement constraint (matches any unit) and the claim carries an
-        /// empty `#{ constraints: [] }`. Ignored on token_pool / Scheduled /
+        /// empty `#{ constraints: [] }`. Ignored on concurrency_limit / Scheduled /
         /// inline deployments (the claim there is unchanged; publish-time
         /// validation still checks the constraint shapes). Plain
         /// `#[serde(default, skip_serializing_if)]` ⇒ existing templates
@@ -787,9 +787,9 @@ pub enum WorkflowNodeData {
         /// Where/how each inference turn is dispatched — same field, defaults
         /// and semantics as `AutomatedStep::deployment_model`. On the
         /// degenerate single-shot path it reaches the full
-        /// `Executor{pool}` / `Scheduled{lease}` dispatch in
+        /// `Executor{capacity}` / `Scheduled{lease}` dispatch in
         /// `lower_automated_step`. The multi-turn loop path supports
-        /// `Executor { pool: None }` only in v1 and compile-rejects the rest
+        /// `Executor { capacity: None }` only in v1 and compile-rejects the rest
         /// (mirrors the `context_strategy` gate); per-turn pooled/scheduled
         /// admission is a follow-up (docs/12).
         #[serde(rename = "deploymentModel", default)]
@@ -1338,7 +1338,7 @@ pub fn default_join_output_port() -> Port {
 /// daemon pool (jobs dispatched over the NATS work queue and pulled by the
 /// long-running executor workers) vs an external cluster. Resource admission
 /// *is* scheduling, so:
-/// - a `token_pool` admission lives under [`DeploymentModel::Executor`]'s `pool`
+/// - a `concurrency_limit` admission lives under [`DeploymentModel::Executor`]'s `capacity`
 ///   (the body runs on our executor pool holding the typed lease — R1–R3
 ///   machinery), and
 /// - an external cluster is a `datacenter` resource bound under
@@ -1348,17 +1348,17 @@ pub fn default_join_output_port() -> Port {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum DeploymentModel {
     /// Dispatch to our executor daemon pool over the NATS work queue (jobs are
-    /// pulled by the long-running executor workers — NOT in-process). `pool:
+    /// pulled by the long-running executor workers — NOT in-process). `capacity:
     /// None` is the plain path: our worker pool is currently unbounded (no
     /// control plane gating concurrency yet), so a job runs as soon as a worker
-    /// is free. `pool: Some` adds BOUNDED admission on top — a `token_pool`
+    /// is free. `capacity: Some` adds BOUNDED admission on top — a `concurrency_limit`
     /// claim/register/release handshake so contended infrastructure (GPUs, lab
     /// machines, LLM slots) is admission-controlled by the Petri firing rule
-    /// (R3). The bound alias MUST be a `token_pool` resource — a `datacenter`
+    /// (R3). The bound alias MUST be a `concurrency_limit` OR `runner_group` resource — a `datacenter`
     /// belongs under [`DeploymentModel::Scheduled`].
     Executor {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pool: Option<ResourcePoolBinding>,
+        capacity: Option<CapacityBinding>,
     },
     /// Lease through an external cluster. `scheduler` names a `datacenter`
     /// resource (docs/13). `job_template` selects the scheduler's parameterized
@@ -1409,7 +1409,7 @@ impl Default for DeploymentModel {
     /// `{"mode":"executor"}`, or an absent `deploymentModel` via the field's
     /// `#[serde(default)]`).
     fn default() -> Self {
-        DeploymentModel::Executor { pool: None }
+        DeploymentModel::Executor { capacity: None }
     }
 }
 
@@ -1425,21 +1425,21 @@ pub struct ResourceConfig {
     pub gpu: Option<u32>,
 }
 
-/// A binding to a `token_pool` resource for executor-pool admission (`docs/14`).
-/// Lives under [`DeploymentModel::Executor`]'s `pool`; its presence makes the
+/// A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).
+/// Lives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the
 /// compiler wrap the executor body with a claim/register/release handshake
 /// against the pool resource's backing net so the engine's firing rule provides
 /// admission control + mutual exclusion for free.
 ///
-/// `alias` is REQUIRED (the `Option` lives on `Executor.pool`, expressing "no
-/// pool"). It resolves at publish through the resource machinery to a backing
+/// `alias` is REQUIRED (the `Option` lives on `Executor.capacity`, expressing "no
+/// capacity binding"). It resolves at publish through the resource machinery to a backing
 /// net id + kind + claim/lease schemas; `request` is validated against the
 /// kind's `claim_schema`. The well-known-global fallback from the prototype is
-/// gone — a pooled step must name a `token_pool` resource.
+/// gone — a pooled step must name a `concurrency_limit` or `runner_group` resource.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ResourcePoolBinding {
-    /// Which `token_pool` resource (by workspace alias) to claim against.
+pub struct CapacityBinding {
+    /// Which `concurrency_limit`/`runner_group` resource (by workspace alias) to claim against.
     /// Required. Resolved at publish to a backing net id (`pool-<resource_id>`),
     /// kind, and claim/lease schemas.
     pub alias: String,
@@ -1457,7 +1457,7 @@ pub struct ResourcePoolBinding {
 /// allocation held across all iterations, released exactly once on exit.
 ///
 /// Mirrors [`DeploymentModel::Scheduled`]'s `scheduler: Option<String>` +
-/// `request: Option<Value>` and [`ResourcePoolBinding`] so the existing
+/// `request: Option<Value>` and [`CapacityBinding`] so the existing
 /// `resolve_binding(..., "datacenter", ...)` + lease-definition machinery
 /// applies unchanged. The field is named `scheduler` (not `alias`) for symmetry
 /// with the `Scheduled` lease path the loop body would otherwise inherit

@@ -12,7 +12,7 @@
 	} from './shared/JobTemplatePicker.svelte';
 	import TemplateParameterForm from './TemplateParameterForm.svelte';
 
-	// The editor-side shape of `DeploymentModel` (executor{pool?} | scheduled{…}).
+	// The editor-side shape of `DeploymentModel` (executor{capacity?} | scheduled{…}).
 	// Shared by the AutomatedStep and Agent panels — both carry the identical
 	// `deploymentModel` field derived from the same OpenAPI schema.
 	type DeploymentModelValue = NonNullable<AutomatedStepNodeData['deploymentModel']>;
@@ -36,7 +36,7 @@
 	};
 
 	type ExtendedDeploymentModel =
-		| { mode: 'executor'; pool?: null | unknown }
+		| { mode: 'executor'; capacity?: null | unknown }
 		| ScheduledExtended;
 
 	type Props = {
@@ -86,9 +86,9 @@
 		}
 	});
 
-	// Switching to scheduled drops any executor pool (pool is Executor-only — a
-	// datacenter cluster is bound under Scheduled instead). Defaults to
-	// env-global scheduler.
+	// Switching to scheduled drops any executor capacity binding (capacity is
+	// Executor-only — a datacenter cluster is bound under Scheduled instead).
+	// Defaults to env-global scheduler.
 	function setDeploymentMode(mode: string) {
 		if (mode === 'scheduled') {
 			const dm: ScheduledExtended = { mode: 'scheduled', jobTemplate: '' };
@@ -129,35 +129,36 @@
 		onchange(dm as unknown as DeploymentModelValue);
 	}
 
-	// Executor-pool token admission. The binding lives under
-	// `deploymentModel.Executor.pool` (post-R3 consolidation); presence = "claim
-	// a unit from this token_pool". `alias` is REQUIRED — a pooled step names a
-	// token_pool resource (no well-known-global fallback).
-	const poolAlias = $derived(value?.mode === 'executor' ? ((value as { mode: 'executor'; pool?: null | { alias: string } }).pool?.alias ?? '') : '');
-	const requiresPool = $derived(value?.mode === 'executor' && (value as { mode: 'executor'; pool?: null | unknown }).pool != null);
-	// Pool is intrinsically executor-only now (it lives under Executor.pool), so
-	// the control is simply hidden while scheduled.
+	// Executor capacity admission. The binding lives under
+	// `deploymentModel.Executor.capacity` (post-R3 consolidation); presence =
+	// "claim a unit from this concurrency_limit / runner_group". `alias` is
+	// REQUIRED — a limited step names a concurrency_limit or runner_group
+	// resource (no well-known-global fallback).
+	const poolAlias = $derived(value?.mode === 'executor' ? ((value as { mode: 'executor'; capacity?: null | { alias: string } }).capacity?.alias ?? '') : '');
+	const requiresPool = $derived(value?.mode === 'executor' && (value as { mode: 'executor'; capacity?: null | unknown }).capacity != null);
+	// Capacity is intrinsically executor-only now (it lives under
+	// Executor.capacity), so the control is simply hidden while scheduled.
 	const poolControlsVisible = $derived(deploymentMode === 'executor');
 
 	function setRequiresPool(on: boolean) {
-		onchange(on ? { mode: 'executor', pool: { alias: poolAlias } } as DeploymentModelValue : { mode: 'executor' } as DeploymentModelValue);
+		onchange(on ? { mode: 'executor', capacity: { alias: poolAlias } } as DeploymentModelValue : { mode: 'executor' } as DeploymentModelValue);
 	}
 
 	function setPoolAlias(alias: string) {
 		if (value?.mode !== 'executor') return;
 		// Preserve any existing request params when re-pointing the alias.
-		const prev = value as { mode: 'executor'; pool?: null | { alias: string; request?: unknown } };
-		const prevRequest = prev.pool?.request;
+		const prev = value as { mode: 'executor'; capacity?: null | { alias: string; request?: unknown } };
+		const prevRequest = prev.capacity?.request;
 		onchange({
 			mode: 'executor',
-			pool: { alias, ...(prevRequest !== undefined ? { request: prevRequest } : {}) }
+			capacity: { alias, ...(prevRequest !== undefined ? { request: prevRequest } : {}) }
 		} as DeploymentModelValue);
 	}
 
 	// ── Optional raw-JSON `request` params (v1: a textarea, not a schema form).
-	// Bound to Executor.pool.request. Kept as text locally so
+	// Bound to Executor.capacity.request. Kept as text locally so
 	// invalid JSON mid-typing doesn't clobber the model; committed on valid parse.
-	const requestValue = $derived(value?.mode === 'executor' ? (value as { mode: 'executor'; pool?: null | { alias: string; request?: unknown } }).pool?.request : undefined);
+	const requestValue = $derived(value?.mode === 'executor' ? (value as { mode: 'executor'; capacity?: null | { alias: string; request?: unknown } }).capacity?.request : undefined);
 	let requestText = $state('');
 	let requestError = $state<string | null>(null);
 	$effect(() => {
@@ -186,11 +187,11 @@
 		}
 		requestError = null;
 		if (dm.mode === 'executor') {
-			const extDm = dm as { mode: 'executor'; pool?: null | { alias: string; request?: unknown } };
-			if (extDm.pool == null) return; // no pool → nothing to attach request to
-			const pool: { alias: string; request?: unknown } = { alias: extDm.pool.alias };
-			if (parsed !== undefined) pool.request = parsed;
-			onchange({ mode: 'executor', pool } as DeploymentModelValue);
+			const extDm = dm as { mode: 'executor'; capacity?: null | { alias: string; request?: unknown } };
+			if (extDm.capacity == null) return; // no capacity → nothing to attach request to
+			const capacity: { alias: string; request?: unknown } = { alias: extDm.capacity.alias };
+			if (parsed !== undefined) capacity.request = parsed;
+			onchange({ mode: 'executor', capacity } as DeploymentModelValue);
 		}
 	}
 
@@ -203,8 +204,12 @@
 	$effect(() => {
 		if (poolControlsVisible && requiresPool && !poolResourcesLoaded) {
 			poolResourcesLoaded = true;
-			listResources({ resource_type: 'token_pool', perPage: 200 })
-				.then((p) => (poolResources = p.items))
+			// A capacity binding can name either kind — list both.
+			Promise.all([
+				listResources({ resource_type: 'concurrency_limit', perPage: 200 }),
+				listResources({ resource_type: 'runner_group', perPage: 200 })
+			])
+				.then(([cl, rg]) => (poolResources = [...cl.items, ...rg.items]))
 				.catch(() => {
 					/* leave empty — picker shows the empty hint */
 				});
@@ -222,7 +227,7 @@
 	});
 
 	function poolAliasLabel(): string {
-		if (!poolAlias) return 'Select a token pool…';
+		if (!poolAlias) return 'Select a capacity (concurrency limit or runner group)…';
 		const found = poolResources.find((r) => r.path === poolAlias);
 		return found ? `${found.path} — ${found.display_name}` : poolAlias;
 	}
@@ -247,10 +252,10 @@
 			<Select.Trigger disabled={readonly} data-testid="select-deployment-model">
 				{deploymentMode === 'scheduled'
 					? 'Scheduled (Nomad/Slurm cluster)'
-					: 'Executor (worker pool)'}
+					: 'Executor (workers)'}
 			</Select.Trigger>
 			<Select.Content>
-				<Select.Item value="executor" label="Executor (worker pool)" />
+				<Select.Item value="executor" label="Executor (workers)" />
 				<Select.Item value="scheduled" label="Scheduled (Nomad/Slurm cluster)" />
 			</Select.Content>
 		</Select.Root>
@@ -351,10 +356,10 @@
 					onCheckedChange={(v) => setRequiresPool(v === true)}
 					data-testid="toggle-resource-pool"
 				/>
-				Claim from a token pool
+				Claim a concurrency limit
 			</label>
 			{#if requiresPool}
-				<FormField label="Pool resource" for="pool-alias">
+				<FormField label="Capacity resource" for="pool-alias">
 					<Select.Root
 						type="single"
 						value={poolAlias}
@@ -373,11 +378,12 @@
 				</FormField>
 				{#if !poolAlias}
 					<p class="text-sm text-destructive">
-						Select a token pool — a pooled step must name a resource.
+						Select a concurrency limit — a limited step must name a resource.
 					</p>
 				{:else if poolResources.length === 0 && poolResourcesLoaded}
 					<p class="text-sm italic text-muted-foreground">
-						No <code class="font-mono">token_pool</code> resources in this workspace. Add one under
+						No <code class="font-mono">concurrency_limit</code> or
+						<code class="font-mono">runner_group</code> resources in this workspace. Add one under
 						<code class="font-mono">/resources</code> first.
 					</p>
 				{/if}
@@ -399,8 +405,9 @@
 					{/if}
 				{/if}
 				<p class="text-sm text-muted-foreground">
-					Holds a unit from the named token_pool resource for the step's duration; queues when the
-					pool is full. The granted lease is readable in the body as <code>lease.unit_id</code>.
+					Holds a unit from the named concurrency_limit (or runner_group) resource for the step's
+					duration; queues when the limit is reached. The granted lease is readable in the body as
+					<code>lease.unit_id</code>.
 				</p>
 			{/if}
 		</div>

@@ -521,18 +521,18 @@ pub enum CompileError {
         detail: String,
     },
 
-    /// An `Inline.pool.alias` resolved to a workspace resource that is not a
-    /// `token_pool`. Inline admission is `token_pool`-only: a `datacenter` is a
+    /// An `Inline.capacity.alias` resolved to a workspace resource that is not a
+    /// `concurrency_limit`/`runner_group`. Inline admission is capacity-only: a `datacenter` is a
     /// scheduler resource (bind it under `Scheduled`), and a plain credential
     /// (`postgres`, …) is no pool at all. The message names the `datacenter`
     /// case explicitly since that's the likely author mistake.
     #[error(
-        "node '{node_id}': inline pool alias '{alias}' is a '{kind}', not a token_pool — \
+        "node '{node_id}': inline capacity alias '{alias}' is a '{kind}', not a concurrency_limit/runner_group — \
          {}",
         if kind == "datacenter" {
             "a datacenter is a scheduler resource; bind it under a Scheduled deployment model"
         } else {
-            "point it at a token_pool resource"
+            "point it at a concurrency_limit or runner_group resource"
         }
     )]
     ResourcePoolNotAPool {
@@ -543,13 +543,13 @@ pub enum CompileError {
 
     /// A `Scheduled.scheduler` alias resolved to a workspace resource that is
     /// not a `datacenter`. The scheduler binding is `datacenter`-only (docs/13):
-    /// a `token_pool` is executor-pool admission (bind it under `Executor.pool`),
+    /// a `concurrency_limit` is executor-pool admission (bind it under `Executor.capacity`),
     /// and a plain credential (`postgres`, …) is no scheduler at all.
     #[error(
         "node '{node_id}': scheduler alias '{alias}' is a '{kind}', not a datacenter — \
          {}",
-        if kind == "token_pool" {
-            "a token_pool is executor-pool admission; bind it under Executor.pool"
+        if kind == "concurrency_limit" || kind == "runner_group" {
+            "a concurrency_limit/runner_group is executor-pool admission; bind it under Executor.capacity"
         } else {
             "point it at a datacenter resource"
         }

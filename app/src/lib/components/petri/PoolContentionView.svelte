@@ -1,8 +1,8 @@
 <!--
   PoolContentionView — live resource-pool-net contention dashboard.
 
-  Visualises a token_pool Petri net's current marking:
-    1. Pool drain bar: free / in-use split with conservation indicator.
+  Visualises a capacity (concurrency_limit / runner_group) admission Petri net's current marking:
+    1. Capacity drain bar: free / in-use split with conservation indicator.
     2. Per-hold list: each active hold's grant_id + its typed lease fields.
     3. Freed units counter (cumulative since net start).
 
@@ -95,7 +95,7 @@
 		<div class="flex min-w-0 items-center gap-2">
 			<Cpu class="size-4 shrink-0 text-muted-foreground" />
 			<div class="flex min-w-0 flex-col leading-tight">
-				<span class="font-semibold whitespace-nowrap text-foreground">Resource Pool</span>
+				<span class="font-semibold whitespace-nowrap text-foreground">Capacity contention</span>
 				<span class="truncate font-mono text-sm text-muted-foreground" title={netId}>{netId}</span>
 			</div>
 		</div>

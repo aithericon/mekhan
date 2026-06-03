@@ -30,10 +30,10 @@
       "data": {
         "type": "automated_step",
         "label": "Measure (on lab fleet)",
-        "description": "Runs on whichever enrolled runner the `lab_fleet` presence pool grants. No placement Requirements — any live runner satisfies the claim. The compiler wraps this body behind a claim/grant/release against the pool's backing net; the granted unit's `executor_namespace` routes the job to that runner.",
+        "description": "Runs on whichever enrolled runner the `lab_fleet` runner group grants. No placement Requirements — any live runner satisfies the claim. The compiler wraps this body behind a claim/grant/release against the group's backing net; the granted unit's `executor_namespace` routes the job to that runner.",
         "deploymentModel": {
           "mode": "executor",
-          "pool": { "alias": "lab_fleet" }
+          "capacity": { "alias": "lab_fleet" }
         },
         "executionSpec": {
           "backendType": "python",

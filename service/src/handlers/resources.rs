@@ -841,7 +841,7 @@ pub(crate) async fn create_resource_internal(
     )
     .await?;
 
-    // R3/R4b: if this is a pool-backed kind (token_pool / datacenter), deploy
+    // R3/R4b: if this is a pool-backed kind (concurrency_limit / datacenter), deploy
     // its backing net (idempotent, engine-down-tolerant). Runs after the
     // resource is durably persisted.
     ensure_pool_net_for_kind(
@@ -939,13 +939,13 @@ pub(crate) async fn reprovision_resource_secret(
 /// engine-down-tolerant. Called on create AND version bump so a config change
 /// (capacity, allocator url/token) re-deploys the net.
 ///
-/// - `token_pool` → [`crate::petri::pool_net::ensure_token_pool_net_deployed`]
+/// - `concurrency_limit` → [`crate::petri::pool_net::ensure_token_pool_net_deployed`]
 ///   (capacity from `public_config`).
 /// - `datacenter` → [`crate::petri::pool_net::ensure_datacenter_adapter_deployed`]
 ///   (`allocator_url` from `public_config`; the token as a
 ///   `{{secret:<vault_path>#token}}` template the engine resolves at fire time —
 ///   `vault_path` from `(workspace_id, resource_id, version)`).
-/// - `presence_pool` → [`crate::petri::presence_pool_net::ensure_presence_pool_net_deployed`]
+/// - `runner_group` → [`crate::petri::presence_pool_net::ensure_presence_pool_net_deployed`]
 ///   (Phase 3; capacity-less — the net seeds nothing, so no config is read; the
 ///   presence controller injects/expires units at runtime).
 async fn ensure_pool_net_for_kind(
@@ -957,8 +957,8 @@ async fn ensure_pool_net_for_kind(
     public: &JsonMap<String, Value>,
 ) {
     match resource_type {
-        "token_pool" => {
-            // `capacity` is a required public field of the TokenPool kind (R1),
+        "concurrency_limit" => {
+            // `capacity` is a required public field of the ConcurrencyLimit kind (R1),
             // so `split_config` guarantees it is present + a u32-shaped number.
             // Defend against a malformed blob by skipping (best-effort deploy).
             let Some(capacity) = public
@@ -968,7 +968,7 @@ async fn ensure_pool_net_for_kind(
             else {
                 tracing::warn!(
                     %resource_id,
-                    "token_pool resource has no numeric `capacity` in public_config; skipping pool-net deploy"
+                    "concurrency_limit resource has no numeric `capacity` in public_config; skipping pool-net deploy"
                 );
                 return;
             };
@@ -1006,12 +1006,12 @@ async fn ensure_pool_net_for_kind(
 
             crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
         }
-        "presence_pool" => {
+        "runner_group" => {
             // Phase 3: a presence pool is capacity-LESS — its backing net seeds
             // nothing and reads no config. mekhan's presence controller injects
             // one unit per live runner (presence_acquire) and reaps it on
             // presence-lease expiry (presence_expired). Deploy is idempotent +
-            // engine-down-tolerant, exactly like the token_pool path.
+            // engine-down-tolerant, exactly like the concurrency_limit path.
             crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
                 &state.petri,
                 resource_id,
