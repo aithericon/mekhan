@@ -2638,6 +2638,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workers/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/workers/coverage` — live worker-pool coverage.
+         * @description Reads the in-memory presence map populated from `worker.*.presence`. Global
+         *     (the pool has no workspace); behind the auth gate like the other reads.
+         */
+        get: operations["worker_coverage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces": {
         parameters: {
             query?: never;
@@ -3195,6 +3216,21 @@ export interface components {
             type: "header";
             value?: string | null;
             value_env?: string | null;
+        };
+        /**
+         * @description Per-backend coverage across every `ExecutorJob` backend. A `worker_count` of
+         *     0 means NO live worker serves this backend — steps on it will queue.
+         */
+        BackendCoverageEntry: {
+            /** @description Snake-case backend wire name (`python`, `loki`, …). */
+            backend: string;
+            /** @description Human label for the backend (editor display name). */
+            display_name: string;
+            /**
+             * Format: int32
+             * @description Number of live workers advertising this backend.
+             */
+            worker_count: number;
         };
         /**
          * @description Frontend-visible metadata for one backend. Returned by `GET /api/v1/backends`.
@@ -7382,6 +7418,25 @@ export interface components {
              *     across published templates — the editor reserves it at publish.
              */
             slug: string;
+        };
+        /** @description One live worker's advertised coverage. */
+        WorkerCoverageEntry: {
+            /** @description `ExecutorJob` backend wire names this worker serves (e.g. `python`). */
+            backends: string[];
+            /**
+             * Format: int64
+             * @description Milliseconds since this worker's last presence heartbeat.
+             */
+            last_seen_ms_ago: number;
+            /** @description Self-reported worker id (the executor daemon's name). */
+            worker_id: string;
+        };
+        /** @description Worker-pool coverage snapshot: live workers + per-backend coverage. */
+        WorkerCoverageResponse: {
+            /** @description Coverage for EVERY `ExecutorJob` backend; `worker_count == 0` is uncovered. */
+            backends: components["schemas"]["BackendCoverageEntry"][];
+            /** @description Live workers (TTL-swept), each with its advertised backends + freshness. */
+            workers: components["schemas"]["WorkerCoverageEntry"][];
         };
         WorkflowEdge: {
             id: string;
@@ -13870,6 +13925,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    worker_coverage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live worker-pool coverage snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerCoverageResponse"];
                 };
             };
         };

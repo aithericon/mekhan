@@ -8002,6 +8002,28 @@
         }
       }
     },
+    "/api/v1/workers/coverage": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`GET /api/v1/workers/coverage` — live worker-pool coverage.",
+        "description": "Reads the in-memory presence map populated from `worker.*.presence`. Global\n(the pool has no workspace); behind the auth gate like the other reads.",
+        "operationId": "worker_coverage",
+        "responses": {
+          "200": {
+            "description": "Live worker-pool coverage snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerCoverageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workspaces": {
       "get": {
         "tags": [
@@ -9389,6 +9411,31 @@
           }
         ],
         "description": "Authentication configuration."
+      },
+      "BackendCoverageEntry": {
+        "type": "object",
+        "description": "Per-backend coverage across every `ExecutorJob` backend. A `worker_count` of\n0 means NO live worker serves this backend — steps on it will queue.",
+        "required": [
+          "backend",
+          "display_name",
+          "worker_count"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string",
+            "description": "Snake-case backend wire name (`python`, `loki`, …)."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Human label for the backend (editor display name)."
+          },
+          "worker_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of live workers advertising this backend.",
+            "minimum": 0
+          }
+        }
       },
       "BackendDescriptor": {
         "type": "object",
@@ -18685,6 +18732,58 @@
           "slug": {
             "type": "string",
             "description": "Stable slug appended to `/api/triggers/webhook/{slug}`. Must be unique\nacross published templates — the editor reserves it at publish."
+          }
+        }
+      },
+      "WorkerCoverageEntry": {
+        "type": "object",
+        "description": "One live worker's advertised coverage.",
+        "required": [
+          "worker_id",
+          "backends",
+          "last_seen_ms_ago"
+        ],
+        "properties": {
+          "backends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`ExecutorJob` backend wire names this worker serves (e.g. `python`)."
+          },
+          "last_seen_ms_ago": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since this worker's last presence heartbeat.",
+            "minimum": 0
+          },
+          "worker_id": {
+            "type": "string",
+            "description": "Self-reported worker id (the executor daemon's name)."
+          }
+        }
+      },
+      "WorkerCoverageResponse": {
+        "type": "object",
+        "description": "Worker-pool coverage snapshot: live workers + per-backend coverage.",
+        "required": [
+          "workers",
+          "backends"
+        ],
+        "properties": {
+          "backends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackendCoverageEntry"
+            },
+            "description": "Coverage for EVERY `ExecutorJob` backend; `worker_count == 0` is uncovered."
+          },
+          "workers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerCoverageEntry"
+            },
+            "description": "Live workers (TTL-swept), each with its advertised backends + freshness."
           }
         }
       },

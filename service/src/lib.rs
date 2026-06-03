@@ -314,6 +314,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::runners::runner_presence))
         .routes(routes!(handlers::runners::list_runners))
         .routes(routes!(handlers::runners::heartbeat_runner))
+        // Worker-pool coverage (worker pool — anonymous competing consumers, NOT
+        // enrolled runners). Live worker presence + per-backend coverage.
+        .routes(routes!(handlers::workers::worker_coverage))
         // Phase 2 — self-service NATS scoped-creds mint/rotation. Runner-token
         // authed, self-only (subject == runner:{id}), same boundary as
         // heartbeat. Mints a fresh user JWT from the stored nats_public_key.

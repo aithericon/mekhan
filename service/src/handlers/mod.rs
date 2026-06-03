@@ -23,6 +23,7 @@ pub mod template_tests;
 pub mod templates;
 pub mod triggers;
 pub mod users;
+pub mod workers;
 pub mod workspaces;
 pub mod yjs_sync;
 

@@ -1,10 +1,13 @@
 <script lang="ts">
 	// Fleet management page — thin route wrapper.
-	// Two in-page tabs: "Runners" (list + enroll) and "Live board" (presence grid).
+	// Three in-page tabs: "Runners" (enrolled lab PCs: list + enroll), "Live
+	// board" (runner presence grid), and "Worker pool" (anonymous
+	// competing-consumer executor workers + per-backend coverage).
 	import RunnerList from '$lib/components/fleet/RunnerList.svelte';
 	import PresenceBoard from '$lib/components/fleet/PresenceBoard.svelte';
+	import WorkerPoolBoard from '$lib/components/fleet/WorkerPoolBoard.svelte';
 
-	type Tab = 'runners' | 'board';
+	type Tab = 'runners' | 'board' | 'workers';
 	let activeTab = $state<Tab>('runners');
 </script>
 
@@ -44,12 +47,25 @@
 			>
 				Live board
 			</button>
+			<button
+				type="button"
+				onclick={() => (activeTab = 'workers')}
+				class="rounded-md px-4 py-1.5 text-sm font-medium transition-colors
+					{activeTab === 'workers'
+						? 'bg-background text-foreground shadow-sm'
+						: 'text-muted-foreground hover:text-foreground'}"
+				data-testid="tab-workers"
+			>
+				Worker pool
+			</button>
 		</div>
 
 		{#if activeTab === 'runners'}
 			<RunnerList />
-		{:else}
+		{:else if activeTab === 'board'}
 			<PresenceBoard />
+		{:else}
+			<WorkerPoolBoard />
 		{/if}
 	</div>
 </div>
