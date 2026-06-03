@@ -12,7 +12,10 @@
 //! ## Crate layout
 //!
 //! - [`backend`] — the [`RosBackend`] `ExecutionBackend` impl.
+//! - [`client`] — the [`RosbridgeClient`] dynamic-type rosbridge JSON client.
 
 pub mod backend;
+pub mod client;
 
 pub use backend::RosBackend;
+pub use client::RosbridgeClient;

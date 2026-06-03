@@ -1,0 +1,8 @@
+[
+  {
+    "type": "turtlesim/RotateAbsolute_Feedback",
+    "fieldnames": ["remaining"],
+    "fieldtypes": ["float"],
+    "fieldarraylen": [-1]
+  }
+]

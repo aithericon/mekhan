@@ -17,26 +17,34 @@
 //!
 //! ## Output
 //!
-//! `output_authoring: Derived`. P1 STUB — the deriver returns an empty port.
-//! The real typedef→Port mapping (from the ROS interface type definition)
-//! lands in P2.
+//! `output_authoring: Derived`. P2 wires the real typedef→Port mapping: the
+//! deriver reads `interface_type` + `operation`, resolves the rosapi typedef
+//! snapshot (bundled ground-truth captures, see [`bundled`]), and lowers it to
+//! a typed [`Port`] via [`typedef::typedefs_to_port`]. Unknown / empty
+//! interfaces fall back to an empty port (the deriver is permissive — it runs
+//! per editor keystroke).
 
 use serde_json::{json, Value};
 
-use aithericon_executor_backend_configs::ros::RosConfig;
+use aithericon_executor_backend_configs::ros::{RosConfig, RosOperation};
 use aithericon_executor_domain::InputDeclaration;
+
+pub mod bundled;
+pub mod typedef;
 
 use crate::compiler::placeholder_refs::scan_placeholders;
 use crate::compiler::CompileError;
-use crate::models::template::{ExecutionBackendType, Port};
+use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 
 use super::{BackendDecl, RefSite, ScanCtx, ValidationCtx, ROS_META};
 
 pub static ROS_DECL: BackendDecl = BackendDecl {
     meta: &ROS_META,
     backend_type: ExecutionBackendType::Ros,
-    // P1 stub: empty default port. The Derived deriver below also returns an
-    // empty port until P2 wires the typedef→Port mapping.
+    // No static default fields — the port shape is derived per-config from the
+    // ROS interface typedef (`derive_output_port`). The descriptor's
+    // `default_output_port` is therefore empty; the editor re-derives on every
+    // config change.
     default_output_fields: &[],
     default_editor_config,
     validate,
@@ -50,8 +58,7 @@ pub static ROS_DECL: BackendDecl = BackendDecl {
     // payload). No per-field placeholder rewrite happens at compile time.
     borrow_shape: super::BorrowShape::Envelope,
     validate_ref_kind: super::accept_any_ref_kind,
-    // The output port is config-derived (from the ROS interface type). P1 stub
-    // returns an empty port; P2 maps the typedef.
+    // The output port is config-derived (from the ROS interface type).
     output_authoring: super::OutputAuthoring::Derived,
     derive_output_port: Some(derive_output_port),
     config_schema_fn: config_schema,
@@ -148,10 +155,109 @@ fn scan_value(value: &Value, out: &mut Vec<RefSite>) {
     }
 }
 
-/// Derive the ROS step's output port. P1 STUB — returns an empty port. The
-/// real typedef→Port mapping (from the ROS interface type definition) lands in
-/// P2.
-fn derive_output_port(_config: &Value) -> Port {
+/// The lookup key into the bundled typedef registry for a given
+/// `interface_type` + `operation`. The key is the rosapi message-details
+/// `type` form (no `/msg/` infix; services use `_Request` / `_Response`;
+/// action result uses `_Result`).
+///
+/// - `PublishTopic` carries no derived output (we surface a `{published: Bool}`
+///   port instead), so this returns `None`.
+/// - `AwaitTopic` derives from the topic message type itself.
+/// - `CallService` derives from the service **response** type.
+/// - `SendActionGoal` derives from the action **result** type.
+///
+/// Returns `None` for an empty interface type (mid-edit) so the deriver yields
+/// an empty / synthetic port without touching the registry.
+fn output_root_key(interface_type: &str, operation: RosOperation) -> Option<String> {
+    let base = typedef::normalize_type_name(interface_type);
+    if base.is_empty() {
+        return None;
+    }
+    match operation {
+        RosOperation::PublishTopic => None,
+        RosOperation::AwaitTopic => Some(base),
+        RosOperation::CallService => Some(format!("{base}_Response")),
+        RosOperation::SendActionGoal => Some(format!("{base}_Result")),
+    }
+}
+
+/// Derive the ROS step's output port from its config.
+///
+/// Reads `interface_type` + `operation`, resolves the bundled rosapi typedef
+/// snapshot for the relevant root (response for a service call, message for an
+/// awaited topic, result for an action goal), and lowers it to a typed [`Port`]
+/// via [`typedef::typedefs_to_port`].
+///
+/// Permissive by contract — it runs per editor keystroke, so a partial /
+/// unknown / empty config never errors:
+/// - `PublishTopic` → a synthetic `{ published: Bool }` port (no payload back).
+/// - `SendActionGoal` → the result port plus a synthetic `feedback_count`
+///   Number field summarising streamed feedback.
+/// - an unknown / unbundled interface type → an empty port.
+fn derive_output_port(config: &Value) -> Port {
+    let operation = config
+        .get("operation")
+        .and_then(|v| v.as_str())
+        .and_then(|s| serde_json::from_value::<RosOperation>(json!(s)).ok())
+        .unwrap_or_default();
+
+    let interface_type = config
+        .get("interface_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    // PublishTopic returns no message payload — just an ack that we published.
+    if operation == RosOperation::PublishTopic {
+        return Port {
+            id: "out".into(),
+            label: "Output".into(),
+            fields: vec![published_field()],
+        };
+    }
+
+    let Some(key) = output_root_key(interface_type, operation) else {
+        return empty_port();
+    };
+    let Some(typedefs) = bundled::lookup(&key) else {
+        return empty_port();
+    };
+
+    let mut port = typedef::typedefs_to_port(&typedefs, &key, "out", "Output");
+
+    // An action goal also streams feedback — surface a count alongside the
+    // result fields so downstream nodes can reference how many were received.
+    if operation == RosOperation::SendActionGoal {
+        port.fields.push(PortField {
+            name: "feedback_count".into(),
+            label: "Feedback count".into(),
+            kind: FieldKind::Number,
+            required: false,
+            options: None,
+            description: Some("Number of feedback messages received before the result.".into()),
+            accept: None,
+            schema: None,
+        });
+    }
+
+    port
+}
+
+/// A bare `{ published: Bool }` output port for `PublishTopic`.
+fn published_field() -> PortField {
+    PortField {
+        name: "published".into(),
+        label: "Published".into(),
+        kind: FieldKind::Bool,
+        required: false,
+        options: None,
+        description: Some("True once the message was published to the topic.".into()),
+        accept: None,
+        schema: None,
+    }
+}
+
+fn empty_port() -> Port {
     Port {
         id: "out".into(),
         label: "Output".into(),
@@ -244,8 +350,74 @@ mod tests {
     }
 
     #[test]
-    fn derive_output_is_empty_stub() {
-        let port = derive_output_port(&json!({}));
+    fn derive_publish_topic_is_published_bool() {
+        // Default operation is publish_topic — output is a single published Bool.
+        let port = derive_output_port(&json!({
+            "interface_type": "geometry_msgs/Twist",
+        }));
+        assert_eq!(port.fields.len(), 1);
+        assert_eq!(port.fields[0].name, "published");
+        assert_eq!(port.fields[0].kind, FieldKind::Bool);
+    }
+
+    #[test]
+    fn derive_await_topic_maps_message_port() {
+        // AwaitTopic derives from the topic message type itself (Pose → 5 Numbers).
+        let port = derive_output_port(&json!({
+            "operation": "await_topic",
+            "interface_type": "turtlesim/Pose",
+        }));
+        assert_eq!(port.fields.len(), 5);
+        assert!(port.fields.iter().all(|f| f.kind == FieldKind::Number));
+    }
+
+    #[test]
+    fn derive_call_service_maps_response_port() {
+        // CallService derives from the service RESPONSE type (Spawn_Response → name Text).
+        let port = derive_output_port(&json!({
+            "operation": "call_service",
+            "interface_type": "turtlesim/Spawn",
+        }));
+        assert_eq!(port.fields.len(), 1);
+        assert_eq!(port.fields[0].name, "name");
+        assert_eq!(port.fields[0].kind, FieldKind::Text);
+    }
+
+    #[test]
+    fn derive_call_service_empty_ack_response_is_empty() {
+        // TeleportAbsolute_Response is an empty ack → empty port.
+        let port = derive_output_port(&json!({
+            "operation": "call_service",
+            "interface_type": "turtlesim/TeleportAbsolute",
+        }));
+        assert!(port.fields.is_empty());
+    }
+
+    #[test]
+    fn derive_action_goal_result_plus_feedback_count() {
+        // SendActionGoal derives the RESULT port (delta) + a feedback_count Number.
+        let port = derive_output_port(&json!({
+            "operation": "send_action_goal",
+            "interface_type": "turtlesim/RotateAbsolute",
+        }));
+        assert_eq!(port.fields.len(), 2);
+        let delta = port.fields.iter().find(|f| f.name == "delta").unwrap();
+        assert_eq!(delta.kind, FieldKind::Number);
+        let fc = port.fields.iter().find(|f| f.name == "feedback_count").unwrap();
+        assert_eq!(fc.kind, FieldKind::Number);
+    }
+
+    #[test]
+    fn derive_unknown_interface_is_permissive_empty() {
+        // Unknown interface (mid-edit) → empty port, never an error.
+        let port = derive_output_port(&json!({
+            "operation": "await_topic",
+            "interface_type": "nope/Unknown",
+        }));
+        assert!(port.fields.is_empty());
+
+        // Empty interface type → empty port.
+        let port = derive_output_port(&json!({ "operation": "await_topic" }));
         assert!(port.fields.is_empty());
     }
 }

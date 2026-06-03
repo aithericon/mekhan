@@ -25,5 +25,21 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# NOTE: no transport deps yet — P1 is a stub. The rosbridge WebSocket client
-# lands in P2.
+# Templating for {{slug.field}} placeholder resolution in `fields` (mirrors
+# executor-loki's Tera mechanics — see executor-backend::context).
+tera = { version = "1", default-features = false }
+
+# rosbridge WebSocket client. We speak the rosbridge JSON protocol directly over
+# tokio-tungstenite (the same transport roslibrust_rosbridge uses) because the
+# backend's ROS type name is a *runtime* value (`interface_type`) and roslibrust's
+# typed API bakes it into a compile-time const — so roslibrust itself buys us
+# nothing here. See crate::client for the full rationale + the wire-op shapes.
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"

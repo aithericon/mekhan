@@ -31,6 +31,7 @@ import PostgresConfigPanel from '$lib/components/editor/panels/property-sections
 import LokiConfigPanel from '$lib/components/editor/panels/property-sections/automated/LokiConfigPanel.svelte';
 import PrometheusConfigPanel from '$lib/components/editor/panels/property-sections/automated/PrometheusConfigPanel.svelte';
 import CatalogueQueryConfigPanel from '$lib/components/editor/panels/property-sections/automated/CatalogueQueryConfigPanel.svelte';
+import RosConfigPanel from '$lib/components/editor/panels/property-sections/automated/RosConfigPanel.svelte';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const BACKEND_PANELS: Partial<Record<ExecutionBackendType, Component<any>>> = {
@@ -44,5 +45,6 @@ export const BACKEND_PANELS: Partial<Record<ExecutionBackendType, Component<any>
 	postgres: PostgresConfigPanel,
 	loki: LokiConfigPanel,
 	prometheus: PrometheusConfigPanel,
-	catalogue_query: CatalogueQueryConfigPanel
+	catalogue_query: CatalogueQueryConfigPanel,
+	ros: RosConfigPanel
 };

@@ -1,0 +1,8 @@
+[
+  {
+    "type": "turtlesim/RotateAbsolute_Result",
+    "fieldnames": ["delta"],
+    "fieldtypes": ["float"],
+    "fieldarraylen": [-1]
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "type": "geometry_msgs/Twist",
+    "fieldnames": ["linear", "angular"],
+    "fieldtypes": ["geometry_msgs/Vector3", "geometry_msgs/Vector3"],
+    "fieldarraylen": [-1, -1]
+  },
+  {
+    "type": "geometry_msgs/Vector3",
+    "fieldnames": ["x", "y", "z"],
+    "fieldtypes": ["double", "double", "double"],
+    "fieldarraylen": [-1, -1, -1]
+  }
+]
