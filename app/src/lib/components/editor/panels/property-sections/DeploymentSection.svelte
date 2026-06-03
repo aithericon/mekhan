@@ -7,6 +7,12 @@
 	import { Input } from '$lib/components/ui/input';
 	import { FormField } from '$lib/components/ui/form-field';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import {
+		resolveRunTarget,
+		initialRunTarget,
+		type RunTarget as Target,
+		type DeploymentLike
+	} from '$lib/editor/deployment-run-target';
 	import JobTemplatePicker, { type JobTemplateRef } from './shared/JobTemplatePicker.svelte';
 	import TemplateParameterForm from './TemplateParameterForm.svelte';
 
@@ -101,14 +107,23 @@
 	);
 
 	// ── "Run on" target — the deployment model, made first-class ──────────────
-	type Target = 'workers' | 'runner_group' | 'limit' | 'scheduled';
-
-	/** The target is DERIVED from the persisted value (+ the resolved kind of any
-	    bound alias), so the selector is a controlled reflection of the model. */
-	const target = $derived.by((): Target => {
-		if (value?.mode === 'scheduled') return 'scheduled';
-		if (!capacityAlias) return 'workers';
-		return kindByAlias.get(capacityAlias) === 'runner_group' ? 'runner_group' : 'limit';
+	// `target` is LOCAL UI state, not a pure derivation. An executor value with a
+	// `capacity` object but an EMPTY alias is ambiguous (runner_group vs limit
+	// can't be told apart from the value alone) — so when the user picks "Runner
+	// group"/"Concurrency limit" (which writes `capacity:{alias:''}` until they
+	// choose a resource), `resolveRunTarget` returns null and we KEEP the local
+	// choice instead of snapping back to "Worker pool" (the reported bug). The
+	// resolution logic is unit-tested in `deployment-run-target.test.ts`.
+	// `untrack`: a deliberate one-time read of the initial `value` (the effect
+	// owns ongoing sync) — silences the state_referenced_locally lint.
+	let target = $state<Target>(untrack(() => initialRunTarget(value as DeploymentLike | undefined)));
+	$effect(() => {
+		const next = resolveRunTarget(value as DeploymentLike | undefined, kindByAlias);
+		if (next !== null) {
+			untrack(() => {
+				if (target !== next) target = next;
+			});
+		}
 	});
 
 	// Options depend on the backend kind:
@@ -142,6 +157,9 @@
 
 	function setTarget(t: Target) {
 		if (t === target) return;
+		// Set the local target immediately so a capacity choice with no alias yet
+		// still shows its picker (the effect won't override an empty-alias value).
+		target = t;
 		if (t === 'scheduled') {
 			onchange({ mode: 'scheduled', jobTemplate: '' } as unknown as DeploymentModelValue);
 			return;

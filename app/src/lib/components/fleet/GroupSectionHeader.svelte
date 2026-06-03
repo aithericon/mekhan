@@ -9,6 +9,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import RadioTower from '@lucide/svelte/icons/radio-tower';
+	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 	import BackendChips from './BackendChips.svelte';
 	import type { FleetSection } from './grouping';
 
@@ -48,6 +49,20 @@
 			<span class="ml-1 text-sm text-muted-foreground">covers</span>
 			<BackendChips backends={section.backends} />
 		{/if}
-		{#if action}<div class="ml-auto">{@render action()}</div>{/if}
+		<!-- A backed group's capacity lives in its presence-pool net `pool-<id>`;
+		     deep-link straight to its live state (NetWorkbench + PoolContentionView). -->
+		<div class="ml-auto flex items-center gap-2">
+			{#if section.resource}
+				<a
+					href="/nets/pool-{section.resource.id}"
+					class="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground hover:underline"
+					data-testid="view-pool-net-{section.alias}"
+				>
+					View pool net
+					<ArrowUpRight class="size-3.5" />
+				</a>
+			{/if}
+			{#if action}{@render action()}{/if}
+		</div>
 	</div>
 {/if}
