@@ -291,6 +291,34 @@ pub struct ExecutorConfig {
     /// Environment variable: `EXECUTOR_PRESENCE_INTERVAL_SECS=10`.
     #[serde(default = "default_presence_interval_secs")]
     pub presence_interval_secs: u64,
+
+    /// ROS backend configuration (rosbridge connection — runner-local).
+    ///
+    /// The ROS backend reaches a rosbridge over a WebSocket. Unlike the
+    /// resource-bound query backends, the endpoint is configured on the daemon
+    /// (the runner advertises a reachable rosbridge) rather than bound per-step
+    /// as a workspace resource.
+    /// Config file: `[ros]` section in `executor.toml`.
+    #[serde(default)]
+    pub ros: Option<RosSettings>,
+}
+
+/// ROS backend connection settings.
+///
+/// A nested struct (not a flat field) so the documented
+/// `EXECUTOR_ROS__WS_URL` env var binds — config-rs uses `__` as the nesting
+/// separator (see the builder's `.separator("__")`), so a flat `ros_ws_url`
+/// field would only catch `EXECUTOR_ROS_WS_URL` and the documented form would
+/// silently no-op. Mirrors [`PythonCacheConfig`] / [`SandboxSettings`].
+///
+/// Environment variable: `EXECUTOR_ROS__WS_URL=ws://host:9090`.
+/// Config file: `[ros]` section in `executor.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RosSettings {
+    /// rosbridge WebSocket URL. When unset the [`ExecutorConfig::ros_ws_url`]
+    /// helper defaults to `ws://localhost:9090` (rosbridge's default port).
+    #[serde(default)]
+    pub ws_url: Option<String>,
 }
 
 /// On-disk runner identity persisted by `aithericon-executor register`.
@@ -603,6 +631,15 @@ impl ExecutorConfig {
     pub fn presence_interval(&self) -> Duration {
         Duration::from_secs(self.presence_interval_secs)
     }
+
+    /// The rosbridge WebSocket URL for the ROS backend, defaulting to
+    /// `ws://localhost:9090` (rosbridge's default port) when unset.
+    pub fn ros_ws_url(&self) -> String {
+        self.ros
+            .as_ref()
+            .and_then(|r| r.ws_url.clone())
+            .unwrap_or_else(|| "ws://localhost:9090".to_string())
+    }
 }
 
 fn default_base_dir() -> String {
@@ -729,6 +766,7 @@ mod tests {
             runner_id: None,
             runner_token_path: None,
             presence_interval_secs: default_presence_interval_secs(),
+            ros: None,
         }
     }
 

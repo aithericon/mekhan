@@ -44,6 +44,7 @@ aithericon-executor-smtp = { workspace = true, optional = true }
 aithericon-executor-postgres = { workspace = true, optional = true }
 aithericon-executor-loki = { workspace = true, optional = true }
 aithericon-executor-prometheus = { workspace = true, optional = true }
+aithericon-executor-ros = { workspace = true, optional = true }
 aithericon-secrets = { workspace = true }
 # Shared backend metadata — drives `build_executor`'s registration loop.
 aithericon-backends = { workspace = true }
@@ -68,6 +69,7 @@ smtp = ["dep:aithericon-executor-smtp"]
 postgres = ["dep:aithericon-executor-postgres"]
 loki = ["dep:aithericon-executor-loki"]
 prometheus = ["dep:aithericon-executor-prometheus"]
+ros = ["dep:aithericon-executor-ros"]
 
 [dev-dependencies]
 aithericon-executor-test-harness = { workspace = true }

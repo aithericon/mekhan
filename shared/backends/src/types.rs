@@ -60,6 +60,13 @@ pub enum ExecutionBackendType {
     /// `result_type` / `series` / `samples` / `sample_count` / `scalar` /
     /// `stats` output.
     Prometheus,
+    /// ROS (Robot Operating System) interaction over a rosbridge WebSocket.
+    /// The connection is runner-local (the runner advertises a reachable
+    /// rosbridge endpoint) rather than a workspace resource, so
+    /// `resource_channel = None`. Inline-only (not schedulable). Operations:
+    /// publish a topic, call a service, await a topic message, send an action
+    /// goal. (P1 stub — the rosbridge client + typedef mapper land in P2.)
+    Ros,
 }
 
 /// The NATS namespace prefix for worker-pool executor-job routing. A default
@@ -105,6 +112,7 @@ impl ExecutionBackendType {
             Self::Postgres => "postgres",
             Self::Loki => "loki",
             Self::Prometheus => "prometheus",
+            Self::Ros => "ros",
         }
     }
 
@@ -139,6 +147,7 @@ impl ExecutionBackendType {
             "postgres" => Some(Self::Postgres),
             "loki" => Some(Self::Loki),
             "prometheus" => Some(Self::Prometheus),
+            "ros" => Some(Self::Ros),
             _ => None,
         }
     }

@@ -35,7 +35,7 @@ use crate::models::template::{ExecutionBackendType, FieldKind, Port, PortField};
 pub use aithericon_backends::{
     BackendMeta, DispatchMode, ResourceChannel, CATALOGUE_QUERY_META, DOCKER_META, FILE_OPS_META,
     HTTP_META, KREUZBERG_META, LLM_META, LOKI_META, POSTGRES_META, PROCESS_META, PROMETHEUS_META,
-    PYTHON_META, SMTP_META, SURYA_META,
+    PYTHON_META, ROS_META, SMTP_META, SURYA_META,
 };
 
 pub mod catalogue_query;
@@ -49,6 +49,7 @@ pub mod postgres;
 pub mod process;
 pub mod prometheus;
 pub mod python;
+pub mod ros;
 pub mod smtp;
 pub mod surya;
 
@@ -451,6 +452,7 @@ pub static BACKENDS: &[&BackendDecl] = &[
     &postgres::POSTGRES_DECL,
     &process::PROCESS_DECL,
     &python::PYTHON_DECL,
+    &ros::ROS_DECL,
     &smtp::SMTP_DECL,
     &surya::SURYA_DECL,
 ];
@@ -579,6 +581,7 @@ mod tests {
             ExecutionBackendType::CatalogueQuery,
             ExecutionBackendType::Loki,
             ExecutionBackendType::Prometheus,
+            ExecutionBackendType::Ros,
         ] {
             assert!(
                 lookup(bt).is_some(),

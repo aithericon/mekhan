@@ -37,6 +37,8 @@ use aithericon_executor_postgres::PostgresBackend;
 use aithericon_executor_loki::LokiBackend;
 #[cfg(feature = "prometheus")]
 use aithericon_executor_prometheus::PrometheusBackend;
+#[cfg(feature = "ros")]
+use aithericon_executor_ros::RosBackend;
 #[cfg(feature = "opendal")]
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
@@ -841,6 +843,12 @@ fn register_executor_backend(
         "prometheus" => {
             info!("prometheus backend registered");
             registry.register(PrometheusBackend::new())
+        }
+        #[cfg(feature = "ros")]
+        "ros" => {
+            let ws_url = config.ros_ws_url();
+            info!(%ws_url, "ros backend registered");
+            registry.register(RosBackend::new(ws_url))
         }
         other => {
             info!(

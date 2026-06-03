@@ -4197,7 +4197,7 @@ export interface components {
          *     Both the mekhan compiler and the executor registry key off it.
          * @enum {string}
          */
-        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query" | "postgres" | "loki" | "prometheus";
+        ExecutionBackendType: "python" | "process" | "docker" | "http" | "llm" | "file_ops" | "kreuzberg" | "surya" | "smtp" | "catalogue_query" | "postgres" | "loki" | "prometheus" | "ros";
         ExecutionSpecConfig: {
             backendType: components["schemas"]["ExecutionBackendType"];
             config: unknown;
@@ -6320,6 +6320,46 @@ export interface components {
          * @enum {string}
          */
         Role: "system" | "user" | "assistant" | "tool";
+        /**
+         * @description Configuration for a single ROS interaction job.
+         *
+         *     Deserialised from `ExecutionSpec.config` at runtime by the executor;
+         *     validated against this shape at compile-time by the mekhan compiler.
+         */
+        RosConfig: {
+            /**
+             * @description The goal / request / message field values.
+             *
+             *     May contain `{{slug.field}}` placeholders resolved at runtime against
+             *     the staged producer envelopes. Defaults to a JSON null when absent.
+             */
+            fields?: unknown;
+            /**
+             * @description The ROS interface name — the topic / service / action name, e.g.
+             *     `"/turtle1/cmd_vel"`. Required.
+             */
+            interface_name: string;
+            /** @description The ROS interface type, e.g. `"geometry_msgs/Twist"`. Required. */
+            interface_type: string;
+            /** @description Which ROS interaction to perform. Defaults to `PublishTopic`. */
+            operation?: components["schemas"]["RosOperation"];
+            /**
+             * Format: int64
+             * @description Per-request timeout in milliseconds. Defaults to 30000.
+             */
+            timeout_ms?: number;
+        };
+        /**
+         * @description Which ROS interaction the step performs.
+         *
+         *     `PublishTopic` (the default) publishes a single message to a topic.
+         *     `CallService` performs a request/response service call. `AwaitTopic`
+         *     blocks for the next message on a topic. `SendActionGoal` dispatches a
+         *     goal to an action server. This is the source of truth for which rosbridge
+         *     op the backend issues.
+         * @enum {string}
+         */
+        RosOperation: "publish_topic" | "call_service" | "await_topic" | "send_action_goal";
         /**
          * @description Request body for `POST /api/v1/resources/{id}/rotate`. Always bumps
          *     version. The body carries the new config — the type cannot change at

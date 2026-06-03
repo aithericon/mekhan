@@ -1,0 +1,29 @@
+[package]
+name = "aithericon-executor-ros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+aithericon-executor-domain = { workspace = true }
+aithericon-executor-backend = { workspace = true }
+aithericon-executor-backend-configs = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+
+# Serde
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Errors / observability
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# NOTE: no transport deps yet — P1 is a stub. The rosbridge WebSocket client
+# lands in P2.

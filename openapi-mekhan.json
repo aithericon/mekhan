@@ -11623,7 +11623,8 @@
           "catalogue_query",
           "postgres",
           "loki",
-          "prometheus"
+          "prometheus",
+          "ros"
         ]
       },
       "ExecutionSpecConfig": {
@@ -16370,6 +16371,47 @@
           "user",
           "assistant",
           "tool"
+        ]
+      },
+      "RosConfig": {
+        "type": "object",
+        "description": "Configuration for a single ROS interaction job.\n\nDeserialised from `ExecutionSpec.config` at runtime by the executor;\nvalidated against this shape at compile-time by the mekhan compiler.",
+        "required": [
+          "interface_name",
+          "interface_type"
+        ],
+        "properties": {
+          "fields": {
+            "description": "The goal / request / message field values.\n\nMay contain `{{slug.field}}` placeholders resolved at runtime against\nthe staged producer envelopes. Defaults to a JSON null when absent."
+          },
+          "interface_name": {
+            "type": "string",
+            "description": "The ROS interface name — the topic / service / action name, e.g.\n`\"/turtle1/cmd_vel\"`. Required."
+          },
+          "interface_type": {
+            "type": "string",
+            "description": "The ROS interface type, e.g. `\"geometry_msgs/Twist\"`. Required."
+          },
+          "operation": {
+            "$ref": "#/components/schemas/RosOperation",
+            "description": "Which ROS interaction to perform. Defaults to `PublishTopic`."
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Per-request timeout in milliseconds. Defaults to 30000.",
+            "minimum": 0
+          }
+        }
+      },
+      "RosOperation": {
+        "type": "string",
+        "description": "Which ROS interaction the step performs.\n\n`PublishTopic` (the default) publishes a single message to a topic.\n`CallService` performs a request/response service call. `AwaitTopic`\nblocks for the next message on a topic. `SendActionGoal` dispatches a\ngoal to an action server. This is the source of truth for which rosbridge\nop the backend issues.",
+        "enum": [
+          "publish_topic",
+          "call_service",
+          "await_topic",
+          "send_action_goal"
         ]
       },
       "RotateResourceRequest": {
