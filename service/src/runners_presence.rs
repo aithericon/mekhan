@@ -86,6 +86,20 @@ pub(crate) struct PresenceEntry {
     /// Resolved once on the acquire edge and cached so the sweep can inject the
     /// expire signal without another DB round-trip.
     pool_net_id: String,
+    /// The runner's `pool` alias (the `resources.path` of its `presence_pool`),
+    /// cached from the trusted DB row on the acquire edge. This is the SAME
+    /// alias string a step's `ResourcePoolBinding.alias` carries, so the
+    /// publish-time backend-coverage warning can match a presence-pool step to
+    /// the live runners in its target pool ([`RunnerPresence::pool_covers`])
+    /// without resolving net ids. `None` for a liveness-only runner (no pool).
+    pool_alias: Option<String>,
+    /// The runner's self-reported `backends` — the executor backend wire-names
+    /// its daemon registered (`["python", ...]`), from the presence PAYLOAD (the
+    /// set-membership dimension, docs/23 §4; advisory wire-truth — see
+    /// `executor`'s `presence` module). Used for fleet visibility + the
+    /// publish-time coverage warning, NEVER to gate the engine `t_grant` guard
+    /// (caps remain authoritative there).
+    backends: Vec<String>,
     /// Whether mekhan currently considers the runner PRESENT (a `presence_acquire`
     /// has been injected and no expire has been injected since). Drives the
     /// absent→present acquire edge + the present→absent expire edge.
@@ -135,9 +149,30 @@ impl RunnerPresence {
                     runner_id: *runner_id,
                     present: entry.present,
                     last_seen_ms_ago: now.duration_since(entry.last_seen).as_millis() as u64,
+                    backends: entry.backends.clone(),
                 },
             )
             .collect()
+    }
+
+    /// Whether ANY currently-present runner in the pool aliased `pool_alias`
+    /// advertises the backend wire-name `wire`.
+    ///
+    /// This is the runner-side analogue of
+    /// [`crate::worker_coverage::BackendCoverage::is_covered`] (which serves the
+    /// default worker pool): it answers "is this presence-pool step's backend
+    /// covered by a live runner in its target pool?" for the best-effort
+    /// publish-time warning. Matches by the `pool` alias (the `resources.path`
+    /// shared by `runner.pool` and `ResourcePoolBinding.alias`), so no net-id
+    /// resolution is needed. Advisory only — a `false` here never blocks a
+    /// publish, it just logs a queue-risk warning.
+    pub async fn pool_covers(&self, pool_alias: &str, wire: &str) -> bool {
+        let map = self.0.lock().await;
+        map.values().any(|e| {
+            e.present
+                && e.pool_alias.as_deref() == Some(pool_alias)
+                && e.backends.iter().any(|b| b == wire)
+        })
     }
 }
 
@@ -280,6 +315,7 @@ async fn handle_presence(
     nats: &MekhanNats,
     presence: &PresenceMap,
     runner_id: Uuid,
+    backends: Vec<String>,
 ) {
     // Fast path: already present → just bump last_seen under the lock and return.
     // We still re-touch last_seen_at periodically below, but avoid a DB lookup on
@@ -288,6 +324,10 @@ async fn handle_presence(
         let mut map = presence.lock().await;
         if let Some(entry) = map.get_mut(&runner_id) {
             entry.last_seen = Instant::now();
+            // Refresh the advertised backend set on every heartbeat — cheap, and
+            // it keeps coverage current if a daemon's feature set changes without
+            // a full re-acquire (caps still come from the DB, untouched here).
+            entry.backends = backends.clone();
             if entry.present {
                 // Already admitted — nothing to inject. Drop the lock and do a
                 // best-effort last_seen_at touch outside it.
@@ -324,6 +364,8 @@ async fn handle_presence(
                 PresenceEntry {
                     last_seen: Instant::now(),
                     pool_net_id: String::new(),
+                    pool_alias: runner.pool.clone(),
+                    backends: backends.clone(),
                     present: true,
                 },
             );
@@ -357,6 +399,8 @@ async fn handle_presence(
             PresenceEntry {
                 last_seen: Instant::now(),
                 pool_net_id: pool_net_id.clone(),
+                pool_alias: runner.pool.clone(),
+                backends: backends.clone(),
                 present: true,
             },
         );
@@ -389,6 +433,23 @@ fn parse_runner_subject(subject: &str) -> Option<Uuid> {
     Uuid::parse_str(parts[1]).ok()
 }
 
+/// Extract the runner's advertised `backends` from a presence payload. The
+/// `runner_id` is authoritative from the SUBJECT (never the payload); `backends`
+/// is the one advisory field we read from the wire (see [`PresenceEntry::backends`]).
+/// A missing/malformed `backends` field yields an empty set — the runner is
+/// still tracked as present (liveness is subject-driven), it just advertises no
+/// coverage until a well-formed heartbeat arrives.
+fn parse_backends(payload: &[u8]) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct PresencePayload {
+        #[serde(default)]
+        backends: Vec<String>,
+    }
+    serde_json::from_slice::<PresencePayload>(payload)
+        .map(|p| p.backends)
+        .unwrap_or_default()
+}
+
 /// Start the presence subscriber: a core-NATS subscription to `runner.*.presence`.
 ///
 /// Presence pings are ephemeral liveness (not a durable command stream), so this
@@ -409,7 +470,8 @@ pub(crate) async fn start_presence_subscriber(nats: MekhanNats, db: PgPool, pres
             tracing::debug!(subject = %msg.subject, "ignoring non-presence subject");
             continue;
         };
-        handle_presence(&db, &nats, &presence, runner_id).await;
+        let backends = parse_backends(&msg.payload);
+        handle_presence(&db, &nats, &presence, runner_id, backends).await;
     }
 
     tracing::warn!("presence subscriber stream ended");
@@ -526,6 +588,8 @@ mod tests {
                 PresenceEntry {
                     last_seen: Instant::now(),
                     pool_net_id: "pool-x".to_string(),
+                    pool_alias: Some("lab_fleet".to_string()),
+                    backends: vec!["python".to_string()],
                     present: true,
                 },
             );
@@ -551,5 +615,49 @@ mod tests {
             let map = presence.lock().await;
             assert!(!map.get(&rid).unwrap().present, "absent → re-acquire armed");
         }
+    }
+
+    #[test]
+    fn parse_backends_reads_payload_set() {
+        assert_eq!(
+            parse_backends(br#"{"runner_id":"x","backends":["python","docker"]}"#),
+            vec!["python".to_string(), "docker".to_string()]
+        );
+        // Missing/malformed → empty (still tracked present; advertises nothing).
+        assert!(parse_backends(br#"{"runner_id":"x"}"#).is_empty());
+        assert!(parse_backends(b"not json").is_empty());
+    }
+
+    #[tokio::test]
+    async fn pool_covers_matches_alias_and_backend_only_when_present() {
+        let presence = RunnerPresence::new();
+        let rid = Uuid::new_v4();
+        {
+            let mut map = presence.map().lock().await;
+            map.insert(
+                rid,
+                PresenceEntry {
+                    last_seen: Instant::now(),
+                    pool_net_id: "pool-x".to_string(),
+                    pool_alias: Some("lab_fleet".to_string()),
+                    backends: vec!["python".to_string()],
+                    present: true,
+                },
+            );
+        }
+
+        // Right pool + right backend → covered.
+        assert!(presence.pool_covers("lab_fleet", "python").await);
+        // Right pool, backend the runner doesn't have → not covered.
+        assert!(!presence.pool_covers("lab_fleet", "docker").await);
+        // Backend present but a different pool → not covered (pool-scoped).
+        assert!(!presence.pool_covers("other_pool", "python").await);
+
+        // Flip absent → no longer covers (a reaped runner can't serve).
+        {
+            let mut map = presence.map().lock().await;
+            map.get_mut(&rid).unwrap().present = false;
+        }
+        assert!(!presence.pool_covers("lab_fleet", "python").await);
     }
 }

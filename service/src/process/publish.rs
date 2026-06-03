@@ -238,6 +238,16 @@ impl<'a> PublishService<'a> {
         // (transient fleet state).
         warn_on_uncovered_backends(self.state, &compiled_graph).await;
 
+        // Presence-pool backend-coverage WARNING (non-blocking, best-effort): the
+        // sibling of the above for the presence-pool (instrument) path. A
+        // presence-pooled step is granted to a specific runner and runs on THAT
+        // runner's executor — but `warn_on_empty_fleet` only checks the runner's
+        // typed CAPS, never that its executor actually has the step's backend. If
+        // no live runner in the target pool advertises the backend, the granted
+        // job lands on a runner that can't run it. Warn (never hard-fail — fleet
+        // state is transient and backends are self-reported).
+        warn_on_uncovered_pool_backends(self.state, &compiled_graph).await;
+
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
         // planner gets the inline source map directly via the `_inline`
@@ -558,6 +568,65 @@ async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
                 "publish: backend `{wire}` is covered by NO live worker — \
                  instances of this step will queue at `submitted` until a worker \
                  serving `{wire}` connects"
+            );
+        }
+    }
+}
+
+/// Runner-fleet feature — best-effort uncovered-backend WARNING for the
+/// PRESENCE-POOL (instrument) path, the sibling of [`warn_on_uncovered_backends`].
+///
+/// For each presence-pooled `AutomatedStep` (`DeploymentModel::Executor { pool:
+/// Some(binding) }`) whose backend dispatches as an `ExecutorJob`, check whether
+/// ANY live runner admitted to that pool (`binding.alias`) advertises the step's
+/// backend ([`crate::runners_presence::RunnerPresence::pool_covers`]). If none
+/// does, log a warning: the step's typed Requirements may match a runner's caps,
+/// but that runner's executor can't run the backend, so the granted job fails on
+/// the runner. This closes the seam where `warn_on_empty_fleet` checks only caps
+/// and `warn_on_uncovered_backends` skips pooled steps.
+///
+/// Backends are the runner's self-reported, set-membership dimension (docs/23
+/// §4) — checked here purely as advisory coverage, NEVER routed through the
+/// engine `satisfies` guard (which stays caps-only). NEVER hard-fails.
+async fn warn_on_uncovered_pool_backends(state: &AppState, graph: &WorkflowGraph) {
+    use crate::models::template::DeploymentModel;
+    use aithericon_backends::DispatchMode;
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep {
+            execution_spec,
+            deployment_model,
+            ..
+        } = &node.data
+        else {
+            continue;
+        };
+
+        // Only the presence-pool path: `Executor { pool: Some }`. The bound alias
+        // is the `resources.path` shared with the runner's `pool` alias.
+        let DeploymentModel::Executor { pool: Some(binding) } = deployment_model else {
+            continue;
+        };
+
+        // Only `ExecutorJob` backends reach the runner's work queue. EngineEffect
+        // (e.g. catalogue_query) is handled inline by the engine.
+        let Some(meta) = crate::backends::lookup(execution_spec.backend_type) else {
+            continue;
+        };
+        if !matches!(meta.dispatch_mode(), DispatchMode::ExecutorJob) {
+            continue;
+        }
+
+        let wire = meta.executor_wire_name();
+        if !state.runner_presence.pool_covers(&binding.alias, wire).await {
+            tracing::warn!(
+                node_id = %node.id,
+                backend = wire,
+                pool = %binding.alias,
+                "publish: presence-pool step's backend `{wire}` is advertised by NO \
+                 live runner in pool `{}` — a grant to a runner lacking `{wire}` will \
+                 fail at execution; instances will queue until a covering runner checks in",
+                binding.alias
             );
         }
     }

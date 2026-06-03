@@ -325,25 +325,6 @@ async fn run_nats_daemon(
     .await?;
     info!("NATS chunk listener started");
 
-    // Phase 3 (presence-lease pool capacity): a registered runner advertises
-    // liveness so mekhan keeps its presence-pool unit alive. Reuses the daemon's
-    // already-connected, runner-scoped NATS client (no second connection) and
-    // the cancel/chunk-listener shutdown token. No-op for a non-enrolled daemon
-    // (no runner identity → no presence task), so behavior is unchanged there.
-    if let Some(runner_id) = config.runner_id.clone() {
-        spawn_presence_task(
-            nats_client_for_cancel.clone(),
-            runner_id.clone(),
-            config.presence_interval(),
-            cancel_shutdown.clone(),
-        );
-        info!(
-            %runner_id,
-            interval_secs = config.presence_interval_secs,
-            "runner presence heartbeat started"
-        );
-    }
-
     // Build the JobExecutor. `registered_wires` is the set of backend
     // wire-names that actually registered (feature-gated arms may skip) —
     // exactly the set the worker pool can serve.
@@ -355,6 +336,35 @@ async fn run_nats_daemon(
         chunk_registry,
     )?;
     let executor = Arc::new(executor);
+
+    // Phase 3 (presence-lease pool capacity): a registered runner advertises
+    // liveness so mekhan keeps its presence-pool unit alive. Reuses the daemon's
+    // already-connected, runner-scoped NATS client (no second connection) and
+    // the cancel/chunk-listener shutdown token. No-op for a non-enrolled daemon
+    // (no runner identity → no presence task), so behavior is unchanged there.
+    //
+    // The payload advertises `registered_wires` — the runner's `backends`
+    // dimension (set-membership, docs/23 §4), the SAME set the worker-pool path
+    // advertises below. This is spawned AFTER `build_executor` so the registered
+    // wire set is known. mekhan uses it for fleet visibility + a best-effort
+    // publish-time coverage warning on presence-pool steps (it never hard-gates
+    // placement — caps remain the authoritative grant guard).
+    if let Some(runner_id) = config.runner_id.clone() {
+        let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
+        spawn_presence_task(
+            nats_client_for_cancel.clone(),
+            runner_id.clone(),
+            backends.clone(),
+            config.presence_interval(),
+            cancel_shutdown.clone(),
+        );
+        info!(
+            %runner_id,
+            ?backends,
+            interval_secs = config.presence_interval_secs,
+            "runner presence heartbeat started"
+        );
+    }
 
     let mut monitor = Monitor::new();
 

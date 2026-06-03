@@ -16503,6 +16503,13 @@
           "last_seen_ms_ago"
         ],
         "properties": {
+          "backends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The runner's self-reported executor `backends` (wire-names, e.g.\n`[\"python\"]`) — the set-membership dimension it advertises in its\npresence heartbeat, ORTHOGONAL to its typed `capabilities`. Surfaced for\nfleet visibility so an operator can see which execution backends a live\nrunner actually serves (a presence-pool step on an uncovered backend will\nqueue until a covering runner checks in)."
+          },
           "last_seen_ms_ago": {
             "type": "integer",
             "format": "int64",

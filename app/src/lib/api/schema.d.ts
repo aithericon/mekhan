@@ -6383,6 +6383,15 @@ export interface components {
          */
         RunnerPresenceSnapshot: {
             /**
+             * @description The runner's self-reported executor `backends` (wire-names, e.g.
+             *     `["python"]`) — the set-membership dimension it advertises in its
+             *     presence heartbeat, ORTHOGONAL to its typed `capabilities`. Surfaced for
+             *     fleet visibility so an operator can see which execution backends a live
+             *     runner actually serves (a presence-pool step on an uncovered backend will
+             *     queue until a covering runner checks in).
+             */
+            backends?: string[];
+            /**
              * Format: int64
              * @description Milliseconds since the last presence heartbeat from this runner.
              */
