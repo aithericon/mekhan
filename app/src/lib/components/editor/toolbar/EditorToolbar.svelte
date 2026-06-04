@@ -82,7 +82,9 @@
 		if (!editing) return;
 		editing = false;
 		const next = draft.trim();
-		if (next && next !== templateName) onrename?.(next);
+		// onrename rejects on failure (shared with the settings panel); the page
+		// banner already reports it, so swallow here to avoid an unhandled reject.
+		if (next && next !== templateName) void Promise.resolve(onrename?.(next)).catch(() => {});
 	}
 
 	function onKeydown(e: KeyboardEvent) {

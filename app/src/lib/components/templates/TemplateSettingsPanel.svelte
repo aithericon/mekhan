@@ -4,6 +4,7 @@
 	import Globe from '@lucide/svelte/icons/globe';
 	import Lock from '@lucide/svelte/icons/lock';
 	import FileText from '@lucide/svelte/icons/file-text';
+	import Pencil from '@lucide/svelte/icons/pencil';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -17,12 +18,48 @@
 
 	interface Props {
 		template: Template;
+		/** Persist a new name (parent owns the API call + state).
+		 *  Rejects on failure so we can surface it inline. */
+		onrename?: (name: string) => Promise<void>;
 		/** Persist a new description (parent owns the API call + state).
 		 *  Rejects on failure so we can surface it inline. */
 		ondescriptionchange?: (description: string) => Promise<void>;
 	}
 
-	let { template, ondescriptionchange }: Props = $props();
+	let { template, onrename, ondescriptionchange }: Props = $props();
+
+	// Name. Like rename in the toolbar, published versions are server-locked
+	// (the PUT 409s), so editing is offered on drafts only. Re-seeds when the
+	// template identity changes.
+	let draftName = $state('');
+	let nameDirty = $state(false);
+	let savingName = $state(false);
+	let nameError = $state<string | null>(null);
+	let seededNameId = $state('');
+
+	$effect(() => {
+		if (template.id !== seededNameId) {
+			seededNameId = template.id;
+			draftName = template.name ?? '';
+			nameDirty = false;
+			nameError = null;
+		}
+	});
+
+	async function saveName() {
+		const next = draftName.trim();
+		if (!nameDirty || savingName || template.published || !next) return;
+		savingName = true;
+		nameError = null;
+		try {
+			await onrename?.(next);
+			nameDirty = false;
+		} catch (e) {
+			nameError = e instanceof Error ? e.message : 'Failed to rename';
+		} finally {
+			savingName = false;
+		}
+	}
 
 	// Description. Published versions are server-locked (the PUT 409s, same as
 	// rename), so editing is offered on drafts only. The draft re-seeds when the
@@ -154,18 +191,63 @@
 		</p>
 	</header>
 
+	<!-- Name -->
+	<section class="space-y-3">
+		<div class="flex items-center gap-2 text-sm font-medium">
+			<Pencil class="size-4 text-muted-foreground" />
+			Name
+		</div>
+		{#if template.published}
+			<p class="text-sm text-muted-foreground">
+				Locked on published versions — fork a new version to edit.
+			</p>
+		{/if}
+
+		<Input
+			bind:value={draftName}
+			oninput={() => (nameDirty = true)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter') {
+					e.preventDefault();
+					saveName();
+				}
+			}}
+			disabled={template.published || savingName}
+			placeholder="Template name"
+			data-testid="settings-name-input"
+		/>
+
+		{#if !template.published}
+			<div class="flex items-center gap-3">
+				<Button
+					size="sm"
+					onclick={saveName}
+					disabled={!nameDirty || savingName || !draftName.trim()}
+					data-testid="settings-save-name"
+				>
+					{savingName ? 'Saving…' : 'Save name'}
+				</Button>
+				{#if nameDirty && !savingName}
+					<span class="text-sm text-muted-foreground">Unsaved changes</span>
+				{/if}
+			</div>
+		{/if}
+		{#if nameError}
+			<div class="text-sm text-destructive" data-testid="settings-name-error">{nameError}</div>
+		{/if}
+	</section>
+
 	<!-- Description -->
 	<section class="space-y-3">
 		<div class="flex items-center gap-2 text-sm font-medium">
 			<FileText class="size-4 text-muted-foreground" />
 			Description
 		</div>
-		<p class="text-sm text-muted-foreground">
-			Shown in the templates list and the run dialog.
-			{#if template.published}
+		{#if template.published}
+			<p class="text-sm text-muted-foreground">
 				Locked on published versions — fork a new version to edit.
-			{/if}
-		</p>
+			</p>
+		{/if}
 
 		<Textarea
 			bind:value={draftDesc}

@@ -144,6 +144,9 @@
 		goto(`/instances/${instanceId}`);
 	}
 
+	// Shared by the toolbar's inline rename and the settings-sheet Name field.
+	// Optimistic; sets the page banner (for the toolbar) and rethrows so the
+	// settings panel can also surface it inline (its sheet covers the banner).
 	async function handleRename(name: string) {
 		if (!template) return;
 		const prev = template;
@@ -153,6 +156,7 @@
 		} catch (e) {
 			template = prev;
 			error = e instanceof Error ? e.message : 'Rename failed';
+			throw e;
 		}
 	}
 
@@ -429,7 +433,11 @@
 	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
 		<SheetTitle class="sr-only">Template settings</SheetTitle>
 		{#if template}
-			<TemplateSettingsPanel {template} ondescriptionchange={handleDescriptionChange} />
+			<TemplateSettingsPanel
+				{template}
+				onrename={handleRename}
+				ondescriptionchange={handleDescriptionChange}
+			/>
 		{/if}
 	</SheetContent>
 </Sheet.Root>
