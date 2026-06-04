@@ -344,6 +344,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // `just dev runner-up` + `mekhan test`.
         "26-runner-pool",
         "27-runner-xrd",
+        // 28-turtle-drive (ROS) is the same shape as 27: its ros AutomatedSteps
+        // target the `ros_fleet` runner_group via `deploymentModel.capacity.alias`
+        // and carry a `ros` capability Requirement — neither resolvable by bare
+        // `compile_to_air` (empty KnownResources/capability registry). The
+        // presence-pool routing + capability match + the ROS backend ops are
+        // proven live by `just dev ros-up` + `mekhan test`.
+        "28-turtle-drive",
     ]
     .into_iter()
     .collect();

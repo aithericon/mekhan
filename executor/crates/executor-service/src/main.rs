@@ -53,6 +53,8 @@ use aithericon_executor_worker::{
 use tokio_util::sync::CancellationToken;
 
 mod register;
+#[cfg(feature = "ros")]
+mod ros_catalog;
 
 /// Connect to NATS, optionally using a credentials file.
 ///
@@ -367,6 +369,14 @@ async fn run_nats_daemon(
             "runner presence heartbeat started"
         );
     }
+
+    // Phase 3 (runner-side ROS catalog publish): when this daemon is a runner
+    // with a mekhan URL + a reachable rosbridge, introspect the ROS interface
+    // catalog and POST it to mekhan at startup. Fire-and-forget + best-effort —
+    // a missing token / unreachable mekhan / no rosapi node never crashes the
+    // daemon. No-op unless `runner_id` + `[mekhan].url` are configured.
+    #[cfg(feature = "ros")]
+    ros_catalog::spawn_catalog_publish(&config);
 
     let mut monitor = Monitor::new();
 

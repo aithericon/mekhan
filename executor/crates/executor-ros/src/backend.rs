@@ -22,10 +22,14 @@
 //!
 //! - **PublishTopic** — advertise + publish `fields` to `interface_name` typed
 //!   `interface_type`. Output `{ "published": true }`.
-//! - **CallService** — call `interface_name` with `fields` as the request;
-//!   output is the service response JSON under `response`.
+//! - **CallService** — call `interface_name` with `fields` as the request; the
+//!   service **response** object's fields are promoted to the top-level output
+//!   map (matching the service-side `derive_output_port`, which maps the response
+//!   type's fields at top level — not nested under `response`).
 //! - **AwaitTopic** — subscribe `interface_name`, await the first message within
-//!   `timeout_ms`, unsubscribe; output is the message JSON under `message`.
+//!   `timeout_ms`, unsubscribe; the **message** object's fields are promoted to
+//!   the top-level output map (matching `derive_output_port`, which maps the
+//!   topic message type's fields at top level — not nested under `message`).
 //! - **SendActionGoal** — P4, returns a clear `BackendError` stub here.
 
 use std::collections::HashMap;
@@ -219,18 +223,47 @@ impl RosBackend {
                     .call_service(&resolved.interface_name, &body, timeout)
                     .await
                     .map_err(|e| e.to_string())?;
-                outputs.insert("response".into(), response);
+                // Promote the response object's fields to the top-level output
+                // map (the service-side `derive_output_port` maps the response
+                // type's fields at top level, not nested under "response").
+                promote_object_fields(&mut outputs, response);
             }
             RosOperation::AwaitTopic => {
                 let message = client
                     .await_first(&resolved.interface_name, &resolved.interface_type, timeout)
                     .await
                     .map_err(|e| e.to_string())?;
-                outputs.insert("message".into(), message);
+                // Promote the message object's fields to the top-level output map
+                // (the service-side `derive_output_port` maps the topic message
+                // type's fields at top level, not nested under "message").
+                promote_object_fields(&mut outputs, message);
             }
             RosOperation::SendActionGoal => unreachable!("handled above"),
         }
         Ok(outputs)
+    }
+}
+
+/// Promote the fields of a rosbridge reply object to top-level entries in the
+/// `outputs` map. A JSON object's keys become output keys (matching the
+/// service-side `derive_output_port`, which maps a response/message type's
+/// fields at top level). A non-object reply (rosbridge `values` for a
+/// no-field/`std_srvs/Empty` response is sometimes `{}`, but a malformed or
+/// scalar reply is possible) is parked under a single `value` key so nothing is
+/// silently dropped.
+fn promote_object_fields(outputs: &mut HashMap<String, Value>, value: Value) {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map {
+                outputs.insert(k, v);
+            }
+        }
+        // Null reply (e.g. a service with no response fields) → nothing to
+        // promote; leave outputs as-is rather than inserting a null `value`.
+        Value::Null => {}
+        other => {
+            outputs.insert("value".into(), other);
+        }
     }
 }
 
@@ -585,6 +618,70 @@ mod tests {
         assert_eq!(rendered["x"], 2.0);
         assert_eq!(rendered["ok"], true);
         assert!(rendered["n"].is_null());
+    }
+
+    /// CallService output: the rosbridge service-response object's fields are
+    /// promoted to TOP-LEVEL output keys (matching the service-side
+    /// `derive_output_port`, which maps the response type's fields at top level),
+    /// NOT nested under a `response` key.
+    #[test]
+    fn promote_object_fields_promotes_service_response_to_top_level() {
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        // turtlesim/srv/TeleportAbsolute returns an empty response; a real
+        // response-carrying service (e.g. rosapi/Topics) returns named fields.
+        let response = serde_json::json!({ "x": 1.0, "y": 2.0, "theta": 0.5 });
+        promote_object_fields(&mut outputs, response);
+        assert_eq!(outputs.get("x"), Some(&serde_json::json!(1.0)));
+        assert_eq!(outputs.get("y"), Some(&serde_json::json!(2.0)));
+        assert_eq!(outputs.get("theta"), Some(&serde_json::json!(0.5)));
+        assert!(
+            !outputs.contains_key("response"),
+            "fields must be promoted, not nested under `response`"
+        );
+    }
+
+    /// AwaitTopic output: the rosbridge message object's fields are promoted to
+    /// TOP-LEVEL output keys (matching `derive_output_port`, which maps the topic
+    /// message type's fields at top level), NOT nested under a `message` key.
+    /// e.g. turtlesim/Pose → x, y, theta, linear_velocity, angular_velocity.
+    #[test]
+    fn promote_object_fields_promotes_topic_message_to_top_level() {
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        let pose = serde_json::json!({
+            "x": 1.0, "y": 1.0, "theta": 0.0,
+            "linear_velocity": 0.0, "angular_velocity": 0.0
+        });
+        promote_object_fields(&mut outputs, pose);
+        assert_eq!(outputs.get("x"), Some(&serde_json::json!(1.0)));
+        assert_eq!(outputs.get("theta"), Some(&serde_json::json!(0.0)));
+        assert_eq!(outputs.len(), 5);
+        assert!(
+            !outputs.contains_key("message"),
+            "fields must be promoted, not nested under `message`"
+        );
+    }
+
+    /// A non-object reply is parked under a single `value` key (nothing dropped),
+    /// and a null reply (a service with no response fields) promotes nothing —
+    /// while PublishTopic keeps its `{ published: true }` shape (set directly in
+    /// `run_operation`, never routed through `promote_object_fields`).
+    #[test]
+    fn promote_object_fields_handles_non_object_and_null() {
+        // Scalar reply → parked under `value`.
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        promote_object_fields(&mut outputs, serde_json::json!(42));
+        assert_eq!(outputs.get("value"), Some(&serde_json::json!(42)));
+
+        // Null reply → nothing promoted.
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        promote_object_fields(&mut outputs, Value::Null);
+        assert!(outputs.is_empty());
+
+        // PublishTopic's shape is unchanged: `{ published: true }`.
+        let mut outputs: HashMap<String, Value> = HashMap::new();
+        outputs.insert("published".into(), Value::Bool(true));
+        assert_eq!(outputs.get("published"), Some(&Value::Bool(true)));
+        assert_eq!(outputs.len(), 1);
     }
 
     #[test]

@@ -5648,6 +5648,103 @@
         }
       }
     },
+    "/api/v1/runners/{id}/interfaces": {
+      "get": {
+        "tags": [
+          "runners"
+        ],
+        "summary": "`GET /api/v1/runners/{id}/interfaces` — read the runner's interface catalog.\nSession/human authed + workspace-scoped (same boundary as `get_runner`).\n404 when the runner is absent/foreign OR has never pushed a catalog.",
+        "operationId": "get_runner_interfaces",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Runner id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runner interface catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerInterfaces"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Runner not found or no catalog reported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "runners"
+        ],
+        "summary": "`POST /api/v1/runners/{id}/interfaces` — upsert the runner's self-reported\ninterface catalog (ROS topics/services/actions). Runner-token authed,\nself-only: the principal's subject MUST be `runner:{id}` (same boundary as\nheartbeat). One row per runner, keyed on `runner_id`; a repeat push replaces\nthe catalog and bumps `updated_at` while preserving `discovered_at`.",
+        "operationId": "upsert_runner_interfaces",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Runner id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertRunnerInterfacesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Interface catalog upserted"
+          },
+          "401": {
+            "description": "Wrong / foreign / revoked runner token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Runner not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runners/{id}/nats-creds": {
       "post": {
         "tags": [
@@ -12837,6 +12934,24 @@
           }
         }
       },
+      "InterfaceEntry": {
+        "type": "object",
+        "description": "One advertised interface entry — a ROS topic/service/action `(name, type)`\npair. The `type` field is renamed `type` on the wire (`type` is a Rust\nkeyword, so the struct field is `type_`).",
+        "required": [
+          "name",
+          "type"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Fully-qualified interface name, e.g. `/turtle1/cmd_vel`."
+          },
+          "type": {
+            "type": "string",
+            "description": "ROS interface type, e.g. `geometry_msgs/msg/Twist`."
+          }
+        }
+      },
       "JobTemplateDetail": {
         "type": "object",
         "description": "Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus\nits full version history and current stagings.",
@@ -16518,6 +16633,58 @@
           }
         }
       },
+      "RunnerInterfaceCatalog": {
+        "type": "object",
+        "description": "The agreed topics/services/actions catalog a runner self-reports. Stored\nverbatim as the `catalog` JSONB column on `runner_interfaces`. Each list\ndefaults to empty so a runner can report a partial surface.",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InterfaceEntry"
+            }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InterfaceEntry"
+            }
+          },
+          "topics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InterfaceEntry"
+            }
+          }
+        }
+      },
+      "RunnerInterfaces": {
+        "type": "object",
+        "description": "Response for `GET /api/v1/runners/{id}/interfaces`. 404 when the runner has\nnever pushed a catalog.",
+        "required": [
+          "runner_id",
+          "catalog",
+          "discovered_at"
+        ],
+        "properties": {
+          "catalog": {
+            "$ref": "#/components/schemas/RunnerInterfaceCatalog"
+          },
+          "catalog_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "discovered_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "runner_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "RunnerNatsCreds": {
         "type": "object",
         "description": "Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted\nscoped NATS user JWT plus the issuing account signing key's public key. The\nrunner assembles its own `.creds` file from this JWT and its locally-held\nuser nkey seed.",
@@ -18628,6 +18795,26 @@
             "items": {
               "$ref": "#/components/schemas/StartToken"
             }
+          }
+        }
+      },
+      "UpsertRunnerInterfacesRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/runners/{id}/interfaces`. Runner-token authed,\nself-only. Upserts the runner's single interface row.",
+        "required": [
+          "catalog"
+        ],
+        "properties": {
+          "catalog": {
+            "$ref": "#/components/schemas/RunnerInterfaceCatalog",
+            "description": "The full topics/services/actions catalog (write-once-per-push; replaces\nany prior catalog for this runner)."
+          },
+          "catalog_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional runner-reported catalog version/hash (e.g. a content hash or a\nROS distro tag)."
           }
         }
       },

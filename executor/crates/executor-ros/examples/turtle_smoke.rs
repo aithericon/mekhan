@@ -68,5 +68,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let y = pose.get("y").and_then(|v| v.as_f64());
     println!("pose x={x:?} y={y:?}  (expect x≈1.0, y≈1.0 after teleport)");
 
+    // 4. Introspection sanity check (Phase 3): list topics via the rosapi
+    //    service surface, the same call the runner-side catalog publish uses.
+    //    Confirms the rosapi node is reachable and returns the turtle's
+    //    interfaces (e.g. /turtle1/cmd_vel : geometry_msgs/msg/Twist).
+    let topics = client
+        .call_service("/rosapi/topics", &json!({}), Duration::from_secs(5))
+        .await?;
+    let names = topics
+        .get("topics")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    println!("\n/rosapi/topics returned {names} topics:");
+    if let (Some(n), Some(t)) = (
+        topics.get("topics").and_then(|v| v.as_array()),
+        topics.get("types").and_then(|v| v.as_array()),
+    ) {
+        for (i, name) in n.iter().enumerate() {
+            let ty = t.get(i).and_then(|v| v.as_str()).unwrap_or("");
+            println!("  {} : {}", name.as_str().unwrap_or(""), ty);
+        }
+    }
+
     Ok(())
 }

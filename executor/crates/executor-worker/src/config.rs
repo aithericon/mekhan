@@ -301,6 +301,31 @@ pub struct ExecutorConfig {
     /// Config file: `[ros]` section in `executor.toml`.
     #[serde(default)]
     pub ros: Option<RosSettings>,
+
+    /// mekhan control-plane connection settings (Phase 3 — runner-side catalog
+    /// publish). A registered runner POSTs its introspected ROS interface
+    /// catalog to mekhan's `/api/v1/runners/{id}/interfaces` at startup. The base
+    /// URL lives here; the `rnr_` bearer is read from [`runner_token_path`].
+    /// Optional — only meaningful when a runner identity is present.
+    /// Config file: `[mekhan]` section in `executor.toml`.
+    #[serde(default)]
+    pub mekhan: Option<MekhanSettings>,
+}
+
+/// mekhan control-plane connection settings.
+///
+/// A nested struct (not a flat field) so the documented `EXECUTOR_MEKHAN__URL`
+/// env var binds — config-rs uses `__` as the nesting separator. Mirrors
+/// [`RosSettings`].
+///
+/// Environment variable: `EXECUTOR_MEKHAN__URL=http://host:13100`.
+/// Config file: `[mekhan]` section in `executor.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MekhanSettings {
+    /// mekhan base URL (e.g. `http://localhost:13100`). When unset, the
+    /// runner-side catalog publish is skipped (logged, never fatal).
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// ROS backend connection settings.
@@ -640,6 +665,17 @@ impl ExecutorConfig {
             .and_then(|r| r.ws_url.clone())
             .unwrap_or_else(|| "ws://localhost:9090".to_string())
     }
+
+    /// The mekhan base URL for the runner-side catalog publish, or `None` when
+    /// unconfigured (the publish is then skipped, never fatal). A trailing slash
+    /// is trimmed so callers can append `/api/v1/...` without doubling it.
+    pub fn mekhan_url(&self) -> Option<String> {
+        self.mekhan
+            .as_ref()
+            .and_then(|m| m.url.clone())
+            .map(|u| u.trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty())
+    }
 }
 
 fn default_base_dir() -> String {
@@ -767,6 +803,7 @@ mod tests {
             runner_token_path: None,
             presence_interval_secs: default_presence_interval_secs(),
             ros: None,
+            mekhan: None,
         }
     }
 

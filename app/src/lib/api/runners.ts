@@ -37,6 +37,9 @@ export type CreateRegistrationTokenRequest =
 export type PaginatedRunners = components['schemas']['PaginatedResponse_RunnerSummary'];
 export type PaginatedRegistrationTokens =
 	components['schemas']['PaginatedResponse_RegistrationTokenSummary'];
+export type RunnerInterfaces = components['schemas']['RunnerInterfaces'];
+export type RunnerInterfaceCatalog = components['schemas']['RunnerInterfaceCatalog'];
+export type InterfaceEntry = components['schemas']['InterfaceEntry'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -141,4 +144,20 @@ export async function revokeRegistrationToken(id: string): Promise<void> {
  */
 export async function getRunnerPresence(): Promise<RunnerPresenceSnapshot[]> {
 	return unwrap(await client.GET('/api/v1/runners/presence', {}));
+}
+
+// ── Interface-catalog endpoint ─────────────────────────────────────────────
+
+/**
+ * GET /api/v1/runners/{id}/interfaces — the runner's self-reported interface
+ * catalog (ROS topics/services/actions). Returns `null` when the runner has
+ * never pushed a catalog (the endpoint replies 404), so callers can render a
+ * friendly empty state instead of treating it as an error.
+ */
+export async function getRunnerInterfaces(id: string): Promise<RunnerInterfaces | null> {
+	const res = await client.GET('/api/v1/runners/{id}/interfaces', {
+		params: { path: { id } }
+	});
+	if (res.response.status === 404) return null;
+	return unwrap(res);
 }
