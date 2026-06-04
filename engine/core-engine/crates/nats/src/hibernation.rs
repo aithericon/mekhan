@@ -128,6 +128,19 @@ impl ActivityTracker {
     }
 }
 
+/// Lets any stimulus boundary (NATS listeners, HTTP command handlers) record
+/// net activity through the `petri_application::ActivitySink` port without
+/// depending on this concrete tracker. Best-effort — a failed touch is logged
+/// and swallowed (hibernation is an optimization, not a correctness invariant).
+#[async_trait::async_trait]
+impl petri_application::ActivitySink for ActivityTracker {
+    async fn record_activity(&self, net_id: &str) {
+        if let Err(e) = self.touch(net_id).await {
+            tracing::warn!(net_id = %net_id, error = %e, "Failed to record net activity");
+        }
+    }
+}
+
 /// Trait for decoupling hibernation logic from the NetRegistry.
 #[async_trait::async_trait]
 pub trait NetHibernator: Send + Sync {
