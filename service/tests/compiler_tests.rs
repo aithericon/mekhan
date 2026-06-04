@@ -5021,8 +5021,8 @@ fn automated_step_executor_group_stamps_partition_namespace() {
         .expect("grouped executor dispatch should compile");
     let air_str = serde_json::to_string(&air).unwrap();
     assert!(
-        air_str.contains(r#"d.executor_namespace = \"executor-docker/groupG\";"#),
-        "grouped step must stamp executor-docker/groupG: {air_str}"
+        air_str.contains(r#"d.executor_namespace = \"executor-docker-grp/groupG\";"#),
+        "grouped step must stamp executor-docker-grp/groupG: {air_str}"
     );
 }
 

@@ -267,7 +267,8 @@ impl RunnerNatsSigner {
     /// The worker is a competing *pull* consumer, NOT a presence-push grant
     /// target, so the scope is materially different from [`Self::mint_runner_jwt`]:
     ///   SUBSCRIBE allow: per advertised backend wire, the group's pull filter
-    ///     `executor-<wire>.*.<group>.>` (the `*` is the priority token, the
+    ///     `executor-<wire>-grp.*.<group>.>` (grouped jobs ride the parallel
+    ///     `executor-<wire>-grp` stream; the `*` is the priority token, the
     ///     `<group>` is the second coarse routing coordinate, the `>` spans the
     ///     exec-id tail) — plus `worker.{id}.>` for its own control/presence
     ///     inbox. When the worker is UNGROUPED (`group = None`) it gets only the
@@ -310,12 +311,15 @@ impl RunnerNatsSigner {
                 }
                 // One group pull filter per advertised backend wire. Backend
                 // wire-names are `[a-z_]`, so they are valid NATS subject tokens
-                // (no validation needed here). `executor_pool_namespace` is the
-                // single source of truth for the `executor-<wire>` prefix the
-                // compiler stamps onto a grouped step.
+                // (no validation needed here). Grouped jobs ride the PARALLEL
+                // `executor-<wire>-grp` stream (the D1 isolation decision — see
+                // `ExecutionBackendType::executor_namespace_for_group`), so the
+                // subscribe filter is `executor-<wire>-grp.<prio>.<group>.>`. The
+                // worker is scoped to its group's pull subjects only; it can
+                // never see the anonymous `executor-<wire>` pool's stream.
                 for wire in backends {
                     let ns = aithericon_backends::executor_pool_namespace(wire);
-                    sub_allow.push(format!("{ns}.*.{group}.>"));
+                    sub_allow.push(format!("{ns}-grp.*.{group}.>"));
                 }
             }
         }
@@ -615,12 +619,12 @@ mod tests {
         assert_eq!(claims["sub"], user_pub);
 
         // SUBSCRIBE: one group pull filter per advertised backend wire + the
-        // worker's own control inbox. The filter is `executor-<wire>.*.<group>.>`
+        // worker's own control inbox. The filter is `executor-<wire>-grp.*.<group>.>`
         // (priority `*`, the group token, then the exec-id tail).
         let sub_allow = allow_list(&claims, "sub");
         assert!(sub_allow.contains(&format!("worker.{id}.>")));
-        assert!(sub_allow.contains(&format!("executor-python.*.{group}.>")));
-        assert!(sub_allow.contains(&format!("executor-docker.*.{group}.>")));
+        assert!(sub_allow.contains(&format!("executor-python-grp.*.{group}.>")));
+        assert!(sub_allow.contains(&format!("executor-docker-grp.*.{group}.>")));
 
         // PUBLISH: presence heartbeat + the shared status/events fan-in. NO
         // `.claim` — a worker is a pull competitor, not a presence-push target.
