@@ -18,23 +18,22 @@
 		CardDescription
 	} from '$lib/components/ui/card';
 	import ProjectApiContract from '$lib/components/projects/ProjectApiContract.svelte';
+	import { workspaces } from '$lib/workspaces/store.svelte';
 	import {
-		getWorkspace,
 		listProjects,
 		updateProject,
 		deleteProject,
 		listTemplates,
 		attachTemplateToProject,
 		detachTemplateFromProject,
-		type WorkspaceSummary,
 		type Project,
 		type Template
 	} from '$lib/api/client';
 
-	const workspaceId = $derived(page.params.id ?? '');
 	const projectId = $derived(page.params.projectId ?? '');
+	// Projects are scoped to the active workspace (same as the list page).
+	const workspaceId = $derived(workspaces.active?.id ?? '');
 
-	let workspace = $state<WorkspaceSummary | null>(null);
 	let project = $state<Project | null>(null);
 	let attached = $state<Template[]>([]);
 	let loading = $state(true);
@@ -55,7 +54,12 @@
 	let attachSearching = $state(false);
 	let attachError = $state<string | null>(null);
 
-	const bundleUrl = $derived(`/api/v1/workspaces/${workspaceId}/projects/${projectId}/openapi.json`);
+	// Bundle URL keys on the project's own workspace, robust to switching.
+	const bundleUrl = $derived(
+		project
+			? `/api/v1/workspaces/${project.workspace_id}/projects/${projectId}/openapi.json`
+			: ''
+	);
 
 	// Base id is what project_templates keys on (COALESCE(base_template_id, id)).
 	function baseId(t: Template): string {
@@ -75,14 +79,10 @@
 		loading = true;
 		error = null;
 		try {
-			const [ws, projects] = await Promise.all([
-				getWorkspace(workspaceId),
-				listProjects(workspaceId)
-			]);
-			workspace = ws;
+			const projects = await listProjects(workspaceId);
 			project = projects.find((p) => p.id === projectId) ?? null;
 			if (!project) {
-				error = 'Project not found in this workspace';
+				error = 'Project not found in the active workspace';
 				return;
 			}
 			editName = project.display_name;
@@ -96,6 +96,7 @@
 	}
 
 	$effect(() => {
+		workspaces.load();
 		if (workspaceId && projectId) load();
 	});
 
@@ -123,7 +124,7 @@
 		if (!confirm(`Delete project '${project.display_name}'? This cannot be undone.`)) return;
 		try {
 			await deleteProject(projectId);
-			goto(`/workspaces/${workspaceId}`);
+			goto('/projects');
 		} catch (e) {
 			alert(e instanceof Error ? e.message : 'Failed to delete project');
 		}
@@ -186,10 +187,10 @@
 <div class="h-full overflow-y-auto">
 	<div class="mx-auto max-w-4xl px-6 py-8 animate-rise">
 		<a
-			href={`/workspaces/${workspaceId}`}
+			href="/projects"
 			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 		>
-			<ChevronLeft class="size-4" /> {workspace?.display_name ?? 'Workspace'}
+			<ChevronLeft class="size-4" /> Projects
 		</a>
 
 		{#if loading}
@@ -355,7 +356,7 @@
 						</div>
 					</CardHeader>
 					<CardContent>
-						<ProjectApiContract {workspaceId} {projectId} />
+						<ProjectApiContract workspaceId={project.workspace_id} {projectId} />
 					</CardContent>
 				</Card>
 			</div>
