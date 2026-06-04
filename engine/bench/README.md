@@ -4,6 +4,10 @@ Benchmark harness for the Petri-net execution engine. It measures the cost of
 the engine's hot paths along well-defined **scaling axes**, emits each measured
 point as a versioned JSON artifact, and prints a human-readable table.
 
+> **Results, the cost model, and optimization recommendations live in
+> [`../docs/engine/scalability.md`](../docs/engine/scalability.md).** This README
+> covers how the harness works; that doc covers what it found.
+
 ## Purpose
 
 The engine has a handful of performance-critical paths: rehydrating a net from
