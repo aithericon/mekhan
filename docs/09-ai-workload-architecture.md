@@ -101,6 +101,22 @@ independently.
 
 ## 2. GPU serving pool (Ollama-based)
 
+> **Revision 2026-06-04 (see [`28-model-pool-control-plane.md`](./28-model-pool-control-plane.md) §5/§11).**
+> Three rules below are softened by vLLM capabilities that postdate this
+> exploration, and by the GDPR constraint:
+> - **"One replica = one GPU / never share / per-model homogeneous pools."** Still
+>   the default, but **multi-LoRA** (many adapters share one base engine) and
+>   **sleep/wake** (fast base swap) mean a worker is a *node agent* that maps
+>   "load model" onto the cheapest vLLM-native mechanism, not strictly one process
+>   per GPU. Capacity is accounted per *engine* (`--max-num-seqs`), shared across
+>   its adapters.
+> - **"Scale-to-zero is a lie."** Under GDPR there is no external-offload valve, so
+>   scale-to-zero + on-demand reload (GPU time-multiplexing on our own hardware)
+>   is the long-tail efficiency mechanism — now a *configurable per-model mode*
+>   (`manual` / `scale_to_zero` / `keep_warm`), not a blanket prohibition.
+> - **External fallback** (referenced in §1 topology and doc 11 §5.10) is **not
+>   automatic** — explicit author choice only.
+
 Ollama is good for dev and small-model serving. Limits before committing:
 single-process, limited continuous batching, no tensor parallelism, weaker
 throughput than vLLM/TGI/SGLang on large models. Pool design is the same

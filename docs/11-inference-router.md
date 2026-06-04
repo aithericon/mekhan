@@ -7,6 +7,19 @@ between job-plane callers and the GPU pool.
 
 Working name: `aithericon-inference-router` (open question — see §10).
 
+> **Revision 2026-06-04 (see [`28-model-pool-control-plane.md`](./28-model-pool-control-plane.md)).**
+> Two amendments from the pool-control-plane design conversation:
+> 1. **No automatic external fallback.** Under strict GDPR, the router must NOT
+>    silently offload to external providers. Goal 7 (§2) and the fallback chain
+>    (§5.10) are **superseded**: external providers remain an *explicit
+>    per-step/per-resource author choice* (the existing `openai`/`anthropic`/
+>    `ollama` resource binding), never a router-initiated fallback. The external
+>    adapters survive only as that explicit transport.
+> 2. **"capability-routing" is built.** Every reference below to an abstract
+>    `capability-routing` inventory service now maps onto the real
+>    capacity/fleet/runner subsystem (docs 21/23/24); doc 28 §2 gives the
+>    mapping. The router stays a *consumer* of that inventory, exactly as specced.
+
 ## 1. Summary
 
 A standalone Rust service that owns every inference request crossing the
@@ -47,8 +60,10 @@ clean point of control for everything inference-adjacent.
    tenant/instance/step, append-only via NATS → Postgres projector.
 6. **Publish autoscale signals** the Nomad autoscaler can consume to scale
    replica count per model.
-7. **Fall back to external providers** (OpenAI/Anthropic) when configured per
-   tenant or per step, with a cost ceiling.
+7. ~~**Fall back to external providers** (OpenAI/Anthropic) when configured per
+   tenant or per step, with a cost ceiling.~~ **SUPERSEDED (2026-06-04, GDPR):**
+   no automatic fallback. External providers are an explicit author choice only —
+   see the revision note at the top of this doc and doc 28 §7/§11.
 8. **Coordinate with `capability-routing`** as the inventory of pools / models /
    versions. Router is a consumer of that inventory, not a second copy.
 
@@ -316,6 +331,14 @@ it. What it must implement:
 Pre-pull and weight loading are the replica's concern, not the router's.
 
 ### 5.10 Fallback chain
+
+> **SUPERSEDED (2026-06-04, GDPR) — see doc 28 §7/§11.** The *automatic* external
+> hop described below is removed: the router never advances local→external on its
+> own. External providers stay reachable only as an *explicit* per-step/per-resource
+> author choice. Local-to-local failover (e.g. primary replica set → backup
+> replica set, both self-hosted, both residency-compliant) is still in scope; the
+> external tiers in the example below are not. The cost-ceiling machinery is moot
+> without the external hop.
 
 Per-tenant or per-request fallback policy, configured as an ordered list:
 

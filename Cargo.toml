@@ -17,9 +17,11 @@ resolver = "2"
 
 members = [
     "service",
+    "router",
     "shared/backends",
     "shared/resources",
     "shared/resources-derive",
+    "shared/inference-core",
 ]
 
 exclude = [
