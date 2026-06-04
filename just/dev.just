@@ -936,6 +936,17 @@ xarm-up:
     proj="${COMPOSE_PROJECT_NAME:-mekhan-s0}"
     cname="${proj}-xarm"
 
+    # Slot-aware DDS domain. The image bakes ROS_DOMAIN_ID=42 to isolate the
+    # xArm from a default-domain (0) turtle in the SAME checkout. But Docker's
+    # bridge passes DDS multicast across containers, so two worktrees both
+    # running `xarm-up` would put two domain-42 xArm stacks on the bridge and
+    # cross-discover each other (duplicate move_group / controllers → flaky
+    # execution + polluted catalog). Bump the domain per slot so each worktree's
+    # arm is isolated. Slot 0 (main checkout) stays 42 — back-compatible with an
+    # already-running slot-0 container; slot N → 42+N.
+    slot="${proj##*-s}"; [[ "$slot" =~ ^[0-9]+$ ]] || slot=0
+    ros_domain=$(( 42 + slot ))
+
     # 1) Build the xArm fake-mode image if missing (heavy — see header).
     if ! docker image inspect aithericon-xarm:jazzy >/dev/null 2>&1; then
       echo "▶ building xArm image (aithericon-xarm:jazzy) — colcon-builds xarm_ros2 + MoveIt, several minutes…"
@@ -945,9 +956,9 @@ xarm-up:
     # 2) (Re)start the xArm container on the slot-aware rosbridge port. No noVNC
     #    viewer — fake mode runs headless (RViz disabled).
     docker rm -f "$cname" >/dev/null 2>&1 || true
-    echo "▶ starting xArm 6 (fake hw) + rosbridge ($cname) → ws://localhost:$bridge_port"
+    echo "▶ starting xArm 6 (fake hw) + rosbridge ($cname) → ws://localhost:$bridge_port (DDS domain $ros_domain)"
     echo "  (the planner stack — move_group + controllers — takes ~20-40s to come up)"
-    docker run -d --name "$cname" -p "$bridge_port:9090" aithericon-xarm:jazzy >/dev/null
+    docker run -d --name "$cname" -e ROS_DOMAIN_ID="$ros_domain" -p "$bridge_port:9090" aithericon-xarm:jazzy >/dev/null
 
     # 3) Wait for mekhan + the `ros` capability-type seed (shared with the turtle).
     echo "▶ waiting for mekhan + ros capability seed…"
