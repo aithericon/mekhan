@@ -5963,6 +5963,14 @@ export interface components {
                 /** Format: date-time */
                 last_seen_at?: string | null;
                 name: string;
+                /**
+                 * Format: uuid
+                 * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+                 *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value
+                 *     the enroll response returns — surfaced on the list row so the Queue detail
+                 *     UI can show each worker's live partition without re-enrolling.
+                 */
+                routing_partition: string;
                 status: string;
             }[];
             /** Format: int64 */
@@ -8070,6 +8078,12 @@ export interface components {
             nats_public_key?: string | null;
             /** Format: date-time */
             revoked_at?: string | null;
+            /**
+             * Format: uuid
+             * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+             *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`).
+             */
+            routing_partition: string;
             status: string;
             /** Format: uuid */
             workspace_id: string;
@@ -8128,6 +8142,14 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
             name: string;
+            /**
+             * Format: uuid
+             * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+             *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value
+             *     the enroll response returns — surfaced on the list row so the Queue detail
+             *     UI can show each worker's live partition without re-enrolling.
+             */
+            routing_partition: string;
             status: string;
         };
         WorkflowEdge: {

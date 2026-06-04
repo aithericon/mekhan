@@ -93,6 +93,11 @@ pub struct WorkerSummary {
     pub name: String,
     #[serde(rename = "group", skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+    /// binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value
+    /// the enroll response returns — surfaced on the list row so the Queue detail
+    /// UI can show each worker's live partition without re-enrolling.
+    pub routing_partition: Uuid,
     pub status: String,
     /// Advertised executor backends (the same `backends` JSON array the worker
     /// enrolled with). Included on the list row so the fleet UI can show the
@@ -110,6 +115,7 @@ impl From<WorkerRow> for WorkerSummary {
             id: w.id,
             name: w.name,
             group: w.group,
+            routing_partition: w.routing_partition,
             status: w.status,
             backends: w.backends,
             last_seen_at: w.last_seen_at,
@@ -127,6 +133,9 @@ pub struct WorkerDetail {
     pub name: String,
     #[serde(rename = "group", skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+    /// binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`).
+    pub routing_partition: Uuid,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nats_public_key: Option<String>,
@@ -145,6 +154,7 @@ impl From<WorkerRow> for WorkerDetail {
             workspace_id: w.workspace_id,
             name: w.name,
             group: w.group,
+            routing_partition: w.routing_partition,
             status: w.status,
             nats_public_key: w.nats_public_key,
             backends: w.backends,
