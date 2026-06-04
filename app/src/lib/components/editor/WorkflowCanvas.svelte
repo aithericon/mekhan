@@ -570,7 +570,7 @@
 		>
 			<DropHandler oninit={handleFlowInit} />
 			<Controls position="bottom-right" />
-			<Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+			<Background variant={BackgroundVariant.Dots} gap={36} size={2.5} />
 			<MiniMap position="bottom-left" data-testid="canvas-minimap" />
 		</SvelteFlow>
 	</div>

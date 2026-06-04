@@ -5,6 +5,7 @@
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { ModeWatcher } from 'mode-watcher';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import NavMenu, { type NavMenuItem } from '$lib/components/NavMenu.svelte';
 	import WorkspacePicker from '$lib/components/WorkspacePicker.svelte';
 	import User from '@lucide/svelte/icons/user';
 	import { auth } from '$lib/auth/store.svelte';
@@ -13,6 +14,26 @@
 	import { loadNodeTypes } from '$lib/editor/node-registry.svelte';
 
 	let { children } = $props();
+
+	// Data/asset views grouped out of the primary nav.
+	const libraryItems: NavMenuItem[] = [
+		{ href: '/catalogue', label: 'Catalogue', testid: 'nav-catalogue', desc: 'Published outputs & artifacts' },
+		{ href: '/resources', label: 'Resources', testid: 'nav-resources', desc: 'Typed credentials & secrets' },
+		{ href: '/assets', label: 'Assets', testid: 'nav-assets', desc: 'Curated record collections' }
+	];
+
+	// Low-traffic engine/admin views.
+	const internalItems: NavMenuItem[] = [
+		{ href: '/nets', label: 'Engine', testid: 'nav-nets', desc: 'Raw petri nets' },
+		{ href: '/processes', label: 'Processes', testid: 'nav-processes', desc: 'Raw engine processes' },
+		{ href: '/clusters', label: 'Clusters', testid: 'nav-clusters', desc: 'Datacenters + live lease state' },
+		{
+			href: '/admin/capability-types',
+			label: 'Capability Types',
+			testid: 'nav-capability-types',
+			desc: 'Runner requirement registry'
+		}
+	];
 
 	onMount(async () => {
 		// BFF: the backend owns the OIDC callback (302s straight to the SPA),
@@ -35,60 +56,20 @@
 	}
 </script>
 
-<ModeWatcher />
+<ModeWatcher defaultMode="dark" />
 <TooltipProvider>
 <div class="flex h-screen flex-col">
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
-		<a href="/" class="text-sm font-semibold tracking-tight text-foreground" data-testid="nav-home">Mekhan</a>
+		<a href="/" class="text-sm font-semibold uppercase tracking-[0.18em] text-foreground" data-testid="nav-home">Mekhan</a>
 		<nav class="ml-8 flex flex-1 items-center gap-1 text-sm" data-testid="nav-bar">
 			<Button variant="ghost" size="sm" href="/templates" data-testid="nav-templates">Templates</Button>
 			<Button variant="ghost" size="sm" href="/projects" data-testid="nav-projects">Projects</Button>
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
-			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>
-			<Button variant="ghost" size="sm" href="/resources" data-testid="nav-resources">Resources</Button>
+			<NavMenu label="Library" items={libraryItems} testid="nav-library" />
 			<Button variant="ghost" size="sm" href="/fleet" data-testid="nav-fleet">Fleet</Button>
-			<Button variant="ghost" size="sm" href="/assets" data-testid="nav-assets">Assets</Button>
 			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/nets"
-				data-testid="nav-nets"
-				class="text-muted-foreground"
-				title="Engine debug: raw petri nets"
-			>
-				Engine
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/clusters"
-				data-testid="nav-clusters"
-				title="Registered datacenters + live lease state"
-			>
-				Clusters
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/processes"
-				data-testid="nav-processes"
-				class="text-muted-foreground"
-				title="Engine debug: raw processes (usually accessed via an instance)"
-			>
-				Processes
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/admin/capability-types"
-				data-testid="nav-capability-types"
-				class="text-muted-foreground"
-				title="Typed capability registry for runner Requirements matching"
-			>
-				Capability Types
-			</Button>
+			<NavMenu label="Internals" items={internalItems} testid="nav-internals" muted />
 			<div class="ml-auto flex items-center gap-1">
 				{#if auth.isAuthenticated}
 					<WorkspacePicker />
