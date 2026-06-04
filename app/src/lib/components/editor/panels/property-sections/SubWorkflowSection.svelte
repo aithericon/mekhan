@@ -22,8 +22,10 @@
 	import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import DerivedPortsSection from './DerivedPortsSection.svelte';
+	import OutputSchemaSection from './OutputSchemaSection.svelte';
 	import RefPicker from './RefPicker.svelte';
 	import ChildWorkflowBrowser from '$lib/components/editor/ChildWorkflowBrowser.svelte';
+	import { portToSchemaNode } from '$lib/schema/model';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 	type Port = components['schemas']['Port'];
@@ -417,6 +419,16 @@
 
 	<!-- Result: derived from the child's End result mapping, read-only. -->
 	<DerivedPortsSection ports={[outputPort]} title="Result" derivedFrom="Child End" />
+
+	<!-- Output schema: expandable type tree for the child's result port. -->
+	{#if outputPort.fields && outputPort.fields.length > 0}
+		<OutputSchemaSection node={portToSchemaNode(outputPort)} title="Output schema" />
+	{/if}
+
+	<!-- Input contract: expandable type tree for the child's Start fields. -->
+	{#if data.inputContract && (data.inputContract.fields?.length ?? 0) > 0}
+		<OutputSchemaSection node={portToSchemaNode(data.inputContract)} title="Input contract" />
+	{/if}
 </div>
 
 <ChildWorkflowBrowser

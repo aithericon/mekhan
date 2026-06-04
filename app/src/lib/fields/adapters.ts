@@ -66,6 +66,13 @@ export function fromPortFieldKind(k: PortFieldKind): FieldKind {
 			return 'date';
 		case 'json':
 			return 'json';
+		case 'object':
+		case 'array':
+			// First-class container markers. The recursive shape lives in the
+			// field's `.schema`; the dedicated builder/SchemaView special-cases
+			// them. For any FieldWidget fallback they degrade to the opaque
+			// 'json' editor (canonical FieldKind has no container member).
+			return 'json';
 		default: {
 			// Exhaustiveness guard — fails the build if a new PortFieldKind
 			// variant is added to the wire schema without updating this adapter.

@@ -9,7 +9,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
 	import PortsSection from './PortsSection.svelte';
+	import OutputSchemaSection from './OutputSchemaSection.svelte';
 	import DeploymentSection from './DeploymentSection.svelte';
+	import { portToSchemaNode } from '$lib/schema/model';
 	import { defaultOutputPort, emptyOutputPort } from '$lib/editor/automated-ports';
 	import {
 		backendList,
@@ -308,4 +310,10 @@
 			: "No declared output fields. Downstream edges with declared input ports will type-mismatch on publish — click reset to seed the backend's default shape."}
 		onchange={handleOutputPortChange}
 	/>
+
+	<!-- Output schema: collapsible type tree derived from the output port.
+	     Only rendered when the port has fields — no fields = nothing to show. -->
+	{#if (outputPort.fields?.length ?? 0) > 0}
+		<OutputSchemaSection node={portToSchemaNode(outputPort)} />
+	{/if}
 </div>

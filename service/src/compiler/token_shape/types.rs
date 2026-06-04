@@ -29,7 +29,12 @@ impl ScalarTy {
             FieldKind::Bool => ScalarTy::Bool,
             FieldKind::File => ScalarTy::FileRef,
             FieldKind::Timestamp => ScalarTy::Timestamp,
-            FieldKind::Json => ScalarTy::Json,
+            // Container markers have no scalar equivalent — `port_to_shape`
+            // models them as `TokenShape::Object`/`Array` (or `Schema` with a
+            // `.schema` override) and never reaches here. TaskFieldKind (the
+            // Repeater path) can't produce these. Treat as the opaque escape
+            // hatch defensively rather than panicking.
+            FieldKind::Json | FieldKind::Object | FieldKind::Array => ScalarTy::Json,
         }
     }
 
@@ -59,9 +64,24 @@ pub enum TokenShape {
     Opaque(String),
     /// A leaf carrying an explicit JSON Schema — the field declared a rich
     /// `schema` override (`PortField::schema`) too structured for the flat
-    /// scalar vocabulary. `to_json_schema` emits the inner schema verbatim so
-    /// the runtime `SchemaRegistry` enforces it on the produced value.
-    Schema(Box<Value>),
+    /// scalar vocabulary.
+    ///
+    /// Two faces, deliberately kept distinct:
+    /// - `raw` is the author's JSON Schema *verbatim*. [`Self::to_json_schema`]
+    ///   emits it unchanged so the runtime `SchemaRegistry` enforces the full
+    ///   set of constraints (`required`, `enum`, `min`/`max`, …) on the
+    ///   produced value. This must NEVER be re-derived from `structural`.
+    /// - `structural` is a parsed *shadow* (see
+    ///   [`super::schema_parse::json_schema_to_token_shape`]) used purely for
+    ///   the read-side: display (`kind_label`/`render`), the picker descriptor
+    ///   (`collect_scope_tree`), and the borrow resolver's path-walking
+    ///   (`resolve`/`find_by_leaf`). It makes schema-backed ports *drillable*
+    ///   without touching what the runtime enforces. Unparseable constructs in
+    ///   `raw` (combinators, missing type) shadow as [`Self::Any`].
+    Schema {
+        raw: Box<Value>,
+        structural: Box<TokenShape>,
+    },
 }
 
 /// A field of an [`TokenShape::Object`]: its shape plus *where it came from*.
@@ -99,6 +119,21 @@ impl Provenance {
     pub(super) fn with_anchor(mut self, anchor: ScalarTy) -> Provenance {
         self.anchor = Some(anchor);
         self
+    }
+}
+
+/// Provenance attached to the *interior* fields of a JSON-Schema structural
+/// shadow (see [`super::schema_parse`]). The schema-backed field itself carries
+/// the real call-site provenance (which node/port declared it); its nested
+/// children only need a neutral marker so they render with context if a caller
+/// surfaces them directly. No node identity, so `node_id`/`node_label` are
+/// empty and there is no anchor.
+pub(super) fn structural_provenance() -> Provenance {
+    Provenance {
+        node_id: String::new(),
+        node_label: String::new(),
+        note: "JSON Schema field".to_string(),
+        anchor: None,
     }
 }
 
@@ -149,6 +184,12 @@ impl TokenShape {
         let mut cur = self;
         let mut prov: Option<&Provenance> = None;
         for seg in segs {
+            // A schema-backed leaf is transparent for path-walking: delegate
+            // into its structural shadow so nested refs resolve exactly as if
+            // it were a plain Object.
+            if let TokenShape::Schema { structural, .. } = cur {
+                cur = structural.as_ref();
+            }
             match cur {
                 TokenShape::Object(map) => {
                     let f = map.get(seg)?;
@@ -158,6 +199,11 @@ impl TokenShape {
                 // Can't walk into a scalar/opaque/any/array by key.
                 _ => return None,
             }
+        }
+        // If the final landing spot is itself a schema-backed leaf, hand back
+        // its structural shadow so callers see the real shape, not "Schema".
+        if let TokenShape::Schema { structural, .. } = cur {
+            cur = structural.as_ref();
         }
         Some((cur, prov))
     }
@@ -171,6 +217,12 @@ impl TokenShape {
             prefix: &str,
             name: &str,
         ) -> Option<(String, String, Provenance)> {
+            // Schema-backed leaves are transparent: search their structural
+            // shadow as if it were the object directly in place.
+            let shape = match shape {
+                TokenShape::Schema { structural, .. } => structural.as_ref(),
+                other => other,
+            };
             if let TokenShape::Object(map) = shape {
                 for (k, f) in map {
                     let path = if prefix.is_empty() {
@@ -198,7 +250,8 @@ impl TokenShape {
             TokenShape::Scalar(s) => s.label().to_string(),
             TokenShape::Any => "Any".to_string(),
             TokenShape::Opaque(n) => format!("Opaque({n})"),
-            TokenShape::Schema(_) => "Schema".to_string(),
+            // Display the real (structural) shape, not "Schema".
+            TokenShape::Schema { structural, .. } => structural.kind_label(),
         }
     }
 
@@ -250,9 +303,10 @@ impl TokenShape {
             | TokenShape::Scalar(ScalarTy::Json)
             | TokenShape::Any
             | TokenShape::Opaque(_) => serde_json::json!({}),
-            // Explicit override: the inner schema IS the constraint the runtime
-            // `SchemaRegistry` enforces.
-            TokenShape::Schema(v) => (**v).clone(),
+            // Explicit override: the *raw* schema IS the constraint the runtime
+            // `SchemaRegistry` enforces — emitted verbatim. The `structural`
+            // shadow is read-side only and never feeds runtime enforcement.
+            TokenShape::Schema { raw, .. } => (**raw).clone(),
         }
     }
 
@@ -277,7 +331,8 @@ impl TokenShape {
             TokenShape::Scalar(t) => t.label().to_string(),
             TokenShape::Any => "Any".to_string(),
             TokenShape::Opaque(n) => format!("Opaque<{n}>"),
-            TokenShape::Schema(_) => "Schema".to_string(),
+            // Render the real (structural) shape, not "Schema".
+            TokenShape::Schema { structural, .. } => structural.render(indent),
         }
     }
 }

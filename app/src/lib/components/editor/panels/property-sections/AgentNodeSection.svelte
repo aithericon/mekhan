@@ -6,16 +6,13 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { FormField } from '$lib/components/ui/form-field';
-	import CodeEditor from '../shared/CodeEditor.svelte';
 	import LlmCommonFields, {
 		type LlmCommonShape
 	} from './shared/LlmCommonFields.svelte';
-	import JsonSchemaBuilder, { detectShape } from './automated/JsonSchemaBuilder.svelte';
+	import SchemaBuilder from '$lib/schema/SchemaBuilder.svelte';
 	import DeploymentSection from './DeploymentSection.svelte';
 	import AssetBindingsSection from './AssetBindingsSection.svelte';
 	import { sanitizeSlug } from '$lib/editor/sanitize-slug';
-	import { untrack } from 'svelte';
-
 	type Props = {
 		data: AgentNodeData;
 		readonly?: boolean;
@@ -67,59 +64,19 @@
 		}
 	}
 
-	// Response format: text vs json_schema, with a Builder/Raw toggle for the
-	// schema (same component the retired LLM step used — single source of
-	// truth via the shared `JsonSchemaBuilder`). The draft/parse guard keeps
-	// mid-edit JSON from being clobbered by a Yjs round-trip.
+	// Response format: text vs json_schema. SchemaBuilder handles its own
+	// raw-JSON toggle internally, so no draft/parse guard or mode state needed.
 	const responseFormat = $derived(
 		(data.responseFormat as Record<string, unknown> | undefined) ?? { type: 'text' }
 	);
 	const responseFormatType = $derived((responseFormat.type as string) ?? 'text');
 	const schemaObj = $derived(
-		(responseFormat.schema as Record<string, unknown> | undefined) ?? {}
+		(responseFormat.schema as unknown) ?? {}
 	);
-	const schemaShape = $derived(detectShape(schemaObj));
-	const builderCompatible = $derived(schemaShape.kind !== 'raw_only');
 
-	let schemaDraft = $state('');
-	let schemaParseError = $state<string | null>(null);
-
-	// Builder vs raw JSON. Default to builder when the persisted schema is
-	// round-trippable; fall back to raw + disable the toggle when it isn't.
-	let schemaEditor = $state<'builder' | 'raw'>('builder');
-	$effect(() => {
-		const compatible = builderCompatible;
-		untrack(() => {
-			if (!compatible && schemaEditor === 'builder') schemaEditor = 'raw';
-		});
-	});
-
-	function handleBuilderChange(schema: Record<string, unknown>) {
+	function handleBuilderChange(schema: unknown) {
 		onchange({ ...data, responseFormat: { type: 'json_schema', schema } });
 	}
-
-	$effect(() => {
-		const schema = (responseFormat.schema as Record<string, unknown> | undefined) ?? {};
-		untrack(() => {
-			if (schemaDraft === '') {
-				schemaDraft = JSON.stringify(schema, null, 2);
-				schemaParseError = null;
-				return;
-			}
-			let draftParsed: unknown;
-			try {
-				draftParsed = JSON.parse(schemaDraft);
-			} catch {
-				return;
-			}
-			if (JSON.stringify(draftParsed) === JSON.stringify(schema)) {
-				schemaParseError = null;
-				return;
-			}
-			schemaDraft = JSON.stringify(schema, null, 2);
-			schemaParseError = null;
-		});
-	});
 
 	// Tool children: every node reachable from this agent via a
 	// `tools`-handle edge. The agent's `tools` source handle is the
@@ -345,67 +302,12 @@
 
 {#if responseFormatType === 'json_schema'}
 	<div class="space-y-2">
-		<div class="flex items-center justify-between">
-			<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
-			<div class="flex gap-1" data-testid="agent-schema-editor-toggle">
-				<button
-					type="button"
-					class="rounded-md border px-2 py-0.5 text-sm transition-colors {schemaEditor ===
-					'builder'
-						? 'border-primary bg-primary/5 text-foreground'
-						: 'border-border text-muted-foreground hover:bg-accent/30'}"
-					disabled={readonly || !builderCompatible}
-					title={builderCompatible
-						? 'Visual property editor'
-						: 'Schema uses constructs the builder can’t represent — raw only.'}
-					onclick={() => (schemaEditor = 'builder')}
-					data-testid="agent-schema-mode-builder"
-				>
-					Builder
-				</button>
-				<button
-					type="button"
-					class="rounded-md border px-2 py-0.5 text-sm transition-colors {schemaEditor === 'raw'
-						? 'border-primary bg-primary/5 text-foreground'
-						: 'border-border text-muted-foreground hover:bg-accent/30'}"
-					disabled={readonly}
-					onclick={() => (schemaEditor = 'raw')}
-					data-testid="agent-schema-mode-raw"
-				>
-					Raw JSON
-				</button>
-			</div>
-		</div>
-
-		{#if schemaEditor === 'builder' && builderCompatible}
-			<JsonSchemaBuilder schema={schemaObj} {readonly} onchange={handleBuilderChange} />
-		{:else}
-			<CodeEditor
-				value={schemaDraft}
-				language="json"
-				{readonly}
-				minHeight="80px"
-				maxHeight="200px"
-				onchange={(val) => {
-					schemaDraft = val;
-					try {
-						const parsed = JSON.parse(val);
-						schemaParseError = null;
-						onchange({
-							...data,
-							responseFormat: { type: 'json_schema', schema: parsed }
-						});
-					} catch (e) {
-						schemaParseError = e instanceof Error ? e.message : String(e);
-					}
-				}}
-			/>
-			{#if schemaParseError}
-				<p class="text-sm text-destructive">
-					Invalid JSON — schema is frozen at the last valid value. ({schemaParseError})
-				</p>
-			{/if}
-		{/if}
+		<span class="text-sm font-medium text-muted-foreground">JSON Schema</span>
+		<SchemaBuilder
+			schema={schemaObj}
+			onchange={handleBuilderChange}
+			allowRootScalar={true}
+		/>
 	</div>
 {/if}
 

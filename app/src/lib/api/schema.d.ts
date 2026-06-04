@@ -4535,7 +4535,7 @@ export interface components {
          *     escape hatch for legacy / dynamic payloads). Snake-case wire values.
          * @enum {string}
          */
-        FieldKind: "text" | "textarea" | "number" | "bool" | "select" | "file" | "signature" | "timestamp" | "json";
+        FieldKind: "text" | "textarea" | "number" | "bool" | "select" | "file" | "signature" | "timestamp" | "json" | "object" | "array";
         /**
          * @description A single field mapping for `Trigger.payload_mapping`. Each entry projects
          *     an event scope into a typed token field via a Rhai expression. The compiler

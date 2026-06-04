@@ -12466,7 +12466,9 @@
           "file",
           "signature",
           "timestamp",
-          "json"
+          "json",
+          "object",
+          "array"
         ]
       },
       "FieldMapping": {

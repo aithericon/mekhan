@@ -1,8 +1,56 @@
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
 use crate::models::template::{FieldKind, Port, TaskBlockConfig, WorkflowNode};
 
 use super::*;
+
+thread_local! {
+    /// Workflow `definitions` in scope for the current shape-analysis pass.
+    ///
+    /// `port_to_shape`'s schema-override arm needs the workflow's
+    /// `#/definitions/*` map to resolve `$ref`s into the structural shadow, but
+    /// it is reached through the registry's fixed
+    /// `fn(&WorkflowNode, &TokenShape) -> TokenShape` hook signature (one per
+    /// node variant) — threading an extra arg would churn every node module.
+    /// Instead [`analyze`](super::analyze::analyze) brackets its pass in
+    /// [`with_definitions`], and `port_to_shape` reads the active map here.
+    /// Outside such a bracket (or at call sites that lack definitions) the map
+    /// is empty and `$ref`s resolve to `TokenShape::Any` — the documented
+    /// fallback. Thread-local (not a param) keeps the change surgical; it is
+    /// always restored on scope exit, so nested/re-entrant analyze calls are
+    /// safe.
+    static ACTIVE_DEFINITIONS: RefCell<BTreeMap<String, Value>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+/// Run `f` with `definitions` installed as the active `$ref` resolution map for
+/// any `port_to_shape` call it triggers. Restores the previous map on exit
+/// (re-entrant safe). Used by [`analyze`](super::analyze::analyze).
+///
+/// The restore runs from a `Drop` guard so the previous map is reinstated even
+/// if `f` unwinds — a stale `$ref` context must never leak onto the thread.
+pub(crate) fn with_definitions<R>(definitions: &BTreeMap<String, Value>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<BTreeMap<String, Value>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(prev) = self.0.take() {
+                ACTIVE_DEFINITIONS.with(|cell| *cell.borrow_mut() = prev);
+            }
+        }
+    }
+    let _guard = Restore(Some(
+        ACTIVE_DEFINITIONS.with(|cell| cell.replace(definitions.clone())),
+    ));
+    f()
+}
+
+/// Read the active definitions map (empty outside a [`with_definitions`]
+/// bracket) and hand it to `f`.
+fn with_active_definitions<R>(f: impl FnOnce(&BTreeMap<String, Value>) -> R) -> R {
+    ACTIVE_DEFINITIONS.with(|cell| f(&cell.borrow()))
+}
 
 /// One Repeater sub-form element's shape — `TokenShape::Object` whose fields
 /// are derived from the Repeater's `Input` child blocks, modeled the same way
@@ -50,11 +98,21 @@ pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> Tok
     for f in &port.fields {
         // A rich `schema` override takes precedence over the flat kind — the
         // declared JSON Schema becomes the emitted `Data__*` definition the
-        // runtime `SchemaRegistry` enforces verbatim.
+        // runtime `SchemaRegistry` enforces verbatim (the `raw` face). We also
+        // parse a *structural* shadow so the port is drillable in the picker
+        // and resolvable by the borrow checker; `$ref`s resolve against the
+        // workflow `definitions` made available for the current analyze pass
+        // via [`with_definitions`] (empty otherwise → `$ref` → `Any`).
         if let Some(schema) = &f.schema {
+            let structural = with_active_definitions(|defs| {
+                json_schema_to_token_shape(schema, defs)
+            });
             o.insert(
                 &f.name,
-                TokenShape::Schema(Box::new(schema.clone())),
+                TokenShape::Schema {
+                    raw: Box::new(schema.clone()),
+                    structural: Box::new(structural),
+                },
                 Provenance::new(node, note),
             );
             continue;
@@ -78,6 +136,15 @@ pub(super) fn port_to_shape(port: &Port, node: &WorkflowNode, note: &str) -> Tok
                     Provenance::new(node, note).with_anchor(ScalarTy::FileRef),
                 )
             }
+            // Container markers WITHOUT a `schema` override (the rich-schema
+            // path above already returns `TokenShape::Schema`). An empty object
+            // is drillable-but-shapeless; an array carries `Any` elements. The
+            // permissive emitted contract mirrors `FieldKind::base_schema`.
+            FieldKind::Object => (TokenShape::object(), Provenance::new(node, note)),
+            FieldKind::Array => (
+                TokenShape::Array(Box::new(TokenShape::Any)),
+                Provenance::new(node, note),
+            ),
             k => (
                 TokenShape::Scalar(ScalarTy::from_kind(k)),
                 Provenance::new(node, note),
@@ -161,7 +228,7 @@ pub fn validate_token_against_port(
             | TokenShape::Opaque(_)
             // Permissive at the boundary — the strict enforcement is the
             // runtime `SchemaRegistry` against the emitted `Data__*` schema.
-            | TokenShape::Schema(_) => true,
+            | TokenShape::Schema { .. } => true,
         };
         if !ok {
             let expected = match &f.shape {
