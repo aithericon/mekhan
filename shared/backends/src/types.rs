@@ -69,11 +69,14 @@ pub enum ExecutionBackendType {
     Ros,
 }
 
-/// The NATS namespace prefix for worker-pool executor-job routing. A default
-/// (non-pooled, non-leased) `AutomatedStep` whose backend dispatches an
-/// executor job is published to `executor-<wire>`; workers bind one Pool
-/// consumer per backend they support. See
-/// [`ExecutionBackendType::executor_namespace`].
+/// The NATS namespace prefix for the worker executor-job stream FAMILY. Every
+/// `AutomatedStep` whose backend dispatches an executor job routes through a
+/// GROUP partition on the parallel `executor-<wire>-grp` stream (see
+/// [`ExecutionBackendType::executor_namespace_for_group`]); `executor-<wire>`
+/// is the stream-family PREFIX both sides build `<prefix>-grp` from. It is no
+/// longer a dispatch target on its own — the anonymous bare-`executor-<wire>`
+/// Pool consumer has been retired (the unified single-stream model: there is no
+/// anonymous worker path, every job is grouped).
 ///
 /// The separator is a HYPHEN, not a dot: apalis-nats derives the JetStream
 /// stream name as `{namespace}_{priority}`, and JetStream stream names cannot
@@ -84,13 +87,25 @@ pub enum ExecutionBackendType {
 /// in both stream names and NATS subject tokens, so it is left as-is.
 pub const EXECUTOR_NS_PREFIX: &str = "executor-";
 
-/// Build the worker-pool namespace for a backend's snake-case `wire_name`
+/// Build the worker stream-family prefix for a backend's snake-case `wire_name`
 /// (`executor-python`). String-keyed companion to
 /// [`ExecutionBackendType::executor_namespace`] for callers (the executor's
 /// `BackendMeta::wire_name` registration loop) that hold the wire tag rather
-/// than the enum.
+/// than the enum. This is the prefix the `-grp` partition stream is built from
+/// ([`executor_pool_namespace_for_group`]), NOT a standalone dispatch target.
 pub fn executor_pool_namespace(wire_name: &str) -> String {
     format!("{EXECUTOR_NS_PREFIX}{wire_name}")
+}
+
+/// Build the grouped (partitioned) worker namespace for a backend's snake-case
+/// `wire_name` and a `group` PARTITION token: `executor-<wire>-grp/<group>`.
+/// String-keyed companion to
+/// [`ExecutionBackendType::executor_namespace_for_group`] — the executor's
+/// registration loop holds the wire tag, not the enum, when it builds the
+/// consumer bind for its group. `group` is the partition token (a worker-group
+/// capacity-resource UUID string).
+pub fn executor_pool_namespace_for_group(wire_name: &str, group: &str) -> String {
+    format!("{}-grp/{group}", executor_pool_namespace(wire_name))
 }
 
 impl ExecutionBackendType {
@@ -116,45 +131,41 @@ impl ExecutionBackendType {
         }
     }
 
-    /// The worker-pool NATS namespace this backend's executor jobs are routed
-    /// to: `executor-<wire>` (e.g. `executor-python`, `executor-loki`).
+    /// The worker stream-family PREFIX this backend's executor jobs are routed
+    /// through: `executor-<wire>` (e.g. `executor-python`, `executor-loki`).
     ///
-    /// This is the **one contract** the compiler (producer — stamps
-    /// `executor_namespace` on a default inline `AutomatedStep`) and the
-    /// executor daemon (consumer — binds a Pool consumer per supported
-    /// backend) must agree on. Defined here so both sides reference a single
-    /// source of truth. See [`executor_pool_namespace`] for the
-    /// string-keyed form the executor's `BackendMeta::wire_name` loop uses.
+    /// This is NOT a dispatch target on its own — in the unified single-stream
+    /// model every executor job rides a GROUP partition on the parallel
+    /// `executor-<wire>-grp` stream ([`Self::executor_namespace_for_group`]).
+    /// `executor-<wire>` is the prefix both the compiler (producer) and the
+    /// executor daemon (consumer, via [`executor_pool_namespace`]) build `-grp`
+    /// from, so it remains the single source of truth for the stream family.
     pub fn executor_namespace(&self) -> String {
         executor_pool_namespace(self.as_wire_str())
     }
 
-    /// The worker-pool namespace narrowed by an optional identity-plane `group`
-    /// (docs/23/24). `None` returns the unchanged base `executor-<wire>`
-    /// (BYTE-STABLE — existing ungrouped AIR is untouched); `Some(g)` returns
-    /// `executor-<wire>-grp/<group>`.
+    /// The grouped worker namespace for this backend and a `group` PARTITION
+    /// token: `executor-<wire>-grp/<group>`. This is THE dispatch target in the
+    /// unified single-stream model — EVERY executor job routes through a group
+    /// (a step naming no group is stamped with its workspace's always-seeded
+    /// "default" worker group), so there is no longer a bare `executor-<wire>`
+    /// dispatch path. The group here is the partition token = a worker-group
+    /// capacity-resource UUID string (`[0-9a-f-]`), which is workspace-safe by
+    /// construction (two workspaces can both have a "default" group without
+    /// colliding on a queue) and a valid JetStream stream + NATS subject token.
     ///
-    /// Grouped jobs land on a SEPARATE stream from the anonymous pool: the
-    /// stream-ns is `executor-<wire>-grp` (apalis-nats `split_namespace` reads
-    /// the segment after the slash as the subject-partition token), so the
-    /// engine routes grouped jobs to `executor-<wire>-grp.<prio>.<group>.<exec>`
-    /// on stream `executor-<wire>-grp_<prio>`, while ungrouped jobs stay on
-    /// `executor-<wire>.<prio>.<exec>` (stream `executor-<wire>_<prio>`). This is
-    /// the D1 isolation decision (docs/24): a parallel grouped stream — NOT a
-    /// stream-per-group — bounded by backend count exactly like the anonymous
-    /// pool, mirroring the way ALL runners share one `runner-jobs` stream
-    /// partitioned by id. It means an anonymous `executor-<wire>` Pool consumer
-    /// (filter `executor-<wire>.<prio>.>`) can never see — let alone steal — a
-    /// grouped job, with no change to the shared apalis Pool-filter logic.
-    /// `<group>` is the subject-partition token; many workers in the group share
-    /// one durable and COMPETE (a second coarse routing coordinate, NOT a
-    /// per-worker push partition). The token must be a single safe subject token
-    /// (`[A-Za-z0-9_-]`); the caller (the compiler) validates it before stamping.
-    pub fn executor_namespace_for_group(&self, group: Option<&str>) -> String {
-        match group {
-            None => self.executor_namespace(),
-            Some(g) => format!("{}-grp/{g}", self.executor_namespace()),
-        }
+    /// All grouped jobs land on the one parallel `executor-<wire>-grp` stream:
+    /// apalis-nats `split_namespace` reads the segment after the slash as the
+    /// subject-partition token, so the engine routes a grouped job to
+    /// `executor-<wire>-grp.<prio>.<group>.<exec>` on stream
+    /// `executor-<wire>-grp_<prio>`. This is the D1 isolation decision
+    /// (docs/24): a SINGLE parallel grouped stream — NOT a stream-per-group —
+    /// bounded by backend count, mirroring the way ALL runners share one
+    /// `runner-jobs` stream partitioned by id. `<group>` is the subject
+    /// partition; many workers in the group share one durable and COMPETE
+    /// (a coarse routing coordinate, NOT a per-worker push partition).
+    pub fn executor_namespace_for_group(&self, group: &str) -> String {
+        executor_pool_namespace_for_group(self.as_wire_str(), group)
     }
 
     /// Inverse of [`Self::as_wire_str`]. Returns `None` for any unknown

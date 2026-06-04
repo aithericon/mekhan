@@ -4505,6 +4505,10 @@ export interface components {
          *     `wkr_{id}.{secret}` credential, returned ONCE and never stored in plaintext.
          */
         EnrolledWorker: {
+            /**
+             * @description Human group alias, inherited from the registration token. Display only —
+             *     `None` is rendered as the implicit `default` group.
+             */
             group?: string | null;
             /** Format: uuid */
             id: string;
@@ -4515,6 +4519,15 @@ export interface components {
              *     `POST /api/v1/workers/{id}/nats-creds`.
              */
             nats_jwt?: string | null;
+            /**
+             * Format: uuid
+             * @description The ROUTING PARTITION the executor binds its grouped consumer to: the
+             *     worker group's `capacity`-resource UUID (the alias resolved, or the
+             *     workspace's seeded `default` group when the token names none). This — NOT
+             *     `group` — is the token the executor partitions on
+             *     (`executor-<wire>-grp.<prio>.<routing_partition>.>`).
+             */
+            routing_partition: string;
             worker_token: string;
             /** Format: uuid */
             workspace_id: string;
