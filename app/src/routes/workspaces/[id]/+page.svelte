@@ -193,7 +193,7 @@
 						<FolderKanban class="size-5 text-muted-foreground" />
 						<div class="min-w-0 flex-1">
 							<div class="font-medium">Manage projects</div>
-							<div class="text-xs text-muted-foreground">
+							<div class="text-sm text-muted-foreground">
 								Create, attach templates, and view API contracts
 							</div>
 						</div>

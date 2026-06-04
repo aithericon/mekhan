@@ -121,7 +121,7 @@
 			</Button>
 		</form>
 		{#if projectError}
-			<div class="mb-4 text-xs text-destructive">{projectError}</div>
+			<div class="mb-4 text-sm text-destructive">{projectError}</div>
 		{/if}
 
 		{#if loading}
@@ -144,7 +144,7 @@
 								data-testid={`link-project-${p.slug}`}
 							>
 								<div class="font-medium hover:underline">{p.display_name}</div>
-								<div class="truncate text-xs text-muted-foreground">{p.slug}</div>
+								<div class="truncate text-sm text-muted-foreground">{p.slug}</div>
 							</a>
 							<div class="flex gap-1">
 								<Button
