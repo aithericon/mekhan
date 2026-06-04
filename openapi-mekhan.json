@@ -16000,6 +16000,7 @@
               "required": [
                 "id",
                 "name",
+                "routing_partition",
                 "status",
                 "backends",
                 "enrolled_at"
@@ -16031,6 +16032,11 @@
                 },
                 "name": {
                   "type": "string"
+                },
+                "routing_partition": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The worker-group `capacity`-resource UUID this worker's `PartitionedPool`\nbinds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value\nthe enroll response returns — surfaced on the list row so the Queue detail\nUI can show each worker's live partition without re-enrolling."
                 },
                 "status": {
                   "type": "string"
@@ -20191,6 +20197,7 @@
           "id",
           "workspace_id",
           "name",
+          "routing_partition",
           "status",
           "backends",
           "enrolled_at"
@@ -20233,6 +20240,11 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "routing_partition": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The worker-group `capacity`-resource UUID this worker's `PartitionedPool`\nbinds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`)."
           },
           "status": {
             "type": "string"
@@ -20314,6 +20326,7 @@
         "required": [
           "id",
           "name",
+          "routing_partition",
           "status",
           "backends",
           "enrolled_at"
@@ -20345,6 +20358,11 @@
           },
           "name": {
             "type": "string"
+          },
+          "routing_partition": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The worker-group `capacity`-resource UUID this worker's `PartitionedPool`\nbinds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value\nthe enroll response returns — surfaced on the list row so the Queue detail\nUI can show each worker's live partition without re-enrolling."
           },
           "status": {
             "type": "string"
