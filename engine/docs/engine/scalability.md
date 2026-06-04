@@ -111,6 +111,24 @@ enumerates the full `m^k` combination space, one Rhai guard eval each:
 genuinely the cross-product, ~2–7 µs/combination (dominated by the Rhai guard
 eval). **This is the only cost that goes super-polynomial.**
 
+**Status (2026-06-04): collapsed for equi-correlated guards.** The equi-join
+index (§4 P1, increment 1) prunes the cross-product to key-agreeing
+combinations whenever the guard declares cross-port equality
+(`a.k == b.k` — every `.correlate()`/`.correlate_on()` join). The `match`
+bench, re-run on the indexed binder:
+
+| `match` arity | before | after |
+|--:|--:|--:|
+| 2, m=300 | 426 ms | **0.47 ms** (~900×) |
+| 3, m=100 | 7.8 s | **0.21 ms** (~37,000×) |
+
+The exponential is gone — both curves are now linear in `m` (`O(m·k)`). What
+the index deliberately does **not** touch: a guard that is not an `==`
+correlation, the chief example being the presence-pool grant
+`satisfies(claim.requirements, unit.caps)` (a ClassAd capability match, N
+runners × M claims, re-paid per eval tick while claims wait). That one needs
+the memoization step (§4 P1, increment 2).
+
 ### 2.4 Write throughput — the per-event round-trip
 The eval loop is event-sourced through NATS on **every** firing. `append`
 (`event_store.rs`) does, per event: take the write-lock (serialize sequence +
@@ -173,21 +191,38 @@ each with the harness before and after.
 
 ### P1 — Binding: kill the `m^k` cliff (the only super-polynomial cost)
 The pool-net/gather-correlate path is central to the capacity model and is
-exactly the join-style binding that explodes.
+exactly the join-style binding that explodes. Tackled in increments:
 
-- **Hash-join on the correlation key.** When a guard correlates input ports on
-  equality (`p0.key == p1.key`), index each input place's tokens by that key and
-  probe instead of nested-looping the cross-product: `O(m^k)` → ~`O(m·k)` for
-  equality-correlated guards. Needs either (a) static analysis of the guard's
-  equality structure, or (b) an explicit join-key declaration on the arc/port
-  (cleaner, less magic). Recommend (b).
-- **Memoize the binding search across eval ticks.** A waiting join re-pays
-  `m^k` on *every* event tick even when its input places are unchanged. Cache
-  the "no valid binding" result per transition and invalidate only when a token
-  arrives at one of its input places. Decouples binding cost from event rate.
+- **Increment 1 — hash-join on the correlation key. ✅ Implemented
+  (`455d91b8`, `application/src/{join_index,binding}.rs`).** When a guard
+  correlates input ports on equality (`a.k == b.k`), index each input place's
+  tokens by that key and probe instead of nested-looping: `O(m^k)` → `O(m·k)`.
+  We took the **static-analysis** route (option a): a conservative extractor
+  recovers the join keys from the guard *source* — no authoring change, so
+  every existing `.correlate()`/`.correlate_on()` guard is optimized
+  automatically. It is safe because it only extracts equalities that are
+  **necessary conditions** (reachable through top-level `&&`) and the binder
+  **still runs the full guard** on every survivor, so a missed pattern loses
+  speedup but never correctness; a disjunctive root, `!=`, comparisons,
+  function calls, and port-vs-constant filters are skipped, and the binder
+  falls back to the full cross-product when the structure isn't safely
+  indexable. Selection-equivalent (identical first binding, same order) ⇒
+  replay-deterministic; verified against a brute-force oracle and the
+  `resource_pool` determinism test. Results in §2.3.
+- **Increment 2 — memoize the binding search across eval ticks. ⬜ Next.** A
+  waiting join re-pays its search on *every* event tick even when its input
+  places are unchanged. Cache the "no valid binding" result per transition and
+  invalidate only when a token arrives at one of its input places. This is
+  **guard-agnostic**, so it is the fix for the one case the index can't help:
+  the presence-pool `satisfies(...)` grant, whose cost couples to the event
+  rate while claims wait. Decouples binding cost from event rate.
+- **Increment 3 — compiled guard (cheap constant). ⬜ Later.** Guards are
+  re-parsed from source on *every* combination (`rhai_runtime.rs`
+  `eval_with_scope(script)`), which is why ~2–7 µs/combo is mostly *parse*.
+  Compile each guard to an `AST` once and `eval_ast` per combination. Shrinks
+  the per-combo constant on whatever combinations survive the index.
 - **Cheap wins:** prune unsatisfiable ports before the cross-product; cap
-  fan-in / cardinality; consider a compiled/cached guard instead of re-parsing
-  Rhai per combination (~2–7 µs/combo is mostly guard eval).
+  fan-in / cardinality.
 
 ### P2 — Scan: incremental enabled-set (collapse the O(N²))
 `select_next_transition` rescans all transitions every step. Maintain the
@@ -258,9 +293,12 @@ keep a net alive.)
 
 Event-log growth is cheap and linear — **don't add marking snapshots for CPU
 reasons.** The real costs, in order of severity: **binding** (`m^k`, the only
-exponential, lives in the capacity/pool-net path — fix with a join-key index);
-**scan** (O(N²) for wide/deep nets — fix with an incremental enabled-set,
-preserving selection determinism); **write round-trip** (~0.55 ms/event, ~1700
+exponential, lives in the capacity/pool-net path — the equi-join index now
+collapses every `==`-correlated guard to `O(m·k)`, e.g. arity-3 m=100
+7.8 s → 0.21 ms; the `satisfies()` capability grant remains, pending the
+per-tick memoization step); **scan** (O(N²) for wide/deep nets — fix with an
+incremental enabled-set, preserving selection determinism); **write
+round-trip** (~0.55 ms/event, ~1700
 ev/s per net, but concurrency scales to ~21k+ aggregate with no observed
 plateau, so the platform scales horizontally). The one open data gap is
 **cold-wake rehydration**: hibernation works (it's gated on NATS-stimulus
