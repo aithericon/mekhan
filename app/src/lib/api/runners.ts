@@ -161,3 +161,37 @@ export async function getRunnerInterfaces(id: string): Promise<RunnerInterfaces 
 	if (res.response.status === 404) return null;
 	return unwrap(res);
 }
+
+// ── ROS interface aggregation ──────────────────────────────────────────────
+
+/** One runner's ROS interface catalog, tagged with the runner it came from. */
+export interface RosInterfaceSource {
+	runnerId: string;
+	runnerName: string;
+	catalog: RunnerInterfaceCatalog;
+}
+
+/**
+ * List ROS interface catalogs across runners advertising a `ros` capability.
+ *
+ * Pulls the runner list (one page, up to 100), keeps those whose `capabilities`
+ * object carries a `ros` key, then fetches each one's self-reported interface
+ * catalog. Runners that have never pushed a catalog (404 → `null`) are skipped.
+ */
+export async function listRosInterfaces(): Promise<RosInterfaceSource[]> {
+	const { items } = await listRunners({ perPage: 100 });
+	const rosRunners = items.filter(
+		(r) =>
+			r.capabilities &&
+			typeof r.capabilities === 'object' &&
+			'ros' in (r.capabilities as Record<string, unknown>)
+	);
+	const sources = await Promise.all(
+		rosRunners.map(async (r) => {
+			const ifaces = await getRunnerInterfaces(r.id);
+			if (!ifaces) return null;
+			return { runnerId: r.id, runnerName: r.name, catalog: ifaces.catalog };
+		})
+	);
+	return sources.filter((s): s is RosInterfaceSource => s !== null);
+}

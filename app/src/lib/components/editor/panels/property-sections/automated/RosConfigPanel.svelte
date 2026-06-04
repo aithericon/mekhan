@@ -32,6 +32,11 @@
 	import InsertRefButton from '../InsertRefButton.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
 	import { appendSnippet } from '$lib/editor/append-snippet';
+	import {
+		listRosInterfaces,
+		type RosInterfaceSource,
+		type InterfaceEntry
+	} from '$lib/api/runners';
 
 	type Props = {
 		config: Record<string, unknown>;
@@ -104,6 +109,102 @@
 		'turtlesim/srv/Spawn',
 		'turtlesim/action/RotateAbsolute'
 	];
+
+	// ── Interface picker ──────────────────────────────────────────────────────
+	// Load the live ROS interface catalogs (across all `ros`-capable runners)
+	// once, lazily, on first mount. The picker is additive sugar over the manual
+	// name/type inputs below — it never hides them, so an offline-authored step
+	// (no runner connected) is still fully editable by hand.
+	// Each picker item retains the catalog entry's optional `typedefs` — the raw
+	// rosapi message-details flat array — so selecting it can embed those typedefs
+	// into the node config (see `interface_typedefs` below).
+	type PickerItem = {
+		name: string;
+		type: string;
+		runnerName: string;
+		typedefs?: InterfaceEntry['typedefs'];
+	};
+
+	let sources = $state<RosInterfaceSource[]>([]);
+	let sourcesStarted = $state(false); // guard: fire the fetch exactly once
+	let sourcesResolved = $state(false); // the fetch has settled (ok or error)
+	let sourcesError = $state(false);
+
+	$effect(() => {
+		if (sourcesStarted) return;
+		sourcesStarted = true;
+		listRosInterfaces()
+			.then((s) => {
+				sources = s;
+			})
+			.catch(() => {
+				sources = [];
+				sourcesError = true;
+			})
+			.finally(() => {
+				sourcesResolved = true;
+			});
+	});
+
+	// Which catalog category the current operation reads from.
+	const pickerCategory = $derived(
+		operation === 'call_service'
+			? 'services'
+			: operation === 'send_action_goal'
+				? 'actions'
+				: 'topics'
+	);
+
+	// Flatten the chosen category across all sources, dedupe by name+type, sort.
+	const pickerItems = $derived.by<PickerItem[]>(() => {
+		const seen = new Map<string, PickerItem>();
+		for (const src of sources) {
+			const entries = src.catalog[pickerCategory] ?? [];
+			for (const e of entries) {
+				const key = `${e.name} ${e.type}`;
+				if (!seen.has(key)) {
+					seen.set(key, {
+						name: e.name,
+						type: e.type,
+						runnerName: src.runnerName,
+						typedefs: e.typedefs
+					});
+				}
+			}
+		}
+		return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+	});
+
+	function onPickInterface(name: string) {
+		const chosen = pickerItems.find((it) => it.name === name);
+		if (!chosen) return;
+		// `interface_typedefs` carries the picker-embedded rosapi message-details
+		// (the chosen entry's raw typedef flat array) so the server-side output-port
+		// deriver can shape the derived port for non-bundled robots — it reads
+		// config["interface_typedefs"] and falls back to its bundled snapshots only
+		// when the key is absent. Embed it on select; omit (don't null) when the
+		// entry carries none so a stale array can never linger.
+		const next: Record<string, unknown> = {
+			...config,
+			interface_name: chosen.name,
+			interface_type: chosen.type
+		};
+		if (Array.isArray(chosen.typedefs) && chosen.typedefs.length > 0)
+			next.interface_typedefs = chosen.typedefs;
+		else delete next.interface_typedefs;
+		onchange(next);
+	}
+
+	// Manual edit of the free-text interface type clears any picker-embedded
+	// `interface_typedefs`: once the user hand-edits the type, a stale embedded
+	// typedef would mis-derive the output port, so we drop it and let the server
+	// deriver fall back to its bundled snapshots. (Manual `interface_name` edits
+	// don't touch typedefs — the type is what drives derivation.)
+	function onManualInterfaceType(value: string) {
+		const next: Record<string, unknown> = { ...config, interface_type: value };
+		delete next.interface_typedefs;
+		onchange(next);
+	}
 
 	function patch(updates: Record<string, unknown>) {
 		onchange({ ...config, ...updates });
@@ -180,6 +281,54 @@
 </div>
 
 <div class="space-y-1.5">
+	<FormField label="Interface" for="ros-interface-picker">
+		{#if pickerItems.length > 0}
+			<Select.Root
+				type="single"
+				value={interfaceName}
+				onValueChange={(v) => {
+					if (v) onPickInterface(v);
+				}}
+				disabled={readonly}
+			>
+				<Select.Trigger
+					disabled={readonly}
+					id="ros-interface-picker"
+					data-testid="ros-interface-picker"
+				>
+					{interfaceName || 'Select a published interface...'}
+				</Select.Trigger>
+				<Select.Content>
+					{#each pickerItems as it (it.name + ' ' + it.type)}
+						<Select.Item value={it.name} label={it.name}>
+							<span class="flex flex-col">
+								<span class="font-mono">{it.name}</span>
+								<span class="text-xs text-muted-foreground">
+									{it.type} ({it.runnerName})
+								</span>
+							</span>
+						</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		{:else}
+			<p
+				class="text-sm italic text-muted-foreground"
+				data-testid="ros-interface-picker-empty"
+			>
+				{#if sourcesError}
+					Couldn't load runner interfaces — enter the name manually below.
+				{:else if !sourcesResolved}
+					Loading published interfaces…
+				{:else}
+					No published interfaces — connect a ROS runner, or enter the name manually below.
+				{/if}
+			</p>
+		{/if}
+	</FormField>
+</div>
+
+<div class="space-y-1.5">
 	<FormField label="Interface name" for="ros-interface-name">
 		<Input
 			id="ros-interface-name"
@@ -206,7 +355,7 @@
 			placeholder="geometry_msgs/Twist"
 			list="ros-interface-types"
 			disabled={readonly}
-			oninput={(e) => patch({ interface_type: (e.currentTarget as HTMLInputElement).value })}
+			oninput={(e) => onManualInterfaceType((e.currentTarget as HTMLInputElement).value)}
 			class="font-mono"
 			data-testid="ros-interface-type"
 		/>
