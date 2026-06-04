@@ -78,7 +78,7 @@ pub enum Exclusivity {
 /// `Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per
 /// live presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case", tag = "kind", content = "amount")]
+#[serde(rename_all = "snake_case", tag = "capacity_kind", content = "capacity_amount")]
 pub enum CapacityAmount {
     /// A configured integer unit count (the worker pool's `N`).
     Fixed(u32),
@@ -367,5 +367,26 @@ mod tests {
             Eligibility::Partition,
         );
         assert!(a.validate().expect("worker shape is clean").is_empty());
+    }
+
+    /// Regression: the `CapacityAmount` flatten MUST serialize as
+    /// `capacity_kind`/`capacity_amount` — the exact `public_fields` the
+    /// `capacity` resource descriptor advertises (`aithericon-resources`
+    /// `ResourceType`). A mismatch (the enum once used `kind`/`amount`) makes
+    /// every `capacity` create 400 with "unknown config field(s)" because the
+    /// descriptor's stray-key gate rejects the serialized axes — caught only at
+    /// live e2e. This pins the wire field names to the descriptor.
+    #[test]
+    fn axes_serialize_with_descriptor_field_names() {
+        let worker = preset_by_name("worker").unwrap().axes;
+        let v = serde_json::to_value(worker).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("capacity_kind"), "missing capacity_kind: {v}");
+        assert!(obj.contains_key("capacity_amount"), "missing capacity_amount: {v}");
+        assert!(!obj.contains_key("kind"), "stale `kind` key leaked: {v}");
+        assert!(!obj.contains_key("amount"), "stale `amount` key leaked: {v}");
+        // And the descriptor's allowed public fields all round-trip back.
+        let back: CapacityAxes = serde_json::from_value(v).unwrap();
+        assert_eq!(back, worker);
     }
 }
