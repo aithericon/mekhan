@@ -291,6 +291,55 @@ pub struct ExecutorConfig {
     /// Environment variable: `EXECUTOR_PRESENCE_INTERVAL_SECS=10`.
     #[serde(default = "default_presence_interval_secs")]
     pub presence_interval_secs: u64,
+
+    /// Mekhan control-plane base URL (e.g. `https://mekhan.example.com`). Used
+    /// by the worker self-enroll path (`worker_reg_token`) to POST
+    /// `/api/v1/workers/enroll` on boot. The CLI runner-enroll subcommands take
+    /// `--url` directly; this field is the daemon-boot worker analog.
+    ///
+    /// Environment variable: `EXECUTOR_MEKHAN_URL=https://mekhan.example.com`.
+    #[serde(default)]
+    pub mekhan_url: Option<String>,
+
+    /// Enrolled-worker identity (Phase B — grouped + enrolled workers).
+    ///
+    /// When this executor was enrolled into a mekhan worker fleet (either by a
+    /// boot-time `worker_reg_token` self-enroll, or pre-provisioned config),
+    /// `worker_id` is the control-plane UUID for this worker. Unlike `runner_id`
+    /// it does **not** become a routing partition — grouped workers COMPETE
+    /// within their `worker_group`; the id is identity/presence only. Populated
+    /// from `EXECUTOR_WORKER_ID` / config, or auto-discovered from
+    /// `{base_dir}/worker/identity.json` in `normalize()`, or set by the
+    /// boot-time self-enroll.
+    ///
+    /// Environment variable: `EXECUTOR_WORKER_ID=<uuid>`.
+    #[serde(default)]
+    pub worker_id: Option<String>,
+
+    /// Routing group for an enrolled worker (Phase B). When set, the worker-pool
+    /// fan-out binds a `PartitionedPool { partition: worker_group }` consumer on
+    /// the PARALLEL `executor-<wire>-grp` namespace (filter
+    /// `executor-<wire>-grp.{prio}.{group}.>`) instead of the anonymous `Pool`
+    /// on `executor-<wire>`. Many workers of the same group share that durable
+    /// and COMPETE for the group's jobs. When `worker_reg_token` self-enroll
+    /// runs, the group is inherited from the registration token (the enroll
+    /// response's `group`) and overrides any configured value.
+    ///
+    /// Environment variable: `EXECUTOR_WORKER_GROUP=<group>`.
+    #[serde(default)]
+    pub worker_group: Option<String>,
+
+    /// One-time worker registration token (`wt_<uuid>.<secret>`) for boot-time
+    /// self-enrollment (Phase B). When set and the worker is not already
+    /// enrolled, the daemon generates a NATS user nkey, POSTs to mekhan
+    /// `POST /api/v1/workers/enroll`, and persists the returned `wkr_` token +
+    /// scoped NATS `.creds` under `{base_dir}/worker/`. The returned `group`
+    /// becomes the routing group (no separate `EXECUTOR_WORKER_GROUP` required
+    /// when self-enrolling). Requires `mekhan_url`.
+    ///
+    /// Environment variable: `EXECUTOR_WORKER_REG_TOKEN=wt_...`.
+    #[serde(default)]
+    pub worker_reg_token: Option<String>,
 }
 
 /// On-disk runner identity persisted by `aithericon-executor register`.
@@ -303,6 +352,23 @@ pub struct RunnerIdentity {
     pub runner_id: String,
     #[serde(default)]
     pub pool: Option<String>,
+    pub workspace_id: String,
+}
+
+/// On-disk enrolled-worker identity persisted by the boot-time self-enroll
+/// (Phase B — grouped + enrolled workers).
+///
+/// Written to `{base_dir}/worker/identity.json` when a `worker_reg_token`
+/// enrollment succeeds. Read back in `ExecutorConfig::normalize()` to
+/// self-identify the daemon (so a restart re-uses the same `wkr_` identity +
+/// group without re-enrolling). Mirrors mekhan's `EnrolledWorker` fields that
+/// the daemon needs locally; `worker_id` is identity/presence only (NOT a
+/// routing partition — grouped workers compete within `group`).
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct WorkerIdentity {
+    pub worker_id: String,
+    #[serde(default)]
+    pub group: Option<String>,
     pub workspace_id: String,
 }
 
@@ -578,6 +644,37 @@ impl ExecutorConfig {
                 self.nats_creds = Some(creds_path.to_string_lossy().into_owned());
             }
         }
+
+        // Phase B (grouped + enrolled workers): self-identify from a prior
+        // boot-time enrollment. If no explicit `worker_id` was given, read one
+        // (plus its inherited `group`) from `{base_dir}/worker/identity.json`
+        // (written by the self-enroll path). Failure to read/parse is silently
+        // ignored — a non-enrolled worker is the normal back-compat default. The
+        // explicit-wins rule mirrors the runner path: an env/config
+        // `worker_group` is only filled from disk when it was unset.
+        let worker_dir = std::path::Path::new(&self.base_dir).join("worker");
+        if self.worker_id.is_none() {
+            let identity_path = worker_dir.join("identity.json");
+            if let Ok(bytes) = std::fs::read(&identity_path) {
+                if let Ok(identity) = serde_json::from_slice::<WorkerIdentity>(&bytes) {
+                    self.worker_id = Some(identity.worker_id);
+                    if self.worker_group.is_none() {
+                        self.worker_group = identity.group;
+                    }
+                }
+            }
+        }
+
+        // Default `nats_creds` to the enrolled worker's scoped `.creds` when one
+        // was persisted (and the operator hasn't set creds explicitly, and the
+        // runner path didn't already claim it). Same non-breaking shape as the
+        // runner block above.
+        if self.nats_creds.is_none() {
+            let creds_path = worker_dir.join("worker.creds");
+            if creds_path.exists() {
+                self.nats_creds = Some(creds_path.to_string_lossy().into_owned());
+            }
+        }
     }
 
     pub fn default_timeout(&self) -> Duration {
@@ -729,6 +826,10 @@ mod tests {
             runner_id: None,
             runner_token_path: None,
             presence_interval_secs: default_presence_interval_secs(),
+            mekhan_url: None,
+            worker_id: None,
+            worker_group: None,
+            worker_reg_token: None,
         }
     }
 
@@ -842,6 +943,72 @@ mod tests {
         let mut config = test_config();
         config.normalize();
         assert_eq!(config.namespace, default_namespace());
+    }
+
+    #[test]
+    fn normalize_discovers_worker_identity_and_group_from_disk() {
+        // Write a {base_dir}/worker/identity.json and confirm normalize() picks
+        // up worker_id + the inherited group, and defaults nats_creds to the
+        // worker.creds file when present.
+        let tmp = std::env::temp_dir().join(format!("exec-worker-test-{}", std::process::id()));
+        let worker_dir = tmp.join("worker");
+        std::fs::create_dir_all(&worker_dir).unwrap();
+        std::fs::write(
+            worker_dir.join("identity.json"),
+            br#"{"worker_id":"wkr-123","group":"xrd_bench","workspace_id":"ws-1"}"#,
+        )
+        .unwrap();
+        std::fs::write(worker_dir.join("worker.creds"), b"creds").unwrap();
+
+        let mut config = test_config();
+        config.base_dir = tmp.to_string_lossy().into_owned();
+        assert!(config.worker_id.is_none());
+        config.normalize();
+
+        assert_eq!(config.worker_id.as_deref(), Some("wkr-123"));
+        assert_eq!(config.worker_group.as_deref(), Some("xrd_bench"));
+        assert_eq!(
+            config.nats_creds.as_deref(),
+            Some(worker_dir.join("worker.creds").to_string_lossy().as_ref())
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn normalize_explicit_worker_group_wins_over_disk() {
+        let tmp = std::env::temp_dir().join(format!("exec-worker-test-grp-{}", std::process::id()));
+        let worker_dir = tmp.join("worker");
+        std::fs::create_dir_all(&worker_dir).unwrap();
+        std::fs::write(
+            worker_dir.join("identity.json"),
+            br#"{"worker_id":"wkr-123","group":"from_disk","workspace_id":"ws-1"}"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.base_dir = tmp.to_string_lossy().into_owned();
+        config.worker_group = Some("explicit".into());
+        config.normalize();
+
+        // worker_id is still discovered, but an explicitly-set group is kept.
+        assert_eq!(config.worker_id.as_deref(), Some("wkr-123"));
+        assert_eq!(config.worker_group.as_deref(), Some("explicit"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn normalize_no_worker_identity_is_anonymous() {
+        let tmp =
+            std::env::temp_dir().join(format!("exec-worker-test-anon-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut config = test_config();
+        config.base_dir = tmp.to_string_lossy().into_owned();
+        config.normalize();
+        assert!(config.worker_id.is_none());
+        assert!(config.worker_group.is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

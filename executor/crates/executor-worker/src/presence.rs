@@ -114,16 +114,24 @@ pub fn worker_presence_subject(worker_id: &str) -> String {
 ///
 /// Mirrors [`spawn_presence_task`] (same best-effort ticker, same reuse of the
 /// daemon's existing NATS client, same `CancellationToken` shutdown) but
-/// publishes a `{"worker_id": "<id>", "backends": ["python", ...]}` payload to
-/// [`worker_presence_subject`] advertising the backend set this worker drains.
-/// Unlike the runner path, the backend set is the wire-truth here — the worker
-/// pool routes by namespace partition, not by a DB-side capability lookup — so
-/// the payload carries it for operator visibility. Publish failures are logged
-/// at `warn` and never abort the loop or the daemon.
+/// publishes a `{"worker_id": "<id>", "backends": ["python", ...], "group": ...}`
+/// payload to [`worker_presence_subject`] advertising the backend set this
+/// worker drains. Unlike the runner path, the backend set is the wire-truth
+/// here — the worker pool routes by namespace partition, not by a DB-side
+/// capability lookup — so the payload carries it for operator visibility.
+///
+/// `worker_id` is the presence-key mekhan dedupes on: for an enrolled worker
+/// pass its `wkr_` control-plane UUID so mekhan correlates the heartbeat to the
+/// DB row; for an anonymous worker pass the process-stable `config.name`.
+/// `group` is the worker's routing group when enrolled (`None` for anonymous);
+/// mekhan ignores unknown/extra fields, so carrying it is non-breaking.
+///
+/// Publish failures are logged at `warn` and never abort the loop or the daemon.
 pub fn spawn_worker_presence_task(
     client: async_nats::Client,
     worker_id: String,
     backends: Vec<String>,
+    group: Option<String>,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
@@ -131,6 +139,7 @@ pub fn spawn_worker_presence_task(
     let payload: Vec<u8> = serde_json::to_vec(&serde_json::json!({
         "worker_id": worker_id,
         "backends": backends,
+        "group": group,
     }))
     .unwrap_or_else(|_| b"{}".to_vec());
 
@@ -181,5 +190,33 @@ mod tests {
             worker_presence_subject("exec-worker-1"),
             "worker.exec-worker-1.presence"
         );
+    }
+
+    /// The presence payload must carry `worker_id`, `backends`, and `group` so
+    /// mekhan's `WorkerPresencePayload` (worker_id + backends; group ignored as
+    /// an extra) parses it and the fleet view can render the routing group.
+    #[test]
+    fn worker_presence_payload_carries_group_when_enrolled() {
+        let payload = serde_json::json!({
+            "worker_id": "wkr-abc",
+            "backends": ["python", "loki"],
+            "group": Some("xrd_bench".to_string()),
+        });
+        assert_eq!(payload["worker_id"], "wkr-abc");
+        assert_eq!(payload["backends"][0], "python");
+        assert_eq!(payload["group"], "xrd_bench");
+    }
+
+    /// An anonymous worker serializes `group: null` — mekhan ignores the extra
+    /// field, so the back-compat `{worker_id, backends}` shape still parses.
+    #[test]
+    fn worker_presence_payload_group_null_when_anonymous() {
+        let group: Option<String> = None;
+        let payload = serde_json::json!({
+            "worker_id": "executor-host",
+            "backends": ["process"],
+            "group": group,
+        });
+        assert!(payload["group"].is_null());
     }
 }

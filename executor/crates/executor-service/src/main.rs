@@ -261,8 +261,15 @@ fn build_apalis_nats_config(config: &ExecutorConfig) -> apalis_nats::Config {
 
 /// Run the executor as a long-running daemon pulling jobs from NATS.
 async fn run_nats_daemon(
-    config: ExecutorConfig,
+    mut config: ExecutorConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Phase B (grouped + enrolled workers): self-enroll on boot when a
+    // `worker_reg_token` is set and we're not already enrolled. Runs BEFORE the
+    // NATS connect so the freshly-minted scoped `.creds` (and the inherited
+    // `worker_group`) are in effect for this daemon's connection + consumer
+    // bind. No-op for an anonymous worker (no token) — the back-compat path.
+    maybe_enroll_worker(&mut config).await?;
+
     // Connect to NATS
     let nats_client = connect_nats(&config).await?;
     let jetstream = async_nats::jetstream::new(nats_client.clone());
@@ -383,10 +390,34 @@ async fn run_nats_daemon(
         }
 
         for wire in &registered_wires {
-            let namespace = aithericon_backends::executor_pool_namespace(wire);
-            // Pool (competing-consumers) config for this backend's namespace.
-            // No target_exec_id here by construction (worker_pool_mode), so the
-            // mode is always Pool.
+            // Grouped (enrolled) vs anonymous (back-compat) routing.
+            //
+            // - Anonymous: bind `ConsumerMode::Pool` on `executor-<wire>` —
+            //   the historical worker-pool path, unchanged.
+            // - Grouped: an enrolled worker carrying a `worker_group` binds
+            //   `ConsumerMode::PartitionedPool { partition: <group> }` on the
+            //   PARALLEL `executor-<wire>-grp` namespace. mekhan's compiler
+            //   stamps grouped jobs' `executor_namespace =
+            //   "executor-<wire>-grp/<group>"`; the engine's `split_namespace`
+            //   splits on the first `/` → stream_ns `executor-<wire>-grp`,
+            //   partition `<group>`, publishing to
+            //   `executor-<wire>-grp.<prio>.<group>.<exec>`. The
+            //   `PartitionedPool` filter `executor-<wire>-grp.<prio>.<group>.>`
+            //   matches that, and its durable is partition-keyed
+            //   (`executor-<wire>-grp_<prio>_<group>_consumer`, NOT
+            //   worker-keyed) so MANY group-<group> workers share one durable
+            //   and COMPETE — `worker_id` is identity only, never a partition.
+            let pool_namespace = aithericon_backends::executor_pool_namespace(wire);
+            let (namespace, consumer_mode) = match config.worker_group.as_deref() {
+                Some(group) => (
+                    format!("{pool_namespace}-grp"),
+                    apalis_nats::ConsumerMode::PartitionedPool {
+                        partition: group.to_string(),
+                    },
+                ),
+                None => (pool_namespace, apalis_nats::ConsumerMode::Pool),
+            };
+
             let nats_config = apalis_nats::Config {
                 namespace: namespace.clone(),
                 max_deliver: config.max_deliver,
@@ -394,7 +425,7 @@ async fn run_nats_daemon(
                 max_ack_pending: config.max_ack_pending,
                 num_replicas: 1,
                 enable_dlq: true,
-                consumer_mode: apalis_nats::ConsumerMode::Pool,
+                consumer_mode,
                 ..Default::default()
             };
 
@@ -404,7 +435,14 @@ async fn run_nats_daemon(
             )
             .await?;
 
-            let worker_name = format!("{}-{wire}", config.name);
+            // Worker name must stay unique across the served backends; for a
+            // grouped worker include the group so logs disambiguate, but note
+            // the apalis worker NAME is NOT the consumer durable — the durable
+            // is partition-keyed (shared), so co-grouped workers still compete.
+            let worker_name = match config.worker_group.as_deref() {
+                Some(group) => format!("{}-{group}-{wire}", config.name),
+                None => format!("{}-{wire}", config.name),
+            };
             let worker = build_worker!(
                 &worker_name,
                 config.concurrency,
@@ -417,22 +455,28 @@ async fn run_nats_daemon(
         }
 
         // Worker presence: advertise the backend set this pool worker drains.
-        // `config.name` is the process-stable worker id — it is the operator-
-        // facing label for this daemon and is already unique per deployment
-        // (k8s pod name / systemd unit / dev slot); reusing it keeps the
-        // presence subject stable across restarts of the same worker without
-        // minting a fresh uuid each boot (which would leak stale presence
-        // rows on the watcher side). The backend set is wire-truth here.
+        // Presence-key precedence: an ENROLLED worker uses its `wkr_`
+        // control-plane UUID (`config.worker_id`) so mekhan's FleetLiveness can
+        // correlate the heartbeat to the worker DB row; an anonymous worker
+        // falls back to `config.name` — the process-stable, operator-facing
+        // label already unique per deployment (k8s pod / systemd unit / dev
+        // slot), which keeps the presence subject stable across restarts
+        // without minting a fresh uuid each boot. The backend set is wire-truth
+        // here; the `group` (enrolled only, `None` for anonymous) is carried so
+        // the fleet view can render which group each worker competes in.
         let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
+        let presence_id = config.worker_id.clone().unwrap_or_else(|| config.name.clone());
         spawn_worker_presence_task(
             nats_client_for_cancel.clone(),
-            config.name.clone(),
+            presence_id.clone(),
             backends.clone(),
+            config.worker_group.clone(),
             config.presence_interval(),
             cancel_shutdown.clone(),
         );
         info!(
-            worker_id = %config.name,
+            worker_id = %presence_id,
+            group = ?config.worker_group,
             ?backends,
             interval_secs = config.presence_interval_secs,
             "worker presence heartbeat started"
@@ -966,6 +1010,106 @@ fn build_executor(
         },
         registered_wires,
     ))
+}
+
+/// Enumerate the executor-job backend wire-names this binary serves, by
+/// compiled feature — WITHOUT building any backend.
+///
+/// [`build_executor`] is the authoritative `registered_wires` source but it (a)
+/// requires a live NATS client (for metric/log sinks) and (b) has real
+/// side-effects (Docker connect, venv-cache build), so it can't run as a
+/// pre-connect dry-run. This is a cheap, side-effect-free mirror of the same
+/// `#[cfg(feature = ...)]` gating used in [`register_executor_backend`], used
+/// only to report `backends` to mekhan at boot-time self-enroll (before the
+/// NATS connection is established with the freshly-minted creds).
+///
+/// `process` is always-on; every other wire is feature-gated. Keep this list in
+/// sync with `register_executor_backend`'s match arms. A backend that is
+/// compiled-in but unavailable at runtime (e.g. Docker daemon down) is still
+/// advertised here — the scoped JWT mekhan mints is a superset; an unavailable
+/// backend only fails its own granted jobs (visible self-harm), never escalates.
+fn served_wires() -> Vec<&'static str> {
+    // `mut` is conditionally used — every `push` below is feature-gated, so a
+    // build with only `process` compiled never mutates after the initializer.
+    #[allow(unused_mut)]
+    let mut wires: Vec<&'static str> = vec!["process"];
+    #[cfg(feature = "python")]
+    wires.push("python");
+    #[cfg(feature = "docker")]
+    wires.push("docker");
+    #[cfg(feature = "http")]
+    wires.push("http");
+    #[cfg(feature = "llm")]
+    wires.push("llm");
+    #[cfg(feature = "file-ops")]
+    wires.push("file_ops");
+    #[cfg(feature = "kreuzberg")]
+    wires.push("kreuzberg");
+    #[cfg(feature = "surya")]
+    wires.push("surya");
+    #[cfg(feature = "smtp")]
+    wires.push("smtp");
+    #[cfg(feature = "postgres")]
+    wires.push("postgres");
+    #[cfg(feature = "loki")]
+    wires.push("loki");
+    #[cfg(feature = "prometheus")]
+    wires.push("prometheus");
+    wires
+}
+
+/// Boot-time worker self-enroll (Phase B — grouped + enrolled workers).
+///
+/// When `worker_reg_token` is set and the worker is not already enrolled
+/// (`{base_dir}/worker/identity.json` absent), POST to mekhan
+/// `/api/v1/workers/enroll`, persist the `wkr_` token + scoped `.creds` under
+/// `{base_dir}/worker/`, then re-`normalize()` so the daemon picks up the
+/// discovered `worker_id`, the inherited `worker_group`, and `nats_creds`. This
+/// mirrors the runner enroll-then-pick-up-from-disk flow, but runs inline on
+/// boot instead of as a separate CLI subcommand. Idempotent: a restart with the
+/// identity already on disk is a no-op (the token is single-use server-side
+/// anyway). `mekhan_url` is required when a token is present.
+async fn maybe_enroll_worker(
+    config: &mut ExecutorConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(token) = config.worker_reg_token.clone() else {
+        return Ok(());
+    };
+
+    // Already enrolled (identity on disk → normalize() set worker_id): skip.
+    if config.worker_id.is_some() {
+        info!("worker already enrolled — skipping self-enroll");
+        return Ok(());
+    }
+
+    let mekhan_url = config.mekhan_url.clone().ok_or(
+        "EXECUTOR_WORKER_REG_TOKEN is set but EXECUTOR_MEKHAN_URL is not — \
+         cannot self-enroll without the mekhan control-plane URL",
+    )?;
+
+    let backends: Vec<String> = served_wires().iter().map(|w| w.to_string()).collect();
+
+    let enrolled = register::enroll_worker(
+        &mekhan_url,
+        &token,
+        &config.name,
+        backends,
+        &config.base_dir,
+    )
+    .await?;
+
+    // Re-normalize so the just-written {base_dir}/worker/identity.json + creds
+    // are picked up: worker_id, the inherited worker_group, and nats_creds.
+    config.normalize();
+
+    info!(
+        worker_id = ?enrolled.worker_id,
+        group = ?enrolled.group,
+        nats_creds = enrolled.creds_path.is_some(),
+        "worker self-enroll complete"
+    );
+
+    Ok(())
 }
 
 /// Build the artifact store based on config.
