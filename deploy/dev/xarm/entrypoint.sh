@@ -38,6 +38,13 @@ websockify --web=/usr/share/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
 ros2 launch xarm_planner xarm6_planner_fake.launch.py show_rviz:=true no_gui_ctrl:=true \
     >/tmp/xarm.log 2>&1 &
 
+# Path C motion-bridge (re-exposes move_group planning as /plan_to_pose). The
+# node create_client-waits for /compute_ik + /plan_kinematic_path (10s each), so
+# launching it here — best-effort, backgrounded, alongside the planner stack — is
+# timing-forgiving. The /ros2_ws/install overlay sourced at the top of this
+# entrypoint carries the bridge, so `ros2 run` resolves it.
+ros2 run aithericon_motion_bridge motion_bridge_node.py >/tmp/motion_bridge.log 2>&1 &
+
 # Maximize the RViz window so the noVNC view is a full-viewport RViz framed on
 # the arm, not a small floating window. Best-effort, backgrounded. Under
 # software GL (llvmpipe) RViz takes ~30-40s to finish mapping + its own layout
