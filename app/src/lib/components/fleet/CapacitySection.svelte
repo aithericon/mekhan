@@ -59,10 +59,16 @@
 			return `${n} ${noun} · ${online}/${total} online`;
 		}
 		if (backend === 'queue') {
-			const noun = n === 1 ? 'pool' : 'pools';
-			let workers = 0;
-			for (const c of capacities) if (c.live.kind === 'queue') workers += c.live.workers;
-			return `${n} ${noun} · ${workers} workers`;
+			const noun = n === 1 ? 'group' : 'groups';
+			let online = 0;
+			let enrolled = 0;
+			for (const c of capacities) {
+				if (c.live.kind === 'queue') {
+					online += c.live.online;
+					enrolled += c.live.enrolled;
+				}
+			}
+			return `${n} ${noun} · ${online}/${enrolled} online`;
 		}
 		if (backend === 'tokens') {
 			const noun = n === 1 ? 'limit' : 'limits';
@@ -103,7 +109,11 @@
 			{#snippet icon()}{#if emptyIcon}{@render emptyIcon()}{/if}{/snippet}
 		</FleetEmpty>
 	{:else}
-		<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+		<div
+			class="grid gap-3 {backend === 'scheduler'
+				? 'sm:grid-cols-1 lg:grid-cols-2'
+				: 'sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'}"
+		>
 			{#each capacities as capacity (capacity.id)}
 				<CapacityCard {capacity} {onedit} {ondelete} {onenroll} {onreconnect} {ondrain} />
 			{/each}

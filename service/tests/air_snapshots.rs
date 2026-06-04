@@ -366,6 +366,20 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // KnownResources/capability registry). Proven live by
         // `just dev xarm-up` + `mekhan test`.
         "30-xarm-joint-move",
+        // 31-xarm-wave (ROS / xArm) is the same shape as 30: its ros
+        // AutomatedSteps target the `xarm_fleet` runner_group via
+        // `deploymentModel.capacity.alias` and carry a `ros` capability
+        // Requirement — neither resolvable by bare `compile_to_air` (empty
+        // KnownResources/capability registry). Proven live by
+        // `just dev xarm-up` + `mekhan test`.
+        "31-xarm-wave",
+        // 32-xarm-trajectory-stream uses the RETIRED streaming model
+        // (`streamOutput` + `stream_fold`) — it was added on `main`
+        // concurrently with the docs/25 streaming-channels rework that deletes
+        // those constructs. It is a P1.5 migration target (same bucket as
+        // 29-turtle-rotate): its graph no longer loads and its streaming test
+        // is disabled until the ROS/pooled data-plane migration re-authors it.
+        "32-xarm-trajectory-stream",
     ]
     .into_iter()
     .collect();

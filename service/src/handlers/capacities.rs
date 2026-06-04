@@ -14,10 +14,10 @@
 //! - **Presence** (instrument / runner group) — `total` is the count of runners
 //!   whose `runner_group` aliases this capacity's `path`; `online` + `backends`
 //!   are read from the in-memory presence snapshot on [`AppState`].
-//! - **Queue** (anonymous worker pool) — read from the fleet-liveness worker
-//!   facet. NOTE: workers are anonymous (no per-`capacity` binding), so this is
-//!   the FLEET-GLOBAL worker view attached to every queue capacity; it is
-//!   coverage telemetry, not a per-resource count.
+//! - **Queue** (worker pool) — now PER-GROUP: the enrolled workers whose
+//!   `worker_group` aliases this capacity's `path`, intersected with the
+//!   fleet-liveness worker facet for online count + advertised backends. NOT a
+//!   fleet-global view.
 //! - **Scheduler** (datacenter) — the live cluster summary for that datacenter,
 //!   assembled by the shared [`crate::handlers::clusters::assemble_cluster_summaries`]
 //!   so the cluster page and this aggregator cannot drift.
@@ -73,12 +73,12 @@ pub enum CapacityLive {
         total: u32,
         backends: Vec<String>,
     },
-    /// Anonymous worker queue: FLEET-GLOBAL worker count + backend coverage
-    /// (workers carry no per-capacity binding, so this is shared telemetry).
+    /// Per-group worker queue: `online` present workers of `enrolled` total in
+    /// this group, plus the union of their advertised backends.
     Queue {
-        workers: u32,
-        backends_covered: u32,
-        backends_total: u32,
+        online: u32,
+        enrolled: u32,
+        backends: Vec<String>,
     },
     /// Lease/scheduler (datacenter): live cluster state from the registry.
     Scheduler {
@@ -158,10 +158,6 @@ pub async fn list_capacities(
     // group. Fail-soft: the snapshot read is in-memory and infallible.
     let presence = state.runner_presence.snapshot().await;
 
-    // Worker-pool (queue) live state — fleet-global, attached to every queue
-    // capacity (workers are anonymous, no per-capacity binding).
-    let queue_live = queue_live(&state).await;
-
     let mut out = Vec::with_capacity(rows.len());
     for (id, path, display_name, resource_type, public_config) in rows {
         let public_map: Map<String, Value> = public_config
@@ -181,7 +177,7 @@ pub async fn list_capacities(
                 tokens_live(&state, id, axes).await
             }
             CapacityBackend::Presence => presence_live(&state, workspace_id, &path, &presence).await,
-            CapacityBackend::Queue => queue_live.clone(),
+            CapacityBackend::Queue => queue_live(&state, workspace_id, &path).await,
             CapacityBackend::Scheduler => {
                 scheduler_live(clusters.get(&id.to_string()))
             }
@@ -284,33 +280,47 @@ async fn presence_live(
     }
 }
 
-/// Fleet-global worker-queue live state: live worker count + backend coverage
-/// across every `ExecutorJob` backend. Workers are anonymous (no per-capacity
-/// binding), so this same snapshot is attached to every queue capacity.
-async fn queue_live(state: &AppState) -> CapacityLive {
-    let snapshot: Vec<crate::fleet::FleetSnapshotEntry> = state
+/// Live per-group worker-queue state: `enrolled` is the count of workers whose
+/// `worker_group` aliases this capacity's `path`; `online` + `backends` come from
+/// the fleet-liveness worker snapshot (filtered to those workers). Mirrors
+/// [`presence_live`]. Fail-soft: a DB error on the enrolled set yields 0.
+async fn queue_live(state: &AppState, workspace_id: Uuid, path: &str) -> CapacityLive {
+    // Enrolled workers in this group (the `worker_group` column aliases the
+    // capacity's `path`). Same alias the worker enroll/dispatch path keys on.
+    let ids: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workers \
+         WHERE workspace_id = $1 AND worker_group = $2 AND revoked_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(path)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let enrolled = ids.len() as u32;
+    let enrolled_set: std::collections::HashSet<String> =
+        ids.iter().map(|id| id.to_string()).collect();
+
+    let mut online = 0u32;
+    let mut backends: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for entry in state
         .fleet
         .snapshot()
         .await
         .into_iter()
         .filter(|e| matches!(e.kind, crate::fleet::CapacityKind::Worker))
-        .collect();
-
-    let backends_total = aithericon_backends::BACKENDS
-        .iter()
-        .filter(|m| matches!(m.dispatch_mode, aithericon_backends::DispatchMode::ExecutorJob))
-        .count() as u32;
-
-    let backends_covered = aithericon_backends::BACKENDS
-        .iter()
-        .filter(|m| matches!(m.dispatch_mode, aithericon_backends::DispatchMode::ExecutorJob))
-        .filter(|m| snapshot.iter().any(|e| e.caps.iter().any(|b| b == m.wire_name)))
-        .count() as u32;
+        .filter(|e| enrolled_set.contains(&e.id))
+    {
+        online += 1;
+        for b in entry.caps {
+            backends.insert(b);
+        }
+    }
 
     CapacityLive::Queue {
-        workers: snapshot.len() as u32,
-        backends_covered,
-        backends_total,
+        online,
+        enrolled,
+        backends: backends.into_iter().collect(),
     }
 }
 

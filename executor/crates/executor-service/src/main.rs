@@ -240,7 +240,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 ///   its own partition `runner-jobs.{priority}.{rid}.>` (exclusive routing,
 ///   one shared stream-set for the whole fleet). `config.namespace` is already
 ///   `runner-jobs` (set in `ExecutorConfig::normalize`).
-/// - else → `Pool`: durable shared consumer (legacy daemon-mode behavior).
+/// - else → `Pool`: durable shared consumer on `config.namespace`. This is the
+///   single-namespace drain/manifest path (Slurm/Nomad sbatch with no
+///   target_exec_id, or local manifest dispatch) — NOT the competing-consumer
+///   worker-pool path, which fans out per-backend grouped consumers in
+///   `run_nats_daemon` (and requires enrollment).
 fn build_apalis_nats_config(config: &ExecutorConfig) -> apalis_nats::Config {
     let consumer_mode = match (&config.target_exec_id, &config.runner_id) {
         (Some(id), _) => apalis_nats::ConsumerMode::PerJob {
@@ -268,11 +272,12 @@ fn build_apalis_nats_config(config: &ExecutorConfig) -> apalis_nats::Config {
 async fn run_nats_daemon(
     mut config: ExecutorConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Phase B (grouped + enrolled workers): self-enroll on boot when a
-    // `worker_reg_token` is set and we're not already enrolled. Runs BEFORE the
-    // NATS connect so the freshly-minted scoped `.creds` (and the inherited
-    // `worker_group`) are in effect for this daemon's connection + consumer
-    // bind. No-op for an anonymous worker (no token) — the back-compat path.
+    // Unified worker model: self-enroll on boot when a `worker_reg_token` is set
+    // and we're not already enrolled. Runs BEFORE the NATS connect so the
+    // freshly-minted scoped `.creds` and the resolved routing partition (the
+    // group's capacity-resource UUID) are in effect for this daemon's connection
+    // + consumer bind. Every worker MUST enroll — a worker-pool daemon without a
+    // routing partition is rejected below (no anonymous path).
     maybe_enroll_worker(&mut config).await?;
 
     // Connect to NATS
@@ -289,11 +294,13 @@ async fn run_nats_daemon(
     )
     .await?;
 
-    // The worker-pool default (non-enrolled, non-PerJob) fans the daemon out
-    // across one `executor.{wire}` namespace per backend it serves (built
-    // below, after the executor's backend set is known). The runner-presence
-    // (`runner.{id}`) and PerJob/lease (`target_exec_id`) paths keep the
-    // historical single-namespace storage built from `config.namespace`.
+    // The worker-pool path (an enrolled, competing-consumer worker — neither a
+    // runner nor PerJob) fans the daemon out across one grouped
+    // `executor-<wire>-grp` consumer per backend it serves (built below, after
+    // the executor's backend set is known), partitioned by its routing group's
+    // capacity-resource UUID. The runner-presence (`runner.{id}`) and PerJob/
+    // lease (`target_exec_id`) paths keep the single-namespace storage built
+    // from `config.namespace`.
     let worker_pool_mode = config.runner_id.is_none() && config.target_exec_id.is_none();
 
     let nats_client_for_cancel = nats_client.clone();
@@ -383,11 +390,11 @@ async fn run_nats_daemon(
     let mut monitor = Monitor::new();
 
     if worker_pool_mode {
-        // Worker-pool fan-out: bind ONE Pool consumer per `executor.{wire}`
-        // namespace for every backend this binary actually registered. Each
-        // gets its own NatsStorage (auto-creates the namespace's streams) +
-        // worker (unique name `{config.name}-{wire}`) sharing the SAME
-        // Arc<JobExecutor>. All register on the single Monitor.
+        // Worker-pool fan-out (unified model): bind ONE grouped consumer per
+        // backend this binary actually registered. Each gets its own NatsStorage
+        // (auto-creates the namespace's streams) + worker (unique name
+        // `{config.name}-{group}-{wire}`) sharing the SAME Arc<JobExecutor>. All
+        // register on the single Monitor.
         if registered_wires.is_empty() {
             return Err(
                 "worker-pool daemon has no ExecutorJob backends compiled in — nothing to drain; \
@@ -396,33 +403,38 @@ async fn run_nats_daemon(
             );
         }
 
+        // MANDATORY enrollment: every worker routes through a GROUP. The routing
+        // partition is the group's capacity-resource UUID, resolved at enroll
+        // (the implicit "default" group resolves to its own UUID server-side).
+        // There is no anonymous worker path — a worker-pool daemon without a
+        // routing partition cannot bind any dispatch consumer, so fail fast with
+        // a clear remediation rather than silently draining nothing.
+        let routing_partition = config.worker_routing_partition.clone().ok_or(
+            "workers must enroll: no routing partition resolved. Set \
+             EXECUTOR_WORKER_REG_TOKEN (+ EXECUTOR_MEKHAN_URL) so this worker \
+             enrolls into a group on boot, or pre-provision \
+             {base_dir}/worker/identity.json with a routing_partition.",
+        )?;
+
         for wire in &registered_wires {
-            // Grouped (enrolled) vs anonymous (back-compat) routing.
-            //
-            // - Anonymous: bind `ConsumerMode::Pool` on `executor-<wire>` —
-            //   the historical worker-pool path, unchanged.
-            // - Grouped: an enrolled worker carrying a `worker_group` binds
-            //   `ConsumerMode::PartitionedPool { partition: <group> }` on the
-            //   PARALLEL `executor-<wire>-grp` namespace. mekhan's compiler
-            //   stamps grouped jobs' `executor_namespace =
-            //   "executor-<wire>-grp/<group>"`; the engine's `split_namespace`
-            //   splits on the first `/` → stream_ns `executor-<wire>-grp`,
-            //   partition `<group>`, publishing to
-            //   `executor-<wire>-grp.<prio>.<group>.<exec>`. The
-            //   `PartitionedPool` filter `executor-<wire>-grp.<prio>.<group>.>`
-            //   matches that, and its durable is partition-keyed
-            //   (`executor-<wire>-grp_<prio>_<group>_consumer`, NOT
-            //   worker-keyed) so MANY group-<group> workers share one durable
-            //   and COMPETE — `worker_id` is identity only, never a partition.
-            let pool_namespace = aithericon_backends::executor_pool_namespace(wire);
-            let (namespace, consumer_mode) = match config.worker_group.as_deref() {
-                Some(group) => (
-                    format!("{pool_namespace}-grp"),
-                    apalis_nats::ConsumerMode::PartitionedPool {
-                        partition: group.to_string(),
-                    },
-                ),
-                None => (pool_namespace, apalis_nats::ConsumerMode::Pool),
+            // Unified single-stream grouped routing. An enrolled worker binds
+            // `ConsumerMode::PartitionedPool { partition: <group_uuid> }` on the
+            // `executor-<wire>-grp` namespace family, where <group_uuid> is the
+            // routing group's capacity-resource UUID. mekhan's compiler stamps
+            // every executor job's `executor_namespace =
+            // "executor-<wire>-grp/<group_uuid>"` (a step naming no group is
+            // stamped with the workspace's "default" group); the engine's
+            // `split_namespace` splits on the first `/` → stream_ns
+            // `executor-<wire>-grp`, partition `<group_uuid>`, publishing to
+            // `executor-<wire>-grp.<prio>.<group_uuid>.<exec>`. The
+            // `PartitionedPool` filter `executor-<wire>-grp.<prio>.<group_uuid>.>`
+            // matches that, and its durable is partition-keyed
+            // (`executor-<wire>-grp_<prio>_<group_uuid>_consumer`, NOT
+            // worker-keyed) so MANY workers in the same group share one durable
+            // and COMPETE — `worker_id` is identity only, never a partition.
+            let namespace = aithericon_backends::executor_pool_namespace(wire) + "-grp";
+            let consumer_mode = apalis_nats::ConsumerMode::PartitionedPool {
+                partition: routing_partition.clone(),
             };
 
             let nats_config = apalis_nats::Config {
@@ -442,14 +454,11 @@ async fn run_nats_daemon(
             )
             .await?;
 
-            // Worker name must stay unique across the served backends; for a
-            // grouped worker include the group so logs disambiguate, but note
-            // the apalis worker NAME is NOT the consumer durable — the durable
-            // is partition-keyed (shared), so co-grouped workers still compete.
-            let worker_name = match config.worker_group.as_deref() {
-                Some(group) => format!("{}-{group}-{wire}", config.name),
-                None => format!("{}-{wire}", config.name),
-            };
+            // Worker name must stay unique across the served backends; include
+            // the routing partition so logs disambiguate co-located groups, but
+            // note the apalis worker NAME is NOT the consumer durable — the
+            // durable is partition-keyed (shared), so co-grouped workers compete.
+            let worker_name = format!("{}-{routing_partition}-{wire}", config.name);
             let worker = build_worker!(
                 &worker_name,
                 config.concurrency,
@@ -458,19 +467,18 @@ async fn run_nats_daemon(
                 storage
             );
             monitor = monitor.register(worker);
-            info!(%namespace, worker = %worker_name, "worker-pool backend consumer bound");
+            info!(%namespace, partition = %routing_partition, worker = %worker_name, "worker-pool backend consumer bound");
         }
 
         // Worker presence: advertise the backend set this pool worker drains.
-        // Presence-key precedence: an ENROLLED worker uses its `wkr_`
-        // control-plane UUID (`config.worker_id`) so mekhan's FleetLiveness can
-        // correlate the heartbeat to the worker DB row; an anonymous worker
-        // falls back to `config.name` — the process-stable, operator-facing
-        // label already unique per deployment (k8s pod / systemd unit / dev
-        // slot), which keeps the presence subject stable across restarts
-        // without minting a fresh uuid each boot. The backend set is wire-truth
-        // here; the `group` (enrolled only, `None` for anonymous) is carried so
-        // the fleet view can render which group each worker competes in.
+        // Presence subject is `worker.<worker_id>.presence` — the `wkr_`
+        // control-plane UUID (`config.worker_id`), which an enrolled worker
+        // always has, so mekhan's FleetLiveness can correlate the heartbeat to
+        // the worker DB row. The `unwrap_or` on `config.name` is defensive only
+        // (the daemon already hard-errors above without a routing partition).
+        // The backend set is wire-truth here; the `group` display alias is
+        // carried so the fleet view can render which group each worker competes
+        // in (the actual queue partition is the group's UUID, bound above).
         let backends: Vec<String> = registered_wires.iter().map(|w| w.to_string()).collect();
         let presence_id = config.worker_id.clone().unwrap_or_else(|| config.name.clone());
         spawn_worker_presence_task(
@@ -1107,12 +1115,14 @@ async fn maybe_enroll_worker(
     .await?;
 
     // Re-normalize so the just-written {base_dir}/worker/identity.json + creds
-    // are picked up: worker_id, the inherited worker_group, and nats_creds.
+    // are picked up: worker_id, the display group alias, the routing partition
+    // (the capacity-resource UUID the grouped consumer binds), and nats_creds.
     config.normalize();
 
     info!(
         worker_id = ?enrolled.worker_id,
         group = ?enrolled.group,
+        routing_partition = %enrolled.routing_partition,
         nats_creds = enrolled.creds_path.is_some(),
         "worker self-enroll complete"
     );

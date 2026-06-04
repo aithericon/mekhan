@@ -1243,6 +1243,7 @@ pub mod net_scoped {
         S: StateProjection + 'static,
     {
         let instance = get_instance(&registry, &net_id).await?;
+        registry.touch_activity(&net_id).await;
         Ok(super::fire_transition(State(instance.as_app_state()), Path(transition_id)).await)
     }
 
@@ -1258,6 +1259,7 @@ pub mod net_scoped {
         S: StateProjection + 'static,
     {
         let instance = get_instance(&registry, &net_id).await?;
+        registry.touch_activity(&net_id).await;
         Ok(super::create_token(State(instance.as_app_state()), body).await)
     }
 
@@ -1272,6 +1274,7 @@ pub mod net_scoped {
         S: StateProjection + 'static,
     {
         let instance = get_instance(&registry, &net_id).await?;
+        registry.touch_activity(&net_id).await;
         Ok(super::reset(State(instance.as_app_state())).await)
     }
 
@@ -1287,6 +1290,7 @@ pub mod net_scoped {
         S: StateProjection + 'static,
     {
         let instance = get_instance(&registry, &net_id).await?;
+        registry.touch_activity(&net_id).await;
         Ok(super::evaluate(State(instance.as_app_state()), body).await)
     }
 
@@ -1303,6 +1307,8 @@ pub mod net_scoped {
     {
         // Use get_or_create so loading into a new net_id auto-creates it
         let instance = registry.get_or_create(&net_id);
+        // Deploy + seed is the net's first activity; start its idle clock.
+        registry.touch_activity(&net_id).await;
 
         // Advance signal epoch BEFORE loading scenario so stale signals
         // from a previous scenario instance are ACK'd without processing.
@@ -1536,6 +1542,9 @@ pub mod net_scoped {
         S: StateProjection + 'static,
     {
         let _instance = registry.get_or_create(&net_id);
+        // Waking is an interaction — reset the idle timer (mirrors the NATS
+        // resolver wake path, which also touches activity).
+        registry.touch_activity(&net_id).await;
         (StatusCode::OK, Json(serde_json::json!({ "success": true })))
     }
 }

@@ -39,6 +39,11 @@
 	// ⇒ scoped to that presence group (per-card "Enroll here").
 	let enrollOpen = $state(false);
 	let enrollGroup = $state<string | null>(null);
+	// "Enroll worker" → EnrollSheet in worker mode. `enrollWorkerGroup` null ⇒
+	// global (picker over `workers` capacities); a path ⇒ scoped to that queue
+	// group (per-card "Enroll here").
+	let enrollWorkerOpen = $state(false);
+	let enrollWorkerGroup = $state<string | null>(null);
 
 	// ── Derived: partition by backend ───────────────────────────────────────────
 
@@ -93,6 +98,18 @@
 	function onEnrollCapacity(path: string) {
 		enrollGroup = path;
 		enrollOpen = true;
+	}
+
+	/** Open the global worker-enroll flow (no fixed group — the sheet shows a picker). */
+	function openEnrollWorker() {
+		enrollWorkerGroup = null;
+		enrollWorkerOpen = true;
+	}
+
+	/** A queue card's "Enroll here" — scope the worker sheet to that group's path. */
+	function onEnrollWorkerCapacity(path: string) {
+		enrollWorkerGroup = path;
+		enrollWorkerOpen = true;
 	}
 
 	// Edit opens the same modal in edit mode, prefilled from the summary the page
@@ -197,16 +214,31 @@
 				{/snippet}
 			</CapacitySection>
 
-			<!-- QUEUE — worker pools -->
+			<!-- QUEUE — worker groups. Backend coverage is a PER-GROUP attribute
+				 (each card shows its group's served backends), so there is no
+				 fleet-wide coverage blob here. -->
 			<CapacitySection
 				title="Queue"
 				backend="queue"
 				capacities={queue}
-				emptyMessage="No worker pools."
+				emptyMessage="No worker groups."
 				onedit={onEditCapacity}
 				ondelete={onDeleteCapacity}
+				onenroll={onEnrollWorkerCapacity}
 			>
 				{#snippet emptyIcon()}<Cpu class="size-10 text-muted-foreground/40" />{/snippet}
+				{#snippet action()}
+					<Button
+						variant="outline"
+						size="sm"
+						class="gap-1.5"
+						onclick={openEnrollWorker}
+						data-testid="enroll-worker-button"
+					>
+						<UserPlus class="size-4" />
+						Enroll worker
+					</Button>
+				{/snippet}
 			</CapacitySection>
 
 			<!-- TOKENS — concurrency limits -->
@@ -244,3 +276,11 @@
 
 <!-- Enroll flow: global (group picker) or scoped to a presence group's path. -->
 <EnrollSheet bind:open={enrollOpen} group={enrollGroup} onenrolled={() => void poll()} />
+
+<!-- Worker enroll flow: global (workers-group picker) or scoped to a queue group's path. -->
+<EnrollSheet
+	bind:open={enrollWorkerOpen}
+	mode="worker"
+	group={enrollWorkerGroup}
+	onenrolled={() => void poll()}
+/>

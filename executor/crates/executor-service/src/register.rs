@@ -421,10 +421,15 @@ struct EnrolledWorker {
     #[allow(dead_code)]
     worker_token: String,
     workspace_id: String,
-    /// Routing group inherited from the registration token. This is the group
-    /// the worker COMPETES in (not a per-worker partition).
+    /// Human-readable routing group ALIAS (display only). The group the worker
+    /// COMPETES in; resolved server-side to `routing_partition` below.
     #[serde(default)]
     group: Option<String>,
+    /// The capacity-resource UUID this worker's grouped consumer binds to — the
+    /// JetStream/NATS partition token (`executor-<wire>-grp.<prio>.<routing_partition>.>`).
+    /// Workspace-safe by construction (two workspaces' "default" groups never
+    /// collide on a queue). This is what the daemon binds, NOT `group`.
+    routing_partition: String,
     /// Scoped NATS user JWT minted from the `nats_public_key` we sent. `None`
     /// when no key was sent OR mekhan's signing key is unavailable.
     #[serde(default)]
@@ -437,7 +442,11 @@ struct EnrolledWorker {
 #[derive(Debug, Serialize)]
 struct WorkerIdentityWire<'a> {
     worker_id: &'a str,
+    /// Display-only group alias.
     group: Option<&'a str>,
+    /// The capacity-resource UUID the grouped consumer binds as its partition
+    /// token. This — not `group` — is the dispatch routing key.
+    routing_partition: &'a str,
     workspace_id: &'a str,
 }
 
@@ -446,9 +455,15 @@ struct WorkerIdentityWire<'a> {
 /// `nats_creds`/`worker_id` without re-reading config.
 pub struct EnrolledWorkerLocal {
     pub worker_id: String,
-    /// The routing group inherited from the registration token (mekhan's
-    /// response). `None` is a valid (ungrouped) enrollment.
+    /// The display-only routing group alias inherited from the registration
+    /// token (mekhan's response). `None` when the token named no explicit group
+    /// (the implicit "default" group); the routing key is `routing_partition`.
     pub group: Option<String>,
+    /// The capacity-resource UUID this worker's grouped consumer binds as its
+    /// partition token (`executor-<wire>-grp.<prio>.<routing_partition>.>`). This
+    /// is the unified dispatch routing key — always present (mekhan resolves the
+    /// implicit "default" group to its UUID).
+    pub routing_partition: String,
     /// Absolute path to the assembled `.creds` file, when mekhan returned a JWT.
     pub creds_path: Option<PathBuf>,
 }
@@ -518,6 +533,7 @@ pub async fn enroll_worker(
     let identity = WorkerIdentityWire {
         worker_id: &enrolled.id,
         group: enrolled.group.as_deref(),
+        routing_partition: &enrolled.routing_partition,
         workspace_id: &enrolled.workspace_id,
     };
     let identity_path = worker_dir.join("identity.json");
@@ -547,6 +563,7 @@ pub async fn enroll_worker(
         worker_id = %enrolled.id,
         workspace_id = %enrolled.workspace_id,
         group = ?enrolled.group,
+        routing_partition = %enrolled.routing_partition,
         dir = %worker_dir.display(),
         nats_creds = creds_written,
         "worker enrolled"
@@ -555,6 +572,7 @@ pub async fn enroll_worker(
     Ok(EnrolledWorkerLocal {
         worker_id: enrolled.id,
         group: enrolled.group,
+        routing_partition: enrolled.routing_partition,
         creds_path: creds_written.then_some(creds_path),
     })
 }

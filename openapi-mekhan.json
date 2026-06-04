@@ -10354,20 +10354,21 @@
           },
           {
             "type": "object",
-            "description": "Anonymous worker queue: FLEET-GLOBAL worker count + backend coverage\n(workers carry no per-capacity binding, so this is shared telemetry).",
+            "description": "Per-group worker queue: `online` present workers of `enrolled` total in\nthis group, plus the union of their advertised backends.",
             "required": [
-              "workers",
-              "backends_covered",
-              "backends_total",
+              "online",
+              "enrolled",
+              "backends",
               "kind"
             ],
             "properties": {
-              "backends_covered": {
-                "type": "integer",
-                "format": "int32",
-                "minimum": 0
+              "backends": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
-              "backends_total": {
+              "enrolled": {
                 "type": "integer",
                 "format": "int32",
                 "minimum": 0
@@ -10378,7 +10379,7 @@
                   "queue"
                 ]
               },
-              "workers": {
+              "online": {
                 "type": "integer",
                 "format": "int32",
                 "minimum": 0
@@ -12549,14 +12550,16 @@
         "required": [
           "id",
           "worker_token",
-          "workspace_id"
+          "workspace_id",
+          "routing_partition"
         ],
         "properties": {
           "group": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Human group alias, inherited from the registration token. Display only —\n`None` is rendered as the implicit `default` group."
           },
           "id": {
             "type": "string",
@@ -12568,6 +12571,11 @@
               "null"
             ],
             "description": "A freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the worker sent at enrollment. `null` when no public key\nwas supplied OR signing was unavailable; the worker can fetch it later via\n`POST /api/v1/workers/{id}/nats-creds`."
+          },
+          "routing_partition": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The ROUTING PARTITION the executor binds its grouped consumer to: the\nworker group's `capacity`-resource UUID (the alias resolved, or the\nworkspace's seeded `default` group when the token names none). This — NOT\n`group` — is the token the executor partitions on\n(`executor-<wire>-grp.<prio>.<routing_partition>.>`)."
           },
           "worker_token": {
             "type": "string"
@@ -12825,7 +12833,9 @@
           "file",
           "signature",
           "timestamp",
-          "json"
+          "json",
+          "object",
+          "array"
         ]
       },
       "FieldMapping": {

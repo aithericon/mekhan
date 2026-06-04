@@ -47,6 +47,7 @@ pub mod analyze;
 pub mod annotate;
 pub mod port;
 pub mod refs;
+pub mod schema_parse;
 pub mod surface;
 pub mod types;
 
@@ -57,5 +58,6 @@ pub use analyze::*;
 pub use annotate::*;
 pub use port::*;
 pub(crate) use refs::*;
+pub use schema_parse::json_schema_to_token_shape;
 pub use surface::*;
 pub use types::*;

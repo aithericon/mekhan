@@ -826,6 +826,20 @@ pub enum CompileError {
          (allowed: non-empty [A-Za-z0-9_-])"
     )]
     GroupTokenInvalid { node_id: String, group: String },
+
+    /// An `Executor` step's `group` (the named partition) — or the implicit
+    /// "default" worker group a group-less step is stamped with — does not
+    /// resolve to a backed `capacity` worker resource in the workspace. In the
+    /// unified single-stream model EVERY executor job routes through a group
+    /// partition (its capacity-resource UUID), so an unresolvable group has no
+    /// queue to land on. The "default" group is always seeded, so this should
+    /// only fire for a misnamed explicit group.
+    #[error(
+        "automated step '{node_id}': worker group '{group}' does not resolve to a \
+         worker `capacity` resource in this workspace — create the group (a `capacity` \
+         resource with the `worker` preset) first"
+    )]
+    WorkerGroupUnresolved { node_id: String, group: String },
 }
 
 impl CompileError {
@@ -906,6 +920,7 @@ impl CompileError {
             Self::LoopAccumulatorExprUnparseable { .. } => "loop_accumulator_expr_unparseable",
             Self::CapacityGroupConflict { .. } => "capacity_group_conflict",
             Self::GroupTokenInvalid { .. } => "group_token_invalid",
+            Self::WorkerGroupUnresolved { .. } => "worker_group_unresolved",
         }
     }
 
@@ -978,6 +993,7 @@ impl CompileError {
             | Self::LoopAccumulatorExprUnparseable { node_id, .. }
             | Self::CapacityGroupConflict { node_id }
             | Self::GroupTokenInvalid { node_id, .. }
+            | Self::WorkerGroupUnresolved { node_id, .. }
             | Self::WorkspaceResourceUnknown { node_id, .. }
             | Self::AssetBindingUnknown { node_id, .. }
             | Self::AssetBindingAmbiguous { node_id, .. }

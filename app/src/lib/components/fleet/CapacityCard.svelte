@@ -3,8 +3,8 @@
 	// from `capacity.live.kind`:
 	//   tokens    → "N seeded · M in use"
 	//   presence  → StatusDot + "X/Y online" + advertised backends
-	//   queue     → "W workers · C/T backends"
-	//   scheduler → watcher-state dot + "L active leases · success%"
+	//   queue     → StatusDot + "X/Y online" + advertised backends
+	//   scheduler → labelled stat grid (flavor / watcher / leases / success%)
 	// Card actions are placeholders this phase (Phase 3 wires them): presence
 	// cards link to /fleet/{id} + offer "Enroll here"; scheduler cards link to
 	// /clusters/{id} + offer reconnect/drain; all cards expose an edit/delete
@@ -41,9 +41,10 @@
 
 	const live = $derived(capacity.live);
 
-	// Liveness tone for the leading dot — only presence/scheduler carry one.
+	// Liveness tone for the leading dot — presence/queue/scheduler carry one.
 	const tone = $derived.by<'live' | 'idle' | 'warn'>(() => {
 		if (live.kind === 'presence') return live.online > 0 ? 'live' : 'idle';
+		if (live.kind === 'queue') return live.online > 0 ? 'live' : 'idle';
 		if (live.kind === 'scheduler') {
 			if (live.draining) return 'warn';
 			return live.watcher_state === 'connected' ? 'live' : 'idle';
@@ -51,7 +52,9 @@
 		return 'idle';
 	});
 
-	const showDot = $derived(live.kind === 'presence' || live.kind === 'scheduler');
+	const showDot = $derived(
+		live.kind === 'presence' || live.kind === 'queue' || live.kind === 'scheduler'
+	);
 
 	function pct(rate: number | null | undefined): string {
 		if (rate == null) return '—';
@@ -62,6 +65,7 @@
 	// board scoped to this group; scheduler → the cluster's lease view.
 	const detailHref = $derived.by<string | null>(() => {
 		if (capacity.backend === 'presence') return `/fleet/${capacity.id}`;
+		if (capacity.backend === 'queue') return `/fleet/${capacity.id}`;
 		if (capacity.backend === 'scheduler') return `/clusters/${capacity.id}`;
 		return null;
 	});
@@ -98,19 +102,46 @@
 				{/if}
 			</div>
 		{:else if live.kind === 'queue'}
-			<span class="text-foreground tabular-nums">{live.workers}</span> workers ·
-			<span class="text-foreground tabular-nums">{live.backends_covered}</span>/<span
-				class="tabular-nums">{live.backends_total}</span
-			> backends
-		{:else if live.kind === 'scheduler'}
-			<div class="flex flex-col gap-1">
+			<div class="flex flex-col gap-2">
 				<span>
-					<span class="text-foreground tabular-nums">{live.active_leases}</span> active leases ·
-					<span class="text-foreground tabular-nums">{pct(live.success_rate)}</span> success
+					<span class="text-foreground tabular-nums">{live.online}</span>/<span class="tabular-nums"
+						>{live.enrolled}</span
+					> online
 				</span>
-				<span class="text-sm">
-					{live.flavor} · {live.draining ? 'draining' : live.watcher_state}
-				</span>
+				{#if live.backends.length > 0}
+					<BackendChips backends={live.backends} />
+				{/if}
+			</div>
+		{:else if live.kind === 'scheduler'}
+			<div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm" data-testid="capacity-scheduler-stats">
+				<div class="flex flex-col">
+					<span class="text-xs text-muted-foreground">Flavor</span>
+					<span class="truncate text-foreground tabular-nums">{live.flavor}</span>
+				</div>
+				<div class="flex flex-col">
+					<span class="text-xs text-muted-foreground">Watcher</span>
+					<span class="flex items-center gap-1.5 text-foreground">
+						<StatusDot {tone} />
+						<span class="truncate tabular-nums">{live.watcher_state}</span>
+					</span>
+				</div>
+				<div class="flex flex-col">
+					<span class="text-xs text-muted-foreground">Active leases</span>
+					<span class="text-foreground tabular-nums">{live.active_leases}</span>
+				</div>
+				<div class="flex flex-col">
+					<span class="text-xs text-muted-foreground">Success</span>
+					<span class="text-foreground tabular-nums">{pct(live.success_rate)}</span>
+				</div>
+				{#if live.draining}
+					<div class="col-span-2">
+						<span
+							class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-200"
+						>
+							Draining
+						</span>
+					</div>
+				{/if}
 			</div>
 		{:else}
 			<span>No live data</span>
@@ -119,7 +150,7 @@
 
 	<!-- Actions -->
 	<div class="flex items-center gap-1 border-t border-border pt-2">
-		{#if capacity.backend === 'presence'}
+		{#if capacity.backend === 'presence' || capacity.backend === 'queue'}
 			<Button
 				variant="ghost"
 				size="sm"

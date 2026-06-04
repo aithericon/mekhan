@@ -604,37 +604,44 @@ pub fn analyze(
     let mut node_in: BTreeMap<String, TokenShape> = BTreeMap::new();
     let mut node_out: BTreeMap<String, TokenShape> = BTreeMap::new();
 
-    for ni in &order {
-        let node = *wg.dag.node_weight(*ni).unwrap();
+    // Make the workflow's `definitions` available to `port_to_shape`'s
+    // schema-override arm for the whole derivation pass, so `$ref`s inside a
+    // `port.schema` override resolve into the structural shadow. See
+    // [`super::port::with_definitions`] for why this is a thread-local bracket
+    // rather than an extra hook argument.
+    crate::compiler::token_shape::port::with_definitions(&graph.definitions, || {
+        for ni in &order {
+            let node = *wg.dag.node_weight(*ni).unwrap();
 
-        // Inbound = shallow-merge of every DAG predecessor's outbound shape.
-        // (Join's strategy can be DeepMerge; honour it.)
-        let deep = matches!(
-            &node.data,
-            WorkflowNodeData::Join {
-                mode: JoinMode::All,
-                merge_strategy: Some(MergeStrategy::DeepMerge),
-                ..
+            // Inbound = shallow-merge of every DAG predecessor's outbound shape.
+            // (Join's strategy can be DeepMerge; honour it.)
+            let deep = matches!(
+                &node.data,
+                WorkflowNodeData::Join {
+                    mode: JoinMode::All,
+                    merge_strategy: Some(MergeStrategy::DeepMerge),
+                    ..
+                }
+            );
+            let mut inbound = TokenShape::object();
+            let mut had_pred = false;
+            for pred_ni in wg
+                .dag
+                .neighbors_directed(*ni, petgraph::Direction::Incoming)
+            {
+                let pred = *wg.dag.node_weight(pred_ni).unwrap();
+                if let Some(p_out) = node_out.get(&pred.id) {
+                    inbound.merge_from(p_out, deep);
+                    had_pred = true;
+                }
             }
-        );
-        let mut inbound = TokenShape::object();
-        let mut had_pred = false;
-        for pred_ni in wg
-            .dag
-            .neighbors_directed(*ni, petgraph::Direction::Incoming)
-        {
-            let pred = *wg.dag.node_weight(pred_ni).unwrap();
-            if let Some(p_out) = node_out.get(&pred.id) {
-                inbound.merge_from(p_out, deep);
-                had_pred = true;
-            }
+            let inbound = if had_pred { inbound } else { TokenShape::Any };
+
+            let outbound = out_shape(node, &inbound);
+            node_in.insert(node.id.clone(), inbound);
+            node_out.insert(node.id.clone(), outbound);
         }
-        let inbound = if had_pred { inbound } else { TokenShape::Any };
-
-        let outbound = out_shape(node, &inbound);
-        node_in.insert(node.id.clone(), inbound);
-        node_out.insert(node.id.clone(), outbound);
-    }
+    });
 
     // Place-schema mapping. Input places (pre-merge; only survivors get
     // annotated) carry the inbound shape; output places (merge-robust) carry
@@ -1020,11 +1027,12 @@ pub fn collect_scope_tree(shape: &TokenShape, prov_anchor: Option<&ScalarTy>) ->
         },
         TokenShape::Any => TyDescriptor::Any,
         TokenShape::Opaque(n) => TyDescriptor::Opaque { name: n.clone() },
-        // A rich-schema leaf is opaque to the picker (it can't render an
-        // arbitrary JSON Schema as drill-down rows); surface it as Opaque.
-        TokenShape::Schema(_) => TyDescriptor::Opaque {
-            name: "Schema".to_string(),
-        },
+        // A schema-backed leaf is drillable via its structural shadow: recurse
+        // into it so the picker renders the real nested shape. Only genuinely
+        // unparseable schemas (mapped to `TokenShape::Any`/`Opaque` by
+        // `json_schema_to_token_shape`) surface as any/opaque. The shadow's
+        // own provenance has no anchor, so we keep this leaf's `prov_anchor`.
+        TokenShape::Schema { structural, .. } => collect_scope_tree(structural, prov_anchor),
     }
 }
 

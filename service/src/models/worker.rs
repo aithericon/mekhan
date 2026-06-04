@@ -43,6 +43,13 @@ pub struct WorkerRow {
     pub name: String,
     #[sqlx(rename = "worker_group")]
     pub group: Option<String>,
+    /// The worker's routing PARTITION — the `capacity`-resource UUID of the
+    /// worker group it competes in (the step's group, resolved alias→UUID, or the
+    /// workspace's seeded `default` group). This is the token the executor binds
+    /// its grouped consumer to (`executor-<wire>-grp.<prio>.<routing_partition>.>`);
+    /// `group` above is the human alias kept for display. Workspace-safe by
+    /// construction (UUID), unlike the alias.
+    pub routing_partition: Uuid,
     /// SHA-256 (hex) of the secret half of `wkr_{id}.{secret}`. Never leaves the
     /// server — DTOs deliberately omit it.
     pub token_hash: String,
@@ -172,8 +179,16 @@ pub struct EnrolledWorker {
     pub id: Uuid,
     pub worker_token: String,
     pub workspace_id: Uuid,
+    /// Human group alias, inherited from the registration token. Display only —
+    /// `None` is rendered as the implicit `default` group.
     #[serde(rename = "group")]
     pub group: Option<String>,
+    /// The ROUTING PARTITION the executor binds its grouped consumer to: the
+    /// worker group's `capacity`-resource UUID (the alias resolved, or the
+    /// workspace's seeded `default` group when the token names none). This — NOT
+    /// `group` — is the token the executor partitions on
+    /// (`executor-<wire>-grp.<prio>.<routing_partition>.>`).
+    pub routing_partition: Uuid,
     /// A freshly-signed scoped NATS *user* JWT, minted from the
     /// `nats_public_key` the worker sent at enrollment. `null` when no public key
     /// was supplied OR signing was unavailable; the worker can fetch it later via
