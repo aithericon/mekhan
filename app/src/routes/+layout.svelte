@@ -35,11 +35,11 @@
 	}
 </script>
 
-<ModeWatcher />
+<ModeWatcher defaultMode="dark" />
 <TooltipProvider>
 <div class="flex h-screen flex-col">
 	<header class="flex h-12 shrink-0 items-center border-b border-border bg-card px-4" data-testid="app-header">
-		<a href="/" class="text-sm font-semibold tracking-tight text-foreground" data-testid="nav-home">Mekhan</a>
+		<a href="/" class="text-sm font-semibold uppercase tracking-[0.18em] text-foreground" data-testid="nav-home">Mekhan</a>
 		<nav class="ml-8 flex flex-1 items-center gap-1 text-sm" data-testid="nav-bar">
 			<Button variant="ghost" size="sm" href="/templates" data-testid="nav-templates">Templates</Button>
 			<Button variant="ghost" size="sm" href="/projects" data-testid="nav-projects">Projects</Button>

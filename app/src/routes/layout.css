@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
 
 @import 'tailwindcss';
 @import 'tw-animate-css';
@@ -6,27 +6,27 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-	--radius: 1rem;
-	--background: oklch(0.962 0.010 255);
-	--foreground: oklch(0.22 0.035 250);
-	--card: oklch(1 0 0);
-	--card-foreground: oklch(0.22 0.035 250);
-	--popover: oklch(1 0 0);
-	--popover-foreground: oklch(0.22 0.035 250);
-	--primary: oklch(0.45 0.13 248);
-	--primary-foreground: oklch(0.985 0.006 250);
-	--secondary: oklch(0.91 0.015 255);
-	--secondary-foreground: oklch(0.34 0.028 250);
-	--muted: oklch(0.93 0.012 255);
-	--muted-foreground: oklch(0.48 0.018 250);
-	--accent: oklch(0.90 0.025 250);
-	--accent-foreground: oklch(0.22 0.035 250);
-	--destructive: oklch(0.58 0.22 28);
-	--success: oklch(0.55 0.13 150);
+	--radius: 0.25rem;
+	--background: oklch(0.958 0.003 270);
+	--foreground: oklch(0.22 0.006 270);
+	--card: oklch(0.992 0.002 270);
+	--card-foreground: oklch(0.22 0.006 270);
+	--popover: oklch(0.992 0.002 270);
+	--popover-foreground: oklch(0.22 0.006 270);
+	--primary: oklch(0.50 0.075 264);
+	--primary-foreground: oklch(0.985 0.004 270);
+	--secondary: oklch(0.91 0.004 270);
+	--secondary-foreground: oklch(0.30 0.006 270);
+	--muted: oklch(0.93 0.003 270);
+	--muted-foreground: oklch(0.46 0.006 270);
+	--accent: oklch(0.90 0.010 264);
+	--accent-foreground: oklch(0.22 0.006 270);
+	--destructive: oklch(0.55 0.18 28);
+	--success: oklch(0.52 0.10 150);
 	--success-foreground: oklch(0.985 0.01 145);
-	--warning: oklch(0.72 0.16 70);
+	--warning: oklch(0.70 0.13 75);
 	--warning-foreground: oklch(0.22 0.04 75);
-	--info: oklch(0.55 0.13 220);
+	--info: oklch(0.50 0.075 264);
 	--info-foreground: oklch(0.985 0.01 240);
 	--node-start: oklch(0.68 0.16 145);
 	--node-end: oklch(0.62 0.19 25);
@@ -45,46 +45,46 @@
 	--node-timeout: oklch(0.64 0.14 215);
 	--node-sub-workflow: oklch(0.70 0.13 185);
 	--node-agent: oklch(0.66 0.15 50);
-	--border: oklch(0.83 0.014 250);
-	--input: oklch(0.985 0.006 255);
-	--ring: oklch(0.55 0.13 248);
-	--sidebar: oklch(0.99 0.005 255);
-	--sidebar-foreground: oklch(0.22 0.035 250);
-	--sidebar-border: oklch(0.83 0.014 250);
-	--heading: oklch(0.16 0.04 250);
-	--paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.05 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+	--border: oklch(0.86 0.004 270);
+	--input: oklch(0.992 0.002 270);
+	--ring: oklch(0.50 0.075 264);
+	--sidebar: oklch(0.975 0.002 270);
+	--sidebar-foreground: oklch(0.22 0.006 270);
+	--sidebar-border: oklch(0.86 0.004 270);
+	--heading: oklch(0.16 0.008 270);
+	--paper-grain: none;
 }
 
 .dark {
-	--background: oklch(0.165 0.020 255);
-	--foreground: oklch(0.94 0.012 255);
-	--card: oklch(0.215 0.022 255);
-	--card-foreground: oklch(0.94 0.012 255);
-	--popover: oklch(0.215 0.022 255);
-	--popover-foreground: oklch(0.94 0.012 255);
-	--primary: oklch(0.72 0.14 248);
-	--primary-foreground: oklch(0.16 0.030 250);
-	--secondary: oklch(0.28 0.020 255);
-	--secondary-foreground: oklch(0.86 0.015 250);
-	--muted: oklch(0.245 0.018 255);
-	--muted-foreground: oklch(0.68 0.020 250);
-	--accent: oklch(0.30 0.030 250);
-	--accent-foreground: oklch(0.94 0.012 255);
-	--destructive: oklch(0.68 0.20 28);
-	--success: oklch(0.68 0.14 150);
+	--background: oklch(0.152 0.004 270);
+	--foreground: oklch(0.925 0.004 270);
+	--card: oklch(0.205 0.005 270);
+	--card-foreground: oklch(0.925 0.004 270);
+	--popover: oklch(0.205 0.005 270);
+	--popover-foreground: oklch(0.925 0.004 270);
+	--primary: oklch(0.635 0.072 264);
+	--primary-foreground: oklch(0.165 0.012 265);
+	--secondary: oklch(0.262 0.005 270);
+	--secondary-foreground: oklch(0.88 0.004 270);
+	--muted: oklch(0.225 0.005 270);
+	--muted-foreground: oklch(0.625 0.006 270);
+	--accent: oklch(0.298 0.008 264);
+	--accent-foreground: oklch(0.925 0.004 270);
+	--destructive: oklch(0.62 0.18 28);
+	--success: oklch(0.66 0.11 150);
 	--success-foreground: oklch(0.16 0.04 145);
-	--warning: oklch(0.80 0.16 70);
+	--warning: oklch(0.78 0.13 70);
 	--warning-foreground: oklch(0.18 0.04 75);
-	--info: oklch(0.70 0.13 220);
+	--info: oklch(0.635 0.072 264);
 	--info-foreground: oklch(0.16 0.04 240);
-	--border: oklch(0.32 0.020 255);
-	--input: oklch(0.235 0.022 255);
-	--ring: oklch(0.72 0.14 248);
-	--sidebar: oklch(0.19 0.020 255);
-	--sidebar-foreground: oklch(0.94 0.012 255);
-	--sidebar-border: oklch(0.32 0.020 255);
-	--heading: oklch(0.985 0.012 255);
-	--paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.035 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+	--border: oklch(0.298 0.006 270);
+	--input: oklch(0.225 0.005 270);
+	--ring: oklch(0.635 0.072 264);
+	--sidebar: oklch(0.175 0.004 270);
+	--sidebar-foreground: oklch(0.925 0.004 270);
+	--sidebar-border: oklch(0.298 0.006 270);
+	--heading: oklch(0.965 0.004 270);
+	--paper-grain: none;
 	--shadow-2xs: 0 1px 1px 0 oklch(0 0 0 / 0.30);
 	--shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.35);
 	--shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.40), 0 1px 2px -1px oklch(0 0 0 / 0.30);
@@ -94,10 +94,10 @@
 }
 
 @theme inline {
-	--radius-sm: calc(var(--radius) - 6px);
-	--radius-md: calc(var(--radius) - 3px);
+	--radius-sm: calc(var(--radius) - 2px);
+	--radius-md: calc(var(--radius) - 1px);
 	--radius-lg: var(--radius);
-	--radius-xl: calc(var(--radius) + 6px);
+	--radius-xl: calc(var(--radius) + 4px);
 	--color-background: var(--background);
 	--color-foreground: var(--foreground);
 	--color-card: var(--card);
@@ -157,7 +157,8 @@
 
 	body {
 		@apply bg-background text-foreground antialiased;
-		font-family: 'Space Grotesk', 'General Sans', 'Helvetica Neue', sans-serif;
+		font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+		font-feature-settings: 'liga' 0, 'calt' 0;
 		min-height: 100vh;
 		background-image: var(--paper-grain);
 		background-attachment: fixed;
@@ -168,8 +169,10 @@
 	h2,
 	h3,
 	h4 {
-		font-family: 'Fraunces', 'Iowan Old Style', serif;
-		letter-spacing: -0.012em;
+		font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 		color: var(--heading);
 	}
 
@@ -212,13 +215,13 @@
 }
 
 :root .svelte-flow {
-	--xy-background-pattern-dots-color-default: oklch(0.80 0.012 250);
+	--xy-background-pattern-dots-color-default: oklch(0.83 0.004 270);
 	--xy-background-pattern-lines-color-default: var(--border);
 	--xy-background-pattern-cross-color-default: var(--border);
 }
 
 :root .svelte-flow.dark {
-	--xy-background-pattern-dots-color-default: oklch(0.36 0.018 250);
+	--xy-background-pattern-dots-color-default: oklch(0.32 0.005 270);
 }
 
 @layer utilities {
