@@ -38,13 +38,18 @@
 //! - **services**: `/rosapi/service_request_details` + `service_response_details`
 //!   (each `{ type }`), concatenated and deduped by `type`. The request/response
 //!   root types are `<type>_Request` / `<type>_Response`.
-//! - **actions**: `/rosapi/message_details` for each of `<type>_Goal`,
-//!   `<type>_Result`, `<type>_Feedback`, merged and deduped by `type`. NOTE: the
-//!   Jazzy `rosapi` does not resolve generated action sub-messages via
-//!   `message_details` (they return an empty `typedefs`), so action entries get
-//!   no `typedefs` and the mekhan deriver falls back to its bundled snapshots for
-//!   action result ports. Topics + services derive live. Sub-type lookups that
-//!   error are skipped.
+//! - **actions**: the dedicated `/rosapi/action_goal_details`,
+//!   `/rosapi/action_result_details`, `/rosapi/action_feedback_details` services
+//!   (each `{ type }`, the FULL action type `pkg/action/Foo`), merged and deduped
+//!   by `type`. These are the ONLY working action path: `message_details` CANNOT
+//!   resolve the rosidl-generated `Foo_Goal` / `Foo_Result` / `Foo_Feedback`
+//!   sub-message names — the generated `pkg/action/__init__.py` exports only the
+//!   action class `Foo` (the sub-types live as nested aliases `Foo.Goal`, …), so
+//!   rosapi's `getattr(pkg.action, "Foo_Goal")` raises and it returns an empty
+//!   array. The `action_*_details` services side-step this by loading
+//!   `get_action_class(Foo).Goal()/.Result()/.Feedback()` directly. Topics,
+//!   services AND actions all derive live now. Detail lookups that error are
+//!   skipped.
 //!
 //! `typedefs` is **best-effort**: any detail lookup that errors is omitted (the
 //! field is left absent) — it never drops the `{name, type}` entry nor crashes.
@@ -306,15 +311,31 @@ async fn service_typedefs(client: &RosbridgeClient, ty: &str) -> Option<Value> {
     merge_typedefs([req, resp])
 }
 
-/// Best-effort merged action goal + result + feedback message details, deduped
-/// by `type`. rosapi exposes action sub-message types under the suffixed names
-/// `<type>_Goal` / `<type>_Result` / `<type>_Feedback`; each is looked up via
-/// `/rosapi/message_details` and skipped if it errors. `None` if none resolve.
+/// Best-effort merged action goal + result + feedback typedefs, deduped by
+/// `type`. Uses the dedicated rosapi action-introspection services — each takes
+/// the FULL action type (`pkg/action/Foo`, exactly as `/rosapi/action_type`
+/// returns it) and returns the recursive `typedefs` flat array for that
+/// sub-message.
+///
+/// This is the ONLY working path for actions on ROS 2: `/rosapi/message_details`
+/// cannot resolve the generated `Foo_Goal` / `Foo_Result` / `Foo_Feedback`
+/// sub-message names (see the module doc) — it returns an empty array. The
+/// `action_*_details` services load `get_action_class(Foo).Goal()/.Result()/`
+/// `.Feedback()` directly, side-stepping that. `None` if none resolve.
 async fn action_typedefs(client: &RosbridgeClient, ty: &str) -> Option<Value> {
-    let goal = message_typedefs(client, &format!("{ty}_Goal")).await;
-    let result = message_typedefs(client, &format!("{ty}_Result")).await;
-    let feedback = message_typedefs(client, &format!("{ty}_Feedback")).await;
+    let goal = action_detail(client, "/rosapi/action_goal_details", ty).await;
+    let result = action_detail(client, "/rosapi/action_result_details", ty).await;
+    let feedback = action_detail(client, "/rosapi/action_feedback_details", ty).await;
     merge_typedefs([goal, result, feedback])
+}
+
+/// Best-effort single action-detail lookup: call `service` (one of the
+/// `/rosapi/action_{goal,result,feedback}_details` services) with the full
+/// action `type` and pull the non-empty, slimmed `typedefs` array out of the
+/// response. `None` on any error or a missing/empty array.
+async fn action_detail(client: &RosbridgeClient, service: &str, ty: &str) -> Option<Value> {
+    let resp = call(client, service, &json!({ "type": ty })).await.ok()?;
+    nonempty_typedefs(&resp)
 }
 
 /// Pull a non-empty `typedefs` array out of a rosapi response, projecting each

@@ -17,6 +17,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-websockify \
     && rm -rf /var/lib/apt/lists/*
 
+# rosapi 2.6.0 (the version apt ships for Jazzy at this image's build) has a
+# broken `/rosapi/action_type`: its `proxy.get_action_type` imports
+# `get_action_names_and_types` from `ros2action.api`, which calls
+# `node.get_action_names_and_types()` — a method Jazzy's `rclpy.node.Node` no
+# longer provides (it moved to the free function
+# `rclpy.action.get_action_names_and_types(node)`). The resulting AttributeError
+# is uncaught and takes down the WHOLE rosapi node, killing all interface
+# introspection right when the runner's catalog publish reaches actions. Repoint
+# the import at the working free function (same signature, `node=` kwarg). This
+# unblocks live action typedef introspection (`/rosapi/action_{goal,result,
+# feedback}_details`). Harmless no-op if a future base image already ships a
+# rosapi that imports it correctly (the `^from ros2action.api import …` line
+# simply won't match).
+RUN sed -i \
+        's/^from ros2action.api import get_action_names_and_types/from rclpy.action import get_action_names_and_types/' \
+        /opt/ros/jazzy/lib/python3.12/site-packages/rosapi/proxy.py
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
