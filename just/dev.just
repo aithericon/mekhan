@@ -767,6 +767,9 @@ ros-up:
     # block; we derive +40 from the service port so it lands in this worktree's
     # block without a dev-ports.sh edit (slot 0 → 13140, slot N → base+40).
     bridge_port=$(( {{service_port}} + 40 ))
+    # noVNC web viewer host port (+41) — open http://localhost:$vnc_port/vnc.html
+    # to WATCH the turtle move while a ros-backed demo runs.
+    vnc_port=$(( {{service_port}} + 41 ))
     # Namespace the container with the compose project (defaults to mekhan-s0
     # for the legacy/main checkout where COMPOSE_PROJECT_NAME is unset).
     proj="${COMPOSE_PROJECT_NAME:-mekhan-s0}"
@@ -778,10 +781,12 @@ ros-up:
       docker build -t aithericon-turtlesim:jazzy deploy/dev/ros
     fi
 
-    # 2) (Re)start the turtle container on the slot-aware host port.
+    # 2) (Re)start the turtle container on the slot-aware host ports (rosbridge
+    #    WS + the noVNC web viewer).
     docker rm -f "$cname" >/dev/null 2>&1 || true
     echo "▶ starting turtlesim+rosbridge ($cname) → ws://localhost:$bridge_port"
-    docker run -d --name "$cname" -p "$bridge_port:9090" aithericon-turtlesim:jazzy >/dev/null
+    echo "  👁  watch the turtle: http://localhost:$vnc_port/vnc.html"
+    docker run -d --name "$cname" -p "$bridge_port:9090" -p "$vnc_port:6080" aithericon-turtlesim:jazzy >/dev/null
 
     # 3) Wait for mekhan + the `ros` capability-type seed (same pattern as
     #    up-runner waits for `xrd`). Soft-skip if it never appears.
