@@ -96,6 +96,7 @@ pub fn ipc_client_job(
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }

@@ -22,8 +22,15 @@
       "data": {
         "type": "automated_step",
         "label": "Producer",
-        "description": "Emits one distinct-named chunk per word on its streaming side-channel (set_output per call, mid-execution).",
-        "streamOutput": true,
+        "description": "Opens a Data/Out channel 'words' and writes one element per word over the out-of-band transport (open/close bracket only in the net marking).",
+        "channels": [
+          {
+            "name": "words",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "any" }
+          }
+        ],
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -50,8 +57,15 @@
       "data": {
         "type": "automated_step",
         "label": "Reducer",
-        "description": "streamInput reducer: a long-lived Python process seeded at net entry that receives the producer's chunks via aithericon.chunks() over IPC, uppercases and concatenates them, then emits the final transcript. No container — this single step owns its reduction.",
-        "streamInput": true,
+        "description": "The reducer IS the Python body: it declares a Data/In channel 'words', drains the producer's stream in-process via aithericon.stream('words'), uppercases + concatenates each element, and emits the final transcript. No container, no net gather barrier — this single step owns the reduction.",
+        "channels": [
+          {
+            "name": "words",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "any" }
+          }
+        ],
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -88,8 +102,7 @@
   ],
   "edges": [
     { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "reducer", "targetHandle": "stream", "type": "sequence" },
-    { "id": "e_producer_control", "source": "producer", "target": "reducer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_producer_words_reducer", "source": "producer", "sourceHandle": "words", "target": "reducer", "targetHandle": "words", "type": "sequence" },
     { "id": "e_reducer_end", "source": "reducer", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

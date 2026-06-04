@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f17",
-  "name": "17 \u00b7 Stream Map",
-  "description": "Parallel streaming-source Map. A streaming producer (streamOutput=true) emits 4 word chunks (the/quick/brown/fox); a Map in stream-source mode runs a per-chunk Python body that uppercases each chunk CONCURRENTLY (one ephemeral job per chunk), gathers the results in stream order (sized on stream_count), and a trailing joiner concatenates the gathered collection into 'THE QUICK BROWN FOX'. Wire producer.stream \u2192 map.stream and producer.out \u2192 map.control.",
+  "name": "17 · Stream Map",
+  "description": "Scatter fan-out over a streaming Control channel (docs/25). A producer AutomatedStep declares a Control/Out channel 'items' (contract=Scatter, max_fanout=8) and scatters 4 words (the/quick/brown/fox), one control emission per word. The channel's gather barrier re-orders the fan-out by emit index into a single `{ output: [...] }` collection, wired (sourceHandle 'items') straight into a joiner that uppercases and concatenates the words in stream order into 'THE QUICK BROWN FOX'.",
   "visibility": "public"
 }

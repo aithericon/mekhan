@@ -117,27 +117,18 @@
 	style="background:#ef4444;border-color:#b91c1c;"
 	title="On error (retries exhausted)"
 />
-{#if data.streamOutput}
-	<!-- Streaming side-channel: emits one token per runner log event. Offset
-	     below the "out" handle on the right edge so it doesn't overlap it.
-	     Wire this to a downstream node to fire it once per log token. -->
-	<Handle
-		id="stream"
-		type="source"
-		position={Position.Right}
-		style="top:75%;background:#a855f7;border-color:#7e22ce;"
-		title="Stream output (log_output tokens)"
-	/>
-{/if}
-{#if data.streamInput}
-	<!-- Streaming reducer input: receives the upstream producer's chunks over
-	     IPC. Offset below the "in" handle on the left edge. Wire the producer's
-	     stream handle here (and its control out to this node's "in"). -->
-	<Handle
-		id="stream"
-		type="target"
-		position={Position.Left}
-		style="top:72%;background:#06b6d4;border-color:#0891b2;"
-		title="Stream input — chunks from a streamOutput producer (aithericon.chunks())"
-	/>
-{/if}
+{#each data.channels ?? [] as channel (channel.name)}
+	<!-- Streaming Channel handle (docs/25): each control-output channel exposes
+	     a per-name port the job emits into at runtime (`emit`/`scatter`).
+	     Downstream edges wire to it by `sourceHandle == channel.name`. Stacked
+	     down the right edge, offset below the "out" handle. -->
+	{#if channel.direction === 'out' && channel.plane === 'control'}
+		<Handle
+			id={channel.name}
+			type="source"
+			position={Position.Right}
+			style="top:75%;background:#a855f7;border-color:#7e22ce;"
+			title="Channel out — {channel.name}"
+		/>
+	{/if}
+{/each}

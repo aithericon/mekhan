@@ -65,6 +65,15 @@ struct ResolvedRosConfig {
     /// `fields` with every `{{slug.field}}` string leaf rendered.
     fields: Value,
     timeout_ms: u64,
+    /// The name of the node's Control/Scatter `out` channel (docs/25), if it
+    /// declares one. `send_action_goal` streams each DISTINCT action feedback
+    /// as a `scatter_item` control token into this channel, then a
+    /// `scatter_close` stamping the count — so a downstream consumer drains the
+    /// gathered feedback collection off-band of the net's firing rate. `None`
+    /// (no channel declared) ⇒ feedback is not streamed (back to a plain
+    /// fire-the-goal-and-await-result action).
+    #[serde(default)]
+    feedback_channel: Option<String>,
 }
 
 /// `ExecutionBackend` implementation for ROS interactions.
@@ -97,7 +106,7 @@ impl ExecutionBackend for RosBackend {
 
     async fn prepare(
         &self,
-        _job: &ExecutionJob,
+        job: &ExecutionJob,
         mut run_context: RunContext,
     ) -> Result<RunContext, ExecutorError> {
         // Prefer the secret-resolved overlay parked in `resolved_config`; fall
@@ -119,12 +128,25 @@ impl ExecutionBackend for RosBackend {
         let job_timeout_ms = u64::try_from(run_context.timeout.as_millis()).unwrap_or(u64::MAX);
         let timeout_ms = config.timeout_ms.min(job_timeout_ms).max(1);
 
+        // A `send_action_goal` node may declare a Control/Scatter `out` channel
+        // (docs/25) to stream its action feedback. The channel manifest carries
+        // no `direction` (the runner only needs name/plane/contract to validate
+        // emits), and an action node declares exactly one such channel, so the
+        // first control/scatter entry is unambiguous. `None` ⇒ no feedback
+        // streaming.
+        let feedback_channel = job
+            .channels
+            .iter()
+            .find(|c| c.plane == "control" && c.contract.as_deref() == Some("scatter"))
+            .map(|c| c.name.clone());
+
         let resolved = ResolvedRosConfig {
             operation: config.operation,
             interface_name: config.interface_name,
             interface_type: config.interface_type,
             fields,
             timeout_ms,
+            feedback_channel,
         };
         debug!(
             interface = %resolved.interface_name,
@@ -166,8 +188,8 @@ impl ExecutionBackend for RosBackend {
 
         // SendActionGoal is long-running + streaming: it owns its own cancel
         // handling (`cancel_action_goal` safe-stop) and uses `event_stream` to
-        // emit each distinct feedback as a streamed OutputSet, so it is NOT run
-        // through the `run_operation` select below.
+        // emit each distinct feedback as a `scatter_item` control token (docs/25),
+        // so it is NOT run through the `run_operation` select below.
         if resolved.operation == RosOperation::SendActionGoal {
             return match self
                 .run_action_goal(&resolved, event_stream, &cancel, timeout)
@@ -262,21 +284,21 @@ impl RosBackend {
     }
 
     /// Run a `send_action_goal` op: dispatch the goal, stream each DISTINCT
-    /// feedback as an `OutputSet { feedback_<i>, { remaining: .. } }` through
-    /// `event_stream` (so it lands on the node's `p_{id}_stream` Signal place
-    /// and flows to a downstream `StreamFold`), await the terminal result, and
-    /// return the per-feedback outputs map + the action `delta`.
+    /// feedback as a `scatter_item` control token (docs/25) into the node's
+    /// declared Control/Scatter `out` channel, stamp a `scatter_close` with the
+    /// total count when the goal resolves, await the terminal result, and
+    /// return the action `delta` + feedback count.
     ///
-    /// The returned `outputs` map contains EXACTLY the N dedup'd feedbacks
-    /// named `feedback_0..feedback_{N-1}`. This is deliberate: the executor
-    /// stamps `stream_count = outputs.len()` on the terminal Completed detail,
-    /// and re-emits one OutputSet per output name at job end — JetStream dedups
-    /// those terminal re-emits against the mid-execution emissions by msg_id
-    /// (`{exec}-output-{name}`), so the downstream `StreamFold(Array)` gather
-    /// barrier expects and receives exactly N feedback chunks. The terminal
-    /// `delta` (the RotateAbsolute result) is carried OUT of the outputs map —
-    /// putting it there would inflate `stream_count` to N+1 and leak a `delta`
-    /// token onto the stream place, corrupting the Array.
+    /// Replaces the retired `streamOutput`/`p_{id}_stream`/`StreamFold` path: no
+    /// per-feedback token enters the marking and no feedback rides the node's
+    /// `outputs` map. The engine's per-channel gather barrier (sized on the
+    /// `scatter_close` count, correlated on the scatter uid) re-orders the items
+    /// and parks the gathered feedback collection `{ output: [..] }` on the
+    /// channel's gathered place, which a downstream consumer drains. The
+    /// terminal `delta` (RotateAbsolute result) still rides `stdout_tail` only.
+    ///
+    /// When the node declares NO scatter channel (`feedback_channel == None`),
+    /// the goal still runs to completion but feedback is silently not streamed.
     async fn run_action_goal(
         &self,
         resolved: &ResolvedRosConfig,
@@ -304,7 +326,16 @@ impl RosBackend {
             .await
             .map_err(|e| ActionFail::Error(e.to_string()))?;
 
-        let mut outputs: HashMap<String, Value> = HashMap::new();
+        // Feedback streams as `scatter_item` tokens into the declared channel
+        // (docs/25) — NOT into the `outputs` map, which stays empty for an
+        // action goal. `feedback_channel == None` ⇒ no streaming. The scatter
+        // uid is deterministic (the channel name) so an apalis redelivery
+        // re-emits the SAME correlation id (JetStream dedups by msg_id) and
+        // never double-counts. There is one scatter per action goal, so a
+        // per-channel constant uid can't collide with a concurrent fan-out.
+        let feedback_channel = resolved.feedback_channel.clone();
+        let scatter_uid = feedback_channel.clone().unwrap_or_default();
+        let outputs: HashMap<String, Value> = HashMap::new();
         let mut feedback_index: usize = 0;
         // The most recent feedback `values`, used to dedup consecutive-identical
         // frames (rosbridge emits feedback DUPLICATED — verified live: a 0.2 rad
@@ -336,8 +367,8 @@ impl RosBackend {
                     return Err(ActionFail::TimedOut);
                 }
                 // Feedback: dedup consecutive-identical frames, then emit each
-                // DISTINCT one as a streamed OutputSet. Disabled once the channel
-                // closes (see `feedback_open` above).
+                // DISTINCT one as a `scatter_item` control token. Disabled once
+                // the channel closes (see `feedback_open` above).
                 fb = feedback_rx.recv(), if feedback_open => {
                     match fb {
                         Some(values) => {
@@ -345,11 +376,17 @@ impl RosBackend {
                                 continue; // duplicate consecutive frame — drop
                             }
                             last_feedback = Some(values.clone());
-                            let name = format!("feedback_{feedback_index}");
-                            if let Some(es) = event_stream.as_ref() {
-                                es.output(name.clone(), values.clone()).await;
+                            if let (Some(es), Some(channel)) =
+                                (event_stream.as_ref(), feedback_channel.as_ref())
+                            {
+                                es.scatter_item(
+                                    channel.clone(),
+                                    scatter_uid.clone(),
+                                    feedback_index as u64,
+                                    values,
+                                )
+                                .await;
                             }
-                            outputs.insert(name, values);
                             feedback_index += 1;
                         }
                         // Channel closed — stop polling this arm so the result
@@ -376,12 +413,31 @@ impl RosBackend {
                                     continue;
                                 }
                                 last_feedback = Some(values.clone());
-                                let name = format!("feedback_{feedback_index}");
-                                if let Some(es) = event_stream.as_ref() {
-                                    es.output(name.clone(), values.clone()).await;
+                                if let (Some(es), Some(channel)) =
+                                    (event_stream.as_ref(), feedback_channel.as_ref())
+                                {
+                                    es.scatter_item(
+                                        channel.clone(),
+                                        scatter_uid.clone(),
+                                        feedback_index as u64,
+                                        values,
+                                    )
+                                    .await;
                                 }
-                                outputs.insert(name, values);
                                 feedback_index += 1;
+                            }
+                            // Close the fan-out: stamp the total item count so the
+                            // engine's gather barrier knows the feedback stream is
+                            // complete. MUST follow every `scatter_item`.
+                            if let (Some(es), Some(channel)) =
+                                (event_stream.as_ref(), feedback_channel.as_ref())
+                            {
+                                es.scatter_close(
+                                    channel.clone(),
+                                    scatter_uid.clone(),
+                                    feedback_index as u64,
+                                )
+                                .await;
                             }
                             Ok(ActionExecution {
                                 outputs,
@@ -411,14 +467,15 @@ enum ActionFail {
 
 /// The outcome of a `send_action_goal` run.
 struct ActionExecution {
-    /// EXACTLY the N dedup'd feedbacks, named `feedback_0..feedback_{N-1}`.
-    /// This map IS the node's `exec_result.outputs` — its length is the
-    /// `stream_count` the downstream `StreamFold` gather barrier counts on.
+    /// Always EMPTY for an action goal: the feedbacks stream out-of-band as
+    /// `scatter_item` control tokens (docs/25), and the terminal `delta` rides
+    /// `stdout_tail`, so the node parks no business output. Kept as a field for
+    /// shape-parity with the other ops' result constructor.
     outputs: HashMap<String, Value>,
     /// The action Result message (e.g. `{ "delta": .. }` for RotateAbsolute),
-    /// carried OUT of `outputs` so it never inflates `stream_count`.
+    /// surfaced on `stdout_tail` only — never an `outputs` entry.
     result: Value,
-    /// The number of DISTINCT feedbacks received (== `outputs.len()`).
+    /// The number of DISTINCT feedbacks streamed (the `scatter_close` count).
     feedback_count: usize,
 }
 
@@ -581,12 +638,11 @@ fn make_success(
 
 /// Build the success result for a `send_action_goal` run.
 ///
-/// `outputs` is set to EXACTLY the N feedbacks (so `stream_count == N`); the
-/// action `result` (delta) + the feedback count ride `stdout_tail` for
-/// observability. They are intentionally NOT placed in `outputs` — see
-/// [`RosBackend::run_action_goal`]. The downstream demo derives its
-/// instance-result fields from the `StreamFold(Array)` output (the feedback
-/// chunks) rather than from a read-arc into this node's parked envelope.
+/// `outputs` is empty (feedbacks streamed as `scatter_item` control tokens,
+/// docs/25); the action `result` (delta) + the feedback count ride
+/// `stdout_tail` for observability. The downstream consumer derives its
+/// instance-result fields from the channel's gathered feedback collection,
+/// not from a read-arc into this node's parked envelope.
 fn make_action_success(
     run_context: &RunContext,
     start: Instant,

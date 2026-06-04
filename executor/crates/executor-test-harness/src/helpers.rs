@@ -23,6 +23,7 @@ pub fn echo_job(eid: &str) -> ExecutionJob {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -44,6 +45,7 @@ pub fn failing_job(eid: &str) -> ExecutionJob {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -65,6 +67,7 @@ pub fn sleep_job(eid: &str, secs: u64, timeout_secs: u64) -> ExecutionJob {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -86,6 +89,7 @@ pub fn job_with_metadata(eid: &str, metadata: HashMap<String, String>) -> Execut
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -107,6 +111,7 @@ pub fn bash_job(eid: &str, script: &str) -> ExecutionJob {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -132,6 +137,7 @@ pub fn job_with_inline_inputs(
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -153,6 +159,7 @@ pub fn job_with_outputs(eid: &str, script: &str, outputs: Vec<OutputDeclaration>
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -179,6 +186,7 @@ pub fn job_with_io(
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -200,6 +208,7 @@ pub fn nonexistent_command_job(eid: &str) -> ExecutionJob {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -224,6 +233,7 @@ pub fn large_output_job(eid: &str, byte_count: usize) -> ExecutionJob {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }
@@ -245,6 +255,7 @@ pub fn long_running_job(eid: &str, sleep_secs: u64) -> ExecutionJob {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     }
 }

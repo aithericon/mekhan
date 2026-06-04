@@ -351,14 +351,50 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // presence-pool routing + capability match + the ROS backend ops are
         // proven live by `just dev ros-up` + `mekhan test`.
         "28-turtle-drive",
-        // 29-turtle-rotate (ROS action + StreamFold) is the same shape as 28:
-        // its ros AutomatedSteps target the `ros_fleet` runner_group via
+        // 29-turtle-rotate (ROS action + streaming channel) is the same shape as
+        // 28: its ros AutomatedSteps target the `ros_fleet` runner_group via
         // `deploymentModel.capacity.alias` and carry a `ros` capability
         // Requirement — neither resolvable by bare `compile_to_air` (empty
         // KnownResources/capability registry). The presence-pool routing +
-        // capability match + the `send_action_goal` streaming feedback path are
-        // proven live by `just dev ros-up` + `mekhan test`.
+        // capability match + the `send_action_goal` feedback path (now a docs/25
+        // Control/Scatter channel, drained by a Python `fold` reducer) are proven
+        // live by `just dev ros-up` + `mekhan test`.
         "29-turtle-rotate",
+        // 30-xarm-joint-move (ROS / xArm) is the same shape as 28/29: its ros
+        // AutomatedSteps target the `xarm_fleet` runner_group via
+        // `deploymentModel.capacity.alias` and carry a `ros` capability
+        // Requirement — neither resolvable by bare `compile_to_air` (empty
+        // KnownResources/capability registry). Proven live by
+        // `just dev xarm-up` + `mekhan test`.
+        "30-xarm-joint-move",
+        // 31-xarm-wave (ROS / xArm) is the same shape as 30: its ros
+        // AutomatedSteps target the `xarm_fleet` runner_group via
+        // `deploymentModel.capacity.alias` and carry a `ros` capability
+        // Requirement — neither resolvable by bare `compile_to_air` (empty
+        // KnownResources/capability registry). Proven live by
+        // `just dev xarm-up` + `mekhan test`.
+        "31-xarm-wave",
+        // 32-xarm-trajectory-stream (ROS / xArm action + streaming channel) is
+        // the same shape as 29/31: its ros AutomatedStep targets the
+        // `xarm_fleet` runner_group via `deploymentModel.capacity.alias` and
+        // carries a `ros` capability Requirement — neither resolvable by bare
+        // `compile_to_air`. The structured `FollowJointTrajectory_Feedback`
+        // stream is a docs/25 Control/Scatter channel drained by a Python `fold`
+        // reducer. Proven live by `just dev xarm-up` + `mekhan test`.
+        "32-xarm-trajectory-stream",
+        // 33-xarm-pose-plan-execute (ROS / xArm MoveIt, docs/26-27) targets the
+        // `xarm_fleet` runner_group via `deploymentModel.capacity.alias` and
+        // carries a `ros` capability Requirement — not resolvable by bare
+        // `compile_to_air`. Proven live by `just dev xarm-up` + `mekhan test`.
+        "33-xarm-pose-plan-execute",
+        // 34-xarm-scene-plan (ROS / xArm MoveIt Path C S2, docs/27) — same
+        // `xarm_fleet` + `ros` Requirement shape as 33; adds a collision object
+        // to the persistent planning scene then plans around it. Live-only.
+        "34-xarm-scene-plan",
+        // 35-xarm-grasp-release (ROS / xArm MoveIt Path C S3, docs/27) — same
+        // `xarm_fleet` + `ros` Requirement shape as 33; atomic grasp/release
+        // (gripper actuation + scene attach/detach). Live-only.
+        "35-xarm-grasp-release",
     ]
     .into_iter()
     .collect();

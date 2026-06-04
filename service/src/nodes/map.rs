@@ -39,36 +39,14 @@ pub(crate) static MAP_DECL: NodeDecl = NodeDecl {
     token_shape: Some(crate::compiler::token_shape::analyze::out_shape_map),
 };
 
-fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {
-    // Array Map accepts the outer `in` + a `body_out` handle from its body
-    // children. A STREAMING Map (`stream_source`) replaces `in` with the
-    // producer's `stream` (chunks) + `control` (EOS/count) handles. Both are
-    // Json pass-throughs; the lowering's `input_handles` routes by `targetHandle`.
-    let WorkflowNodeData::Map { stream_source, .. } = data else {
-        unreachable!("map::input_ports on non-Map variant");
-    };
+fn input_ports(_data: &WorkflowNodeData) -> Vec<Port> {
+    // Map accepts the outer `in` + a `body_out` handle from its body children.
     let body_out = Port {
         id: "body_out".to_string(),
         label: "Body Out".to_string(),
         fields: vec![],
     };
-    if *stream_source {
-        vec![
-            Port {
-                id: "stream".to_string(),
-                label: "Stream".to_string(),
-                fields: vec![],
-            },
-            Port {
-                id: "control".to_string(),
-                label: "Control".to_string(),
-                fields: vec![],
-            },
-            body_out,
-        ]
-    } else {
-        vec![Port::empty_input(), body_out]
-    }
+    vec![Port::empty_input(), body_out]
 }
 
 fn output_ports(_data: &WorkflowNodeData) -> Vec<Port> {
@@ -96,7 +74,6 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         item_var,
         result_var,
         output,
-        stream_source,
         ..
     } = data
     else {
@@ -105,13 +82,6 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
     config.insert(txn, "itemsRef", items_ref.clone());
     config.insert(txn, "itemVar", item_var.clone());
     config.insert(txn, "resultVar", result_var.clone());
-    // `stream_source` is `#[serde(default)]`; write it explicitly so the
-    // graph→Y.Doc seed + Y.Doc→graph reconstruction preserve the flag.
-    config.insert(
-        txn,
-        "streamSource",
-        crate::yjs::persistence::json_value_to_any(&serde_json::Value::Bool(*stream_source)),
-    );
     // `output` is an optional declared element Port; encode as a JSON blob
     // when present (mirrors how loop_::yjs_encode encodes its accumulators
     // array via `json_value_to_any`). Absent → leave the key unset.

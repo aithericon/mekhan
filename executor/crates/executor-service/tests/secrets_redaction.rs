@@ -122,6 +122,7 @@ async fn secret_template_stays_on_disk_plaintext_only_reaches_child() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 
@@ -296,6 +297,7 @@ async fn no_secret_store_means_no_resolution_at_all() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 
@@ -421,6 +423,7 @@ async fn inline_input_secret_is_resolved_in_staged_file_only() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 
@@ -555,6 +558,7 @@ async fn inline_input_without_secret_template_is_not_diverted() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 

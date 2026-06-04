@@ -23,7 +23,9 @@ use chrono::Utc;
 use futures::StreamExt;
 use tokio::sync::broadcast;
 
-use aithericon_executor_domain::{ExecutionEvent, StatusDetail, StatusUpdate};
+use aithericon_executor_domain::{
+    ControlEmitEvent, ControlKind, ExecutionEvent, StatusDetail, StatusUpdate,
+};
 use petri_domain::ExternalSignal;
 use petri_scheduler_bridge::{signal_subject, CheckpointStore, RoutingMeta, SignalPublisher};
 
@@ -381,6 +383,17 @@ impl ExecutorWatcher {
 
     /// Process a mid-execution event message.
     async fn handle_event_message(&self, msg: &async_nats::jetstream::Message) {
+        // A `control_emit` rides the same `executor.events.>` stream but is a
+        // `ControlEmitEvent`, NOT an `ExecutionEvent` (no `EventCategory` /
+        // sequence). Branch on the subject suffix BEFORE attempting the
+        // `ExecutionEvent` deserialize — otherwise the emit fails to parse and
+        // is silently dropped. The subject is
+        // `executor.events.{execution_id}.control_emit`.
+        if msg.subject.ends_with(".control_emit") {
+            self.handle_control_emit(msg).await;
+            return;
+        }
+
         let event: ExecutionEvent = match serde_json::from_slice(&msg.payload) {
             Ok(e) => e,
             Err(e) => {
@@ -483,5 +496,264 @@ impl ExecutorWatcher {
                 .save(EVENTS_CHECKPOINT_KEY, &info.stream_sequence.to_string())
                 .await;
         }
+    }
+
+    /// Process a `control_emit` message: a mid-execution dynamic control-token
+    /// emission from an executor job's streaming channel (`emit` / `scatter`,
+    /// docs/25). This is the engine ingestion seam — the SINGLE place the
+    /// worker's wire fields are renamed into the token shape the compiler-
+    /// synthesized `control_emit` effect expects.
+    ///
+    /// Resolves the node's control-inbox place via `event_routes["control_emit"]`
+    /// (registered by the compiler on the submit transition, same mechanism as
+    /// progress/output/artifact routes), then publishes ONE `ExternalSignal`
+    /// onto that signal place. Fire-and-forget: a missing route / net is logged
+    /// and dropped, never gated.
+    async fn handle_control_emit(&self, msg: &async_nats::jetstream::Message) {
+        let emit: ControlEmitEvent = match serde_json::from_slice(&msg.payload) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to deserialize ControlEmitEvent");
+                return;
+            }
+        };
+
+        let routing = match RoutingMeta::from_meta_tags(&emit.metadata) {
+            Some(r) => r,
+            None => {
+                tracing::debug!(
+                    execution_id = %emit.execution_id,
+                    "ControlEmitEvent has no Petri routing metadata, skipping"
+                );
+                return;
+            }
+        };
+
+        // The control-inbox place is carried on the `control_emit` event route.
+        // A miss means the node declared no OUT control channel (so the compiler
+        // synthesized no inbox) — nothing to deposit into; drop quietly.
+        let Some(target_place) = routing.place_for_event("control_emit") else {
+            tracing::debug!(
+                execution_id = %emit.execution_id,
+                channel = %emit.channel,
+                "control_emit has no control_emit event route, skipping"
+            );
+            return;
+        };
+
+        let subject = signal_subject(&routing.net_id, target_place);
+        let (payload, dedup_id) = control_emit_token(&emit);
+
+        let signal = ExternalSignal {
+            source: "executor".to_string(),
+            signal_key: routing.signal_key.clone(),
+            payload,
+            timestamp: Utc::now(),
+            dedup_id: Some(dedup_id.clone()),
+        };
+
+        self.signal_publisher
+            .publish(&subject, &signal, &dedup_id)
+            .await;
+
+        // Checkpoint (shared with the ExecutionEvent path — same stream).
+        if let Ok(info) = msg.info() {
+            self.checkpoint
+                .save(EVENTS_CHECKPOINT_KEY, &info.stream_sequence.to_string())
+                .await;
+        }
+    }
+}
+
+/// Translate a worker `ControlEmitEvent` (wire fields) into the inbox-token
+/// shape the engine's `control_emit` effect reads — the ONE place the rename
+/// happens. Returns `(token_payload, dedup_id)`.
+///
+/// Field mapping:
+///   - `channel`   ← `channel`
+///   - `kind`      ← `kind` (`signal` | `scatter_item` | `scatter_close`)
+///   - `payload`   ← `payload_json` parsed as JSON when non-empty (else `null`)
+///   - `__map_idx` ← `scatter_id`   (scatter_item only)
+///   - `count`     ← `scatter_count` (scatter_close only)
+///   - `__map_id`  ← `"{execution_id}:{scatter_uid}"` — namespaced so concurrent
+///     template instances AND multiple scatters into the same channel never
+///     collide; this is the correlation key the gather barrier correlates on.
+///
+/// The `dedup_id` mirrors the worker's `msg_id()` keying (per-channel signal,
+/// per-`scatter_uid` item/close) so an apalis redelivery is idempotent at the
+/// engine's `(PlaceId, dedup_id)` DedupIndex while two distinct fan-outs stay
+/// independent.
+fn control_emit_token(emit: &ControlEmitEvent) -> (serde_json::Value, String) {
+    let payload = if emit.payload_json.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_str(&emit.payload_json).unwrap_or(serde_json::Value::Null)
+    };
+
+    // Namespaced correlation id: instance + per-invocation scatter uid.
+    let map_id = format!("{}:{}", emit.execution_id, emit.scatter_uid);
+
+    let (token, dedup_id) = match emit.kind {
+        ControlKind::Signal => (
+            serde_json::json!({
+                "channel": emit.channel,
+                "kind": "signal",
+                "payload": payload,
+            }),
+            format!("{}-control-{}-signal", emit.execution_id, emit.channel),
+        ),
+        ControlKind::ScatterItem => (
+            serde_json::json!({
+                "channel": emit.channel,
+                "kind": "scatter_item",
+                "payload": payload,
+                "__map_id": map_id,
+                "__map_idx": emit.scatter_id,
+            }),
+            format!(
+                "{}-control-{}-{}-item-{}",
+                emit.execution_id, emit.channel, emit.scatter_uid, emit.scatter_id
+            ),
+        ),
+        ControlKind::ScatterClose => (
+            serde_json::json!({
+                "channel": emit.channel,
+                "kind": "scatter_close",
+                "__map_id": map_id,
+                "count": emit.scatter_count,
+            }),
+            format!(
+                "{}-control-{}-{}-close",
+                emit.execution_id, emit.channel, emit.scatter_uid
+            ),
+        ),
+        // DATA-plane brackets (docs/25 §6). `open` carries the transport
+        // DESCRIPTOR (so the consumer can connect EARLY); `close` carries
+        // `{count, status}`. Both deposit a control token into the data channel's
+        // place; the bulk bytes never enter the marking. Dedup is once-per-channel
+        // per execution (one open, one close).
+        ControlKind::Open => (
+            serde_json::json!({
+                "channel": emit.channel,
+                "kind": "open",
+                "payload": payload,
+            }),
+            format!("{}-data-{}-open", emit.execution_id, emit.channel),
+        ),
+        ControlKind::Close => (
+            serde_json::json!({
+                "channel": emit.channel,
+                "kind": "close",
+                "payload": payload,
+            }),
+            format!("{}-data-{}-close", emit.execution_id, emit.channel),
+        ),
+    };
+
+    (token, dedup_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn item_emit(exec: &str, channel: &str, scatter_uid: &str, idx: u64) -> ControlEmitEvent {
+        ControlEmitEvent {
+            execution_id: exec.to_string(),
+            channel: channel.to_string(),
+            kind: ControlKind::ScatterItem,
+            payload_json: format!(r#"{{"v":{idx}}}"#),
+            scatter_id: idx,
+            scatter_count: 0,
+            scatter_uid: scatter_uid.to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// The bridge translates a REAL wire `ControlEmitEvent` (scatter_id /
+    /// scatter_count / scatter_uid, NO pre-shaped `__map_id`) into the
+    /// `{__map_id, __map_idx, count}`-shaped inbox token the engine's
+    /// `control_emit` effect reads. This tests the TRANSLATION, not a token
+    /// that already arrived in the right shape.
+    #[test]
+    fn translates_scatter_item_into_inbox_token() {
+        let emit = item_emit("exec-1", "items", "uid-abc", 3);
+        let (token, dedup) = control_emit_token(&emit);
+
+        assert_eq!(token["channel"], "items");
+        assert_eq!(token["kind"], "scatter_item");
+        assert_eq!(token["payload"], serde_json::json!({ "v": 3 }));
+        // scatter_id → __map_idx
+        assert_eq!(token["__map_idx"], 3);
+        // namespaced correlation id: execution_id:scatter_uid
+        assert_eq!(token["__map_id"], "exec-1:uid-abc");
+        assert_eq!(dedup, "exec-1-control-items-uid-abc-item-3");
+    }
+
+    #[test]
+    fn translates_scatter_close_count_and_map_id() {
+        let emit = ControlEmitEvent {
+            execution_id: "exec-1".into(),
+            channel: "items".into(),
+            kind: ControlKind::ScatterClose,
+            payload_json: String::new(),
+            scatter_id: 0,
+            scatter_count: 7,
+            scatter_uid: "uid-abc".into(),
+            metadata: HashMap::new(),
+        };
+        let (token, dedup) = control_emit_token(&emit);
+
+        assert_eq!(token["kind"], "scatter_close");
+        // scatter_count → count
+        assert_eq!(token["count"], 7);
+        assert_eq!(token["__map_id"], "exec-1:uid-abc");
+        // close carries no payload field
+        assert!(token.get("payload").is_none());
+        assert_eq!(dedup, "exec-1-control-items-uid-abc-close");
+    }
+
+    #[test]
+    fn translates_signal_with_empty_payload_to_null() {
+        let emit = ControlEmitEvent {
+            execution_id: "exec-1".into(),
+            channel: "events".into(),
+            kind: ControlKind::Signal,
+            payload_json: String::new(),
+            scatter_id: 0,
+            scatter_count: 0,
+            scatter_uid: String::new(),
+            metadata: HashMap::new(),
+        };
+        let (token, dedup) = control_emit_token(&emit);
+
+        assert_eq!(token["kind"], "signal");
+        assert_eq!(token["payload"], serde_json::Value::Null);
+        // a signal carries no scatter correlation leaves
+        assert!(token.get("__map_id").is_none());
+        assert!(token.get("__map_idx").is_none());
+        assert_eq!(dedup, "exec-1-control-events-signal");
+    }
+
+    /// Two concurrent scatters into the SAME channel of the SAME execution but
+    /// with DIFFERENT `scatter_uid` must produce DIFFERENT `__map_id`s, so the
+    /// gather barrier never cross-correlates one fan-out's items into another's.
+    #[test]
+    fn concurrent_scatters_do_not_cross_correlate() {
+        let a = item_emit("exec-1", "items", "uid-A", 0);
+        let b = item_emit("exec-1", "items", "uid-B", 0);
+
+        let (tok_a, dedup_a) = control_emit_token(&a);
+        let (tok_b, dedup_b) = control_emit_token(&b);
+
+        assert_ne!(
+            tok_a["__map_id"], tok_b["__map_id"],
+            "distinct scatter_uids must yield distinct correlation ids"
+        );
+        assert_eq!(tok_a["__map_id"], "exec-1:uid-A");
+        assert_eq!(tok_b["__map_id"], "exec-1:uid-B");
+        // …and their dedup ids stay independent (no JetStream collision).
+        assert_ne!(dedup_a, dedup_b);
     }
 }

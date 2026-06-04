@@ -7,8 +7,9 @@ use crate::compiler::interface::InterfaceRegistry;
 use crate::compiler::lower::{expand_node, ConfigStorage, NodeFiles, NodePorts, PostProcess};
 use crate::compiler::resource_refs::KnownResources;
 use crate::compiler::validate::{
-    validate, validate_edges_typed, validate_guards, validate_human_task_steps_refs, validate_maps,
-    validate_repeaters, validate_schema_refs, validate_triggers,
+    validate, validate_channels, validate_edges_typed, validate_guards,
+    validate_human_task_steps_refs, validate_maps, validate_repeaters, validate_schema_refs,
+    validate_triggers,
 };
 use crate::compiler::wire::{apply_merges, resolve_aliases, wire_edge};
 use crate::compiler::CompileError;
@@ -667,6 +668,9 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
 ///   `validate_repeaters`, but runs BEFORE `validate_guards` so its precise
 ///   `MapItemsRef*` errors win over the guard pass's generic `GuardUnresolved`
 ///   (which would otherwise fire first on the itemsRef read-arc).
+/// - `validate_channels` (docs/25) — each AutomatedStep's streaming channel
+///   declarations: unique names, positive `max_fanout` for scatter, control-
+///   only contracts, resolvable `Json` element schemas, plane/wiring coherence.
 fn run_validations(
     graph: &WorkflowGraph,
     wg: &WorkflowDiGraph<'_>,
@@ -684,6 +688,9 @@ fn run_validations(
     // is NOT caught by the guard pass at all — it resolves any field, array or
     // not). It still needs the per-node shapes from `analyze`, available here.
     validate_maps(graph)?;
+    // Streaming channels (docs/25): per-node channel declarations are
+    // self-contained (no cross-node resolution) — validate before guards.
+    validate_channels(graph)?;
     validate_guards(graph, wg, known_globals)?;
     validate_triggers(graph)?;
     crate::compiler::resource_refs::validate_resource_refs(known_resources, graph)?;
@@ -2310,8 +2317,7 @@ mod tests {
                     base_delay_ms: 0,
                 },
                 deployment_model: Default::default(),
-                stream_output: false,
-                stream_input: false,
+                channels: Vec::new(),
                 requirements: None,
                 asset_bindings: Vec::new(),
             },
@@ -2444,8 +2450,7 @@ mod tests {
                     base_delay_ms: 0,
                 },
                 deployment_model: Default::default(),
-                stream_output: false,
-                stream_input: false,
+                channels: Vec::new(),
                 requirements: None,
                 asset_bindings: Vec::new(),
             },
@@ -2512,8 +2517,7 @@ mod tests {
                 output: default_output_port(ExecutionBackendType::Docker),
                 retry_policy: policy,
                 deployment_model: Default::default(),
-                stream_output: false,
-                stream_input: false,
+                channels: Vec::new(),
                 requirements: None,
                 asset_bindings: Vec::new(),
             },
@@ -3469,8 +3473,7 @@ mod tests {
                 output: default_output_port(ExecutionBackendType::CatalogueQuery),
                 retry_policy: RetryPolicy::default(),
                 deployment_model: Default::default(),
-                stream_output: false,
-                stream_input: false,
+                channels: Vec::new(),
                 requirements: None,
                 asset_bindings: Vec::new(),
             },
@@ -4744,8 +4747,7 @@ mod tests {
                         output: default_output_port(ExecutionBackendType::Llm),
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
-                        stream_output: false,
-                        stream_input: false,
+                        channels: Vec::new(),
                         requirements: None,
                         asset_bindings: Vec::new(),
                     },
@@ -4813,8 +4815,7 @@ mod tests {
                         output: default_output_port(ExecutionBackendType::Llm),
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
-                        stream_output: false,
-                        stream_input: false,
+                        channels: Vec::new(),
                         requirements: None,
                         asset_bindings: Vec::new(),
                     },
@@ -4934,8 +4935,7 @@ mod tests {
                         output: default_output_port(ExecutionBackendType::Llm),
                         retry_policy: RetryPolicy::default(),
                         deployment_model: Default::default(),
-                        stream_output: false,
-                        stream_input: false,
+                        channels: Vec::new(),
                         requirements: None,
                         asset_bindings: Vec::new(),
                     },

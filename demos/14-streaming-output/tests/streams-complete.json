@@ -1,5 +1,5 @@
 {
-  "name": "StreamFold concat: producer streams the/quick/brown/fox → End transcript 'the quick brown fox'",
+  "name": "Data channel fold: producer writes the/quick/brown/fox over a Data/Out channel → consumer drains stream('words') + concatenates → End transcript 'the quick brown fox'",
   "enabled": true,
   "start_tokens": [
     {

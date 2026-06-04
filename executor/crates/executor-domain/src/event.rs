@@ -269,6 +269,113 @@ impl ExecutionEvent {
     }
 }
 
+/// Kind of control token emitted into a channel's place. Mirrors the IPC proto
+/// `ControlKind`; carried in the NATS `control_emit` event so the engine can
+/// dispatch the deposit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ControlKind {
+    /// CONTROL plane: a single one-shot control token.
+    Signal,
+    /// CONTROL plane: one instance-colored item of a fan-out.
+    ScatterItem,
+    /// CONTROL plane: end of a fan-out, stamping the total item count.
+    ScatterClose,
+    /// DATA plane: opens a data channel. `payload_json` carries the transport
+    /// DESCRIPTOR `{transport, subject, content_type, credential?}`; flows to the
+    /// consumer EARLY (the moment `open_output` is called) so it can start
+    /// draining the out-of-band byte stream while the producer still produces.
+    Open,
+    /// DATA plane: closes a data channel. `payload_json` carries `{count, status}`
+    /// (elements written + terminal status); updates the producer's status (the
+    /// consumer drains until the transport's `is_eof`, independent of this).
+    Close,
+}
+
+/// A dynamic control-token emission, published by the executor to the
+/// `EXECUTOR_EVENTS` JetStream stream on subject
+/// `executor.events.{execution_id}.control_emit` when a job calls the
+/// `EmitControl` IPC. The engine ingests this to deposit a control token into
+/// the channel's place. Fire-and-forget — the engine never gates the emit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ControlEmitEvent {
+    /// The execution this emit belongs to (correlates to the node's place).
+    pub execution_id: String,
+
+    /// The declared `out` channel name the token is emitted into.
+    pub channel: String,
+
+    /// Signal vs. scatter-item vs. scatter-close.
+    pub kind: ControlKind,
+
+    /// JSON-serialized control-token payload (empty string for a bare signal /
+    /// scatter-close that carries no value).
+    pub payload_json: String,
+
+    /// 0-based item index within a scatter (0 for a signal).
+    pub scatter_id: u64,
+
+    /// Total item count, carried on a `ScatterClose` emit (0 otherwise).
+    pub scatter_count: u64,
+
+    /// Per-fan-out correlation id, minted once per `with scatter(name)` block
+    /// and stamped on every item + the close so the engine's gather barrier can
+    /// correlate all emits of one scatter invocation. Empty string for a signal.
+    pub scatter_uid: String,
+
+    /// The job's routing metadata, echoed verbatim (same surface as
+    /// `ExecutionEvent.metadata`). The engine's `ExecutorWatcher` reads
+    /// `petri_net_id` + `petri_event_route_control_emit` out of this to resolve
+    /// which net + control-inbox place the emit deposits into — a `ControlEmitEvent`
+    /// carries no `EventCategory`, so it relies entirely on this map for routing.
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+impl ControlEmitEvent {
+    /// NATS subject this emit is published on.
+    /// Pattern: `executor.events.{execution_id}.control_emit`.
+    pub fn subject(&self) -> String {
+        format!(
+            "executor.events.{}.control_emit",
+            crate::status::sanitize_subject_token(&self.execution_id)
+        )
+    }
+
+    /// JetStream dedup id. A signal is once-per-channel; scatter items + close
+    /// are keyed by the per-invocation `scatter_uid` (and, for items, the index)
+    /// so an apalis redelivery re-emits the same id while two distinct fan-outs
+    /// into the same channel stay independent.
+    pub fn msg_id(&self) -> String {
+        match self.kind {
+            ControlKind::Signal => {
+                format!("{}-control-{}-signal", self.execution_id, self.channel)
+            }
+            ControlKind::ScatterItem => format!(
+                "{}-control-{}-{}-item-{}",
+                self.execution_id, self.channel, self.scatter_uid, self.scatter_id
+            ),
+            ControlKind::ScatterClose => {
+                format!(
+                    "{}-control-{}-{}-close",
+                    self.execution_id, self.channel, self.scatter_uid
+                )
+            }
+            // Data-plane brackets are once-per-channel-per-execution (one open,
+            // one close), so the channel name alone keys the dedup id — an
+            // apalis redelivery re-emits the same id.
+            ControlKind::Open => {
+                format!("{}-data-{}-open", self.execution_id, self.channel)
+            }
+            ControlKind::Close => {
+                format!("{}-data-{}-close", self.execution_id, self.channel)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,11 +10,13 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
 use aithericon_executor_domain::{
-    Artifact, ArtifactCategory, EventCategory, LogEntry, LogLevel, LogSummary, MetricPoint,
-    MetricSummary, MetricType, Phase, PhaseStatus, Progress, StatusDetail,
+    Artifact, ArtifactCategory, ChannelManifestEntry, ControlEmitEvent, ControlKind, EventCategory,
+    LogEntry, LogLevel, LogSummary, MetricPoint, MetricSummary, MetricType, Phase, PhaseStatus,
+    Progress, StatusDetail,
 };
 
-use crate::event_emitter::{enrich_log_fields, StreamContext};
+use crate::chunks::{datastream_subject, StreamTransport};
+use crate::event_emitter::{enrich_log_fields, EventEmitter, StreamContext};
 use aithericon_executor_ipc::proto;
 use aithericon_executor_ipc::{ExecutorSidecar, ExecutorSidecarServer};
 use aithericon_executor_logs::LogSink;
@@ -155,11 +157,30 @@ struct SidecarService {
     log_sink: Option<Arc<dyn LogSink>>,
     pending_uploads: Arc<Mutex<Vec<PendingUploadHandle>>>,
     stream_ctx: Option<Arc<StreamContext>>,
-    /// Inbound chunk feed for live reducer jobs. `Some` only when the job opted
-    /// in (the receiver end of the `ChunkRegistry` channel); `None` for every
-    /// non-reducer job, in which case `StreamChunks` returns an immediately-empty
-    /// stream. Wrapped so the (single) `StreamChunks` call can take ownership.
-    chunk_rx: Mutex<Option<tokio::sync::mpsc::Receiver<proto::ChunkMessage>>>,
+    /// This execution's id, used to subject + correlate `control_emit` events.
+    execution_id: String,
+    /// The job's channel manifest — `EmitControl` validates the named channel
+    /// against this before publishing. Empty for jobs declaring no channels.
+    channels: Vec<ChannelManifestEntry>,
+    /// The job's routing metadata, stamped onto every `control_emit` event so the
+    /// engine's `ExecutorWatcher` can resolve the net + control-inbox place (a
+    /// `ControlEmitEvent` carries no `EventCategory`; routing rides this map).
+    metadata: HashMap<String, String>,
+    /// NATS event emitter for `control_emit` events. Always present (independent
+    /// of `stream_events` opt-in) when NATS is wired; `None` only when the
+    /// executor has no emitter (e.g. unit tests), in which case `EmitControl`
+    /// validates but does not publish.
+    event_emitter: Option<Arc<dyn EventEmitter>>,
+    /// Data-plane byte transport (docs/25 §6). Backs BOTH directions:
+    ///   * `PublishChunk` (producer write) — the producer writer hands the
+    ///     executor framed envelopes, the executor publishes them onto the
+    ///     channel's datastream subject; and
+    ///   * `StreamChunks` (consumer read) — the executor subscribes to the
+    ///     PRODUCER's subject (carried in the request) and relays its envelopes
+    ///     back over the server-stream.
+    /// `None` when NATS is not wired (unit tests), in which case `PublishChunk`
+    /// validates + no-ops and `StreamChunks` returns an immediately-empty stream.
+    transport: Option<Arc<dyn StreamTransport>>,
 }
 
 #[tonic::async_trait]
@@ -269,59 +290,136 @@ impl ExecutorSidecar for SidecarService {
         Ok(Response::new(resp))
     }
 
+    /// Dynamic control-token emission: validate the named channel against the
+    /// job's channel manifest, then publish a `control_emit` event to NATS for
+    /// the engine to ingest. Validation failures return an error in the
+    /// `SidecarResponse` (the SDK surfaces them to the child); a publish with
+    /// no emitter wired is a silent no-op after validation.
+    async fn emit_control(
+        &self,
+        request: Request<proto::EmitControlRequest>,
+    ) -> Result<Response<proto::SidecarResponse>, Status> {
+        let req = request.into_inner();
+        let (status, error_message) = handle_emit_control(
+            &req,
+            &self.execution_id,
+            &self.channels,
+            &self.metadata,
+            &self.event_emitter,
+        )
+        .await;
+        Ok(Response::new(make_response(status, error_message)))
+    }
+
+    /// Outbound data-plane byte stream: the producer writer hands the executor
+    /// one framed envelope; the executor publishes it onto the channel's
+    /// datastream transport subject. Validates the channel names a `data` `out`
+    /// channel in the manifest; a missing transport (no NATS) validates + no-ops.
+    async fn publish_chunk(
+        &self,
+        request: Request<proto::PublishChunkRequest>,
+    ) -> Result<Response<proto::SidecarResponse>, Status> {
+        let req = request.into_inner();
+        let (status, error_message) = handle_publish_chunk(
+            &req,
+            &self.execution_id,
+            &self.channels,
+            &self.transport,
+        )
+        .await;
+        Ok(Response::new(make_response(status, error_message)))
+    }
+
     type StreamChunksStream = ChunkStream;
 
-    /// Inbound live data feed: the child opens this server-stream once and pulls
-    /// chunks as the executor receives them (over the `EXECUTOR_CHUNKS`
-    /// JetStream feed → `ChunkRegistry` channel). Drives the Python SDK's
-    /// `for chunk in aithericon.chunks()` loop.
+    /// Data-plane CONSUMER read (`for elem in aithericon.stream(name)`): the
+    /// child opens this server-stream passing the PRODUCER's transport `subject`
+    /// (lifted by the SDK from the `open` descriptor the engine delivered as this
+    /// job's input). The executor subscribes to that subject over the data-plane
+    /// [`StreamTransport`] and relays each decoded binary envelope back over the
+    /// stream, in `seq` order, until the in-band EOF sentinel.
     ///
-    /// Gated on opt-in: a non-reducer job has `chunk_rx == None`, so this
-    /// returns an immediately-empty stream (the loop body never runs). When the
-    /// feed is present, each `ChunkMessage` is yielded in `sequence` order; the
-    /// in-band EOF sentinel (`is_eof`) is forwarded too and the channel close
-    /// (driven by the listener after EOF, or by the job ending) terminates the
-    /// stream.
+    /// An empty `subject` (no producer descriptor was present) or a missing
+    /// transport (no NATS wired — unit tests) yields an immediately-empty stream,
+    /// so the Python `stream()` loop body never runs. The subscribe task is
+    /// scoped to a cancellation token the [`ChunkStream`] cancels on drop, so a
+    /// consumer that abandons the loop early tears the subscription down.
     async fn stream_chunks(
         &self,
-        _request: Request<proto::StreamChunksRequest>,
+        request: Request<proto::StreamChunksRequest>,
     ) -> Result<Response<Self::StreamChunksStream>, Status> {
-        // Take the receiver — `StreamChunks` is opened at most once per job.
-        let rx = self.chunk_rx.lock().await.take();
-        match rx {
-            Some(rx) => {
-                debug!("IPC sidecar: child opened chunk feed");
-                Ok(Response::new(ChunkStream::new(rx)))
+        let req = request.into_inner();
+        let subject = req.subject.trim().to_string();
+
+        let Some(transport) = self.transport.clone() else {
+            debug!(
+                channel = %req.channel,
+                "IPC sidecar: StreamChunks with no transport wired — empty stream"
+            );
+            return Ok(Response::new(ChunkStream::empty()));
+        };
+        if subject.is_empty() {
+            debug!(
+                channel = %req.channel,
+                "IPC sidecar: StreamChunks with no producer subject — empty stream"
+            );
+            return Ok(Response::new(ChunkStream::empty()));
+        }
+
+        // Subscribe to the producer's datastream subject. The transport spawns an
+        // ordered+reordered drain task that forwards each envelope into `tx`;
+        // `ChunkStream` drains `rx` and cancels `cancel` on drop to tear it down.
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+        let cancel = CancellationToken::new();
+        match transport
+            .subscribe(subject.clone(), tx, cancel.clone())
+            .await
+        {
+            Ok(_task) => {
+                debug!(
+                    channel = %req.channel,
+                    %subject,
+                    "IPC sidecar: data-plane consumer subscribed to producer subject"
+                );
+                Ok(Response::new(ChunkStream::subscribed(rx, cancel)))
             }
-            None => {
-                // Not a reducer job (no feed) OR the feed was already opened.
-                // Either way: an empty stream — the Python `chunks()` loop ends
-                // immediately.
-                debug!("IPC sidecar: StreamChunks with no active feed — empty stream");
-                Ok(Response::new(ChunkStream::empty()))
-            }
+            Err(e) => Err(Status::internal(format!(
+                "stream_chunks: subscribe to '{subject}' failed: {e}"
+            ))),
         }
     }
 }
 
-/// Server-stream of inbound `ChunkMessage`s for `StreamChunks`.
+/// Server-stream of inbound `ChunkMessage`s for `StreamChunks` (the data-plane
+/// consumer read).
 ///
-/// Drains the per-job `ChunkRegistry` channel. Each delivered chunk is yielded
-/// as `Ok(ChunkMessage)`; once the channel closes (EOF forwarded by the
-/// listener, or the job ended) the stream ends. An EOF sentinel
+/// Drains the mpsc channel the transport's `subscribe` task feeds with the
+/// producer's decoded envelopes. Each delivered envelope is yielded as
+/// `Ok(ChunkMessage)`; once the channel closes (EOF forwarded by the subscribe
+/// task, or the producer's subscription ending) the stream ends. An EOF sentinel
 /// (`is_eof == true`) is yielded to the client and then ends the stream so the
 /// Python loop has an explicit terminator even if the channel stays open
-/// briefly.
+/// briefly. Dropping the stream cancels the subscribe task (a consumer that
+/// abandons the loop early tears the subscription down).
 pub struct ChunkStream {
     rx: Option<tokio::sync::mpsc::Receiver<proto::ChunkMessage>>,
     done: bool,
+    /// Cancels the transport `subscribe` task when this stream is dropped.
+    /// `None` for an empty stream (no subscription was opened).
+    cancel: Option<CancellationToken>,
 }
 
 impl ChunkStream {
-    fn new(rx: tokio::sync::mpsc::Receiver<proto::ChunkMessage>) -> Self {
+    /// A stream backed by a live transport subscription. `cancel` tears the
+    /// subscribe task down when the stream is dropped.
+    fn subscribed(
+        rx: tokio::sync::mpsc::Receiver<proto::ChunkMessage>,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             rx: Some(rx),
             done: false,
+            cancel: Some(cancel),
         }
     }
 
@@ -329,6 +427,15 @@ impl ChunkStream {
         Self {
             rx: None,
             done: true,
+            cancel: None,
+        }
+    }
+}
+
+impl Drop for ChunkStream {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
         }
     }
 }
@@ -373,6 +480,183 @@ fn make_response(
         status: status.into(),
         error_message: error_message.unwrap_or_default(),
     }
+}
+
+/// Map the proto `ControlKind` to the domain `ControlKind` carried on the NATS
+/// event.
+fn convert_control_kind(kind: proto::ControlKind) -> ControlKind {
+    match kind {
+        proto::ControlKind::Signal => ControlKind::Signal,
+        proto::ControlKind::ScatterItem => ControlKind::ScatterItem,
+        proto::ControlKind::ScatterClose => ControlKind::ScatterClose,
+        proto::ControlKind::Open => ControlKind::Open,
+        proto::ControlKind::Close => ControlKind::Close,
+    }
+}
+
+/// Validate an `EmitControl` against the job's channel manifest, then publish a
+/// `control_emit` event to NATS for the engine to ingest.
+///
+/// Validation rules (any failure returns `INVALID_ARGUMENT` with a message and
+/// publishes nothing):
+///   1. `channel` must be non-empty.
+///   2. `channel` must name a channel in the manifest (unknown name → reject).
+///   3. that channel must be on the `control` plane (a control emit into a
+///      `data` channel is a category error → reject).
+///
+/// On success the emit is published fire-and-forget; a missing emitter (no NATS
+/// wired) validates then no-ops, so the contract is identical offline.
+async fn handle_emit_control(
+    req: &proto::EmitControlRequest,
+    execution_id: &str,
+    channels: &[ChannelManifestEntry],
+    metadata: &HashMap<String, String>,
+    event_emitter: &Option<Arc<dyn EventEmitter>>,
+) -> (proto::ResponseStatus, Option<String>) {
+    let channel = req.channel.trim();
+    if channel.is_empty() {
+        return (
+            proto::ResponseStatus::InvalidArgument,
+            Some("emit_control: empty channel name".to_string()),
+        );
+    }
+
+    let Some(entry) = channels.iter().find(|c| c.name == channel) else {
+        return (
+            proto::ResponseStatus::InvalidArgument,
+            Some(format!(
+                "emit_control: channel '{channel}' is not declared in this job's channel manifest"
+            )),
+        );
+    };
+
+    // Plane is selected by the emit kind: signal/scatter are control-plane;
+    // the data-plane brackets (open/close) target a `data` channel. A kind that
+    // doesn't match the declared channel's plane is a category error.
+    let kind = convert_control_kind(req.kind());
+    let expected_plane = match kind {
+        ControlKind::Open | ControlKind::Close => "data",
+        ControlKind::Signal | ControlKind::ScatterItem | ControlKind::ScatterClose => "control",
+    };
+    if entry.plane != expected_plane {
+        return (
+            proto::ResponseStatus::InvalidArgument,
+            Some(format!(
+                "emit_control: {kind:?} emit targets a '{expected_plane}' channel, but \
+                 channel '{channel}' is declared on the '{}' plane",
+                entry.plane
+            )),
+        );
+    }
+
+    let event = ControlEmitEvent {
+        execution_id: execution_id.to_string(),
+        channel: channel.to_string(),
+        kind,
+        payload_json: req.payload_json.clone(),
+        scatter_id: req.scatter_id,
+        scatter_count: req.scatter_count,
+        scatter_uid: req.scatter_uid.clone(),
+        metadata: metadata.clone(),
+    };
+
+    match event_emitter {
+        Some(emitter) => {
+            emitter.emit_control(&event).await;
+            debug!(%execution_id, channel, ?kind, "control_emit published");
+        }
+        None => {
+            debug!(
+                %execution_id,
+                channel,
+                "emit_control: no event emitter wired — validated, not published"
+            );
+        }
+    }
+
+    (proto::ResponseStatus::Ok, None)
+}
+
+/// Validate a `PublishChunk` against the job's channel manifest, then publish the
+/// binary envelope onto the channel's datastream transport subject.
+///
+/// Validation rules (any failure returns `INVALID_ARGUMENT` and publishes
+/// nothing):
+///   1. `channel` must be non-empty and present in the manifest.
+///   2. that channel must be on the `data` plane (publishing bytes into a
+///      `control` channel is a category error).
+///   3. an `envelope` must be present.
+///
+/// On success the envelope is published onto
+/// `executor.datastream.{execution_id}.{channel}` via the [`StreamTransport`]; a
+/// missing transport (no NATS wired) validates then no-ops, identical offline.
+async fn handle_publish_chunk(
+    req: &proto::PublishChunkRequest,
+    execution_id: &str,
+    channels: &[ChannelManifestEntry],
+    transport: &Option<Arc<dyn StreamTransport>>,
+) -> (proto::ResponseStatus, Option<String>) {
+    let channel = req.channel.trim();
+    if channel.is_empty() {
+        return (
+            proto::ResponseStatus::InvalidArgument,
+            Some("publish_chunk: empty channel name".to_string()),
+        );
+    }
+
+    let Some(entry) = channels.iter().find(|c| c.name == channel) else {
+        return (
+            proto::ResponseStatus::InvalidArgument,
+            Some(format!(
+                "publish_chunk: channel '{channel}' is not declared in this job's channel manifest"
+            )),
+        );
+    };
+
+    if entry.plane != "data" {
+        return (
+            proto::ResponseStatus::InvalidArgument,
+            Some(format!(
+                "publish_chunk: channel '{channel}' is a '{}' channel, not a data channel",
+                entry.plane
+            )),
+        );
+    }
+
+    let Some(envelope) = req.envelope.as_ref() else {
+        return (
+            proto::ResponseStatus::InvalidArgument,
+            Some("publish_chunk: missing envelope".to_string()),
+        );
+    };
+
+    let subject = datastream_subject(execution_id, channel);
+    match transport {
+        Some(t) => {
+            if let Err(e) = t.write(&subject, envelope).await {
+                return (
+                    proto::ResponseStatus::Error,
+                    Some(format!("publish_chunk: transport publish failed: {e}")),
+                );
+            }
+            debug!(
+                %execution_id,
+                channel,
+                seq = envelope.seq,
+                is_eof = envelope.is_eof,
+                "datastream envelope published"
+            );
+        }
+        None => {
+            debug!(
+                %execution_id,
+                channel,
+                "publish_chunk: no transport wired — validated, not published"
+            );
+        }
+    }
+
+    (proto::ResponseStatus::Ok, None)
 }
 
 /// Download a storage-path object into the run directory and return its local
@@ -475,7 +759,9 @@ pub async fn start_ipc_sidecar(
     log_config: SidecarLogConfig,
     child_exited: CancellationToken,
     stream_ctx: Option<Arc<StreamContext>>,
-    chunk_rx: Option<tokio::sync::mpsc::Receiver<proto::ChunkMessage>>,
+    channels: Vec<ChannelManifestEntry>,
+    event_emitter: Option<Arc<dyn EventEmitter>>,
+    transport: Option<Arc<dyn StreamTransport>>,
 ) -> Result<tokio::task::JoinHandle<SidecarResult>, std::io::Error> {
     // Ensure socket parent directory exists (may be outside the run dir
     // when the path was shortened to fit the Unix sun_path limit).
@@ -488,6 +774,10 @@ pub async fn start_ipc_sidecar(
 
     let listener = UnixListener::bind(&socket_path)?;
     info!(path = %socket_path.display(), "IPC sidecar listening");
+
+    // The control-emit path needs the routing metadata to stamp onto every
+    // `ControlEmitEvent`; clone it before `metadata` is moved into the state.
+    let control_metadata = metadata.clone();
 
     let state = Arc::new(Mutex::new(SidecarState {
         execution_id: execution_id.clone(),
@@ -539,7 +829,11 @@ pub async fn start_ipc_sidecar(
             log_sink: log_sink.clone(),
             pending_uploads: pending_uploads.clone(),
             stream_ctx,
-            chunk_rx: Mutex::new(chunk_rx),
+            execution_id,
+            channels,
+            metadata: control_metadata,
+            event_emitter,
+            transport,
         };
 
         let shutdown = tokio_util::sync::CancellationToken::new();
@@ -1437,15 +1731,22 @@ async fn handle_set_output(
     }
     // Lock released before the (async) emit.
 
-    // PROTOTYPE — streaming output: emit an OutputSet event PER set_output CALL,
-    // mid-execution, so a downstream node wired off this step's "stream" port
-    // (compiler `stream_output`) receives each value while this step is still
-    // running — instead of only at job end (which races net completion). Gated
-    // on the `output` category being in the job's `stream_events` allowlist
-    // (the compiler adds it for stream_output steps), so non-streaming steps
-    // are unaffected. The job-end flush remains the source of truth for the
-    // node's parked output; these mid-run events are content-addressably
-    // deduped per output name engine-side, so the terminal re-emit collapses.
+    // Mid-execution OutputSet: emit an OutputSet event PER set_output CALL so a
+    // downstream node can observe each value while this step is still running —
+    // instead of only at job end (which races net completion). Gated on the
+    // `output` category being in the job's `stream_events` allowlist, so steps
+    // that don't opt in are unaffected. The job-end flush remains the source of
+    // truth for the node's parked output; these mid-run events are content-
+    // addressably deduped per output name engine-side, so the terminal re-emit
+    // collapses.
+    //
+    // NOTE (docs/25 streaming channels): the per-event STREAMING path (a job
+    // emitting into a typed control Channel via `emit`/`scatter`, surfaced as a
+    // `ControlEmitEvent` on `executor.events.{exec}.control_emit` and routed by
+    // the engine `ControlEmitHandler` into `p_{node}_{channel}`) is the data
+    // plane and lands in Phase 1b. This OutputSet fast-path is dormant for
+    // channel emits until then — no compiler currently sets `stream_events` for
+    // a channel, so this branch is inert on the 1a control-plane-only build.
     if let Some(ctx) = stream_ctx {
         ctx.maybe_emit(
             EventCategory::Output,
@@ -1620,6 +1921,8 @@ mod tests {
             SidecarLogConfig::default(),
             child_exited.clone(),
             None,
+            Vec::new(),
+            None,
             None,
         )
         .await
@@ -1694,6 +1997,73 @@ mod tests {
         // A genuinely unexpected error must NOT be swallowed.
         let other = Error::new(ErrorKind::InvalidData, "protocol error");
         assert!(!is_benign_disconnect(&other));
+    }
+
+    fn chunk(seq: u64, eof: bool) -> proto::ChunkMessage {
+        proto::ChunkMessage {
+            seq,
+            content_type: if eof {
+                String::new()
+            } else {
+                "application/json".to_string()
+            },
+            payload: if eof { Vec::new() } else { format!("{seq}").into_bytes() },
+            is_eof: eof,
+        }
+    }
+
+    /// The data-plane consumer read relay: envelopes pushed into the channel
+    /// (as the transport `subscribe` task would) are yielded in order over the
+    /// `StreamChunks` server-stream, and the EOF sentinel is yielded then ends
+    /// the stream — exactly what the Python `stream()` loop drains.
+    #[tokio::test]
+    async fn chunk_stream_relays_envelopes_until_eof() {
+        use futures::StreamExt;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let cancel = CancellationToken::new();
+        let mut stream = ChunkStream::subscribed(rx, cancel.clone());
+
+        // The transport's subscribe task feeds decoded envelopes in seq order,
+        // terminated by the in-band EOF sentinel.
+        tx.send(chunk(0, false)).await.unwrap();
+        tx.send(chunk(1, false)).await.unwrap();
+        tx.send(chunk(2, true)).await.unwrap();
+        drop(tx);
+
+        let a = stream.next().await.unwrap().unwrap();
+        assert_eq!(a.seq, 0);
+        assert_eq!(a.payload, b"0");
+        let b = stream.next().await.unwrap().unwrap();
+        assert_eq!(b.seq, 1);
+        // EOF sentinel is yielded to the client...
+        let eof = stream.next().await.unwrap().unwrap();
+        assert!(eof.is_eof);
+        // ...then the stream ends (no more items).
+        assert!(stream.next().await.is_none());
+    }
+
+    /// Dropping the stream cancels the subscribe task's token — a consumer that
+    /// abandons the loop early tears the producer subscription down.
+    #[tokio::test]
+    async fn chunk_stream_drop_cancels_subscription() {
+        let (_tx, rx) = tokio::sync::mpsc::channel::<proto::ChunkMessage>(8);
+        let cancel = CancellationToken::new();
+        let stream = ChunkStream::subscribed(rx, cancel.clone());
+        assert!(!cancel.is_cancelled());
+        drop(stream);
+        assert!(
+            cancel.is_cancelled(),
+            "dropping ChunkStream must cancel the subscribe task"
+        );
+    }
+
+    /// An empty stream (no producer subject / no transport) yields nothing.
+    #[tokio::test]
+    async fn chunk_stream_empty_yields_nothing() {
+        use futures::StreamExt;
+        let mut stream = ChunkStream::empty();
+        assert!(stream.next().await.is_none());
     }
 
     /// `try_accept` drains an already-queued connection (the accept-race

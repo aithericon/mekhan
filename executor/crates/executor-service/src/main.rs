@@ -46,9 +46,10 @@ use aithericon_executor_storage::StorageBackend;
 use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
 use aithericon_executor_worker::{
     drain_signal, handle_execution, spawn_presence_task, spawn_worker_presence_task,
-    BackendRegistry, BatchRunner, CancellationRegistry, ChunkRegistry, CompletionTracker,
-    DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime, NatsCancelListener,
-    NatsChunkListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
+    BackendRegistry, BatchRunner, CancellationRegistry, CompletionTracker,
+    DrainConfig, ExecutorConfig, JetStreamTransport, JobExecutor, JobSource, Lifetime,
+    NatsCancelListener, NixEnvironmentHook, SidecarLogConfig, StatusReporter,
+    StreamTransport,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -328,20 +329,14 @@ async fn run_nats_daemon(
         );
     }
 
-    // Set up the inbound live chunk feed (the "live IPC reducer"). Always-on:
-    // the per-job opt-in lives on `job.feed_chunks`, not here. The listener
-    // drains the ordered+lossless `EXECUTOR_CHUNKS` JetStream into per-job
-    // channels; reuses the cancel-listener shutdown token.
-    let chunk_registry = ChunkRegistry::new();
-    NatsChunkListener::ensure_stream(&jetstream, config.status_replicas).await?;
-    NatsChunkListener::start(
-        jetstream.clone(),
-        chunk_registry.clone(),
-        None,
-        cancel_shutdown.clone(),
-    )
-    .await?;
-    info!("NATS chunk listener started");
+    // Data-plane byte transport (docs/25 §6). Ensure the `EXECUTOR_DATASTREAM`
+    // stream exists once, then hand each job's IPC sidecar the transport so a
+    // producer's `PublishChunk` publishes binary envelopes onto its channel's
+    // datastream subject AND a consumer's `StreamChunks` subscribes to the
+    // producer's subject and relays its envelopes back.
+    JetStreamTransport::ensure_stream(&jetstream, config.status_replicas).await?;
+    let transport: Option<Arc<dyn StreamTransport>> =
+        Some(Arc::new(JetStreamTransport::new(jetstream.clone())));
 
     // Build the JobExecutor. `registered_wires` is the set of backend
     // wire-names that actually registered (feature-gated arms may skip) —
@@ -351,7 +346,7 @@ async fn run_nats_daemon(
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
-        chunk_registry,
+        transport,
     )?;
     let executor = Arc::new(executor);
 
@@ -587,17 +582,10 @@ async fn run_nats_drain(
         info!("NATS cancel listener started");
     }
 
-    // Inbound live chunk feed (see `run_nats_daemon` for the rationale).
-    let chunk_registry = ChunkRegistry::new();
-    NatsChunkListener::ensure_stream(&jetstream, config.status_replicas).await?;
-    NatsChunkListener::start(
-        jetstream.clone(),
-        chunk_registry.clone(),
-        None,
-        cancel_shutdown.clone(),
-    )
-    .await?;
-    info!("NATS chunk listener started");
+    // Data-plane byte transport (see `run_nats_daemon` for the rationale).
+    JetStreamTransport::ensure_stream(&jetstream, config.status_replicas).await?;
+    let transport: Option<Arc<dyn StreamTransport>> =
+        Some(Arc::new(JetStreamTransport::new(jetstream.clone())));
 
     // Build the executor with a completion tracker
     let tracker = Arc::new(CompletionTracker::new());
@@ -612,7 +600,7 @@ async fn run_nats_drain(
         reporter,
         &nats_client_for_cancel,
         cancel_registry,
-        chunk_registry,
+        transport,
     )?;
     executor.completion_tracker = Some(tracker);
     let executor = Arc::new(executor);
@@ -703,7 +691,7 @@ async fn run_manifest(
     let nats_client = connect_nats(&config).await?;
     let jetstream = async_nats::jetstream::new(nats_client.clone());
     let reporter = StatusReporter::new_with_prefix(
-        jetstream,
+        jetstream.clone(),
         config.name.clone(),
         config.status_replicas,
         config.subject_prefix.clone(),
@@ -726,11 +714,13 @@ async fn run_manifest(
     let storage =
         NatsStorage::<ExecutionJob>::new_with_config(nats_client.clone(), nats_config).await?;
 
-    // Build executor — same pipeline as daemon mode. Manifest mode runs local
-    // jobs with no live inbound feed, so the chunk registry is present but never
-    // populated (no `NatsChunkListener`); reducer jobs aren't a manifest path.
+    // Build executor — same pipeline as daemon mode.
     let cancel_registry = CancellationRegistry::new();
-    let chunk_registry = ChunkRegistry::new();
+    // Data-plane transport: a manifest job MAY be a producer (`open_output`) or a
+    // consumer (`stream`), so wire the transport here too.
+    JetStreamTransport::ensure_stream(&jetstream, config.status_replicas).await?;
+    let transport: Option<Arc<dyn StreamTransport>> =
+        Some(Arc::new(JetStreamTransport::new(jetstream.clone())));
     // Manifest mode is its own single-namespace dispatcher — no per-backend
     // fan-out, so the registered wire set is unused here.
     let (executor, _registered_wires) = build_executor(
@@ -738,7 +728,7 @@ async fn run_manifest(
         reporter.clone(),
         &nats_client,
         cancel_registry,
-        chunk_registry,
+        transport,
     )?;
     let executor = Arc::new(executor);
 
@@ -942,7 +932,7 @@ fn build_executor(
     reporter: StatusReporter,
     nats_client: &async_nats::Client,
     cancel_registry: CancellationRegistry,
-    chunk_registry: ChunkRegistry,
+    transport: Option<Arc<dyn StreamTransport>>,
 ) -> Result<(JobExecutor, Vec<&'static str>), Box<dyn std::error::Error + Send + Sync>> {
     let base_dir = PathBuf::from(&config.base_dir);
 
@@ -1030,9 +1020,9 @@ fn build_executor(
             metric_sink,
             log_sink,
             cancel_registry,
-            chunk_registry,
             log_config,
             completion_tracker: None,
+            transport,
         },
         registered_wires,
     ))

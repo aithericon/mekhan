@@ -185,6 +185,7 @@ async fn openai_resource_secret_is_resolved_into_bearer_token() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 
@@ -309,6 +310,7 @@ async fn openai_env_secret_is_resolved_into_bearer_token() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 
@@ -414,6 +416,7 @@ async fn missing_openai_secret_fails_at_staging_not_at_adapter() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 

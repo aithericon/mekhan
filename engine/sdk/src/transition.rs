@@ -1150,6 +1150,9 @@ impl<'ctx> TransitionBuilder<'ctx> {
         if let Some(l) = ports.log {
             event_routes.insert("log".into(), serde_json::json!(l.id()));
         }
+        if let Some(c) = ports.control_in {
+            event_routes.insert("control_emit".into(), serde_json::json!(c.id()));
+        }
         if !event_routes.is_empty() {
             config["event_routes"] = serde_json::Value::Object(event_routes);
         }

@@ -1,20 +1,17 @@
-# Reducer — demo 15 (AutomatedStep with streamInput=true).
+# Reducer — demo 15 (the AutomatedStep body IS the reducer, docs/25).
 #
-# A streamInput AutomatedStep IS the reducer: it is seeded at net entry (starts
-# immediately), receives the upstream producer's chunks via `aithericon.chunks()`
-# over the IPC sidecar, does its own reduction (uppercase + concatenate), and
-# emits the final result. No container node, no Petri-net gather barrier — this
-# single step owns the reduction.
-#
-# `aithericon.chunks()` is a generator that yields chunk values as they arrive.
-# It terminates when the producer's stream ends (the EOF sentinel, sent when the
-# producer's control token reaches this node's `in`).
+# This step declares a Data/In channel "words" wired from the producer's
+# `open_output("words")` handle (graph.json). `aithericon.stream("words")` drains
+# the producer's out-of-band byte stream as elements arrive — it starts the
+# moment the producer's `open` descriptor reaches this node (EARLY, independent of
+# the producer finishing) and yields one decoded element per envelope until the
+# in-band EOF. The Python body does its own reduction (uppercase + concatenate)
+# and emits the final result. No container node, no Petri-net gather barrier —
+# this single step owns the reduction (docs/25 §2 retires net-native Fold).
 
-from aithericon import chunks, set_output
+from aithericon import set_output, stream
 
-acc = []
-for chunk in chunks():
-    acc.append(str(chunk).upper())
+acc = [str(w).upper() for w in stream("words")]
 
 transcript = " ".join(acc)
 set_output("transcript", transcript)

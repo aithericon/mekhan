@@ -64,7 +64,6 @@ export type TimeoutNodeData = Extract<SchemaWorkflowNodeData, { type: 'timeout' 
 export type TriggerNodeData = Extract<SchemaWorkflowNodeData, { type: 'trigger' }>;
 export type SubWorkflowNodeData = Extract<SchemaWorkflowNodeData, { type: 'sub_workflow' }>;
 export type AgentNodeData = Extract<SchemaWorkflowNodeData, { type: 'agent' }>;
-export type StreamFoldNodeData = Extract<SchemaWorkflowNodeData, { type: 'stream_fold' }>;
 
 // Convenience aliases for TaskBlockConfig variants used in editor pickers.
 export type InputBlock = Extract<SchemaTaskBlockConfig, { type: 'input' }>;
@@ -220,13 +219,6 @@ export function createDefaultNodeData(type: WorkflowNodeType): SchemaWorkflowNod
 				onToolError: 'feedback',
 				retryPolicy: { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 },
 				deploymentModel: { mode: 'executor' }
-			};
-		case 'stream_fold':
-			return {
-				type: 'stream_fold',
-				label: 'Stream Fold',
-				resultVar: 'item',
-				reduce: { kind: 'array' }
 			};
 	}
 }

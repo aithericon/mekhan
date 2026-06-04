@@ -1,14 +1,15 @@
-# Joiner — concatenate the gathered Map collection (demo 16).
+# Joiner — concatenate the scatter-gathered collection (docs/25).
 #
-# The streaming Map parks its gathered collection as the envelope
-# `{ output: [<element>, ...] }` at `p_mapper_data`. This source references
-# `mapper.output` (an upstream parked Map producer), so the compiler scans it,
-# synthesizes a read-arc into the Map's parked place, and stages the whole
-# envelope as `mapper.json` — the runner promotes `mapper` to a global.
+# The producer's Control/Scatter channel "items" parks its gathered collection
+# as the envelope `{ output: [<word>, ...] }` on the channel's gathered place.
+# The graph wires that place (sourceHandle "items") straight into this node, so
+# the gathered envelope IS this step's input token — read the list off
+# `input.output` (the runner exposes the inbound token as the `input` global).
 #
-# Each element is one uppercased word (the Map lifted the body's `upper` value
-# directly). Join them in stream order into the final transcript.
+# The items are already in stream order (the gather barrier sorts by emit
+# index). Uppercase each word and concatenate into the final transcript —
+# "THE QUICK BROWN FOX".
 
-elems = mapper.output
+elems = input.output or []
 
-transcript = " ".join(str(e) for e in elems)
+transcript = " ".join(str(e).upper() for e in elems)

@@ -3764,6 +3764,36 @@ export interface components {
             total_bytes: number;
         };
         /**
+         * @description A statically-declared, typed port on an [`AutomatedStep`]. The job emits
+         *     (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
+         *     place at runtime; the net wires edges to it by `name`. `contract` is set
+         *     only on `Control`-plane channels (the firing semantics); `max_fanout` caps
+         *     a `Scatter`'s fan-out width.
+         */
+        Channel: {
+            contract?: null | components["schemas"]["ControlContract"];
+            direction: components["schemas"]["ChannelDirection"];
+            element: components["schemas"]["ElementType"];
+            /** Format: int32 */
+            max_fanout?: number | null;
+            name: string;
+            plane: components["schemas"]["ChannelPlane"];
+        };
+        /**
+         * @description Which way a [`Channel`] flows relative to its owning node: `In` consumes
+         *     tokens the node reads, `Out` produces tokens the node emits.
+         * @enum {string}
+         */
+        ChannelDirection: "in" | "out";
+        /**
+         * @description Which net plane a [`Channel`] rides on: `Control` carries slim control
+         *     tokens that drive net firing (the borrow resolver can reference their
+         *     payload fields downstream); `Data` carries out-of-band element payloads
+         *     (large/binary), edge-wired only and never value-referenceable.
+         * @enum {string}
+         */
+        ChannelPlane: "data" | "control";
+        /**
          * @description A single message in conversation history.
          *
          *     `content` is a JSON value, not a bare string, because tool-result
@@ -4032,6 +4062,13 @@ export interface components {
          * @enum {string}
          */
         ContextStrategy: "none" | "drop_oldest" | "summarize_oldest";
+        /**
+         * @description The firing contract of a CONTROL [`Channel`]: `Signal` deposits one token
+         *     per emission (fire-and-forget downstream); `Scatter` fans out instance-
+         *     colored items closed by a count, sized at the gather barrier by `max_fanout`.
+         * @enum {string}
+         */
+        ControlContract: "signal" | "scatter";
         CopyConfig: {
             compress?: null | components["schemas"]["Compression"];
             decompress?: null | components["schemas"]["Compression"];
@@ -4437,6 +4474,23 @@ export interface components {
             size?: number | null;
             thumbnail_url?: string | null;
             url: string;
+        };
+        /**
+         * @description The element type a [`Channel`] carries. `Json` declares a schema the
+         *     compiler typechecks against the `SchemaRegistry`; `Binary` carries opaque
+         *     bytes tagged by `content_type`; `Any` is an untyped passthrough.
+         */
+        ElementType: {
+            schema: unknown;
+            /** @enum {string} */
+            type: "json";
+        } | {
+            content_type: string;
+            /** @enum {string} */
+            type: "binary";
+        } | {
+            /** @enum {string} */
+            type: "any";
         };
         /**
          * @description The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate
@@ -7404,27 +7458,6 @@ export interface components {
             /** @description Secret key (S3 secret access key, GCS HMAC secret, Azure account key). */
             secret_key?: string;
         };
-        /**
-         * @description How a `StreamFold` folds the drained chunks into its single output token.
-         *     Tagged on `kind` (camelCase), mirroring the serde conventions of the other
-         *     config enums. Each variant selects the gather barrier's reduce Rhai in
-         *     `compiler/lower/stream_fold.rs`.
-         */
-        StreamReduce: {
-            /** @enum {string} */
-            kind: "array";
-        } | {
-            /** @enum {string} */
-            kind: "concat";
-            sep?: string | null;
-        } | {
-            /** @enum {string} */
-            kind: "sum";
-        } | {
-            expr: string;
-            /** @enum {string} */
-            kind: "custom";
-        };
         TaskBlockConfig: {
             field: components["schemas"]["TaskFieldConfig"];
             /** @enum {string} */
@@ -8363,9 +8396,17 @@ export interface components {
              *     whole record collection as an ordinary input (`<alias>.json`) the
              *     node code reads. `#[serde(default)]` ⇒ existing templates (field
              *     absent → empty) round-trip unchanged (same precedent as
-             *     `deployment_model`/`stream_output`).
+             *     `deployment_model`/`channels`).
              */
             assetBindings?: components["schemas"]["AssetBinding"][];
+            /**
+             * @description Statically-declared streaming [`Channel`]s (docs/25). Each control-
+             *     output channel synthesizes a place `p_{id}_{name}` the job emits into
+             *     at runtime via `emit`/`scatter`; downstream edges wire to it by
+             *     `sourceHandle`/`targetHandle == name`. `#[serde(default)]` ⇒ existing
+             *     templates (field absent → empty) round-trip unchanged.
+             */
+            channels?: components["schemas"]["Channel"][];
             /**
              * @description Where/how the job is dispatched. `Executor` (default) = our executor
              *     daemon pool over the NATS work queue, optionally under a Tokens or
@@ -8403,30 +8444,6 @@ export interface components {
              *     templates keep their prior semantics without re-authoring.
              */
             retryPolicy?: components["schemas"]["RetryPolicy"];
-            /**
-             * @description Opt-in streaming CONSUMER. When `true`, the node exposes a second
-             *     INPUT port "stream" and becomes a long-lived stateful reducer: it is
-             *     seeded at net entry, receives the upstream producer's chunks over IPC
-             *     (`aithericon.chunks()`), and folds them in-process. Wire the
-             *     producer's `stream` handle to this node's `stream` input and its
-             *     control `out` to this node's `in` (the control token's arrival is the
-             *     end-of-stream / EOF trigger, carrying `stream_count`). The compiler
-             *     derives the executor `feed_chunks` flag from this. Plain `bool` +
-             *     `#[serde(default)]` ⇒ existing templates round-trip unchanged.
-             */
-            streamInput?: boolean;
-            /**
-             * @description PROTOTYPE — opt-in streaming side-channel. When `true`, the node
-             *     exposes a second output port "stream" and the compiler synthesizes a
-             *     Signal place `p_{id}_stream` that receives ONE token per executor
-             *     `EventCategory::Log` event (Python `log_info()/log_debug()/…`). An
-             *     edge from the "stream" handle fires the downstream node once per log
-             *     token; the normal "out" control token still governs termination.
-             *     Plain `bool` + `#[serde(default)]` ⇒ existing templates (field
-             *     absent → `false`) round-trip unchanged (same precedent as
-             *     `retry_policy`/`deployment_model`).
-             */
-            streamOutput?: boolean;
             /** @enum {string} */
             type: "automated_step";
         } | {
@@ -8511,9 +8528,7 @@ export interface components {
             /**
              * @description Producer-namespaced reference to the array to scatter, carrying
              *     exactly one `[*]` boundary at iteration time (resolved through the
-             *     Repeater items-ref machinery), e.g. `extract.tasks`. IGNORED when
-             *     `stream_source` is set (a streaming Map sources elements from its
-             *     `stream`/`control` edges, not a static array).
+             *     Repeater items-ref machinery), e.g. `extract.tasks`.
              */
             itemsRef?: string;
             label: string;
@@ -8523,35 +8538,8 @@ export interface components {
              *     element (the per-iteration result the reduce collects).
              */
             resultVar: string;
-            /**
-             * @description When `true`, this Map is a STREAMING map: instead of scattering the
-             *     static `items_ref` array, it ingests a streaming producer's chunks
-             *     (one element per chunk over the `stream` handle) and sizes its gather
-             *     barrier on the runtime `stream_count` (from the `control` handle).
-             *     Parallel-only — bodies fan out concurrently exactly like the array
-             *     path; `__map_idx` (the producer sequence) restores order at the
-             *     gather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps
-             *     round-trip unchanged.
-             */
-            streamSource?: boolean;
             /** @enum {string} */
             type: "map";
-        } | {
-            description?: string | null;
-            label: string;
-            /**
-             * @description How the drained chunks are folded into the single output token.
-             *     Defaults to an ordered `Array` (sort by stream sequence, project
-             *     `.value`).
-             */
-            reduce?: components["schemas"]["StreamReduce"];
-            /**
-             * @description Name of the output field that holds the reduced result; borrowable
-             *     downstream as `<slug>.<resultVar>`.
-             */
-            resultVar?: string;
-            /** @enum {string} */
-            type: "stream_fold";
         } | {
             description?: string | null;
             label: string;

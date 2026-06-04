@@ -38,7 +38,9 @@ use petri_application::{
     CatalogueUnsubscribeHandler,
 };
 #[cfg(feature = "executor")]
-use petri_application::{ExecutorCancelHandler, ExecutorStreamFeedHandler, ExecutorSubmitHandler};
+use petri_application::{
+    ControlEmitHandler, ExecutorCancelHandler, ExecutorStreamFeedHandler, ExecutorSubmitHandler,
+};
 use petri_domain::human::HumanTaskClient;
 #[cfg(feature = "executor")]
 use petri_domain::ExecutorClient;
@@ -914,6 +916,19 @@ where
                     Arc::new(ExecutorStreamFeedHandler::new(executor_client)),
                 )
                 .expect("register executor_stream_feed effect handler");
+
+            // The control_emit handler (docs/25 streaming-channels) deposits a
+            // job's dynamically-emitted control tokens into their declared
+            // channel places. It needs no executor client — it routes purely on
+            // the per-fire `channel_routes` baked on the transition's
+            // effect_config — but lives with the executor handler set because the
+            // emits originate from a running executor job.
+            service
+                .register_effect_handler(
+                    effects::CONTROL_EMIT.handler_id,
+                    Arc::new(ControlEmitHandler::new()),
+                )
+                .expect("register control_emit effect handler");
 
             tracing::info!(
                 net_id = %net_id,

@@ -1,24 +1,21 @@
-# Producer — streaming-source Map demo (demo 16).
+# Producer — scatter the words onto a Control/Out channel (docs/25).
 #
-# `streamOutput: true` (graph.json) makes every `set_output(name, value)` call
-# emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this
-# node's stream side-channel (the `p_producer_stream` Signal place). The
-# downstream streaming Map ingests each chunk as it arrives and dispatches a
-# per-chunk Python body CONCURRENTLY (one ephemeral job per chunk).
+# The producer declares a Control channel "items" with contract=Scatter and
+# max_fanout=8 (graph.json). `scatter("items")` opens a fan-out: every
+# `s.emit(value)` fires one instance-colored `scatter_item` control token into
+# the channel; closing the context fires a `scatter_close` carrying the total
+# item count. The compiler's per-channel gather barrier (sized on that count)
+# re-orders the items by emit index and parks the gathered collection as
+# `{ output: [<word>, ...] }` on the channel's gathered place. The downstream
+# edge (sourceHandle "items") feeds that collection straight into the joiner.
 #
-# We emit one DISTINCT-named chunk per word, each value a plain string. The
-# map body uppercases each chunk; the gather re-orders by stream sequence and
-# the trailing joiner concatenates into "THE QUICK BROWN FOX".
-#
-# IMPORTANT: a streaming producer must emit ONLY stream chunks — every
-# `set_output` is counted into `stream_count` (the end-of-stream N that sizes
-# the Map's gather barrier). Do NOT also set a control output here.
+# Replaces the old `streamOutput`/`set_output(f"chunk_i")` model: no per-chunk
+# token spam in the marking, just one scatter open + N emits + one close, each a
+# control emission off-band of the net's firing.
 
-import time
-
-from aithericon import set_output
+from aithericon import scatter
 
 words = ["the", "quick", "brown", "fox"]
-for i, w in enumerate(words):
-    set_output(f"chunk_{i}", w)
-    time.sleep(1.0)
+with scatter("items") as s:
+    for w in words:
+        s.emit(w)

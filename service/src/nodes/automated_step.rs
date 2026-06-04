@@ -9,7 +9,7 @@
 //! dispatch arms for Inline / Scheduled / EngineEffect).
 
 use crate::compiler::interface::NodeKind;
-use crate::models::template::{Port, WorkflowNodeData};
+use crate::models::template::{ChannelDirection, Port, WorkflowNodeData};
 use crate::nodes::{NodeDecl, YjsEncodeFn};
 use crate::yjs::persistence::json_value_to_any;
 
@@ -42,22 +42,25 @@ fn input_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // authored an input shape. Matches the central
     // `WorkflowNodeData::input_ports` arm.
     let WorkflowNodeData::AutomatedStep {
-        input, stream_input, ..
+        input, channels, ..
     } = data
     else {
         unreachable!("automated_step::input_ports on non-AutomatedStep variant");
     };
+    // Plus one pass-through input port per `In` channel (docs/25) — an upstream
+    // edge wires to it by `targetHandle == <name>` (the compiler registers the
+    // synthesized inbound place in `NodePorts.input_handles` under the same
+    // name). Empty fields ⇒ pass-through so the dynamic channel token wires
+    // without a static field contract. Channel-less steps add nothing, so the
+    // port list is byte-stable.
     let mut ports = vec![input.clone()];
-    // streamInput reducer exposes a SECOND input handle "stream" alongside the
-    // implicit control "in". The compiler routes it to `p_{id}_stream_in` (the
-    // producer's per-chunk Signal tokens) via `input_handles`.
-    if *stream_input {
-        ports.push(Port {
-            id: "stream".to_string(),
-            label: "Stream".to_string(),
+    ports.extend(channels.iter().filter(|c| matches!(c.direction, ChannelDirection::In)).map(
+        |c| Port {
+            id: c.name.clone(),
+            label: c.name.clone(),
             fields: vec![],
-        });
-    }
+        },
+    ));
     ports
 }
 
@@ -68,13 +71,19 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
     // `p_{id}_error`. Matches the central `WorkflowNodeData::output_ports`
     // arm.
     let WorkflowNodeData::AutomatedStep {
-        output,
-        stream_output,
-        ..
+        output, channels, ..
     } = data
     else {
         unreachable!("automated_step::output_ports on non-AutomatedStep variant");
     };
+    // Plus one pass-through output port per `Out` channel (docs/25) — a
+    // downstream edge wires off it by `sourceHandle == <name>` (the compiler
+    // registers the synthesized deposit/gathered place in
+    // `NodePorts.output_places` under the same name; `find_output_place` routes
+    // there). Empty fields ⇒ pass-through so the dynamic channel token (a
+    // `Signal` emission or the `Scatter` gathered `{ output: [..] }` envelope)
+    // wires without a static field contract. Channel-less steps add nothing, so
+    // the port list is byte-stable.
     let mut ports = vec![
         output.clone(),
         Port {
@@ -83,17 +92,13 @@ fn output_ports(data: &WorkflowNodeData) -> Vec<Port> {
             fields: vec![],
         },
     ];
-    // PROTOTYPE — `stream_output` exposes a SECOND output handle "stream"
-    // alongside the control "out" and the "error" port. The compiler maps it to
-    // the Signal place `p_{id}_stream` (one token per executor Log event). Empty
-    // `fields` ⇒ pass-through so wiring it to any downstream node type-checks.
-    if *stream_output {
-        ports.push(Port {
-            id: "stream".to_string(),
-            label: "Stream".to_string(),
+    ports.extend(channels.iter().filter(|c| matches!(c.direction, ChannelDirection::Out)).map(
+        |c| Port {
+            id: c.name.clone(),
+            label: c.name.clone(),
             fields: vec![],
-        });
-    }
+        },
+    ));
     ports
 }
 
@@ -105,8 +110,7 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
         output,
         retry_policy,
         deployment_model,
-        stream_output,
-        stream_input,
+        channels,
         requirements,
         ..
     } = data
@@ -135,20 +139,14 @@ fn yjs_encode(txn: &mut yrs::TransactionMut<'_>, config: &yrs::MapRef, data: &Wo
     config.insert(txn, "retryPolicy", json_value_to_any(&retry_val));
     let dm_val = serde_json::to_value(deployment_model).unwrap_or_default();
     config.insert(txn, "deploymentModel", json_value_to_any(&dm_val));
-    // `stream_output` is `#[serde(default)]`; like the other fields above it must
-    // be written explicitly or the graph→Y.Doc seed + Y.Doc→graph reconstruction
-    // would silently reset the prototype streaming flag to `false`.
-    config.insert(
-        txn,
-        "streamOutput",
-        json_value_to_any(&serde_json::Value::Bool(*stream_output)),
-    );
-    // `stream_input` — same round-trip rationale as `stream_output`.
-    config.insert(
-        txn,
-        "streamInput",
-        json_value_to_any(&serde_json::Value::Bool(*stream_input)),
-    );
+    // `channels` is `#[serde(default, skip_serializing_if = Vec::is_empty)]`;
+    // like the other fields above it must be written explicitly (when non-empty)
+    // or the graph→Y.Doc seed + Y.Doc→graph reconstruction would silently drop
+    // the declared streaming channels. Empty ⇒ absent key (round-trips to `[]`).
+    if !channels.is_empty() {
+        let ch_val = serde_json::to_value(channels).unwrap_or_default();
+        config.insert(txn, "channels", json_value_to_any(&ch_val));
+    }
     // `requirements` is `Option<Requirements>` (`#[serde(default,
     // skip_serializing_if = Option::is_none)]`). Like deploymentModel it must be
     // written explicitly or the graph→Y.Doc seed (createTemplate / seeded demos)

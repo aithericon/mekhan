@@ -115,20 +115,12 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         execution_spec,
         retry_policy,
         output,
-        stream_output,
-        stream_input,
+        channels,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_automated_step on non-AutomatedStep node")
     };
-    let stream_output = *stream_output;
-    // A `streamInput` AutomatedStep is a long-lived streaming reducer: it is
-    // seeded at net entry, receives the upstream producer's chunks over IPC, and
-    // folds them in-process. The executor opts into the inbound chunk feed when
-    // `feed_chunks` is set — derived directly from the node's own flag.
-    let stream_input = *stream_input;
-    let feed_chunks = stream_input;
 
     // Is this the terminal node of a Map body? If so it must forward its FULL
     // completed envelope (park data AND the whole token) so the Map's
@@ -176,6 +168,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     let inputs_rhai =
         json_to_rhai_literal(&serde_json::to_value(&staged_inputs).unwrap_or_default());
     let outputs_rhai = declared_outputs_rhai(*backend_type, output);
+    // Streaming-channel manifest (docs/25): the declared channels, baked into
+    // the job spec so the worker validates each `emit`/`scatter` channel name.
+    // `[]` for a channel-less step ⇒ byte-stable spec. Cloned out of the node
+    // data here, before the `&mut *cx.ctx` reborrow ends the `cx.node.data`
+    // borrow; `lower_channels` (below) consumes the same slice.
+    let channels = channels.clone();
+    let channels_rhai = super::channels::channel_manifest_rhai(&channels);
 
     let max_retries = retry_policy.max_retries;
 
@@ -348,77 +347,12 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         None
     };
 
-    // Streaming side-channel: when `stream_output` is set, mint a Signal place
-    // `p_{id}_stream` (intentionally multi-token — one token per executor
-    // Output event, i.e. per `set_output(name, value)` the job produces) at
-    // NODE scope and hand it to the lifecycle's `stream_output` bridge below.
-    // The lifecycle's `log_output` transition grows a second output arc onto
-    // this place, copying each Output event here AND onto `output_log`. A
-    // downstream edge from the node's "stream" handle consumes from here
-    // (registered in `output_places`) and reads `{ name, value }` off the
-    // token's `.detail`. Leftover stream tokens never block `NetCompleted`
-    // (Signal is never terminal); the slim control token still governs
-    // completion.
-    let p_stream: Option<PlaceHandle<DynamicToken>> = if stream_output {
-        Some(ctx.signal(format!("p_{id}_stream"), format!("{label} - Stream")))
-    } else {
-        None
-    };
-    // Clone for the move into the `scoped_prefix` closure (the original is
-    // consumed by `output_places` registration after the closure returns).
-    let p_stream_bridge = p_stream.clone();
-
-    // ── streamInput reducer interface (long-lived in-process fold) ──────────
-    // When `stream_input` is set this node is a streaming REDUCER: it is seeded
-    // at net entry so its executor job starts immediately (the post-mortem
-    // "immediate bootstrap" — `p_exec_id` is always populated even for an empty
-    // stream), receives the producer's chunks over IPC, and folds them in the
-    // Python loop (`aithericon.chunks()`). The chunk feed + EOF arcs are minted
-    // after the lifecycle closure (they reference the lifecycle's scoped
-    // `p_{id}_submitted`). The control `in` edge is the EOF trigger — it is
-    // routed to `p_{id}_control_in` (NOT `p_input`) via `input_handles` below.
-    let stream_reducer = if stream_input {
-        let p_control_in: PlaceHandle<DynamicToken> =
-            ctx.state(format!("p_{id}_control_in"), format!("{label} - Control In"));
-        let p_stream_in: PlaceHandle<DynamicToken> =
-            ctx.state(format!("p_{id}_stream_in"), format!("{label} - Stream In"));
-        let p_dense_seq: PlaceHandle<DynamicToken> = ctx.state(
-            format!("p_{id}_dense_seq"),
-            format!("{label} - Dense Sequence Counter"),
-        );
-        let p_exec_id: PlaceHandle<DynamicToken> = ctx.state(
-            format!("p_{id}_exec_id"),
-            format!("{label} - Reducer Execution ID"),
-        );
-        let p_feed_inbox: PlaceHandle<DynamicToken> =
-            ctx.state(format!("p_{id}_feed_inbox"), format!("{label} - Feed Inbox"));
-        // One-shot gate for `t_capture_exec_id`. `t_capture` read-arcs the
-        // lifecycle's `submitted` place (non-consuming, so the lifecycle keeps
-        // it) — without a CONSUMING input it would be perpetually enabled and
-        // fire forever, flooding `p_exec_id` and starving the rest of the net
-        // (the producer never starts). This seeded gate is consumed on the first
-        // firing so the capture happens exactly once.
-        let p_exec_gate: PlaceHandle<DynamicToken> = ctx.state(
-            format!("p_{id}_exec_gate"),
-            format!("{label} - Exec-ID Capture Gate"),
-        );
-        ctx.seed_one(&p_exec_gate, DynamicToken::new(json!({})));
-        ctx.seed_one(&p_dense_seq, DynamicToken::new(json!({ "n": 0 })));
-        // Immediate bootstrap: seed a null input so `prepare` fires on net entry
-        // and the reducer job submits. The reducer reads chunks ONLY via IPC, so
-        // the seed value is inert (no first-chunk duplication).
-        ctx.seed_one(&p_input, DynamicToken::new(json!({})));
-        Some((
-            p_control_in,
-            p_stream_in,
-            p_dense_seq,
-            p_exec_id,
-            p_feed_inbox,
-            p_exec_gate,
-        ))
-    } else {
-        None
-    };
+    // Streaming channels (docs/25): pre-create the `control_emit` inbox (only
+    // when the node declares ≥1 OUT control channel) so the lifecycle's submit
+    // transition can register `event_routes["control_emit"]` → its id, then hand
+    // the SAME handle to `lower_channels` below to drain it. `None` (no place) ⇒
+    // AIR byte-stable for channel-less steps.
+    let p_control_in = super::channels::control_inbox(ctx, id, label, &channels);
 
     // Scoped prefix: all lifecycle IDs become "{id}/submitted", "{id}/completed", etc.
     let handles = ctx.scoped_prefix(id, label, |ctx| {
@@ -447,19 +381,9 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         // so the runtime stages the producer's parked data alongside
         // `input.json` and the runner exposes `<slug>` as a Python global.
         // The sentinel survives a no-op replacement (empty pushes) cleanly.
-        // PROTOTYPE — when `stream_output` is set, opt the executor into
-        // emitting `output` events PER `set_output` CALL (mid-execution) so the
-        // node's "stream" port delivers each value while the step still runs,
-        // instead of only at job end (which races net completion). The executor
-        // gates per-call OutputSet emission on this `output` category being in
-        // `stream_events`; non-streaming steps omit it and are unaffected.
-        let stream_events_rhai = if stream_output {
-            r#"["metric", "progress", "phase", "log", "output"]"#
-        } else {
-            r#"["metric", "progress", "phase", "log"]"#
-        };
+        let stream_events_rhai = r#"["metric", "progress", "phase", "log"]"#;
         let prepare_logic = format!(
-            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; d.feed_chunks = {feed_chunks};{ns_frag}{job_template_frag}{container_frag} #{{ job: d }}"#
+            r#"let d = input; d.job_id = "{id}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); /*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_type}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai}, "channels": {channels_rhai} }};{ns_frag}{job_template_frag}{container_frag} #{{ job: d }}"#
         );
         let prepare = ctx
             .transition("prepare", format!("{label} - Prepare"))
@@ -497,11 +421,13 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
                 // causality consumer projects them into hpi_metrics /
                 // hpi_logs against the causality-discovered process.
                 process: true,
-                // When set, the lifecycle's `log_output` transition ALSO copies
-                // each Output event onto this place (one token per
-                // `set_output(name, value)`) so the node's "stream" handle fires
-                // the downstream once per output.
-                stream_output: p_stream_bridge,
+                // Streaming channels (docs/25) are synthesized as a separate
+                // control-emit path, not via the lifecycle's Output side-channel.
+                stream_output: None,
+                // The pre-created control-emit inbox (docs/25). `Some` only when
+                // the node has ≥1 OUT control channel; the submit transition
+                // registers `event_routes["control_emit"]` → its id.
+                control_in: p_control_in.clone(),
             },
         );
 
@@ -523,70 +449,6 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
 
         lc
     });
-
-    // ── streamInput chunk-feed + EOF arcs (relocated LiveReduce machinery) ──
-    // The reducer job is started by the seed above. These arcs feed each
-    // upstream chunk to it over IPC and send a clean EOF when the producer
-    // completes. The reducer's own terminal output flows through the standard
-    // `t_to_output` → `split_outputs` tail below — there is no separate collect
-    // (the node IS the reducer, not a container around one).
-    if let Some((p_control_in, p_stream_in, p_dense_seq, p_exec_id, p_feed_inbox, p_exec_gate)) =
-        &stream_reducer
-    {
-        // Capture the reducer's execution id from the lifecycle's submitted
-        // state (read-arc, non-consuming) so it is always available for the EOF
-        // sentinel even on an empty (`stream_count == 0`) stream. The lifecycle
-        // runs inside `scoped_prefix(id)`, so its internal `submitted` state is
-        // named `<id>/submitted` (scoped slash-form), NOT the `p_<id>_*`
-        // interface form — referencing the latter yields the engine's
-        // "Unknown place reference" 400 at deploy.
-        let p_submitted = PlaceHandle::<DynamicToken>::external(format!("{id}/submitted"));
-        ctx.transition(
-            format!("t_{id}_capture_exec_id"),
-            format!("{label} - Capture Exec ID"),
-        )
-        .auto_input("gate", p_exec_gate)
-        .read_input("submitted", &p_submitted)
-        .auto_output("exec_id", p_exec_id)
-        .logic_rhai("#{ exec_id: #{ id: submitted.execution_id } }".to_string())
-        .done();
-
-        // Feed each chunk over IPC, renumbering 0..N-1 with the node's own dense
-        // counter so the executor ReorderBuffer never wedges on the producer's
-        // sparse global `sequence`.
-        ctx.transition(format!("t_{id}_feed"), format!("{label} - Feed Chunk"))
-            .auto_input("chunk", p_stream_in)
-            .auto_input("seq", p_dense_seq)
-            .read_input("exec", p_exec_id)
-            .auto_output("feed", p_feed_inbox)
-            .auto_output("seq", p_dense_seq)
-            .logic_rhai(
-                "#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: seq.n }, seq: #{ n: seq.n + 1 } }"
-                    .to_string(),
-            )
-            .done();
-
-        ctx.transition(
-            format!("t_{id}_feed_effect"),
-            format!("{label} - Stream Feed Effect"),
-        )
-        .auto_input("feed", p_feed_inbox)
-        .builtin_effect(&petri_domain::effects::EXECUTOR_STREAM_FEED);
-
-        // EOF: when the producer's control token arrives on `p_control_in` (its
-        // `out` → this node's `in`), send the EOF sentinel. The sequence is the
-        // dense total (`stream_count`), always one past the last chunk.
-        ctx.transition(format!("t_{id}_eof"), format!("{label} - Feed EOF"))
-            .auto_input("ctrl", p_control_in)
-            .read_input("exec", p_exec_id)
-            .auto_output("feed", p_feed_inbox)
-            .logic_rhai(
-                "let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; \
-                 #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }"
-                    .to_string(),
-            )
-            .done();
-    }
 
     // Bridge lifecycle outputs to node interface
     ctx.transition(format!("t_{id}_to_output"), format!("{label} - To Output"))
@@ -629,15 +491,16 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // unaffected; only the token handed to the container's `body_out` changes.
     let (data_place_id, p_ctrl) = if is_map_body_terminal {
         park_outputs(ctx, id, label, &p_output)
-    } else if stream_output {
-        // Streaming producer: the slim control token additionally carries
-        // `stream_count` (the end-of-stream item count) so a downstream
-        // StreamConsumer's `t_close` can size its gather barrier. Plain
-        // `split_outputs` strips `detail`, losing it.
-        split_outputs_streaming(ctx, id, label, &p_output)
     } else {
         split_outputs(ctx, id, label, &p_output)
     };
+
+    // Streaming channels (docs/25): synthesize one place per control channel +
+    // the `control_emit` ingestion seam (inbox + effect transition with
+    // `channel_routes`) + scatter gather. Returns the per-channel wiring ports
+    // folded into NodePorts below. No control channels ⇒ no topology (byte-stable).
+    let lowered_channels =
+        super::channels::lower_channels(ctx, id, label, &channels, p_control_in, &p_input);
 
     // Slim control success output, plus the named "error" output ONLY when the
     // handle is wired. An edge from the node's error handle (source_handle ==
@@ -648,21 +511,19 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     if let Some(p_error) = p_error {
         output_places.push((Some("error".to_string()), p_error));
     }
-    // PROTOTYPE — register the "stream" handle → `p_{id}_stream` so a normal
-    // edge from that handle (sourceHandle == "stream") wires the Signal place to
-    // the downstream transition via `wire_edge`/`find_output_place`. No special
-    // consuming transition is needed — the standard edge-wiring path applies.
-    if let Some(p_stream) = p_stream {
-        output_places.push((Some("stream".to_string()), p_stream));
-    }
-    // streamInput reducer: route the producer's `stream` edge to `p_stream_in`
-    // (chunks) and its control `out` → this node's `in` edge to `p_control_in`
-    // (the EOF trigger), NOT to the seeded `p_input` (which only ever holds the
-    // bootstrap token consumed by `prepare`).
+    // Fold channel ports: OUT channels become source-handle outputs (edges wire
+    // off `sourceHandle == name`); IN channels become named input handles
+    // (`targetHandle == name`).
     let mut input_handles = HashMap::new();
-    if let Some((p_control_in, p_stream_in, _, _, _, _)) = stream_reducer {
-        input_handles.insert("stream".to_string(), p_stream_in);
-        input_handles.insert("in".to_string(), p_control_in);
+    for port in lowered_channels.ports {
+        match port.direction {
+            crate::models::template::ChannelDirection::Out => {
+                output_places.push((Some(port.name), port.place));
+            }
+            crate::models::template::ChannelDirection::In => {
+                input_handles.insert(port.name, port.place);
+            }
+        }
     }
     cx.ports.insert(
         id.clone(),
@@ -1138,21 +999,19 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         retry_policy,
         output,
         requirements,
-        stream_output,
+        channels,
         ..
     } = &cx.node.data
     else {
         unreachable!("lower_pooled_body on non-AutomatedStep node")
     };
     let label = label.clone();
+    // Streaming-channel manifest + synthesis data, cloned out before the
+    // `&mut *cx.ctx` reborrow. Same handling as the inline path.
+    let channels = channels.clone();
+    let channels_rhai = super::channels::channel_manifest_rhai(&channels);
     let retry_policy = *retry_policy;
     let backend_type = execution_spec.backend_type;
-    // Streaming-output pooled step: mirror the inline path's `stream_output`
-    // side-channel (mint `p_{id}_stream`, opt the executor into `output` events,
-    // plumb it through the lifecycle, surface `stream_count` via
-    // `split_outputs_streaming`, and expose the "stream" handle). Gated on this
-    // flag so a NON-streaming pooled node's AIR stays byte-identical.
-    let stream_output = *stream_output;
     // Capture the authored placement Requirements as a Rhai literal NOW, while we
     // still hold `&cx.node.data` (the `&mut *cx.ctx` reborrow below ends this
     // borrow). Serialized to JSON then lowered to a Rhai map so the presence
@@ -1256,20 +1115,6 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         ctx.state(format!("p_{id}_input"), format!("{label} - Input"));
     let p_output: PlaceHandle<DynamicToken> =
         ctx.state(format!("p_{id}_output"), format!("{label} - Output"));
-    // Streaming side-channel (mirrors the inline path): a Signal place that the
-    // lifecycle's `log_output` transition copies each executor `set_output`
-    // event onto (one token per call), consumed by a downstream "stream" edge.
-    // Minted at NODE scope so its id is the unprefixed `p_{id}_stream` the
-    // StreamFold consumer's `"stream"` edge targets. `None` (and every
-    // downstream touchpoint below) is skipped for a non-streaming pooled node.
-    let p_stream: Option<PlaceHandle<DynamicToken>> = if stream_output {
-        Some(ctx.signal(format!("p_{id}_stream"), format!("{label} - Stream")))
-    } else {
-        None
-    };
-    // Cloned for the move into the lifecycle `scoped_prefix` closure (the
-    // original is retained for the "stream" handle registration in the tail).
-    let p_stream_bridge = p_stream.clone();
     // `p_error` only when the error handle is wired; otherwise the failure
     // exit releases capacity and then crashes the net via `t_{id}_panic`.
     let p_error: Option<PlaceHandle<DynamicToken>> = if error_handled {
@@ -1277,6 +1122,12 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     } else {
         None
     };
+
+    // Streaming channels (docs/25): pre-create the `control_emit` inbox (only
+    // when the node declares ≥1 OUT control channel) so the lifecycle's submit
+    // transition can register `event_routes["control_emit"]` → its id; the same
+    // handle is drained by `lower_channels` below. `None` ⇒ AIR byte-stable.
+    let p_control_in = super::channels::control_inbox(ctx, id.as_str(), label.as_str(), &channels);
 
     // Grant reply lands here (consumable `state` place w/ bridge_reply_channel,
     // same proven-consumable kind the scheduled path uses for `sched_result`).
@@ -1429,12 +1280,12 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
                 process_step: None,
                 catalogue: true,
                 process: true,
-                // Streaming-output pooled step: the lifecycle's `log_output`
-                // transition copies each executor Output event onto this Signal
-                // place (one token per `set_output` call), exactly as on the
-                // inline path. `None` for a non-streaming pooled node keeps the
-                // lifecycle AIR byte-identical.
-                stream_output: p_stream_bridge,
+                // Streaming channels (docs/25) are synthesized as a separate
+                // control-emit path, not via the lifecycle's Output side-channel.
+                stream_output: None,
+                // Pre-created control-emit inbox (docs/25). `Some` only when the
+                // node has ≥1 OUT control channel.
+                control_in: p_control_in.clone(),
             },
         );
 
@@ -1511,14 +1362,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // register/release on.
     let reg_payload = "grant";
     let held_payload = "grant";
-    // Streaming pooled step opts the executor into per-call `output` events so
-    // the lifecycle emits each `set_output` onto `p_{id}_stream` mid-execution
-    // (mirrors the inline `stream_events_rhai`). Byte-identical otherwise.
-    let stream_events_rhai = if stream_output {
-        r#"["metric", "progress", "phase", "log", "output"]"#
-    } else {
-        r#"["metric", "progress", "phase", "log"]"#
-    };
+    let stream_events_rhai = r#"["metric", "progress", "phase", "log"]"#;
     ctx.transition(format!("t_{id}_acquire"), format!("{label} - Acquire"))
         .auto_input("pending", &p_pending)
         .auto_input("grant", &p_grant_inbox)
@@ -1527,7 +1371,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .auto_output("reg", &p_register_out)
         .auto_output("held", &p_held)
         .logic(format!(
-            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}{job_template_frag}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai} }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
+            r#"let input = pending.input; let d = input; d.job_id = "{id_lit}"; d.run = 0; d.retries = 0; d.max_retries = {max_retries}; let job_inputs = {inputs_rhai}; job_inputs.push(#{{ "name": "input.json", "source": #{{ "type": "inline", "value": input }} }}); {lease_stage_push}{ns_stamp}{job_template_frag}/*__BORROWED_INPUTS__*/ d.spec = #{{ "backend": "{backend_wire}", "inputs": job_inputs, "outputs": {outputs_rhai}, "config_ref": {config_ref_rhai}, "stream_events": {stream_events_rhai}, "channels": {channels_rhai} }}; #{{ job: d, reg: {reg_payload}, held: {held_payload} }}"#
         ));
 
     // ── Terminal exits: BOTH consume p_held and BOTH arc to p_release_out.
@@ -1641,25 +1485,26 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .done();
     }
 
-    // Foundation split + port registration tail — mirrors the inline path. A
-    // streaming step uses `split_outputs_streaming` so the executor-reported
-    // `stream_count` (end-of-stream item count, carried on the terminal
-    // `completed` token) rides as a TOP-LEVEL leaf on the slim control token —
-    // the StreamFold consumer's `t_close` sizes its counted gather barrier on it.
-    let (data_place_id, p_ctrl) = if stream_output {
-        split_outputs_streaming(ctx, &id, &label, &p_output)
-    } else {
-        split_outputs(ctx, &id, &label, &p_output)
-    };
+    // Streaming channels (docs/25): same synthesis as the inline path.
+    let lowered_channels =
+        super::channels::lower_channels(ctx, &id, &label, &channels, p_control_in, &p_input);
+
+    // Foundation split + port registration tail — mirrors the inline path.
+    let (data_place_id, p_ctrl) = split_outputs(ctx, &id, &label, &p_output);
     let mut output_places = vec![(None, p_ctrl)];
     if let Some(p_error) = p_error {
         output_places.push((Some("error".to_string()), p_error));
     }
-    // Expose the "stream" handle (the Signal place the lifecycle copies each
-    // Output event onto) so a downstream edge from this node's "stream" port
-    // drains the chunks. Present only for a streaming step.
-    if let Some(p_stream) = p_stream {
-        output_places.push((Some("stream".to_string()), p_stream));
+    let mut input_handles = HashMap::new();
+    for port in lowered_channels.ports {
+        match port.direction {
+            crate::models::template::ChannelDirection::Out => {
+                output_places.push((Some(port.name), port.place));
+            }
+            crate::models::template::ChannelDirection::In => {
+                input_handles.insert(port.name, port.place);
+            }
+        }
     }
     cx.ports.insert(
         id.clone(),
@@ -1667,7 +1512,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
             input_place: p_input,
             output_places,
             input_places: HashMap::new(),
-            input_handles: HashMap::new(),
+            input_handles,
         },
     );
     cx.publish_interface().data_port = Some(data_place_id);

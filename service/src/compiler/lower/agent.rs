@@ -187,8 +187,7 @@ fn lower_agent_degenerate(cx: &mut LoweringCtx) -> Result<(), CompileError> {
             deployment_model,
             // Agent's degenerate single-shot LLM body does not expose the
             // prototype streaming side-channel.
-            stream_output: false,
-            stream_input: false,
+            channels: Vec::new(),
             requirements: None,
             asset_bindings,
         },
@@ -604,6 +603,8 @@ fn lower_agent_loop(
                 process: false,
                 // Agent body has no `stream_output` side-channel.
                 stream_output: None,
+                // Agent body declares no streaming channels.
+                control_in: None,
             },
         )
     });

@@ -20,8 +20,9 @@ use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_process::ProcessBackend;
 use aithericon_executor_storage::ArtifactStore;
 use aithericon_executor_worker::{
-    handle_execution, BackendRegistry, CancellationRegistry, ChunkRegistry, CleanupPolicy,
-    JobExecutor, NatsCancelListener, SidecarLogConfig, StagingPipeline, StatusReporter,
+    handle_execution, BackendRegistry, CancellationRegistry, CleanupPolicy,
+    JetStreamTransport, JobExecutor, NatsCancelListener, SidecarLogConfig, StagingPipeline,
+    StatusReporter, StreamTransport,
 };
 
 use crate::nats::shared_nats_url;
@@ -38,7 +39,9 @@ pub struct ExecutorTestContext {
     pub pipeline: Arc<StagingPipeline>,
     pub base_dir: PathBuf,
     pub cancel_registry: CancellationRegistry,
-    pub chunk_registry: ChunkRegistry,
+    /// Data-plane byte transport over this context's isolated NATS — backs a
+    /// producer job's `PublishChunk`.
+    transport: Option<Arc<dyn StreamTransport>>,
     nats_client: async_nats::Client,
     jetstream: jetstream::Context,
     status_stream_name: String,
@@ -115,7 +118,16 @@ impl ExecutorTestContext {
         let status_stream_name = format!("STATUS_{prefix}");
         let events_stream_name = format!("EVENTS_{prefix}");
         let cancel_registry = CancellationRegistry::new();
-        let chunk_registry = ChunkRegistry::new();
+
+        // Data-plane byte transport over this context's NATS. The
+        // `EXECUTOR_DATASTREAM` stream is global (not prefix-isolated), but
+        // subjects carry the execution_id so distinct tests never collide;
+        // ensure-stream is idempotent.
+        JetStreamTransport::ensure_stream(&js, 1)
+            .await
+            .expect("ensure EXECUTOR_DATASTREAM");
+        let transport: Option<Arc<dyn StreamTransport>> =
+            Some(Arc::new(JetStreamTransport::new(js.clone())));
 
         Self {
             prefix,
@@ -125,7 +137,7 @@ impl ExecutorTestContext {
             pipeline,
             base_dir,
             cancel_registry,
-            chunk_registry,
+            transport,
             nats_client,
             jetstream: js,
             status_stream_name,
@@ -251,9 +263,9 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
-            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
+            transport: self.transport.clone(),
         });
         let storage = self.storage.clone();
 
@@ -287,9 +299,9 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
-            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
+            transport: self.transport.clone(),
         });
         let storage = self.storage.clone();
 
@@ -323,9 +335,9 @@ impl ExecutorTestContext {
             metric_sink,
             log_sink,
             cancel_registry: self.cancel_registry.clone(),
-            chunk_registry: self.chunk_registry.clone(),
             log_config,
             completion_tracker: None,
+            transport: self.transport.clone(),
         });
         let storage = self.storage.clone();
 
@@ -361,9 +373,9 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
-            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: Some(tracker.clone()),
+            transport: self.transport.clone(),
         });
         let storage = self.storage.clone();
 
@@ -392,9 +404,9 @@ impl ExecutorTestContext {
             metric_sink: None,
             log_sink: None,
             cancel_registry: self.cancel_registry.clone(),
-            chunk_registry: self.chunk_registry.clone(),
             log_config: SidecarLogConfig::default(),
             completion_tracker: None,
+            transport: self.transport.clone(),
         })
     }
 

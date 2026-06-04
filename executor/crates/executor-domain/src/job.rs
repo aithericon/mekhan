@@ -51,23 +51,26 @@ pub struct ExecutionJob {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_events: Option<Vec<EventCategory>>,
 
-    /// Opt-in for the INbound live chunk feed (the "live IPC reducer").
+    /// DEAD wire field (retired with the live-reducer feed; docs/25 §2).
     ///
-    /// When `true`, the executor registers a per-job chunk channel and the IPC
-    /// sidecar exposes the `StreamChunks` server-stream, so the child can run
-    /// `for chunk in aithericon.chunks()`; chunks arrive over the
-    /// `EXECUTOR_CHUNKS` JetStream feed (subject `executor.chunks.{id}`).
-    ///
-    /// When `false` (default), no channel is registered and `StreamChunks`
-    /// returns an immediately-empty stream — non-reducer jobs spin up nothing.
-    ///
-    /// This is the symmetric INbound counterpart to `stream_events` (which gates
-    /// OUTbound real-time event streaming). It is a dedicated flag rather than
-    /// an `EventCategory` because `stream_events` drives outbound *event
-    /// emission*, whereas this gates an inbound *data feed* — overloading the
-    /// emission filter with an inbound category would be a category error.
+    /// Previously opted a job into an INbound live chunk feed (the "live IPC
+    /// reducer", `for chunk in aithericon.chunks()`). The reducer is retired: the
+    /// data-plane consumer read (`for elem in aithericon.stream(name)`) now drains
+    /// the PRODUCER's datastream subject directly via the IPC sidecar's
+    /// `StreamChunks` (subject lifted from the `open` descriptor), so no per-job
+    /// inbound feed is registered. Nothing sets this `true` anymore and the
+    /// executor never reads it — kept only so the engine→executor wire DTO stays
+    /// in lockstep until the engine drops `feed_chunks` / `feed_chunk` too.
     #[serde(default, skip_serializing_if = "is_false")]
     pub feed_chunks: bool,
+
+    /// Statically-declared streaming channels for this job (the channel
+    /// manifest). Compiler-emitted; the executor uses it to validate that an
+    /// `EmitControl` call names a real `out` channel of the right plane and
+    /// rejects an emit to an undeclared name or a control emit to a data
+    /// channel. Empty (default) for jobs that declare no channels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ChannelManifestEntry>,
 
     /// Single-use Vault wrapping token containing resolved secrets.
     ///
@@ -78,6 +81,31 @@ pub struct ExecutionJob {
     /// NOT stored in `metadata` because metadata is echoed in every StatusUpdate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrapped_secrets: Option<String>,
+}
+
+/// One entry in a job's channel manifest — the executor-visible projection of
+/// a compiler-declared streaming `Channel`.
+///
+/// `plane` is `"control"` or `"data"`; `contract` is `"signal"` or `"scatter"`
+/// for control channels (`None` for data channels); `element_kind` is the
+/// element shape tag (`"json"`, `"binary"`, or `"any"`). The executor only
+/// needs these flat strings to validate an `EmitControl` against the manifest —
+/// the rich `Channel` enum lives on the service side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChannelManifestEntry {
+    /// Channel name (the `sourceHandle`/`targetHandle` the net wires on).
+    pub name: String,
+
+    /// `"control"` or `"data"`.
+    pub plane: String,
+
+    /// `"signal"` or `"scatter"` for control channels; `None` for data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<String>,
+
+    /// Element shape tag: `"json"`, `"binary"`, or `"any"`.
+    pub element_kind: String,
 }
 
 /// Open-ended execution spec. The `backend` field selects which backend

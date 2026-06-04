@@ -67,6 +67,14 @@ pub struct ExecutorBridges {
     /// place (intentionally multi-token); leftover tokens never block
     /// `NetCompleted` (the slim control path governs completion).
     pub stream_output: Option<PlaceHandle<DynamicToken>>,
+
+    /// Optional control-emit inbox place (streaming channels, docs/25). When
+    /// `Some`, the submit transition registers `event_routes["control_emit"]`
+    /// → this place id, so the engine `ExecutorWatcher` deposits mid-execution
+    /// `ControlEmitEvent`s here for the node's `control_emit` fan-out
+    /// transition. Only wired when the AutomatedStep declares ≥1 OUT control
+    /// channel; `None` keeps the AIR byte-stable for channel-less steps.
+    pub control_in: Option<PlaceHandle<DynamicToken>>,
 }
 
 /// Handles to key places created by the lifecycle builder.
@@ -94,6 +102,7 @@ pub struct ExecutorLifecycleHandles {
 /// Returns handles to key output places.
 pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> ExecutorLifecycleHandles {
     let exec_queue = bridges.inbox;
+    let control_in = bridges.control_in;
     let dead_letter = ctx.terminal::<DynamicToken>("dead_letter", "Dead Letter");
     let effect_errors = ctx.state::<EffectError>("effect_errors", "Effect Errors");
     let completed = ctx.terminal::<DynamicToken>("completed", "Completed");
@@ -139,6 +148,7 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
                 phase: Some(&sig_phase),
                 output: Some(&sig_output),
                 log: Some(&sig_log),
+                control_in: control_in.as_ref(),
                 process_id: bridges.process_id.as_deref(),
                 process_step: bridges.process_step.as_deref(),
             });

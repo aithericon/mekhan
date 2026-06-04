@@ -15,7 +15,7 @@ use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
 use crate::cancel::CancellationRegistry;
-use crate::chunks::ChunkRegistry;
+use crate::chunks::StreamTransport;
 use crate::completion::CompletionTracker;
 use crate::config::CleanupPolicy;
 use crate::event_emitter::StreamContext;
@@ -41,14 +41,15 @@ pub struct JobExecutor {
     pub metric_sink: Option<Arc<dyn MetricSink>>,
     pub log_sink: Option<Arc<dyn LogSink>>,
     pub cancel_registry: CancellationRegistry,
-    /// Inbound live chunk feed registry (the "live IPC reducer"). A per-job
-    /// channel is registered here only when `job.feed_chunks` is set, then
-    /// threaded into the IPC sidecar's `StreamChunks` stream. The
-    /// `NatsChunkListener` drains `EXECUTOR_CHUNKS` into these channels.
-    pub chunk_registry: ChunkRegistry,
     pub log_config: SidecarLogConfig,
     /// Completion tracker for drain-mode shutdown. `None` in daemon/manifest modes.
     pub completion_tracker: Option<Arc<CompletionTracker>>,
+    /// Data-plane byte transport (docs/25 §6), handed to each job's IPC sidecar
+    /// so a producer's `PublishChunk` publishes binary envelopes onto its
+    /// channel's datastream subject AND a consumer's `StreamChunks` subscribes to
+    /// the producer's subject and relays its envelopes back. `None` when NATS is
+    /// not wired (some test harnesses), in which case both validate + no-op.
+    pub transport: Option<Arc<dyn StreamTransport>>,
 }
 
 impl JobExecutor {
@@ -120,26 +121,8 @@ impl JobExecutor {
                     "execution already in progress (lock file exists), skipping duplicate"
                 );
                 self.cancel_registry.deregister(execution_id);
-                // NOTE: do NOT touch the chunk_registry here. The chunk feed is
-                // registered ONLY after winning the lock (below), so a duplicate
-                // delivery must not deregister (or, via a pre-lock re-register,
-                // drop the sender of) the PRIMARY executor's still-live channel —
-                // doing so closes the running reducer's `aithericon.chunks()`
-                // stream mid-flight, yielding an empty reduction.
                 return ExecutionStatus::Failed;
             }
-        };
-
-        // Inbound live chunk feed (the "live IPC reducer"): registered ONLY after
-        // winning the run-directory lock, so a duplicate/redelivered job (which
-        // fails the lock above and returns early) can never disturb the primary
-        // executor's live channel. `Some(rx)` is threaded into the IPC sidecar's
-        // `StreamChunks` stream; `None` means non-reducer jobs spin up nothing.
-        // Deregistered on every exit path below alongside the cancel token.
-        let chunk_rx = if job.feed_chunks {
-            Some(self.chunk_registry.register(execution_id))
-        } else {
-            None
         };
 
         let initial_ctx = RunContext {
@@ -178,27 +161,36 @@ impl JobExecutor {
                     )
                     .await;
                 self.cancel_registry.deregister(execution_id);
-                self.chunk_registry.deregister(execution_id);
                 return ExecutionStatus::Failed;
             }
         };
 
-        // Build StreamContext for real-time event streaming (if opted in).
+        // Build StreamContext for real-time event streaming. Opted in by EITHER
+        // a non-empty `stream_events` set (category-gated log/output/agent_turn)
+        // OR a declared streaming channel (docs/25): an in-process backend (ROS
+        // action feedback) emits `scatter_item`/`scatter_close` control tokens
+        // through this context's `emit_control` path, which is route-driven and
+        // NOT category-gated — so a channels-only job still needs the context
+        // even though its `categories` set is empty.
         let shared_sequence = Arc::new(AtomicU64::new(0));
-        let stream_ctx = job
-            .stream_events
-            .as_ref()
-            .filter(|cats| !cats.is_empty())
-            .map(|cats| {
-                Arc::new(StreamContext {
-                    categories: cats.iter().copied().collect(),
-                    emitter: self.reporter.event_emitter(),
-                    sequence: shared_sequence.clone(),
-                    execution_id: execution_id.clone(),
-                    source: self.reporter.source().to_string(),
-                    metadata: job.metadata.clone(),
-                })
-            });
+        let opted_into_events = job.stream_events.as_ref().is_some_and(|c| !c.is_empty());
+        let stream_ctx = if opted_into_events || !job.channels.is_empty() {
+            let categories = job
+                .stream_events
+                .as_ref()
+                .map(|cats| cats.iter().copied().collect())
+                .unwrap_or_default();
+            Some(Arc::new(StreamContext {
+                categories,
+                emitter: self.reporter.event_emitter(),
+                sequence: shared_sequence.clone(),
+                execution_id: execution_id.clone(),
+                source: self.reporter.source().to_string(),
+                metadata: job.metadata.clone(),
+            }))
+        } else {
+            None
+        };
 
         // Flush deferred staging events (collected before StreamContext existed).
         if let Some(ref ctx) = stream_ctx {
@@ -231,7 +223,9 @@ impl JobExecutor {
             self.log_config.clone(),
             child_exited.clone(),
             stream_ctx,
-            chunk_rx,
+            job.channels.clone(),
+            Some(self.reporter.event_emitter()),
+            self.transport.clone(),
         )
         .await
         {
@@ -778,8 +772,6 @@ impl JobExecutor {
 
         // Deregister cancellation token (execution finished, regardless of outcome)
         self.cancel_registry.deregister(execution_id);
-        // Deregister the inbound chunk feed (no-op when never registered).
-        self.chunk_registry.deregister(execution_id);
 
         // Cleanup run directory per policy
         let should_cleanup = match &self.cleanup_policy {

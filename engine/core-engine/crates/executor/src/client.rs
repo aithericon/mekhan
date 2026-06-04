@@ -291,16 +291,34 @@ impl ExecutorNatsClient {
                 )
                 .ok()
             });
-Ok(ExecutionJob {
-    execution_id,
-    spec,
-    metadata: routing_meta.clone(),
-    timeout,
-    priority,
-    stream_events,
-    feed_chunks: request.feed_chunks,
-    wrapped_secrets: None,
-})
+
+        // The compiler bakes the streaming-channels manifest (docs/25) onto the
+        // job token (top level or nested in spec, mirroring `stream_events`). The
+        // executor uses it to validate `EmitControl` calls against declared `out`
+        // channels. Absent → no channels (empty).
+        let channels = request
+            .token_data
+            .get("channels")
+            .or_else(|| request.token_data.get("spec").and_then(|s| s.get("channels")))
+            .and_then(|v| {
+                serde_json::from_value::<Vec<aithericon_executor_domain::ChannelManifestEntry>>(
+                    v.clone(),
+                )
+                .ok()
+            })
+            .unwrap_or_default();
+
+        Ok(ExecutionJob {
+            execution_id,
+            spec,
+            metadata: routing_meta.clone(),
+            timeout,
+            priority,
+            stream_events,
+            channels,
+            feed_chunks: request.feed_chunks,
+            wrapped_secrets: None,
+        })
     }
 
     /// Idempotently ensure the apalis-nats stream for the given priority and
@@ -575,6 +593,7 @@ mod tests {
             timeout: None,
             priority: JobPriority::default(),
             stream_events: None,
+            channels: Vec::new(),
             wrapped_secrets: None,
             feed_chunks: false,
         };

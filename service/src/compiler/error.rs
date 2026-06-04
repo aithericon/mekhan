@@ -260,33 +260,6 @@ pub enum CompileError {
     )]
     MapNested { node_id: String, outer_id: String },
 
-    /// A `StreamFold` is missing exactly one inbound `stream` or `control`
-    /// handle edge. It needs the producer's data Signal place (`stream`) and
-    /// its EOS/completion token (`control`) — one of each.
-    #[error("node {node_id}: stream fold is missing exactly one inbound `{handle}` handle edge")]
-    StreamFoldMissingHandle {
-        node_id: String,
-        handle: &'static str,
-    },
-
-    /// A `StreamFold`'s `Custom` reduce expression is not a parseable Rhai
-    /// expression (it is embedded verbatim into the gather transition's logic).
-    #[error("node {node_id}: invalid stream-fold reduce expression `{expr}`: {detail}")]
-    StreamFoldInvalidReduce {
-        node_id: String,
-        expr: String,
-        detail: String,
-    },
-
-    /// A `streamInput` AutomatedStep (streaming reducer) is mis-wired or
-    /// mis-configured: it must have exactly one inbound `stream` edge from a
-    /// `streamOutput` producer's `stream` handle plus exactly one control `in`
-    /// edge from that same producer, and it cannot run under a pooled/leased or
-    /// scheduled deployment model (the inline executor lifecycle is the only
-    /// path that plumbs the IPC chunk feed).
-    #[error("node {node_id}: invalid streamInput reducer: {detail}")]
-    StreamInputInvalid { node_id: String, detail: String },
-
     /// A Map body terminal is a node kind that cannot produce the
     /// `detail.outputs.<resultVar>` envelope the gather requires (engine-effect
     /// backends like CatalogueQuery, Scheduled AutomatedSteps whose scheduler
@@ -330,6 +303,18 @@ pub enum CompileError {
         ref_value: String,
         slug: String,
         available: Vec<String>,
+    },
+
+    /// A streaming [`Channel`](crate::models::template::Channel) declaration on
+    /// an AutomatedStep is invalid (docs/25). Covers: a duplicate channel name
+    /// on one node; a `Json` element schema that doesn't resolve / compile; a
+    /// `Scatter` control channel missing a positive `max_fanout`; or a
+    /// plane/wiring mismatch the edge typing can't express.
+    #[error("node '{node_id}': channel '{channel}' is invalid — {message}")]
+    ChannelInvalid {
+        node_id: String,
+        channel: String,
+        message: String,
     },
 
     /// A node wired as an agent tool (target of an edge with
@@ -894,12 +879,10 @@ impl CompileError {
             Self::MapRefMissingStar { .. } => "map_ref_missing_star",
             Self::MapResultVarInvalid { .. } => "map_result_var_invalid",
             Self::MapNested { .. } => "map_nested",
-            Self::StreamFoldMissingHandle { .. } => "stream_fold_missing_handle",
-            Self::StreamFoldInvalidReduce { .. } => "stream_fold_invalid_reduce",
-            Self::StreamInputInvalid { .. } => "stream_input_invalid",
             Self::MapBodyUnsupported { .. } => "map_body_unsupported",
             Self::MapItemsRefNotArray { .. } => "map_items_ref_not_array",
             Self::MapItemsRefUnresolved { .. } => "map_items_ref_unresolved",
+            Self::ChannelInvalid { .. } => "channel_invalid",
             Self::ToolChildHasIncomingEdge { .. } => "tool_child_has_incoming_edge",
             Self::OutputFieldShadowsReserved { .. } => "output_field_shadows_reserved",
             Self::OutputFieldShadowsInput { .. } => "output_field_shadows_input",
@@ -980,12 +963,10 @@ impl CompileError {
             | Self::MapRefMissingStar { node_id, .. }
             | Self::MapResultVarInvalid { node_id, .. }
             | Self::MapNested { node_id, .. }
-            | Self::StreamFoldMissingHandle { node_id, .. }
-            | Self::StreamFoldInvalidReduce { node_id, .. }
-            | Self::StreamInputInvalid { node_id, .. }
             | Self::MapBodyUnsupported { node_id, .. }
             | Self::MapItemsRefNotArray { node_id, .. }
             | Self::MapItemsRefUnresolved { node_id, .. }
+            | Self::ChannelInvalid { node_id, .. }
             | Self::ToolChildHasIncomingEdge {
                 child_id: node_id, ..
             }

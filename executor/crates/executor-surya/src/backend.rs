@@ -695,6 +695,7 @@ mod tests {
             stream_events: None,
             wrapped_secrets: None,
             feed_chunks: false,
+            channels: Vec::new(),
         }
     }
 

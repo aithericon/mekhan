@@ -1,19 +1,21 @@
-# Producer — stage 1 of the streaming pipeline (demo 18).
+# Producer — stage 1 of the streaming pipeline (demo 18, docs/25).
 #
-# `streamOutput: true` makes every `set_output(name, value)` call emit an
-# OutputSet event PER CALL, mid-execution, onto this node's stream side-channel.
-# We emit one distinct-named chunk per LOWERCASE word; the downstream transform
-# receives each via aithericon.chunks(), uppercases it, and re-streams it.
+# Declares a Data/Out channel "lower" (graph.json). `open_output("lower")` fires
+# an `open` control token EARLY so the downstream transform starts draining while
+# this job still runs; each `out.write(value)` publishes one out-of-band element
+# envelope over the transport. The bytes never ride a net token — the net sees
+# only this stage's open + close.
 #
-# IMPORTANT: a streaming producer must emit ONLY stream chunks — every
-# set_output is counted into stream_count (the end-of-stream N that sizes the
-# transform's EOF). Do NOT set any control output here.
+# We write one element per LOWERCASE word; the transform stream-maps each
+# (uppercase) and re-streams it on its own Data/Out channel. The sleeps space the
+# elements out so they genuinely stream over time.
 
 import time
 
-from aithericon import set_output
+from aithericon import open_output
 
 words = ["the", "quick", "brown", "fox"]
-for i, w in enumerate(words):
-    set_output(f"chunk_{i}", w)
-    time.sleep(1.0)
+with open_output("lower") as out:
+    for w in words:
+        out.write(w)
+        time.sleep(1.0)

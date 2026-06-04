@@ -145,6 +145,30 @@ pub const EXECUTOR_STREAM_FEED: EffectDescriptor = EffectDescriptor {
     default_output_schema: None,
 };
 
+/// Deposit a dynamically-emitted control token into a statically-declared
+/// channel place (docs/25 streaming-channels).
+///
+/// A running executor job emits `signal` / `scatter` control tokens
+/// mid-execution; the worker publishes each as a `control_emit` executor event,
+/// the watcher routes it (via the job's `event_routes`) to the node's control
+/// inbox, and a transition draining that inbox carries THIS effect. The handler
+/// (`ControlEmitHandler`) resolves the emit's `channel` against the
+/// `channel_routes` map baked on the transition's `effect_config` and forwards
+/// the payload into the channel's own place `p_{node}_{channel}`. Fire-and-
+/// forget: the engine NEVER gates or declines (no `max_fanout` enforcement —
+/// that is the compiler/validation layer's concern; back-pressure is
+/// JetStream's). `default_input_port` / `default_output_port` are unused — the
+/// handler reads the single bound input and deposits onto the place id resolved
+/// per-fire from `channel_routes`.
+pub const CONTROL_EMIT: EffectDescriptor = EffectDescriptor {
+    handler_id: "control_emit",
+    default_input_port: "emit",
+    default_output_port: "emitted",
+    category: ServiceCategory::Executor,
+    default_input_schema: None,
+    default_output_schema: None,
+};
+
 /// Schedule a durable timer via Clockmaster.
 pub const TIMER_SCHEDULE: EffectDescriptor = EffectDescriptor {
     handler_id: "timer_schedule",
@@ -420,6 +444,7 @@ pub const ALL_BUILTIN: &[&EffectDescriptor] = &[
     &EXECUTOR_SUBMIT,
     &EXECUTOR_CANCEL,
     &EXECUTOR_STREAM_FEED,
+    &CONTROL_EMIT,
     &TIMER_SCHEDULE,
     &TIMER_CANCEL,
     &HUMAN_TASK,
@@ -495,12 +520,13 @@ mod tests {
 
     #[test]
     fn all_builtin_covers_all_handlers() {
-        assert_eq!(ALL_BUILTIN.len(), 25);
+        assert_eq!(ALL_BUILTIN.len(), 26);
         let ids: Vec<&str> = ALL_BUILTIN.iter().map(|d| d.handler_id).collect();
         assert!(ids.contains(&"scheduler_submit"));
         assert!(ids.contains(&"scheduler_cancel"));
         assert!(ids.contains(&"executor_submit"));
         assert!(ids.contains(&"executor_cancel"));
+        assert!(ids.contains(&"control_emit"));
         assert!(ids.contains(&"timer_schedule"));
         assert!(ids.contains(&"timer_cancel"));
         assert!(ids.contains(&"human_task"));

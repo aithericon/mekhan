@@ -314,6 +314,234 @@ impl EffectHandler for ExecutorStreamFeedHandler {
     }
 }
 
+/// Effect handler that deposits a dynamically-emitted control token into the
+/// statically-declared channel place it names.
+///
+/// ## Where the token comes from
+///
+/// A running executor job emits `signal` / `scatter` control tokens mid-execution
+/// (the docs/25 streaming-channels primitive). The worker publishes each emit as
+/// an executor event to NATS; the `ExecutorWatcher` routes it — via the job's
+/// `event_routes` (the `control_emit` event category) — to a generic per-node
+/// control inbox signal place. A transition draining that inbox carries the
+/// `control_emit` effect: this handler reads the channel name the emit carries
+/// and forwards the payload into the channel's own place `p_{node}_{channel}`,
+/// resolved through the `channel_routes` map baked on the transition's
+/// `effect_config` by the compiler.
+///
+/// ## Fire-and-forget
+///
+/// The engine NEVER gates or declines an emit. There is no `max_fanout`
+/// enforcement here — back-pressure is JetStream's job; an over-fanout is the
+/// compiler/validation layer's concern, not the runtime's. The handler simply
+/// deposits the token.
+///
+/// ## `effect_config`
+///
+/// ```json
+/// { "channel_routes": { "<channel_name>": "<place_id>", ... } }
+/// ```
+///
+/// `channel_routes` maps each declared control-output channel name to the place
+/// id the compiler synthesized for it (`p_{node}_{channel}`). The handler looks
+/// up the emit's `channel` field in this map; an unmapped channel is a fatal
+/// error (the compiler is the single source of both the manifest and the route,
+/// so a miss is a compile bug, never user input).
+///
+/// ## Input token shape (the emit, as routed in by the watcher)
+///
+/// The emit token carries:
+/// - `channel` (string, required): the declared channel name to route into.
+/// - `kind` (string, required): one of `"signal"`, `"scatter_item"`,
+///   `"scatter_close"`.
+/// - `payload` (any, optional): the emitted element value (absent for
+///   `scatter_close`).
+/// - `__map_id` (string, optional): scatter correlation id — the per-emit
+///   instance coloring identity. Present for `scatter_item` / `scatter_close`.
+/// - `__map_idx` (integer, optional): scatter element index within the run.
+///   Present for `scatter_item`.
+/// - `count` (integer, optional): the total number of `scatter_item`s emitted
+///   for this `__map_id`. Present ONLY on `scatter_close`.
+///
+/// ## Output token shape (deposited into `p_{node}_{channel}`)
+///
+/// The handler emits the token verbatim onto the resolved place via the
+/// dynamic output port keyed by the resolved place id. The deposited JSON is:
+///
+/// **signal:**
+/// ```json
+/// { "kind": "signal", "payload": <value> }
+/// ```
+///
+/// **scatter_item:**
+/// ```json
+/// { "kind": "scatter_item", "payload": <value>,
+///   "__map_id": "<id>", "__map_idx": <n> }
+/// ```
+/// The `__map_id` / `__map_idx` coloring fields are the gather barrier's
+/// correlation key (the service-side `emit_gather_barrier` correlates on
+/// `__map_id` and counts items per id).
+///
+/// **scatter_close:**
+/// ```json
+/// { "kind": "scatter_close", "__map_id": "<id>", "count": <n> }
+/// ```
+/// The `count` is the per-`__map_id` item total the downstream gather uses to
+/// fire its counted barrier.
+///
+/// ## Data-plane brackets (`open` / `close`, docs/25 §6)
+///
+/// A data channel is out-of-band bytes bracketed by an `open` emission (carrying
+/// the transport DESCRIPTOR) and a `close` emission (carrying `{count, status}`).
+/// The bulk bytes never enter the marking — only these two lifecycle tokens do.
+/// Both deposit into the SAME `p_{node}_{channel}` data place resolved through
+/// `channel_routes`. The `open` token flows to the consumer EARLY (independent
+/// of producer-job completion) so the consumer can connect to the transport
+/// while the producer still produces.
+///
+/// **open** (carries the transport descriptor the consumer connects to):
+/// ```json
+/// { "kind": "open", "descriptor": { "transport": "jetstream", "subject": "...",
+///   "content_type": "...", "credential": <null|wrapped> } }
+/// ```
+///
+/// **close** (producer done; consumer drains transport until `is_eof`):
+/// ```json
+/// { "kind": "close", "count": <n>, "status": "ok"|"error"|... }
+/// ```
+pub struct ControlEmitHandler;
+
+impl ControlEmitHandler {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ControlEmitHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait::async_trait]
+impl EffectHandler for ControlEmitHandler {
+    async fn execute(&self, input: EffectInput) -> Result<EffectOutput, EffectError> {
+        // The emit arrives as the single input token (routed in from the node's
+        // control inbox).
+        let data = input.inputs.values().next().ok_or_else(|| {
+            EffectError::Fatal("ControlEmitHandler requires an input".into())
+        })?;
+
+        let channel = data
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                EffectError::Fatal("Missing channel in control_emit input".to_string())
+            })?;
+
+        let kind = data
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| EffectError::Fatal("Missing kind in control_emit input".to_string()))?;
+
+        // Resolve channel name → synthesized place id via the compiler-baked
+        // route map. A miss is a compile bug (the compiler authors both the
+        // manifest the SDK validates against AND this route), so it is fatal.
+        let channel_routes = input
+            .config
+            .as_ref()
+            .and_then(|c| c.get("channel_routes"))
+            .and_then(|v| serde_json::from_value::<HashMap<String, String>>(v.clone()).ok())
+            .ok_or_else(|| {
+                EffectError::Fatal(
+                    "Missing channel_routes in control_emit effect_config".to_string(),
+                )
+            })?;
+
+        let place_id = channel_routes.get(channel).ok_or_else(|| {
+            EffectError::Fatal(format!(
+                "control_emit channel '{channel}' has no route in channel_routes"
+            ))
+        })?;
+
+        // Build the deposited token by kind — carry only the fields the
+        // downstream consumer/gather needs, fire-and-forget.
+        let payload = data.get("payload").cloned().unwrap_or(JsonValue::Null);
+        let token = match kind {
+            "signal" => serde_json::json!({
+                "kind": "signal",
+                "payload": payload,
+            }),
+            "scatter_item" => {
+                let map_id = data.get("__map_id").cloned().unwrap_or(JsonValue::Null);
+                let map_idx = data.get("__map_idx").cloned().unwrap_or(JsonValue::Null);
+                serde_json::json!({
+                    "kind": "scatter_item",
+                    "payload": payload,
+                    "__map_id": map_id,
+                    "__map_idx": map_idx,
+                })
+            }
+            "scatter_close" => {
+                let map_id = data.get("__map_id").cloned().unwrap_or(JsonValue::Null);
+                let count = data.get("count").cloned().unwrap_or(JsonValue::Null);
+                serde_json::json!({
+                    "kind": "scatter_close",
+                    "__map_id": map_id,
+                    "count": count,
+                })
+            }
+            // DATA-plane OPEN (docs/25 §6): `payload` IS the transport descriptor
+            // the consumer connects to. Deposit it as `descriptor` so the
+            // downstream consumer edge reads `p_{node}_{channel}.descriptor` to
+            // resolve the subject EARLY (before the producer job finishes). The
+            // bytes themselves never enter the marking.
+            "open" => {
+                serde_json::json!({
+                    "kind": "open",
+                    "channel": channel,
+                    "descriptor": payload,
+                })
+            }
+            // DATA-plane CLOSE (docs/25 §6): producer is done. `payload` carries
+            // `{count, status}`; surface those at the top level so a downstream
+            // sink / status reader sees them as plain fields. The consumer keeps
+            // draining the transport until its own `is_eof`; close only updates
+            // producer status.
+            "close" => {
+                let count = payload.get("count").cloned().unwrap_or(JsonValue::Null);
+                let status = payload.get("status").cloned().unwrap_or(JsonValue::Null);
+                serde_json::json!({
+                    "kind": "close",
+                    "count": count,
+                    "status": status,
+                })
+            }
+            other => {
+                return Err(EffectError::Fatal(format!(
+                    "Unknown control_emit kind '{other}' (expected signal|scatter_item|scatter_close|open|close)"
+                )));
+            }
+        };
+
+        let mut tokens = HashMap::new();
+        tokens.insert(place_id.clone(), token);
+
+        Ok(EffectOutput {
+            tokens,
+            result: serde_json::json!({ "emitted": channel, "kind": kind }),
+        })
+    }
+
+    fn replay(&self, _input: &EffectInput, _stored_result: &JsonValue) {
+        // Stateless
+    }
+
+    fn name(&self) -> &str {
+        "control_emit"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,5 +777,162 @@ mod tests {
             schemas.outputs.get("cancelled").unwrap(),
             "#/definitions/ExecutorCancelled"
         );
+    }
+
+    /// Build a control-emit `EffectInput` with the `channel_routes` config.
+    fn make_emit_input(emit: JsonValue, routes: JsonValue) -> EffectInput {
+        let mut inputs = HashMap::new();
+        inputs.insert("emit".to_string(), emit);
+        EffectInput {
+            transition_id: TransitionId::new(),
+            inputs,
+            config: Some(json!({ "channel_routes": routes })),
+            read_inputs: HashMap::new(),
+            process_step: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_control_emit_signal_deposits_into_place() {
+        let handler = ControlEmitHandler::new();
+        let input = make_emit_input(
+            json!({ "channel": "items", "kind": "signal", "payload": { "x": 1 } }),
+            json!({ "items": "p_node_items" }),
+        );
+
+        let out = handler.execute(input).await.unwrap();
+        let token = out.tokens.get("p_node_items").expect("deposited token");
+        assert_eq!(token["kind"], "signal");
+        assert_eq!(token["payload"]["x"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_control_emit_scatter_item_carries_coloring() {
+        let handler = ControlEmitHandler::new();
+        let input = make_emit_input(
+            json!({
+                "channel": "items",
+                "kind": "scatter_item",
+                "payload": "a",
+                "__map_id": "m1",
+                "__map_idx": 2
+            }),
+            json!({ "items": "p_node_items" }),
+        );
+
+        let out = handler.execute(input).await.unwrap();
+        let token = out.tokens.get("p_node_items").unwrap();
+        assert_eq!(token["kind"], "scatter_item");
+        assert_eq!(token["payload"], "a");
+        assert_eq!(token["__map_id"], "m1");
+        assert_eq!(token["__map_idx"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_control_emit_scatter_close_carries_count() {
+        let handler = ControlEmitHandler::new();
+        let input = make_emit_input(
+            json!({
+                "channel": "items",
+                "kind": "scatter_close",
+                "__map_id": "m1",
+                "count": 3
+            }),
+            json!({ "items": "p_node_items" }),
+        );
+
+        let out = handler.execute(input).await.unwrap();
+        let token = out.tokens.get("p_node_items").unwrap();
+        assert_eq!(token["kind"], "scatter_close");
+        assert_eq!(token["__map_id"], "m1");
+        assert_eq!(token["count"], 3);
+        // scatter_close carries no payload.
+        assert!(token.get("payload").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_control_emit_open_deposits_descriptor() {
+        let handler = ControlEmitHandler::new();
+        // The watcher delivers the descriptor as `payload`; the handler relabels
+        // it `descriptor` in the deposited token so the consumer edge resolves
+        // the transport subject early.
+        let input = make_emit_input(
+            json!({
+                "channel": "frames",
+                "kind": "open",
+                "payload": {
+                    "transport": "jetstream",
+                    "subject": "executor.datastream.exec-1.frames",
+                    "content_type": "image/jpeg",
+                    "credential": null
+                }
+            }),
+            json!({ "frames": "p_node_frames" }),
+        );
+
+        let out = handler.execute(input).await.unwrap();
+        let token = out.tokens.get("p_node_frames").expect("deposited token");
+        assert_eq!(token["kind"], "open");
+        assert_eq!(token["descriptor"]["transport"], "jetstream");
+        assert_eq!(
+            token["descriptor"]["subject"],
+            "executor.datastream.exec-1.frames"
+        );
+        assert_eq!(token["descriptor"]["content_type"], "image/jpeg");
+        // No credential in dev (open NATS): present and null, not absent.
+        assert!(token["descriptor"]["credential"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_control_emit_close_carries_count_and_status() {
+        let handler = ControlEmitHandler::new();
+        let input = make_emit_input(
+            json!({
+                "channel": "frames",
+                "kind": "close",
+                "payload": { "count": 42, "status": "ok" }
+            }),
+            json!({ "frames": "p_node_frames" }),
+        );
+
+        let out = handler.execute(input).await.unwrap();
+        let token = out.tokens.get("p_node_frames").unwrap();
+        assert_eq!(token["kind"], "close");
+        assert_eq!(token["count"], 42);
+        assert_eq!(token["status"], "ok");
+        // close carries no descriptor.
+        assert!(token.get("descriptor").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_control_emit_unmapped_channel_is_fatal() {
+        let handler = ControlEmitHandler::new();
+        let input = make_emit_input(
+            json!({ "channel": "missing", "kind": "signal", "payload": 1 }),
+            json!({ "items": "p_node_items" }),
+        );
+
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(matches!(err, EffectError::Fatal(_)));
+    }
+
+    #[tokio::test]
+    async fn test_control_emit_missing_routes_is_fatal() {
+        let handler = ControlEmitHandler::new();
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            "emit".to_string(),
+            json!({ "channel": "items", "kind": "signal" }),
+        );
+        let input = EffectInput {
+            transition_id: TransitionId::new(),
+            inputs,
+            config: None,
+            read_inputs: HashMap::new(),
+            process_step: None,
+        };
+
+        let err = handler.execute(input).await.unwrap_err();
+        assert!(matches!(err, EffectError::Fatal(_)));
     }
 }

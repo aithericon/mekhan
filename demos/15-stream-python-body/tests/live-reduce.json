@@ -1,5 +1,5 @@
 {
-  "name": "LiveReduce: reducer receives chunks via IPC, uppercases + concatenates → 'THE QUICK BROWN FOX'",
+  "name": "LiveReduce: reducer drains the producer's Data/In channel via stream('words'), uppercases + concatenates → 'THE QUICK BROWN FOX'",
   "enabled": true,
   "start_tokens": [
     {

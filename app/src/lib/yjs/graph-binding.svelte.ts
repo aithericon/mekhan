@@ -215,14 +215,15 @@ export class YjsGraphBinding {
 				const deploymentModel = config?.deploymentModel as
 					| AutomatedStepNodeData['deploymentModel']
 					| undefined;
-				// PROTOTYPE — `streamOutput` exposes the node's second "stream"
-				// output handle (see AutomatedStepNode.svelte). It must be read
-				// back here or the editor reconstruction drops the flag and the
-				// handle never renders even though the backend seeded it `true`.
-				const streamOutput = config?.streamOutput === true;
-				// `streamInput` makes the node a streaming reducer (exposes a
-				// "stream" INPUT handle). Same round-trip rationale as streamOutput.
-				const streamInput = config?.streamInput === true;
+				// `channels` (docs/25) carries the node's statically-declared
+				// streaming Channels — each control-output channel exposes a
+				// per-name handle the job emits into at runtime. The whole array
+				// round-trips as one value; it MUST be read back here or the
+				// editor reconstruction drops the channels and their handles never
+				// render even though the backend seeded them.
+				const channels = config?.channels as
+					| AutomatedStepNodeData['channels']
+					| undefined;
 				// `requirements` (Phase 4) carries the step's capability-match
 				// constraints. The whole nested object round-trips as one value —
 				// it MUST be read back (and written below) or a template authored
@@ -244,8 +245,7 @@ export class YjsGraphBinding {
 					...(output ? { output: output as never } : {}),
 					retryPolicy,
 					...(deploymentModel ? { deploymentModel } : {}),
-					...(streamOutput ? { streamOutput } : {}),
-					...(streamInput ? { streamInput } : {}),
+					...(channels && channels.length > 0 ? { channels } : {}),
 					...(requirements ? { requirements } : {}),
 					...(assetBindings && assetBindings.length > 0 ? { assetBindings } : {})
 				};
@@ -437,15 +437,6 @@ export class YjsGraphBinding {
 					type: 'timeout',
 					durationMsExpr: (config?.durationMsExpr as string) ?? '60000'
 				};
-			case 'stream_fold': {
-				type StreamReduceT = Extract<WorkflowNodeData, { type: 'stream_fold' }>['reduce'];
-				return {
-					...base,
-					type: 'stream_fold',
-					resultVar: (config?.resultVar as string) ?? 'item',
-					reduce: (config?.reduce as StreamReduceT) ?? { kind: 'array' }
-				};
-			}
 		}
 	}
 
@@ -807,12 +798,17 @@ export class YjsGraphBinding {
 				// (seeded/presence capacity admission) and scheduled
 				// `scheduler`/`operation` knobs travel with it. Default = plain executor dispatch.
 				config.set('deploymentModel', data.deploymentModel ?? { mode: 'executor' });
-				// PROTOTYPE — persist the streaming-output flag so toggling the
-				// "Stream output" checkbox survives the Y.Doc round-trip and the
-				// second "stream" handle renders. Written unconditionally (mirrors
-				// the backend's `streamOutput` Y.Map key) so clearing it persists.
-				config.set('streamOutput', (data as AutomatedStepNodeData).streamOutput ?? false);
-				config.set('streamInput', (data as AutomatedStepNodeData).streamInput ?? false);
+				// `channels` (docs/25) round-trips whole, conditionally (mirrors
+				// `requirements`): persist the statically-declared streaming Channels
+				// so their per-name emit handles survive the Y.Doc round-trip.
+				{
+					const chans = (data as AutomatedStepNodeData).channels;
+					// Delete when absent/empty so clearing the last channel removes the
+					// stale Yjs key (a bare `if (chans) set()` would leave it to reappear
+					// on reload). Mirrors the other `config.delete(...)` clear paths.
+					if (chans && chans.length > 0) config.set('channels', chans);
+					else config.delete('channels');
+				}
 				// `requirements` (Phase 4) round-trips whole, conditionally (mirrors
 				// `output`): persist when the step carries capability constraints so
 				// collaborative edits don't drop them on publish.
@@ -981,10 +977,6 @@ export class YjsGraphBinding {
 				break;
 			case 'timeout':
 				config.set('durationMsExpr', data.durationMsExpr ?? '60000');
-				break;
-			case 'stream_fold':
-				config.set('resultVar', data.resultVar ?? 'item');
-				config.set('reduce', data.reduce ?? { kind: 'array' });
 				break;
 		}
 	}

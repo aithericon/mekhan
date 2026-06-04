@@ -12,12 +12,38 @@ service ExecutorSidecar {
     rpc HealthCheck(HealthCheckRequest) returns (SidecarResponse);
     rpc ShutdownAck(ShutdownAckRequest) returns (SidecarResponse);
 
-    // Inbound live data feed: the child opens this server-stream and pulls
-    // chunks the executor receives (over the EXECUTOR_CHUNKS JetStream feed)
-    // while the child is still running. Drives the Python SDK's
-    // `for chunk in aithericon.chunks()` live-reducer loop. The stream ends
-    // when an in-band EOF sentinel (`ChunkMessage{is_eof:true}`) is reached.
+    // Dynamic control-token emission into a statically-declared output channel.
+    // CONTROL plane: the child emits a `signal` (one control token) or a
+    // `scatter` (N instance-colored items bracketed by a close that stamps the
+    // count). DATA plane (1b): the child emits an `open` (carrying the JSON
+    // transport DESCRIPTOR of a data channel it just opened) so the consumer can
+    // start draining the out-of-band byte stream EARLY, then a `close` (stamping
+    // the element count + terminal status) once the producer is done writing.
+    // The sidecar validates the name+plane against the manifest, then publishes a
+    // `control_emit` event to the EXECUTOR_EVENTS JetStream stream
+    // (subject `executor.events.{execution_id}.control_emit`) which the engine
+    // ingests to deposit a token into the channel's place. Fire-and-forget: the
+    // engine never gates the emit.
+    rpc EmitControl(EmitControlRequest) returns (SidecarResponse);
+
+    // Data-plane CONSUMER read (`for elem in aithericon.stream(name)`): the
+    // child opens this server-stream passing the PRODUCER's transport subject
+    // (lifted from the `open` descriptor the engine delivered as this job's
+    // input). The executor subscribes to that subject over the data-plane
+    // `StreamTransport` and relays each binary envelope here while the producer
+    // is still writing. Each yielded `ChunkMessage` is a binary envelope
+    // `{ seq, content_type, payload, is_eof }`; the stream ends after the
+    // in-band EOF sentinel (`ChunkMessage{is_eof:true}`).
     rpc StreamChunks(StreamChunksRequest) returns (stream ChunkMessage);
+
+    // Outbound byte stream: the producer writer (`open_output(name)`) hands the
+    // executor one framed element at a time; the executor publishes the binary
+    // envelope onto the channel's datastream transport subject
+    // (`executor.datastream.{execution_id}.{channel}`) so a consumer elsewhere
+    // can drain it. The SDK holds no NATS/transport credentials; the executor
+    // does. Unary + ordered: the writer awaits each publish so the transport's
+    // ack window can back-pressure a too-fast producer.
+    rpc PublishChunk(PublishChunkRequest) returns (SidecarResponse);
 
     // Inbound file retrieval: the child asks the sidecar (which holds storage
     // credentials — the child does not) to download a storage-path object into
@@ -151,17 +177,93 @@ message RetrieveFileResponse {
     string local_path = 3;
 }
 
-// Request to open the inbound chunk feed. Carries no parameters — the
-// executor already knows which execution this IPC connection belongs to.
-message StreamChunksRequest {}
+// Kind of control token a job emits into a channel's place.
+//
+// CONTROL plane:
+//   `CONTROL_KIND_SIGNAL` fires a single control token (a one-shot downstream
+//   trigger). `CONTROL_KIND_SCATTER_ITEM` emits one instance-colored item of a
+//   fan-out; `CONTROL_KIND_SCATTER_CLOSE` ends the fan-out and stamps the total
+//   item count so the net's gather barrier knows when the scatter is complete.
+//
+// DATA plane (1b) — a data stream is bracketed by two control emissions:
+//   `CONTROL_KIND_OPEN` is emitted the moment `open_output(name)` is called
+//   (mid-job, EARLY) and carries the transport DESCRIPTOR as `payload_json`
+//   (see EmitControlRequest.payload_json) so the consumer can connect and start
+//   draining the out-of-band bytes while the producer still produces.
+//   `CONTROL_KIND_CLOSE` is emitted when the producer is done; `payload_json`
+//   carries `{count, status}` (elements written + terminal status). The bulk
+//   bytes themselves NEVER ride a control token — they flow over the transport
+//   subject named in the OPEN descriptor.
+enum ControlKind {
+    CONTROL_KIND_SIGNAL = 0;
+    CONTROL_KIND_SCATTER_ITEM = 1;
+    CONTROL_KIND_SCATTER_CLOSE = 2;
+    CONTROL_KIND_OPEN = 3;
+    CONTROL_KIND_CLOSE = 4;
+}
 
-// A single chunk fed into a running reducer job, or the end-of-stream
-// sentinel. `value_json` is the JSON-serialized chunk value; `sequence`
-// is the producer's monotonically-increasing chunk index (used for
-// ordering/dedup); `is_eof` marks the in-band terminator (after which
-// `value_json` is empty and the server-stream ends).
+// A single control-token emission into a declared output channel.
+//
+// `channel` is the channel name (must match an `out` channel in the job's
+// channel manifest — a `control` channel for signal/scatter, a `data` channel
+// for open/close). `payload_json` is the JSON-serialized payload: the control
+// token value for SIGNAL/SCATTER_ITEM (empty for a bare signal / scatter-close);
+// the transport DESCRIPTOR `{transport, subject, content_type, credential?}` for
+// OPEN; `{count, status}` for CLOSE. `scatter_id` is the 0-based item index
+// within a scatter; `scatter_count` is the total item count, carried on
+// `CONTROL_KIND_SCATTER_CLOSE` (0 otherwise). `scatter_uid` is a per-fan-out
+// correlation id minted once per `with scatter(name)` block and stamped on every
+// item + the close so the engine's gather barrier can correlate all emits of one
+// invocation (empty for a bare signal / data open/close).
+message EmitControlRequest {
+    string channel = 1;
+    ControlKind kind = 2;
+    string payload_json = 3;
+    uint64 scatter_id = 4;
+    uint64 scatter_count = 5;
+    string scatter_uid = 6;
+}
+
+// Request to open a data-plane inbound byte stream (the consumer read).
+//
+// `channel` is the data-plane `in` channel being read (the SDK passes the name
+// from `stream(name)`) — informational/diagnostic. `subject` is the PRODUCER's
+// transport subject, lifted by the SDK out of the `open` DESCRIPTOR the engine
+// delivered as this consumer job's input (`descriptor.subject` =
+// `executor.datastream.{producer_execution_id}.{channel}`). The executor
+// subscribes to that subject over the data-plane `StreamTransport` and relays
+// each binary envelope back over this server-stream until the in-band EOF
+// sentinel. An empty `subject` yields an immediately-empty stream (no producer
+// descriptor was present — offline / not wired).
+message StreamChunksRequest {
+    string channel = 1;
+    string subject = 2;
+}
+
+// One binary envelope on a data stream (producer→consumer), or the end-of-stream
+// sentinel. This is the uniform framing for BOTH JSON and binary elements:
+// `payload` is the raw element bytes (for a JSON element the producer sets
+// `payload = utf8(json)` + `content_type = "application/json"`; for a binary
+// element it is the opaque blob + its MIME type). `seq` is the producer's
+// monotonically-increasing element index (ordering/dedup); `is_eof` marks the
+// in-band terminator (after which `payload` is empty and the stream ends).
 message ChunkMessage {
-    string value_json = 1;
-    uint64 sequence = 2;
-    bool is_eof = 3;
+    uint64 seq = 1;
+    string content_type = 2;
+    bytes payload = 3;
+    bool is_eof = 4;
+}
+
+// Publish one binary envelope onto a data-plane `out` channel's transport
+// subject. Backs the producer writer (`open_output(name) -> writer.write(...)`):
+// the SDK never touches NATS/credentials itself — it hands the executor the
+// element bytes + content_type and the executor (which holds the transport
+// connection + any unwrapped credential) frames and publishes them. The final
+// `is_eof` envelope is published by the writer's context-exit, immediately
+// before the SDK emits the `close` control token.
+message PublishChunkRequest {
+    // The data-plane `out` channel the bytes belong to (names the transport
+    // subject: `executor.datastream.{execution_id}.{channel}`).
+    string channel = 1;
+    ChunkMessage envelope = 2;
 }

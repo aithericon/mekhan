@@ -6,7 +6,9 @@ use async_nats::jetstream;
 use chrono::Utc;
 use tracing::{debug, error};
 
-use aithericon_executor_domain::{EventCategory, ExecutionEvent, LogLevel, StatusDetail};
+use aithericon_executor_domain::{
+    ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, LogLevel, StatusDetail,
+};
 
 use aithericon_executor_backend::traits::EventStream;
 
@@ -85,6 +87,14 @@ pub(crate) async fn publish_event<T: serde::Serialize>(
 #[async_trait::async_trait]
 pub trait EventEmitter: Send + Sync + 'static {
     async fn emit(&self, event: &ExecutionEvent);
+
+    /// Publish a dynamic control-token emission (`control_emit`) to NATS.
+    ///
+    /// Separate from `emit` because a `ControlEmitEvent` is not an
+    /// `ExecutionEvent` (no `EventCategory` / sequence) — it rides its own
+    /// `executor.events.{id}.control_emit` subject and is engine-ingested rather
+    /// than projected into the step-event timeline.
+    async fn emit_control(&self, event: &ControlEmitEvent);
 }
 
 /// Concrete `EventEmitter` backed by a NATS JetStream context.
@@ -113,6 +123,19 @@ impl EventEmitter for NatsEventEmitter {
             None,
             &event.execution_id,
             "streamed event",
+            event,
+        )
+        .await;
+    }
+
+    async fn emit_control(&self, event: &ControlEmitEvent) {
+        publish_event(
+            &self.jetstream,
+            subject_for(&self.subject_prefix, event.subject()),
+            event.msg_id().as_str(),
+            None,
+            &event.execution_id,
+            "control emit",
             event,
         )
         .await;
@@ -235,6 +258,45 @@ impl EventStream for StreamContext {
             StatusDetail::OutputSet { name, value },
         )
         .await;
+    }
+
+    async fn scatter_item(
+        &self,
+        channel: String,
+        scatter_uid: String,
+        idx: u64,
+        payload: serde_json::Value,
+    ) {
+        // A `ControlEmitEvent` carries no `EventCategory` — it routes purely on
+        // the job's `metadata` (petri net id + control_emit event route), so it
+        // is NOT category-gated like `maybe_emit`. Build it directly and publish
+        // through the emitter's control path (same wire the IPC `EmitControl`
+        // uses for the Python SDK's `scatter`).
+        let event = ControlEmitEvent {
+            execution_id: self.execution_id.clone(),
+            channel,
+            kind: ControlKind::ScatterItem,
+            payload_json: serde_json::to_string(&payload).unwrap_or_default(),
+            scatter_id: idx,
+            scatter_count: 0,
+            scatter_uid,
+            metadata: self.metadata.clone(),
+        };
+        self.emitter.emit_control(&event).await;
+    }
+
+    async fn scatter_close(&self, channel: String, scatter_uid: String, count: u64) {
+        let event = ControlEmitEvent {
+            execution_id: self.execution_id.clone(),
+            channel,
+            kind: ControlKind::ScatterClose,
+            payload_json: String::new(),
+            scatter_id: 0,
+            scatter_count: count,
+            scatter_uid,
+            metadata: self.metadata.clone(),
+        };
+        self.emitter.emit_control(&event).await;
     }
 }
 

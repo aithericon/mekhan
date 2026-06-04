@@ -1,30 +1,28 @@
-# Producer — streaming-output demo.
+# Producer — data-plane streaming demo (docs/25).
 #
-# `streamOutput: true` (graph.json) makes every `set_output(name, value)` call
-# emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this
-# node's stream side-channel (the `p_producer_stream` Signal place). A downstream
-# StreamFold wired from the "stream" handle drains each chunk as it arrives.
+# The producer declares a Data/Out channel "words" (graph.json). Opening it with
+# `open_output("words")` fires an `open` control token EARLY (the moment the
+# context is entered, mid-job) carrying the transport descriptor; the downstream
+# consumer wired off this handle starts draining immediately, while we still
+# produce. Each `out.write(value)` publishes one out-of-band element envelope
+# over the transport subject — the bulk bytes NEVER ride a net token, so the
+# petri net sees only the open + the close (two firings total).
 #
-# We emit one DISTINCT-named chunk per word, each value a plain string (distinct
-# names matter: the stream token dedup id is content-addressable per output
-# name). The consumer's Concat reduce joins them in stream order into the full
-# sentence "the quick brown fox".
+# We write one element per word, each a plain string (Any element kind →
+# JSON-framed on the wire, decoded back to the string on the consumer side). The
+# sleeps space the elements out so they genuinely stream over time. On context
+# exit the writer publishes the in-band EOF terminator and fires the `close`
+# control token stamping the element count (4) + status.
 #
-# IMPORTANT: a streaming producer must emit ONLY stream chunks — every
-# `set_output` becomes a stream token and is counted into `stream_count` (the
-# end-of-stream N). Do NOT also set a `produced`/`count` control output here, or
-# it inflates N and pollutes the consumer's reduction.
-#
-# At job end the executor stamps `stream_count` (= 4 here) on the terminal
-# Completed detail; it rides the producer's control token to the consumer's
-# "control" handle, where it sizes the end-of-stream gather barrier. The sleeps
-# space the chunks out so they stream over time.
+# Replaces the old `streamOutput`/`set_output(f"chunk_i")` model: no per-chunk
+# token spam in the marking.
 
 import time
 
-from aithericon import set_output
+from aithericon import open_output
 
 words = ["the", "quick", "brown", "fox"]
-for i, w in enumerate(words):
-    set_output(f"chunk_{i}", w)
-    time.sleep(1.0)
+with open_output("words") as out:
+    for w in words:
+        out.write(w)
+        time.sleep(1.0)
