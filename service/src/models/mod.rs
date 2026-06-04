@@ -1,6 +1,7 @@
 pub mod asset;
 pub mod auth_token;
 pub mod capability;
+pub mod capacity;
 pub mod error;
 pub mod image_materialization;
 pub mod instance;

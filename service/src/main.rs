@@ -193,6 +193,14 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
+    // Unified fleet-liveness registry (docs/24 S1) — the shared telemetry plane
+    // over BOTH the anonymous worker pool and the advisory facet of enrolled
+    // runners. Construct it ONCE: the worker subscriber/sweep mutate it, the
+    // presence controller mirrors each runner's advertised backends into it, and
+    // the AppState publish-time warning reads through it. Purely advisory — it
+    // never reaps an instance.
+    let fleet = mekhan_service::fleet::FleetLiveness::new();
+
     // Presence controller (Phase 3 — presence-lease pool capacity). Subscribes
     // to `runner.*.presence` and drives every `runner_group` net: admits one
     // pool unit per live runner via the `presence_acquire` bridge on the
@@ -202,24 +210,23 @@ async fn main() -> anyhow::Result<()> {
     // NATS-backed background tasks.
     // Construct the shared presence handle ONCE: the controller tasks mutate it
     // and the AppState read API (`GET /api/v1/runners/presence`) reads through it.
+    // The `fleet` clone receives the advisory backend mirror (telemetry only —
+    // NOT the pool-net control binding, which stays inside this controller).
     let runner_presence = mekhan_service::runners_presence::RunnerPresence::new();
     mekhan_service::runners_presence::spawn_presence_controller(
         runner_presence.clone(),
         mekhan_nats.clone(),
         db.clone(),
         petri.clone(),
+        fleet.clone(),
     );
 
-    // Worker backend-coverage tracker (worker-pool feature). Subscribes to
-    // `worker.*.presence` and keeps a TTL-swept set of which `ExecutorJob`
+    // Worker liveness tasks (worker-pool feature). Subscribe to
+    // `worker.*.presence` and keep a TTL-swept set of which `ExecutorJob`
     // backends have ≥1 live worker, so publish can WARN (never fail) when a
-    // step's backend is covered by zero workers. Wire-only; shares the handle
-    // stored in AppState.
-    let worker_coverage = mekhan_service::worker_coverage::BackendCoverage::new();
-    mekhan_service::worker_coverage::spawn_worker_coverage(
-        worker_coverage.clone(),
-        mekhan_nats.clone(),
-    );
+    // step's backend is served by zero capacities. Wire-only; share the `fleet`
+    // handle stored in AppState.
+    mekhan_service::fleet::spawn_worker_liveness(fleet.clone(), mekhan_nats.clone());
 
     let catalogue_repo = Arc::new(PgCatalogueRepository::new(db.clone()));
 
@@ -334,7 +341,7 @@ async fn main() -> anyhow::Result<()> {
         resource_resolver,
         runner_nats_signer,
         runner_presence,
-        worker_coverage,
+        fleet,
         asset_resolver,
     };
 

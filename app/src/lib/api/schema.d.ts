@@ -3354,6 +3354,38 @@ export interface components {
             name: string;
         };
         /**
+         * @description How much concurrent work the capacity offers (doc 23 §3 "capacity amount").
+         *
+         *     `Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per
+         *     live presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC).
+         */
+        CapacityAmount: {
+            /**
+             * Format: int32
+             * @description A configured integer unit count (the worker pool's `N`).
+             */
+            amount: number;
+            /** @enum {string} */
+            kind: "fixed";
+        } | {
+            /** @enum {string} */
+            kind: "presence_driven";
+        } | {
+            /** @enum {string} */
+            kind: "elastic";
+        };
+        /**
+         * @description The full point in the trait-space a `capacity` resource names. This is the
+         *     typed view of the axes stored as strings in `public_config`; the create
+         *     path parses the wire strings into this and runs [`CapacityAxes::validate`].
+         */
+        CapacityAxes: components["schemas"]["CapacityAmount"] & {
+            dispatch: components["schemas"]["Dispatch"];
+            eligibility: components["schemas"]["Eligibility"];
+            exclusivity: components["schemas"]["Exclusivity"];
+            liveness: components["schemas"]["Liveness"];
+        };
+        /**
          * @description A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).
          *     Lives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the
          *     compiler wrap the executor body with a claim/register/release handshake
@@ -3380,6 +3412,25 @@ export interface components {
              *     default placement (e.g. one token).
              */
             request?: unknown;
+        };
+        /**
+         * @description One named preset (doc 23 §7): a coherent, legible axis set the create form
+         *     prefills so an operator names a kind ("worker") and gets the locked axes,
+         *     overriding only the free ones. Presets are legibility over the substrate —
+         *     the substrate (the validated holes) is what makes the missing cells
+         *     reachable.
+         *
+         *     The fields are owned `String`s (not `&'static str`) so this is a clean
+         *     `Deserialize`-able wire DTO surfaced on `ResourceTypeInfo.capacity_presets`;
+         *     the const table is built by [`presets`].
+         */
+        CapacityPreset: {
+            /** @description The coherent axis set this preset locks in. */
+            axes: components["schemas"]["CapacityAxes"];
+            /** @description UI label. */
+            display_name: string;
+            /** @description Stable wire id (`worker` / `instrument` / `hpc`). */
+            name: string;
         };
         /**
          * @description Cardinality of an asset type (docs/20 §4.2). `Object` is the 1-row
@@ -4038,6 +4089,11 @@ export interface components {
             scheduler?: string | null;
         };
         /**
+         * @description How work reaches the capacity (doc 23 §3 "dispatch discipline").
+         * @enum {string}
+         */
+        Dispatch: "pull" | "push";
+        /**
          * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
          *     step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
          *     per-step author choice on any `ExecutorJob` backend.
@@ -4088,6 +4144,14 @@ export interface components {
             thumbnail_url?: string | null;
             url: string;
         };
+        /**
+         * @description The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate
+         *     shape rather than chosen by hand: a single coarse equality (`backend == x`)
+         *     IS a partition key (free competing-consumers, no matcher); a richer
+         *     conjunction needs the guarded matcher.
+         * @enum {string}
+         */
+        Eligibility: "partition" | "predicate";
         EngineStatus: {
             available: boolean;
             run_mode?: string | null;
@@ -4185,6 +4249,11 @@ export interface components {
             tokens: components["schemas"]["TokenInfo"][];
             transition_name?: string | null;
         };
+        /**
+         * @description Hold-vs-consume (doc 23 §3 "exclusivity discipline" — the real fork of §5).
+         * @enum {string}
+         */
+        Exclusivity: "hold" | "consume";
         /**
          * @description Discriminator selecting which executor backend handles an automated step.
          *
@@ -4829,6 +4898,16 @@ export interface components {
             /** Format: double */
             value: number;
         };
+        /**
+         * @description How a capacity proves it is available (doc 23 §3 "liveness").
+         *
+         *     `lease` is reserved now (doc 24 §5) so the model has a slot for the
+         *     HPC/`datacenter` allocation path; this slice does not re-express the lease
+         *     adapter as a `capacity`, but the axis value must exist so a future preset
+         *     can name it.
+         * @enum {string}
+         */
+        Liveness: "competing_consumer" | "presence" | "lease";
         /** @description Configuration for the LLM backend. */
         LlmConfig: {
             /** @description API key. Falls back to provider-specific env var if absent. */
@@ -6217,6 +6296,14 @@ export interface components {
          *     renders it field-by-field.
          */
         ResourceTypeInfo: {
+            /**
+             * @description Named trait-space presets (doc 23 §7) the create form can prefill —
+             *     populated ONLY for the `capacity` type (`Some([worker, instrument,
+             *     hpc])`), `None` for every other kind. A create call names a preset via
+             *     the `preset` config key to get the locked axes, overriding only the free
+             *     ones. See `models::capacity`.
+             */
+            capacity_presets?: components["schemas"]["CapacityPreset"][] | null;
             display_name: string;
             /**
              * @description `true` for the `kv` escape hatch: the field set is per-INSTANCE,

@@ -51,6 +51,17 @@ use utoipa::OpenApi;
             crate::models::resource::UpdateResourceRequest,
             crate::models::resource::RotateResourceRequest,
             crate::models::resource::ResourceAuditEntry,
+            // S3 (unified capacity model) — the trait-space axis vocabulary +
+            // the named presets surfaced on `ResourceTypeInfo.capacity_presets`
+            // for the `capacity` type. Reached only through nested `Option<Vec<_>>`,
+            // so register them explicitly for frontend codegen.
+            crate::models::capacity::Liveness,
+            crate::models::capacity::Dispatch,
+            crate::models::capacity::Exclusivity,
+            crate::models::capacity::CapacityAmount,
+            crate::models::capacity::Eligibility,
+            crate::models::capacity::CapacityAxes,
+            crate::models::capacity::CapacityPreset,
             // docs/20 — Asset layer DTOs. Request/response shapes for asset
             // types + assets + records. Several appear only inside `Vec<_>` or
             // as request bodies, so register them explicitly for frontend

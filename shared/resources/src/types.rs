@@ -440,6 +440,56 @@ pub struct RunnerGroup {
     pub unit_label: Option<String>,
 }
 
+/// First-class **capacity** (doc 23/24, S3) — the generalisation of
+/// [`RunnerGroup`] into a named point in the unified trait-space. A capacity
+/// advertises *how* it offers work (the doc 23 §3 axes), stored here as plain
+/// strings in `public_config`; the authoritative typed view + the create-time
+/// cell validation + the named presets live service-side in
+/// `mekhan_service::models::capacity` (this crate carries no service dep). The
+/// axis vocabulary on the wire:
+///
+/// - `liveness ∈ { competing_consumer, presence, lease }`
+/// - `dispatch ∈ { pull, push }`
+/// - `exclusivity ∈ { hold, consume }`
+/// - `capacity_kind ∈ { fixed, presence_driven, elastic }` (+ `capacity_amount`
+///   for `fixed`)
+/// - `eligibility ∈ { partition, predicate }`
+///
+/// A presence-driven capacity deploys the SAME presence-pool admission net
+/// `runner_group` does — the instrument path is byte-stable. `runner_group`
+/// stays registered (below) so existing rows + the instrument enroll path keep
+/// working; `capacity` is the forward-looking superset.
+#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
+#[resource(
+    name = "capacity",
+    display_name = "Capacity",
+    icon = "lucide-layout-grid"
+)]
+pub struct Capacity {
+    /// How we know it is available. One of `competing_consumer` / `presence` /
+    /// `lease`. Validated service-side against `models::capacity::Liveness`.
+    pub liveness: String,
+    /// How work reaches it: `pull` (broker-balanced queue) or `push` (matched
+    /// grant to an inbox).
+    pub dispatch: String,
+    /// `hold` (claim → grant → release) or `consume` (quota debit; accepted but
+    /// not yet dispatchable this slice).
+    pub exclusivity: String,
+    /// `fixed` (configured `capacity_amount`), `presence_driven` (emergent), or
+    /// `elastic` (scheduler-granted).
+    pub capacity_kind: String,
+    /// Unit count when `capacity_kind == fixed`. Ignored otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_amount: Option<u32>,
+    /// Eligibility strategy: `partition` (trivial equality ⇒ a work queue) or
+    /// `predicate` (rich match ⇒ a guarded admission net).
+    pub eligibility: String,
+    /// Optional human label for one unit (cosmetic; mirrors
+    /// [`RunnerGroup::unit_label`]).
+    #[serde(default)]
+    pub unit_label: Option<String>,
+}
+
 // ─── Kv — the dynamic-fields escape hatch ────────────────────────────────────
 //
 // The 5 typed resources above cover the common credential surfaces. `kv`

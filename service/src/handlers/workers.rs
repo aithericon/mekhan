@@ -4,7 +4,8 @@
 //! (NOT enrolled runners — see [`crate::handlers::runners`] for the
 //! presence-pool / instrument path). Each worker advertises which
 //! `ExecutorJob` backends it serves via `worker.<id>.presence`;
-//! [`crate::worker_coverage`] tracks that as advisory, TTL-swept presence.
+//! [`crate::fleet`] tracks that as advisory, TTL-swept presence (the worker
+//! facet of the unified fleet-liveness registry).
 //!
 //! This read surfaces that map so an operator can see the live pool: which
 //! workers are connected and, crucially, which backends are covered by ZERO
@@ -72,14 +73,23 @@ pub async fn worker_coverage(
     State(state): State<AppState>,
     _user: AuthUser,
 ) -> Result<Json<WorkerCoverageResponse>, ApiError> {
-    let snapshot = state.worker_coverage.snapshot().await;
+    // Filter the unified fleet snapshot to the WORKER facet — this endpoint is
+    // the anonymous worker-pool coverage view (runners have their own presence
+    // read), so a mirrored runner entry must not appear here or inflate counts.
+    let snapshot: Vec<crate::fleet::FleetSnapshotEntry> = state
+        .fleet
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|e| matches!(e.kind, crate::fleet::CapacityKind::Worker))
+        .collect();
 
     let workers: Vec<WorkerCoverageEntry> = snapshot
         .iter()
-        .map(|(worker_id, backends, last_seen_ms_ago)| WorkerCoverageEntry {
-            worker_id: worker_id.clone(),
-            backends: backends.clone(),
-            last_seen_ms_ago: *last_seen_ms_ago,
+        .map(|e| WorkerCoverageEntry {
+            worker_id: e.id.clone(),
+            backends: e.caps.clone(),
+            last_seen_ms_ago: e.last_seen_ms_ago,
         })
         .collect();
 
@@ -91,7 +101,7 @@ pub async fn worker_coverage(
         .map(|m| {
             let worker_count = snapshot
                 .iter()
-                .filter(|(_, bs, _)| bs.iter().any(|b| b == m.wire_name))
+                .filter(|e| e.caps.iter().any(|b| b == m.wire_name))
                 .count() as u32;
             BackendCoverageEntry {
                 backend: m.wire_name.to_string(),

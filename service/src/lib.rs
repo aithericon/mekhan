@@ -9,6 +9,7 @@ pub mod compiler;
 pub mod config;
 pub mod db;
 pub mod demos;
+pub mod fleet;
 pub mod handlers;
 pub mod lifecycle;
 pub mod models;
@@ -25,7 +26,6 @@ pub mod runners_presence;
 pub mod s3;
 pub mod scope;
 pub mod triggers;
-pub mod worker_coverage;
 pub mod yjs;
 
 use std::sync::Arc;
@@ -115,13 +115,16 @@ pub struct AppState {
     /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
     /// capacity (which runners hold an admitted unit right now).
     pub runner_presence: crate::runners_presence::RunnerPresence,
-    /// Worker-pool feature — shared handle to the worker backend-coverage
-    /// tracker's in-memory map. Workers heartbeat on `worker.*.presence`
-    /// advertising which `ExecutorJob` backends they serve; the coverage tasks
-    /// (`crate::worker_coverage`) keep this TTL-swept. Publish reads through it to
-    /// WARN (never fail) on backends covered by zero live workers. No HTTP route
-    /// in v1 — held here for a future fleet-coverage UI.
-    pub worker_coverage: crate::worker_coverage::BackendCoverage,
+    /// Unified fleet-liveness registry (docs/23 §2; docs/24 S1) — the shared
+    /// telemetry plane over BOTH the anonymous worker pool and the advisory
+    /// facet of enrolled runners. Workers heartbeat on `worker.*.presence`
+    /// (subscriber + TTL sweep owned by `crate::fleet`); runners mirror their
+    /// self-reported backends in from `crate::runners_presence` on each
+    /// heartbeat. Publish reads through it (`serves_backend`) to WARN (never
+    /// fail) on a step's backend served by zero live capacities. Purely
+    /// advisory — a dropped capacity NEVER reaps an instance (the runner control
+    /// binding in `runners_presence` is a separate plane).
+    pub fleet: crate::fleet::FleetLiveness,
     /// Publish-time asset resolver (docs/20 §5). Materializes the pinned
     /// records of every node-bound asset into the JSON envelope the publish
     /// handler splices into the AIR (`__assets`) before persistence. The

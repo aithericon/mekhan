@@ -9652,6 +9652,94 @@
           }
         }
       },
+      "CapacityAmount": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A configured integer unit count (the worker pool's `N`).",
+            "required": [
+              "amount",
+              "kind"
+            ],
+            "properties": {
+              "amount": {
+                "type": "integer",
+                "format": "int32",
+                "description": "A configured integer unit count (the worker pool's `N`).",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Emergent from live presence — one unit per checked-in unit. No count is\ndeclared (the presence controller injects/expires units).",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "presence_driven"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Scheduler-granted, unbounded a priori (HPC). Reserved; not built here.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "elastic"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "How much concurrent work the capacity offers (doc 23 §3 \"capacity amount\").\n\n`Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per\nlive presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC)."
+      },
+      "CapacityAxes": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CapacityAmount"
+          },
+          {
+            "type": "object",
+            "required": [
+              "liveness",
+              "dispatch",
+              "exclusivity",
+              "eligibility"
+            ],
+            "properties": {
+              "dispatch": {
+                "$ref": "#/components/schemas/Dispatch"
+              },
+              "eligibility": {
+                "$ref": "#/components/schemas/Eligibility"
+              },
+              "exclusivity": {
+                "$ref": "#/components/schemas/Exclusivity"
+              },
+              "liveness": {
+                "$ref": "#/components/schemas/Liveness"
+              }
+            }
+          }
+        ],
+        "description": "The full point in the trait-space a `capacity` resource names. This is the\ntyped view of the axes stored as strings in `public_config`; the create\npath parses the wire strings into this and runs [`CapacityAxes::validate`]."
+      },
       "CapacityBinding": {
         "type": "object",
         "description": "A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.capacity`, expressing \"no\ncapacity binding\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a `concurrency_limit` or `runner_group` resource.",
@@ -9665,6 +9753,29 @@
           },
           "request": {
             "description": "Claim-schema-shaped request params (the kind's `claim_schema` in\n`aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`\nand validated against the kind's `claim_schema`. `None` ⇒ the kind's\ndefault placement (e.g. one token)."
+          }
+        }
+      },
+      "CapacityPreset": {
+        "type": "object",
+        "description": "One named preset (doc 23 §7): a coherent, legible axis set the create form\nprefills so an operator names a kind (\"worker\") and gets the locked axes,\noverriding only the free ones. Presets are legibility over the substrate —\nthe substrate (the validated holes) is what makes the missing cells\nreachable.\n\nThe fields are owned `String`s (not `&'static str`) so this is a clean\n`Deserialize`-able wire DTO surfaced on `ResourceTypeInfo.capacity_presets`;\nthe const table is built by [`presets`].",
+        "required": [
+          "name",
+          "display_name",
+          "axes"
+        ],
+        "properties": {
+          "axes": {
+            "$ref": "#/components/schemas/CapacityAxes",
+            "description": "The coherent axis set this preset locks in."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "UI label."
+          },
+          "name": {
+            "type": "string",
+            "description": "Stable wire id (`worker` / `instrument` / `hpc`)."
           }
         }
       },
@@ -11214,6 +11325,14 @@
         ],
         "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a `concurrency_limit` admission lives under [`DeploymentModel::Executor`]'s `capacity`\n  (the body runs on our executor pool holding the typed lease — R1–R3\n  machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
       },
+      "Dispatch": {
+        "type": "string",
+        "description": "How work reaches the capacity (doc 23 §3 \"dispatch discipline\").",
+        "enum": [
+          "pull",
+          "push"
+        ]
+      },
       "DispatchMode": {
         "oneOf": [
           {
@@ -11373,6 +11492,14 @@
             "type": "string"
           }
         }
+      },
+      "Eligibility": {
+        "type": "string",
+        "description": "The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate\nshape rather than chosen by hand: a single coarse equality (`backend == x`)\nIS a partition key (free competing-consumers, no matcher); a richer\nconjunction needs the guarded matcher.",
+        "enum": [
+          "partition",
+          "predicate"
+        ]
       },
       "EngineStatus": {
         "type": "object",
@@ -11606,6 +11733,14 @@
             ]
           }
         }
+      },
+      "Exclusivity": {
+        "type": "string",
+        "description": "Hold-vs-consume (doc 23 §3 \"exclusivity discipline\" — the real fork of §5).",
+        "enum": [
+          "hold",
+          "consume"
+        ]
       },
       "ExecutionBackendType": {
         "type": "string",
@@ -13314,6 +13449,15 @@
             "format": "double"
           }
         }
+      },
+      "Liveness": {
+        "type": "string",
+        "description": "How a capacity proves it is available (doc 23 §3 \"liveness\").\n\n`lease` is reserved now (doc 24 §5) so the model has a slot for the\nHPC/`datacenter` allocation path; this slice does not re-express the lease\nadapter as a `capacity`, but the axis value must exist so a future preset\ncan name it.",
+        "enum": [
+          "competing_consumer",
+          "presence",
+          "lease"
+        ]
       },
       "LlmConfig": {
         "type": "object",
@@ -16237,6 +16381,16 @@
           "schema"
         ],
         "properties": {
+          "capacity_presets": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CapacityPreset"
+            },
+            "description": "Named trait-space presets (doc 23 §7) the create form can prefill —\npopulated ONLY for the `capacity` type (`Some([worker, instrument,\nhpc])`), `None` for every other kind. A create call names a preset via\nthe `preset` config key to get the locked axes, overriding only the free\nones. See `models::capacity`."
+          },
           "display_name": {
             "type": "string"
           },

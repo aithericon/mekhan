@@ -139,6 +139,13 @@ pub struct ResourceTypeInfo {
     /// derived via `#[derive(ResourceType)]` always set this to `false`.
     #[serde(default)]
     pub dynamic_fields: bool,
+    /// Named trait-space presets (doc 23 §7) the create form can prefill —
+    /// populated ONLY for the `capacity` type (`Some([worker, instrument,
+    /// hpc])`), `None` for every other kind. A create call names a preset via
+    /// the `preset` config key to get the locked axes, overriding only the free
+    /// ones. See `models::capacity`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_presets: Option<Vec<crate::models::capacity::CapacityPreset>>,
 }
 
 /// Request body for `POST /api/v1/resources`. Carries every field needed to

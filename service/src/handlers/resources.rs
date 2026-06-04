@@ -178,6 +178,90 @@ fn validate_datacenter_connection(
     }
 }
 
+/// The create-form key a caller sets to name a `capacity` preset (doc 23 §7).
+/// Consumed + stripped by [`expand_capacity_preset`] before [`split_config`]
+/// sees the blob — it is NOT a `public_config` field, so it can't survive the
+/// stray-key gate. Underscore-prefixed so it can't collide with an axis name.
+const CAPACITY_PRESET_KEY: &str = "preset";
+
+/// Expand a `capacity` create config carrying a `preset` name into its locked
+/// axis set, letting caller-supplied axes override the free ones, then strip
+/// the `preset` key. No-op for every non-`capacity` kind and for a `capacity`
+/// config that names no preset (the axes are then taken verbatim).
+///
+/// This is the surface refinement #1 / doc 24 §2 calls for: "presets set the
+/// locked axes; the form exposes the free ones." A named preset prefills the
+/// coherent combination; the caller's explicit axes win on conflict so the few
+/// free axes (e.g. a worker's unit count) can be set in the same call.
+fn expand_capacity_preset(resource_type: &str, config: &mut Value) -> Result<(), ApiError> {
+    if resource_type != "capacity" {
+        return Ok(());
+    }
+    let Some(map) = config.as_object_mut() else {
+        // split_config will reject a non-object with its own message.
+        return Ok(());
+    };
+    let Some(preset_val) = map.remove(CAPACITY_PRESET_KEY) else {
+        return Ok(()); // axes given verbatim
+    };
+    let preset_name = preset_val.as_str().ok_or_else(|| {
+        ApiError::bad_request("capacity `preset` must be a string naming a known preset")
+    })?;
+    let preset = crate::models::capacity::preset_by_name(preset_name).ok_or_else(|| {
+        let known: Vec<String> = crate::models::capacity::presets()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        ApiError::bad_request(format!(
+            "unknown capacity preset '{preset_name}' — known presets: {}",
+            known.join(", ")
+        ))
+    })?;
+
+    // Serialize the preset's axes to a flat JSON object, then layer the
+    // caller's explicit fields ON TOP (override-the-free-axes). The axes
+    // struct flattens `CapacityAmount` into `capacity_kind` (+ optional
+    // `capacity_amount`), matching the wire fields of the `Capacity`
+    // descriptor exactly.
+    let Value::Object(axis_map) = serde_json::to_value(preset.axes)
+        .map_err(|e| ApiError::internal(format!("preset serialize: {e}")))?
+    else {
+        return Err(ApiError::internal("preset axes did not serialize to an object"));
+    };
+    for (k, v) in axis_map {
+        map.entry(k).or_insert(v);
+    }
+    Ok(())
+}
+
+/// Authoritative create/update/rotate validation for `capacity` resources: the
+/// trait-space axes in `public_config` must parse into a coherent point in the
+/// space (doc 24 refinement #1). Rejects incoherent cells (`competing_consumer
+/// × push`, presence-less × push, `elastic × push` without presence) with a
+/// 400; returns the non-fatal scale-mismatch WARNINGS (`pull × predicate`) for
+/// the caller to log. No-op for every non-`capacity` kind.
+///
+/// The `serde(tag = "kind")` flattening on `CapacityAmount` means the typed
+/// `CapacityAxes` deserializes straight off the public half: `capacity_kind`
+/// (the tag) + `capacity_amount` (the content, for `fixed`). A missing/invalid
+/// axis surfaces as a 400 naming the bad field rather than a 500.
+fn validate_capacity_axes(
+    resource_type: &str,
+    public: &JsonMap<String, Value>,
+) -> Result<Vec<String>, ApiError> {
+    if resource_type != "capacity" {
+        return Ok(Vec::new());
+    }
+    let axes: crate::models::capacity::CapacityAxes =
+        serde_json::from_value(Value::Object(public.clone())).map_err(|e| {
+            ApiError::bad_request(format!(
+                "capacity axes are malformed or missing: {e} — expected liveness / dispatch / \
+                 exclusivity / capacity_kind (+ capacity_amount for fixed) / eligibility"
+            ))
+        })?;
+    axes.validate()
+}
+
 type ConfigSplit = (JsonMap<String, Value>, JsonMap<String, Value>);
 
 fn split_config(
@@ -700,6 +784,11 @@ pub async fn list_resource_types() -> Json<Vec<ResourceTypeInfo>> {
             public_fields: d.public_fields.iter().map(|s| (*s).to_string()).collect(),
             schema: schema_json_cached(d).clone(),
             dynamic_fields: d.dynamic_fields,
+            // Surface the trait-space presets on the `capacity` type so the
+            // create form can offer "worker / instrument / hpc" with their
+            // locked axes (doc 23 §7). No other kind has presets.
+            capacity_presets: (d.name == "capacity")
+                .then(crate::models::capacity::presets),
         })
         .collect();
     Json(infos)
@@ -752,8 +841,18 @@ pub(crate) async fn create_resource_internal(
         )));
     }
     let descriptor = descriptor_or_400(&req.resource_type)?;
-    let (public, secret) = split_config(descriptor, req.config.clone())?;
+    // Expand a `capacity` preset (if named) into its locked axes BEFORE the
+    // split-config stray-key gate sees the blob (the `preset` key is not a
+    // public_config field).
+    let mut config = req.config.clone();
+    expand_capacity_preset(&req.resource_type, &mut config)?;
+    let (public, secret) = split_config(descriptor, config)?;
     validate_datacenter_connection(&req.resource_type, &public, &secret)?;
+    // Cell validation: reject incoherent capacity axis combinations; log the
+    // non-fatal scale-mismatch warnings.
+    for w in validate_capacity_axes(&req.resource_type, &public)? {
+        tracing::warn!(path = %req.path, "capacity axes warning: {w}");
+    }
 
     let resource_id = Uuid::new_v4();
     let version = 1;
@@ -1018,6 +1117,31 @@ async fn ensure_pool_net_for_kind(
             )
             .await;
         }
+        "capacity" => {
+            // S3: a `capacity` whose liveness is presence/lease-driven deploys
+            // the SAME presence-pool admission net `runner_group` does — the
+            // instrument path is byte-stable, this is the generalised superset.
+            // A competing_consumer (pull) capacity has NO admission net (it is a
+            // static partition / shared work queue — no per-task matcher), and a
+            // `consume`/elastic capacity's backing is deferred (doc 24 §4), so we
+            // only deploy for the presence-driven case. The axes are already
+            // validated coherent by `validate_capacity_axes` at create/rotate.
+            let liveness = public.get("liveness").and_then(Value::as_str);
+            if liveness == Some("presence") {
+                crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
+                    &state.petri,
+                    resource_id,
+                )
+                .await;
+            } else {
+                tracing::debug!(
+                    %resource_id,
+                    ?liveness,
+                    "capacity is not presence-driven; no admission net deployed (partition / \
+                     consume / elastic backing is deferred)"
+                );
+            }
+        }
         _ => {}
     }
 }
@@ -1140,9 +1264,13 @@ pub async fn update_resource(
         display_name = trimmed;
     }
 
-    if let Some(config) = req.config {
+    if let Some(mut config) = req.config {
         let descriptor = descriptor_or_400(&row.resource_type)?;
+        expand_capacity_preset(&row.resource_type, &mut config)?;
         let (public, secret) = split_config(descriptor, config)?;
+        for w in validate_capacity_axes(&row.resource_type, &public)? {
+            tracing::warn!(path = %row.path, "capacity axes warning: {w}");
+        }
 
         latest_version = row.latest_version + 1;
         let vault_path = vault_path_for(row.workspace_id, row.id, latest_version);
@@ -1292,8 +1420,13 @@ pub async fn rotate_resource(
     .ok_or_else(|| ApiError::not_found("resource not found"))?;
 
     let descriptor = descriptor_or_400(&row.resource_type)?;
-    let (public, secret) = split_config(descriptor, req.config)?;
+    let mut config = req.config;
+    expand_capacity_preset(&row.resource_type, &mut config)?;
+    let (public, secret) = split_config(descriptor, config)?;
     validate_datacenter_connection(&row.resource_type, &public, &secret)?;
+    for w in validate_capacity_axes(&row.resource_type, &public)? {
+        tracing::warn!(path = %row.path, "capacity axes warning: {w}");
+    }
 
     let principal_id = user.subject_as_uuid();
     let new_version = row.latest_version + 1;
