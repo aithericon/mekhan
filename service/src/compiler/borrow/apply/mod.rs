@@ -97,10 +97,19 @@ pub(crate) fn strip_borrow_markers(scenario: &mut ScenarioDefinition) {
 /// - `t_{id}_prepare_call` — Agent (loop mints multiple prep-shaped
 ///   transitions per cycle; the LLM-call prep carries the more specific
 ///   name)
+/// - `t_{id}_acquire` — POOLED AutomatedSteps (capacity/presence-runner or
+///   datacenter-lease lifecycle, `lower_pooled_body`). These have no separate
+///   `prepare`; the claim/grant `acquire` transition is where the job spec is
+///   built and the `BORROW_MARKER` lives, so envelope/resource/asset borrows
+///   into a pooled step must splice there. Without this, a pooled step that
+///   references an upstream `{{ slug.field }}` (e.g. a ROS execute step
+///   consuming an upstream plan's trajectory) silently stages no borrow and
+///   fails at render time with "variable not found in context".
 pub(crate) fn is_prepare_transition_id(transition_id: &str, consumer_id: &str) -> bool {
     transition_id == format!("{consumer_id}/prepare")
         || transition_id == format!("t_{consumer_id}_prepare")
         || transition_id == format!("t_{consumer_id}_prepare_call")
+        || transition_id == format!("t_{consumer_id}_acquire")
 }
 
 /// Same predicate, without a known consumer id — for the publish-time
@@ -109,6 +118,7 @@ pub(crate) fn has_prepare_transition_suffix(transition_id: &str) -> bool {
     transition_id.ends_with("/prepare")
         || transition_id.ends_with("_prepare")
         || transition_id.ends_with("_prepare_call")
+        || transition_id.ends_with("_acquire")
 }
 
 /// Locate the prepare transition for `consumer_id`. The `Option` return

@@ -62,7 +62,7 @@
           "id": "out",
           "label": "Output",
           "fields": [
-            { "name": "trajectory", "label": "Trajectory", "kind": "json", "schema": { "type": "object" } },
+            { "name": "trajectory", "label": "Trajectory (opaque JSON-encoded JointTrajectory)", "kind": "text" },
             { "name": "success", "label": "Success", "kind": "bool" },
             { "name": "planning_time", "label": "Planning time (s)", "kind": "number" },
             { "name": "point_count", "label": "Point count", "kind": "number" },
