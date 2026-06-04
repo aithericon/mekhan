@@ -26,10 +26,10 @@ channel's datastream subject. The publish is unary + awaited, so the transport's
 ack window can back-pressure a too-fast producer (docs/25 §5).
 
 Silent no-op when the SDK is not connected to a sidecar (no
-``AITHERICON_IPC_SOCKET``) — same contract as :func:`aithericon.emit` /
+``AITHERICON_IPC_SOCKET``) — same contract as :func:`aithericon.out` /
 :func:`aithericon.set_output` — so the same script runs unchanged outside an
 execution context. The channel name is validated against the job's channel
-manifest exactly as :func:`aithericon.emit` does (early friendly check when
+manifest exactly as :func:`aithericon.out` does (early friendly check when
 ``AITHERICON_CHANNELS`` is exposed; the sidecar enforces authoritatively
 otherwise).
 """
@@ -105,7 +105,7 @@ class _Writer:
 
         Silent no-op when not connected to a sidecar. Raises on a non-OK
         response (an invalid channel, transport failure) — same surfacing as
-        :func:`aithericon.emit`.
+        :func:`aithericon.out`.
         """
         stub = get_stub()
         if stub is None:
@@ -202,7 +202,7 @@ class open_output:
                 channel=self._name,
                 kind=executor_sidecar_pb2.CONTROL_KIND_OPEN,
                 payload_json=json.dumps(self._descriptor()),
-                scatter_uid="",
+                episode_uid="",
             )
         )
         if resp.status != executor_sidecar_pb2.RESPONSE_STATUS_OK:
@@ -223,7 +223,7 @@ class open_output:
                 payload_json=json.dumps(
                     {"count": self._writer.count, "status": "ok"}
                 ),
-                scatter_uid="",
+                episode_uid="",
             )
         )
         if resp.status != executor_sidecar_pb2.RESPONSE_STATUS_OK:

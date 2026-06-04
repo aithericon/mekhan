@@ -933,13 +933,11 @@ mod tests {
             ChannelManifestEntry {
                 name: "progress".into(),
                 plane: "control".into(),
-                contract: Some("signal".into()),
                 element_kind: "json".into(),
             },
             ChannelManifestEntry {
                 name: "frames".into(),
                 plane: "data".into(),
-                contract: None,
                 element_kind: "binary".into(),
             },
         ];

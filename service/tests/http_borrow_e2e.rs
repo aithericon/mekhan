@@ -158,6 +158,7 @@ fn graph(http_url: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -167,6 +168,7 @@ fn graph(http_url: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
             WorkflowEdge {
@@ -176,6 +178,7 @@ fn graph(http_url: &str) -> WorkflowGraph {
                 source_handle: None,
                 target_handle: Some("in".to_string()),
                 label: None,
+                join: None,
                 edge_type: "sequence".to_string(),
             },
         ],

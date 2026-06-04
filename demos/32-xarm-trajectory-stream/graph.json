@@ -19,7 +19,7 @@
       "data": {
         "type": "automated_step",
         "label": "Move (trajectory action, streaming feedback)",
-        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`). Commands a single-waypoint trajectory to the proven-reachable joint target [0, -0.3, -0.3, 0, 0.6, 0] (reused from demo 30) on the xArm 6 driven through ros2_control fake hardware. The node declares a Control/Scatter `out` channel `feedback` (max_fanout 4096): as the controller follows the trajectory it publishes structured `FollowJointTrajectory_Feedback` frames (`{ header, joint_names, desired, actual, error }` — each a nested JointTrajectoryPoint, far richer than the turtle's scalar `{ remaining }`); the ROS backend dedups the DUPLICATED frames rosbridge emits and streams each DISTINCT feedback as a `scatter_item` control token (docs/25) into the channel, then a `scatter_close` carrying the count. The compiler's per-channel gather barrier parks the gathered collection `{ output: [...] }` on the channel's gathered place, which the downstream `fold` consumer drains off `input.output`. The terminal action RESULT (`error_code`) rides `stdout_tail` ONLY — success is implicit (the backend only succeeds when GoalStatus == 4 SUCCEEDED). The goal is authored as free-form JSON in `config.fields` and passed to rosbridge verbatim (nested array-of-structs, no mapper involvement); `interface_typedefs` carries the flat `FollowJointTrajectory_Result` typedef so the deriver can shape the result port for this non-bundled action. Runs on an `xarm_fleet` runner that satisfies `ros.robot_model == xarm6`; the rosbridge endpoint is runner-local (`EXECUTOR_ROS__WS_URL`).",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`). Commands a single-waypoint trajectory to the proven-reachable joint target [0, -0.3, -0.3, 0, 0.6, 0] (reused from demo 30) on the xArm 6 driven through ros2_control fake hardware. The node declares a Control/Out channel `feedback` (max_fanout 4096): as the controller follows the trajectory it publishes structured `FollowJointTrajectory_Feedback` frames (`{ header, joint_names, desired, actual, error }` — each a nested JointTrajectoryPoint, far richer than the turtle's scalar `{ remaining }`); the ROS backend dedups the DUPLICATED frames rosbridge emits and streams each DISTINCT feedback as an `item` control token (docs/25) into the channel, then a `close` carrying the count. The consumer edge to `fold` carries `join: gather`, so the compiler's per-channel gather barrier parks the gathered collection `{ output: [...] }` on the channel's gathered place, which the downstream `fold` consumer drains off `input.output`. The terminal action RESULT (`error_code`) rides `stdout_tail` ONLY — success is implicit (the backend only succeeds when GoalStatus == 4 SUCCEEDED). The goal is authored as free-form JSON in `config.fields` and passed to rosbridge verbatim (nested array-of-structs, no mapper involvement); `interface_typedefs` carries the flat `FollowJointTrajectory_Result` typedef so the deriver can shape the result port for this non-bundled action. Runs on an `xarm_fleet` runner that satisfies `ros.robot_model == xarm6`; the rosbridge endpoint is runner-local (`EXECUTOR_ROS__WS_URL`).",
         "deploymentModel": {
           "mode": "executor",
           "capacity": { "alias": "xarm_fleet" }
@@ -35,7 +35,6 @@
             "direction": "out",
             "plane": "control",
             "element": { "type": "any" },
-            "contract": "scatter",
             "max_fanout": 4096
           }
         ],
@@ -109,7 +108,7 @@
   ],
   "edges": [
     { "id": "e_start_move", "source": "start", "target": "move", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_move_feedback_fold", "source": "move", "sourceHandle": "feedback", "target": "fold", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_move_feedback_fold", "source": "move", "sourceHandle": "feedback", "target": "fold", "targetHandle": "in", "type": "sequence", "join": "gather" },
     { "id": "e_fold_end", "source": "fold", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }
