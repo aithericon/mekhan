@@ -4,8 +4,13 @@
 //! through NATS internally). Three axes, all reusing the L1 generators so an
 //! L1↔L2 comparison of the same scenario isolates the I/O tax:
 //!
-//! - `throughput`  — write-path throughput: fire `N` transitions through one
-//!   net and time it (`token_fanin`, one transition → no scan-cost confound).
+//! - `throughput`  — write-path throughput: drive a `self_loop` net `N` steps
+//!   and time it. The self-loop is O(1) per firing, so the wall-clock is `N` ×
+//!   the per-event **fire → publish(JetStream, await ACK) → subscribe(consumer
+//!   receives) → apply-to-projection → next fire** round-trip — the cost the
+//!   engine pays on *every* event (it won't advance the eval loop until the
+//!   event it just produced has round-tripped back into the marking cache).
+//!   This is the bare write-path cost, with no eval-overhead confound.
 //! - `concurrency` — does the single `PETRI_GLOBAL` stream / sequence write
 //!   path serialize `M` nets evaluated at once? Aggregate throughput vs `M`.
 //!
@@ -27,7 +32,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
-use petri_bench::generators::token_fanin;
+use petri_bench::generators::self_loop;
 use petri_bench::live::{EngineClient, DEFAULT_ENGINE_URL};
 use petri_bench::metrics::{Metrics, ResultRecord, Stats};
 use petri_bench::report::{emit, run_meta};
@@ -169,9 +174,10 @@ fn record_l2(
     }
 }
 
-/// Throughput axis: one net, `size` transitions fired, timed end-to-end. Uses
-/// `token_fanin` (a single transition fired `size` times) so the measurement is
-/// the write-path round-trip, not the transition-scan cost.
+/// Throughput axis: drive a `self_loop` net exactly `size` steps and time it.
+/// The self-loop is O(1) per firing, so the wall-clock is `size` × the per-event
+/// publish→subscribe→apply round-trip — no eval-overhead confound (unlike
+/// `token_fanin`/`linear_chain`, which are secretly quadratic in `size`).
 async fn run_throughput(client: &EngineClient, max_events: usize, samples: usize) {
     print_header();
     let run = run_nonce();
@@ -182,16 +188,17 @@ async fn run_throughput(client: &EngineClient, max_events: usize, samples: usize
 
         for s in 0..samples {
             let net_id = format!("bench_tput_{size}_{s}_{run}");
-            let def = token_fanin(size);
+            let def = self_loop();
 
-            // Deploy (and seed) is untimed; only the firing pass is measured.
+            // Deploy (and seed the single token) is untimed; only the firing
+            // pass is measured. `max_steps = size` => exactly `size` firings.
             if let Err(e) = client.deploy(&net_id, &def).await {
                 eprintln!("deploy {net_id} failed: {e}");
                 continue;
             }
 
             let start = Instant::now();
-            let out = match client.evaluate(&net_id, size + 100).await {
+            let out = match client.evaluate(&net_id, size).await {
                 Ok(o) => o,
                 Err(e) => {
                     eprintln!("evaluate {net_id} failed: {e}");
@@ -238,7 +245,7 @@ async fn run_concurrency(client: &EngineClient, max_nets: usize, per_net: usize,
             let mut deployed = true;
             for n in 0..m {
                 let net_id = format!("bench_conc_{m}_{s}_{n}_{run}");
-                if let Err(e) = client.deploy(&net_id, &token_fanin(per_net)).await {
+                if let Err(e) = client.deploy(&net_id, &self_loop()).await {
                     eprintln!("deploy {net_id} failed: {e}");
                     deployed = false;
                     break;
@@ -249,14 +256,13 @@ async fn run_concurrency(client: &EngineClient, max_nets: usize, per_net: usize,
                 continue;
             }
 
-            // Fire all M concurrently; time until the last one returns.
+            // Fire all M concurrently (each driven exactly `per_net` steps);
+            // time until the last one returns.
             let start = Instant::now();
             let mut handles = Vec::with_capacity(m);
             for id in ids {
                 let c = client.clone();
-                handles.push(tokio::spawn(
-                    async move { c.evaluate(&id, per_net + 100).await },
-                ));
+                handles.push(tokio::spawn(async move { c.evaluate(&id, per_net).await }));
             }
             for h in handles {
                 if let Ok(Err(e)) = h.await {

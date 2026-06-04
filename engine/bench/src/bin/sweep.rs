@@ -53,6 +53,10 @@ enum Shape {
     Branches,
     /// Token fan-in: `m` tokens through a single transition.
     Fanin,
+    /// Self-loop driven `n` steps: O(1) per firing (constant per-event cost).
+    /// This is the L1 baseline for the L2 `live throughput` axis — it shows the
+    /// bare in-memory fire cost (~µs) the live round-trip is measured against.
+    Loop,
 }
 
 impl Shape {
@@ -61,6 +65,7 @@ impl Shape {
             Shape::Chain => "chain",
             Shape::Branches => "branches",
             Shape::Fanin => "fanin",
+            Shape::Loop => "loop",
         }
     }
 }
@@ -233,7 +238,13 @@ async fn run_eval(max_size: usize, shape: Shape, samples: usize) {
     let scenario = format!("eval_{}", shape.as_str());
 
     for &size in EVAL_LADDER.iter().filter(|&&s| s <= max_size) {
-        let limit = 10 * size + 100;
+        // The self-loop never quiesces, so it is driven by an exact step limit
+        // of `size` (i.e. `size` firings). The other shapes run to quiescence
+        // with generous headroom.
+        let limit = match shape {
+            Shape::Loop => size,
+            _ => 10 * size + 100,
+        };
         let mut millis = Vec::with_capacity(samples);
         let mut topology = (0usize, 0usize);
 
@@ -244,6 +255,7 @@ async fn run_eval(max_size: usize, shape: Shape, samples: usize) {
                 Shape::Chain => linear_chain(size),
                 Shape::Branches => parallel_branches(size),
                 Shape::Fanin => token_fanin(size),
+                Shape::Loop => generators::self_loop(),
             };
             topology = generators::topology_counts(&def);
 
@@ -256,6 +268,13 @@ async fn run_eval(max_size: usize, shape: Shape, samples: usize) {
 
         let stats = Stats::from_millis(&millis);
         let (places, transitions) = topology;
+        // For the self-loop, per-firing cost is constant, so firings/sec is a
+        // meaningful figure (the L1 baseline for the live write-path rate).
+        let eps = if matches!(shape, Shape::Loop) && stats.mean > 0.0 {
+            Some(size as f64 / (stats.mean / 1_000.0))
+        } else {
+            None
+        };
 
         record(
             "single_net_eval",
@@ -267,7 +286,7 @@ async fn run_eval(max_size: usize, shape: Shape, samples: usize) {
                 "transitions": transitions,
             }),
             stats,
-            None,
+            eps,
             size,
         );
     }

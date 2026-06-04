@@ -127,6 +127,22 @@ impl EventRepository for MockEventRepository {
     async fn current_sequence(&self) -> u64 {
         self.events.read().len() as u64
     }
+
+    // Override the trait defaults, which clone the whole log via `all_events()`
+    // on every call. The default `events_from`/`len` make any code that reads
+    // the marking once per step (the eval loop's `get_marking_cached`) O(n) per
+    // step → O(n²) over a run, purely as a test-double artifact — the real
+    // `MemoryEventStore` is O(1)/O(delta) here. Match it so the simulator (and
+    // benchmarks built on it) reflect the engine's true per-step cost.
+    async fn len(&self) -> usize {
+        self.events.read().len()
+    }
+
+    async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
+        let events = self.events.read();
+        let start = idx.min(events.len());
+        events[start..].to_vec()
+    }
 }
 
 #[cfg(test)]

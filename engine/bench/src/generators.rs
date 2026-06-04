@@ -173,6 +173,33 @@ pub fn binding(arity: usize, tokens_per_place: usize) -> ScenarioDefinition {
     ctx.build()
 }
 
+/// Build a **self-loop**: one place `Loop`, one transition that consumes the
+/// single token from `Loop` and produces a fresh one straight back into `Loop`.
+///
+/// Seeded with exactly one token, this net **never quiesces** — the transition
+/// is always enabled — so it is driven by a *step limit* rather than to
+/// quiescence: `evaluate_with_limit(N)` fires it exactly `N` times. Crucially,
+/// every step has exactly one token in one place and one transition to check,
+/// so each firing is **O(1)** (no growing token scan like [`token_fanin`], no
+/// growing transition rescan like [`linear_chain`]). The per-firing cost is
+/// therefore constant, which makes this the right shape for measuring the
+/// **per-event cost** in isolation: in-process (L1) it is the bare fire cost
+/// (~µs, Rhai-bound); against a live engine (L2) it is the fire→publish→
+/// subscribe→apply round-trip that gates the eval loop on every event.
+///
+/// Place **name**: `Loop`. Topology: `(1, 1)`. `N` (the firing count) is the
+/// driver's step limit, not a topology parameter.
+pub fn self_loop() -> ScenarioDefinition {
+    let mut ctx = Context::new("self_loop");
+    let place = ctx.state::<UnitToken>("loop", "Loop");
+    ctx.transition("spin", "Spin")
+        .auto_input("inp", &place)
+        .auto_output("out", &place)
+        .logic(PASSTHROUGH);
+    ctx.seed_one(&place, UnitToken);
+    ctx.build()
+}
+
 /// Return `(place_count, transition_count)` for a built scenario.
 pub fn topology_counts(def: &ScenarioDefinition) -> (usize, usize) {
     (def.places.len(), def.transitions.len())
@@ -221,6 +248,20 @@ mod tests {
 
         assert_eq!(sim.token_count("Sink").await, 8);
         assert_eq!(sim.token_count("Src").await, 0);
+    }
+
+    #[tokio::test]
+    async fn self_loop_fires_exactly_the_step_limit() {
+        let def = self_loop();
+        assert_eq!(topology_counts(&def), (1, 1));
+
+        let sim = Simulator::from_sdk(def).await;
+        // Never quiesces -> driven by the limit; fires exactly N times.
+        let result = sim.evaluate_with_limit(50).await.unwrap();
+        assert_eq!(result.final_state, FinalState::LimitReached);
+        assert_eq!(result.steps, 50);
+        // The single token just cycles in place.
+        assert_eq!(sim.token_count("Loop").await, 1);
     }
 
     #[tokio::test]

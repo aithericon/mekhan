@@ -44,16 +44,39 @@ Each axis is a separate `sweep` subcommand. A subcommand walks a size ladder,
 times the measured op over `--samples` iterations per rung, and emits one JSON
 record per rung.
 
-| Axis              | Subcommand  | Probes                                                        | Generator / source                     |
-|-------------------|-------------|--------------------------------------------------------------|----------------------------------------|
-| Rehydration       | `replay`    | `project_marking` cost vs. event-log length                  | `synth_log::chain_log` (4-place ring)  |
-| Single-net eval   | `eval`      | drive a generated net to quiescence vs. net size             | `generators::{linear_chain, parallel_branches, token_fanin}` (`--shape chain\|branches\|fanin`) |
-| Selection         | `selection` | evaluation cost when many transitions are simultaneously enabled | `generators::parallel_branches`     |
-| Binding search    | `match`     | worst-case `m^arity` token-combination scan inside `find_valid_binding` | `generators::binding`     |
+| Axis              | Subcommand  | Layer | Probes                                                        | Generator / source                     |
+|-------------------|-------------|-------|--------------------------------------------------------------|----------------------------------------|
+| Rehydration       | `replay`    | L1 | `project_marking` cost vs. event-log length                  | `synth_log::chain_log` (4-place ring)  |
+| Single-net eval   | `eval`      | L1 | drive a generated net vs. net size                           | `generators::{linear_chain, parallel_branches, token_fanin, self_loop}` (`--shape chain\|branches\|fanin\|loop`) |
+| Selection         | `selection` | L1 | evaluation cost when many transitions are simultaneously enabled | `generators::parallel_branches`     |
+| Binding search    | `match`     | L1 | worst-case `m^arity` token-combination scan inside `find_valid_binding` | `generators::binding`     |
+| Write throughput  | `live throughput`  | L2 | per-event write-path round-trip (events/sec) | `generators::self_loop` |
+| Concurrency       | `live concurrency` | L2 | aggregate throughput vs. number of nets evaluated at once | `generators::self_loop` |
 
-The fourth conceptual axis — **token volume / repeated single-transition
-firing** — is exercised via `eval --shape fanin` (the `token_fanin` generator),
-so all four shapes have a probe.
+`eval --shape loop` is the **per-event baseline**: a 1-token self-loop driven
+`N` steps is O(1) per firing, so it measures the bare in-process fire cost the
+L2 `live throughput` round-trip is compared against. (`--shape fanin` covers the
+token-volume axis.)
+
+### The per-event round-trip (what `live throughput` measures)
+
+The engine's eval loop is **event-sourced through NATS on every firing**.
+`EventStore::append` (`petri-nats/src/event_store.rs`) does, per event:
+
+1. take the write-lock (serializes the sequence + hash chain),
+2. **publish to JetStream and `await` the ACK**, then
+3. **block until the per-net consumer has received that event back off the
+   stream and applied it to the in-memory marking cache** (a watch channel on
+   the applied sequence).
+
+So the loop is **fire → publish → (subscribe) → apply-to-projection → next
+fire**: the engine will not advance until the event it just produced has
+round-tripped out to JetStream *and back through the subscription* into the
+projection. This keeps the in-memory marking derived purely from the
+authoritative stream (which is what makes replay/hibernation correct), but it
+means every transition firing pays that full round-trip, serialized within a
+net. `live throughput` measures exactly this with a `self_loop` (O(1) firing, no
+eval confound), so the number is the round-trip cost itself.
 
 ### Two distinct evaluation costs
 
@@ -79,6 +102,27 @@ genuinely the `m^arity` cross-product. `--arity` is the exponent (input places);
 the ladder sweeps `--max-tokens` (`m`). Worst case (unsatisfiable guard) is the
 default; a future `--match-density` knob could measure the best/average
 satisfiable paths.
+
+### Measurement fidelity (L1 vs the real engine)
+
+L1 runs on `petri-simulator`, which uses the in-memory `MockEventRepository`.
+That double must match the real `MemoryEventStore`'s cursor semantics or the
+numbers lie: the eval loop reads the marking once per step via
+`get_marking_cached`, which calls `events.len()` + `events.events_from(cursor)`.
+The `EventRepository` trait *defaults* for both clone the whole log
+(`all_events()`), so an unfixed mock makes **every** multi-firing benchmark
+O(n²) per run as a pure test-double artifact — independent of topology. The mock
+now overrides `len`/`events_from` positionally (O(1)/O(delta)), matching
+`MemoryEventStore`.
+
+The `self_loop` shape is the discriminator that caught this: it has one
+transition and one token (O(1) scan *and* O(1) binding), so any remaining growth
+is the event-store path alone. After the fix `eval --shape loop` is ~flat, and
+the live `throughput` self-loop is flat across run length too — so the real
+engine's per-step marking cost is O(1). Meanwhile `eval --shape chain` and
+`selection` stay O(n²) after the fix, confirming the **transition-scan** cost is
+real engine behaviour (the eval loop rescans all transitions each step), not the
+artifact.
 
 ### Running
 
