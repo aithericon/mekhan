@@ -34,6 +34,11 @@ client.use(sessionExpiryMiddleware);
 export type WorkerCoverageResponse = components['schemas']['WorkerCoverageResponse'];
 export type WorkerCoverageEntry = components['schemas']['WorkerCoverageEntry'];
 export type BackendCoverageEntry = components['schemas']['BackendCoverageEntry'];
+export type WorkerSummary = components['schemas']['WorkerSummary'];
+export type CreatedWorkerRegistrationToken = components['schemas']['CreatedWorkerRegistrationToken'];
+export type CreateWorkerRegistrationTokenRequest =
+	components['schemas']['CreateWorkerRegistrationTokenRequest'];
+export type PaginatedWorkers = components['schemas']['PaginatedResponse_WorkerSummary'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -60,4 +65,37 @@ function unwrap<T>(result: { data?: T; error?: unknown; response: Response }): T
  */
 export async function getWorkerCoverage(): Promise<WorkerCoverageResponse> {
 	return unwrap(await client.GET('/api/v1/workers/coverage', {}));
+}
+
+// ── Worker list endpoint ───────────────────────────────────────────────────────
+
+export interface ListWorkersParams {
+	page?: number;
+	perPage?: number;
+}
+
+/** GET /api/v1/workers — paginated, workspace-scoped list of enrolled workers. */
+export async function listWorkers(params?: ListWorkersParams): Promise<PaginatedWorkers> {
+	return unwrap(
+		await client.GET('/api/v1/workers', {
+			params: {
+				query: {
+					page: params?.page ?? 1,
+					per_page: params?.perPage ?? 200
+				}
+			}
+		})
+	);
+}
+
+// ── Registration-token endpoint ────────────────────────────────────────────────
+
+/**
+ * POST /api/v1/workers/registration-tokens — mint a new `wt_` token.
+ * The returned `token` field is shown exactly once; it is never re-served.
+ */
+export async function createWorkerRegistrationToken(
+	body: CreateWorkerRegistrationTokenRequest
+): Promise<CreatedWorkerRegistrationToken> {
+	return unwrap(await client.POST('/api/v1/workers/registration-tokens', { body }));
 }

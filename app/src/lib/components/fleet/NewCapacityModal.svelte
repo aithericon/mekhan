@@ -93,9 +93,9 @@
 		},
 		{
 			kind: 'worker',
-			label: 'Worker pool',
+			label: 'Worker group',
 			preset: 'worker',
-			hint: 'A pull queue fungible workers drain. No held claim.'
+			hint: "Competing-consumer workers that pull from this group's queue. Enroll workers into it."
 		},
 		{
 			kind: 'cluster',

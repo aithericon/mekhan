@@ -31,6 +31,7 @@
 		createRegistrationToken,
 		type CreatedRegistrationToken
 	} from '$lib/api/runners';
+	import { createWorkerRegistrationToken } from '$lib/api/workers';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
 	import { capacityTarget } from '$lib/editor/deployment-run-target';
 
@@ -39,13 +40,20 @@
 		/** When set, the token is scoped to THIS group (no picker is shown). When
 		 *  omitted, the sheet shows a picker over the presence `capacity` groups. */
 		group?: string | null;
+		/** Which fleet this sheet enrolls into. `'runner'` (default) mints an `rt_`
+		 *  runner token over the presence `runner_group` capacities; `'worker'`
+		 *  mints a `wt_` worker token over the competing-consumer `workers`
+		 *  capacities. The form/reveal flow is otherwise identical. */
+		mode?: 'runner' | 'worker';
 		/** Called after a successful mint (parent may refresh its token list). */
 		onenrolled?: () => void;
 	};
 
-	let { open = $bindable(), group = null, onenrolled }: Props = $props();
+	let { open = $bindable(), group = null, mode = 'runner', onenrolled }: Props = $props();
 
 	const fixedGroup = $derived(group ?? null);
+	const isWorker = $derived(mode === 'worker');
+	const unit = $derived(isWorker ? 'worker' : 'runner');
 
 	// ── Form state ───────────────────────────────────────────────────────────────
 	let name = $state('');
@@ -73,7 +81,8 @@
 			(async () => {
 				try {
 					const page = await listResources({ resource_type: 'capacity', perPage: 200 });
-					groups = page.items.filter((r) => capacityTarget(r) === 'runner_group');
+					const want = isWorker ? 'workers' : 'runner_group';
+					groups = page.items.filter((r) => capacityTarget(r) === want);
 				} catch {
 					groups = [];
 				}
@@ -89,7 +98,8 @@
 		try {
 			// A fixed group wins; otherwise the picker value ('' ⇒ no group).
 			const resolvedGroup = fixedGroup ?? (groupSel || undefined);
-			const created = await createRegistrationToken({
+			const mint = isWorker ? createWorkerRegistrationToken : createRegistrationToken;
+			const created = await mint({
 				group: resolvedGroup,
 				// Always send the explicit checkbox value: the backend defaults an
 				// OMITTED `reusable` to `true`.
@@ -109,11 +119,20 @@
 	}
 
 	/** Build the CLI enroll line shown in the reveal sheet. */
-	function cliLine(token: string, runnerName: string, runnerGroup: string): string {
+	function cliLine(token: string, unitName: string, unitGroup: string): string {
 		const origin = typeof window !== 'undefined' ? window.location.origin : '';
+		if (isWorker) {
+			// Workers self-enroll on boot: the executor daemon reads its `wt_`
+			// registration token from the environment and POSTs /api/v1/workers/enroll
+			// (the group is inherited from the token — no `--group` flag).
+			let cmd = `EXECUTOR_MEKHAN_URL=${origin} EXECUTOR_WORKER_REG_TOKEN=${token}`;
+			if (unitName) cmd += ` EXECUTOR_WORKER_NAME=${unitName}`;
+			cmd += ' aithericon-executor';
+			return cmd;
+		}
 		let cmd = `aithericon-executor register --url ${origin} --token ${token}`;
-		if (runnerName) cmd += ` --name ${runnerName}`;
-		if (runnerGroup) cmd += ` --group ${runnerGroup}`;
+		if (unitName) cmd += ` --name ${unitName}`;
+		if (unitGroup) cmd += ` --group ${unitGroup}`;
 		return cmd;
 	}
 </script>
@@ -130,7 +149,7 @@
 			<div class="space-y-1">
 				<SheetTitle class="flex items-center gap-2 text-lg font-semibold">
 					<Plus class="size-4" />
-					{fixedGroup ? `Enroll a runner into ${fixedGroup}` : 'Enroll a new runner'}
+					{fixedGroup ? `Enroll a ${unit} into ${fixedGroup}` : `Enroll a new ${unit}`}
 				</SheetTitle>
 				<SheetDescription class="text-sm text-muted-foreground">
 					Mint a one-time registration token. Hand it to the executor — it enrolls itself using
@@ -146,7 +165,7 @@
 						for="enroll-name"
 						class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
 					>
-						Runner name
+						{isWorker ? 'Worker name' : 'Runner name'}
 					</label>
 					<Input id="enroll-name" bind:value={name} required placeholder="e.g. gpu-node-01" />
 					<p class="text-sm text-muted-foreground">
@@ -163,7 +182,9 @@
 							{fixedGroup}
 						</p>
 						<p class="text-sm text-muted-foreground">
-							The runner's unit is admitted into this presence group's pool net.
+							{isWorker
+								? "The worker competes for this group's queued jobs."
+								: "The runner's unit is admitted into this presence group's pool net."}
 						</p>
 					</div>
 				{:else}
@@ -190,8 +211,13 @@
 							</Select.Content>
 						</Select.Root>
 						<p class="text-sm text-muted-foreground">
-							Pick a backed presence <code class="font-mono">capacity</code> group — create new
-							groups from <strong>New capacity</strong>.
+							{#if isWorker}
+								Pick a <code class="font-mono">workers</code> group — create new groups from
+								<strong>New capacity</strong>.
+							{:else}
+								Pick a backed presence <code class="font-mono">capacity</code> group — create new
+								groups from <strong>New capacity</strong>.
+							{/if}
 						</p>
 					</div>
 				{/if}

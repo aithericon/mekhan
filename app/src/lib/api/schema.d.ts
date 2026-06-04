@@ -3643,14 +3643,13 @@ export interface components {
             /** Format: int32 */
             total: number;
         } | {
+            backends: string[];
             /** Format: int32 */
-            backends_covered: number;
-            /** Format: int32 */
-            backends_total: number;
+            enrolled: number;
             /** @enum {string} */
             kind: "queue";
             /** Format: int32 */
-            workers: number;
+            online: number;
         } | {
             /** Format: int64 */
             active_leases: number;

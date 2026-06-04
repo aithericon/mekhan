@@ -10354,20 +10354,21 @@
           },
           {
             "type": "object",
-            "description": "Anonymous worker queue: FLEET-GLOBAL worker count + backend coverage\n(workers carry no per-capacity binding, so this is shared telemetry).",
+            "description": "Per-group worker queue: `online` present workers of `enrolled` total in\nthis group, plus the union of their advertised backends.",
             "required": [
-              "workers",
-              "backends_covered",
-              "backends_total",
+              "online",
+              "enrolled",
+              "backends",
               "kind"
             ],
             "properties": {
-              "backends_covered": {
-                "type": "integer",
-                "format": "int32",
-                "minimum": 0
+              "backends": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
-              "backends_total": {
+              "enrolled": {
                 "type": "integer",
                 "format": "int32",
                 "minimum": 0
@@ -10378,7 +10379,7 @@
                   "queue"
                 ]
               },
-              "workers": {
+              "online": {
                 "type": "integer",
                 "format": "int32",
                 "minimum": 0
