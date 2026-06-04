@@ -446,7 +446,7 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
     let holds_lease = matches!(
         &node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Executor { capacity: Some(_) },
+            deployment_model: DeploymentModel::Executor { capacity: Some(_), .. },
             ..
         }
     );

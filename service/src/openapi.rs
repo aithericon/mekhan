@@ -121,6 +121,19 @@ use utoipa::OpenApi;
             // `Vec<_>`, which utoipa's auto-discovery doesn't fully walk, so
             // register it explicitly for frontend codegen.
             crate::models::runner::RunnerPresenceSnapshot,
+            // Phase A (Grouped + Enrolled Workers) — the worker identity plane:
+            // enroll / registration-token / list-detail DTOs. The list/get bodies
+            // refer to the summaries via PaginatedResponse<_>, which utoipa's
+            // auto-discovery doesn't fully walk, so register them explicitly for
+            // frontend codegen (same treatment as the runner DTOs above).
+            crate::models::worker::WorkerSummary,
+            crate::models::worker::WorkerDetail,
+            crate::models::worker::EnrollWorkerRequest,
+            crate::models::worker::EnrolledWorker,
+            crate::models::worker::WorkerNatsCreds,
+            crate::models::worker::CreateWorkerRegistrationTokenRequest,
+            crate::models::worker::CreatedWorkerRegistrationToken,
+            crate::models::worker::WorkerRegistrationTokenSummary,
             // Phase 4 (typed capability registry) — capability type DTOs +
             // the CapabilityField sub-shape. The list/detail bodies refer to
             // these via PaginatedResponse<_> / nested Vec<_>, which utoipa's
@@ -231,6 +244,7 @@ use utoipa::OpenApi;
         (name = "admin", description = "Operator-only maintenance — remove / reseed the built-in demo workflows."),
         (name = "clusters", description = "Multi-cluster scheduling control plane — live datacenter cluster clients (connection health, watcher state, active leases) + force-reconnect / drain (read-through of the engine `ClusterRegistry`)."),
         (name = "runners", description = "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."),
+        (name = "workers", description = "Grouped + Enrolled Workers — the identity plane on the executor worker pool: enrolled, group-scoped, revocable workers that still PULL. Public `POST /enroll` is authed by a `wt_` registration token in the body; workers then authenticate with a mekhan-native `wkr_` bearer. A group is backed by a `capacity` resource with the `worker` preset. Plus the anonymous worker-pool coverage read."),
         (name = "capability-types", description = "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."),
     ),
 )]

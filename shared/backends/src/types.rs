@@ -121,6 +121,26 @@ impl ExecutionBackendType {
         executor_pool_namespace(self.as_wire_str())
     }
 
+    /// The worker-pool namespace narrowed by an optional identity-plane `group`
+    /// (docs/23/24). `None` returns the unchanged base `executor-<wire>`
+    /// (BYTE-STABLE — existing ungrouped AIR is untouched); `Some(g)` returns
+    /// `executor-<wire>/<group>`.
+    ///
+    /// The separator is a SLASH, matching the runner-jobs partition convention
+    /// (`runner-jobs/<id>`): apalis-nats `split_namespace` reads the segment
+    /// after the slash as the subject-partition token, so the engine routes
+    /// grouped jobs to `executor-<wire>.<prio>.<group>.<exec>` while ungrouped
+    /// jobs stay on `executor-<wire>.<prio>.<exec>`. The group token must be a
+    /// single safe subject token (`[A-Za-z0-9_-]`); the caller (the compiler)
+    /// validates it before stamping. The group stays a COMPETING pull pool — it
+    /// is a second coarse routing coordinate, NOT a per-worker push partition.
+    pub fn executor_namespace_for_group(&self, group: Option<&str>) -> String {
+        match group {
+            None => self.executor_namespace(),
+            Some(g) => format!("{}/{g}", self.executor_namespace()),
+        }
+    }
+
     /// Inverse of [`Self::as_wire_str`]. Returns `None` for any unknown
     /// wire tag — callers should treat that as a 404 / validation error
     /// rather than a fallback to a default backend.

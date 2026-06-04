@@ -910,8 +910,8 @@ pub(crate) fn validate_automated_step(
     // that plumbs the IPC chunk feed, so a streamInput flag there would silently
     // produce a broken net.
     match deployment_model {
-        DeploymentModel::Executor { capacity: None } => {}
-        DeploymentModel::Executor { capacity: Some(_) } => {
+        DeploymentModel::Executor { capacity: None, .. } => {}
+        DeploymentModel::Executor { capacity: Some(_), .. } => {
             return Err(err(
                 "streamInput is unsupported on a pooled (concurrency_limit) deployment — \
                  use a plain inline Executor step"

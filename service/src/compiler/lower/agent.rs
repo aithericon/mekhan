@@ -81,7 +81,13 @@ pub(crate) fn lower_agent(cx: &mut LoweringCtx) -> Result<(), CompileError> {
     // so this gate only bites multi-turn / tool-bearing agents. Reject at
     // compile so a mis-authored template fails at publish, not mid-loop —
     // same idiom as the `context_strategy` gate above.
-    if !matches!(deployment_model, DeploymentModel::Executor { capacity: None }) {
+    if !matches!(
+        deployment_model,
+        DeploymentModel::Executor {
+            capacity: None,
+            group: None
+        }
+    ) {
         return Err(CompileError::Compilation(format!(
             "agent node '{}': deployment_model {:?} is not yet supported for \
              multi-turn / tool-bearing agents (v1 runs loop turns on the plain \

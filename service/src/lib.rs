@@ -145,6 +145,10 @@ fn build_public_openapi_router() -> OpenApiRouter<AppState> {
         // registration token in the body, not the session cookie, so a fresh
         // runner can bootstrap its `rnr_` credential before it has one.
         .routes(routes!(handlers::runners::enroll_runner))
+        // Worker enrollment — PUBLIC by the same design as runner enroll: authed
+        // by the `wt_` registration token in the body, so a fresh worker can
+        // bootstrap its `wkr_` credential + scoped JWT before it has any.
+        .routes(routes!(handlers::workers::enroll_worker))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -320,6 +324,26 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // Worker-pool coverage (worker pool — anonymous competing consumers, NOT
         // enrolled runners). Live worker presence + per-backend coverage.
         .routes(routes!(handlers::workers::worker_coverage))
+        // Workers (Phase A, Grouped + Enrolled Workers) — the identity plane on
+        // the executor worker pool: enrolled, group-scoped, revocable workers
+        // that still PULL. `enroll` is on the PUBLIC router (authed by the `wt_`
+        // token in the body); everything here is behind the auth gate. The
+        // literal `registration-tokens` + `coverage` segments are registered
+        // BEFORE `{id}` so matchit prefers the literal over the `{id}` wildcard
+        // (same trie-ordering caveat as the runner block). Heartbeat + nats-creds
+        // are worker-token authed, self-only (subject == worker:{id}).
+        .routes(routes!(
+            handlers::workers::create_worker_registration_token,
+            handlers::workers::list_worker_registration_tokens
+        ))
+        .routes(routes!(handlers::workers::revoke_worker_registration_token))
+        .routes(routes!(handlers::workers::list_workers))
+        .routes(routes!(handlers::workers::heartbeat_worker))
+        .routes(routes!(handlers::workers::issue_worker_nats_creds))
+        .routes(routes!(
+            handlers::workers::get_worker,
+            handlers::workers::revoke_worker
+        ))
         // Phase 2 — self-service NATS scoped-creds mint/rotation. Runner-token
         // authed, self-only (subject == runner:{id}), same boundary as
         // heartbeat. Mints a fresh user JWT from the stored nats_public_key.

@@ -11,4 +11,5 @@ pub mod runner;
 pub mod responses;
 pub mod template;
 pub mod template_test;
+pub mod worker;
 pub mod workspace;

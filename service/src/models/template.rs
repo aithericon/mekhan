@@ -1356,9 +1356,23 @@ pub enum DeploymentModel {
     /// machines, LLM slots) is admission-controlled by the Petri firing rule
     /// (R3). The bound alias MUST be a `concurrency_limit` OR `runner_group` resource — a `datacenter`
     /// belongs under [`DeploymentModel::Scheduled`].
+    ///
+    /// `group` is the orthogonal IDENTITY-PLANE coordinate (docs/23/24): an
+    /// optional `capacity`-resource alias (the `worker` preset:
+    /// `competing_consumer · pull · hold · fixed · partition`) that narrows the
+    /// pull routing from `executor-<wire>` to `executor-<wire>/<group>` so only
+    /// enrolled workers of that group compete for the step's jobs. It stays a
+    /// COMPETING pull pool — the group is a second coarse routing coordinate, NOT
+    /// a per-worker push partition. `None` ⇒ the unchanged literal
+    /// `executor-<wire>` (byte-stable AIR). `group` is mutually exclusive with
+    /// `capacity`: `capacity` is the presence-PUSH admission handshake (R3),
+    /// `group` is a plain pull coordinate — a step cannot be both (the compiler
+    /// rejects `Some` + `Some`).
     Executor {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         capacity: Option<CapacityBinding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
     },
     /// Lease through an external cluster. `scheduler` names a `datacenter`
     /// resource (docs/13). `job_template` selects the scheduler's parameterized
@@ -1409,7 +1423,10 @@ impl Default for DeploymentModel {
     /// `{"mode":"executor"}`, or an absent `deploymentModel` via the field's
     /// `#[serde(default)]`).
     fn default() -> Self {
-        DeploymentModel::Executor { capacity: None }
+        DeploymentModel::Executor {
+            capacity: None,
+            group: None,
+        }
     }
 }
 

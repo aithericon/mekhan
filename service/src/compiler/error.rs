@@ -811,6 +811,30 @@ pub enum CompileError {
         var: String,
         error: String,
     },
+
+    /// An `Executor` step declares BOTH a `capacity` binding and a `group`
+    /// (docs/23/24). The two are mutually exclusive: `capacity` is the
+    /// presence-PUSH admission handshake (claim/grant/register/release on a
+    /// backing net, R3), `group` is a plain PULL routing coordinate
+    /// (`executor-<wire>/<group>`, competing consumers). A grouped step stays on
+    /// the plain pull path and must NOT enter the pooled lowering. Author one or
+    /// the other.
+    #[error(
+        "automated step '{node_id}' sets both `capacity` and `group` on its executor \
+         deployment — these are mutually exclusive (capacity is presence-push admission, \
+         group is a pull routing coordinate). Use one or the other."
+    )]
+    CapacityGroupConflict { node_id: String },
+
+    /// An `Executor` step's `group` is not a single safe NATS subject token
+    /// (`[A-Za-z0-9_-]`, non-empty). The group is interpolated verbatim into the
+    /// pull namespace `executor-<wire>/<group>` → a NATS subject segment, so a
+    /// `.`, wildcard, or whitespace would broaden/break routing.
+    #[error(
+        "automated step '{node_id}': group '{group}' is not a valid routing token \
+         (allowed: non-empty [A-Za-z0-9_-])"
+    )]
+    GroupTokenInvalid { node_id: String, group: String },
 }
 
 impl CompileError {
@@ -891,6 +915,8 @@ impl CompileError {
             Self::LoopAccumulatorVarReserved { .. } => "loop_accumulator_var_reserved",
             Self::LoopAccumulatorDuplicateVar { .. } => "loop_accumulator_duplicate_var",
             Self::LoopAccumulatorExprUnparseable { .. } => "loop_accumulator_expr_unparseable",
+            Self::CapacityGroupConflict { .. } => "capacity_group_conflict",
+            Self::GroupTokenInvalid { .. } => "group_token_invalid",
         }
     }
 
@@ -963,6 +989,8 @@ impl CompileError {
             | Self::LoopAccumulatorVarReserved { node_id, .. }
             | Self::LoopAccumulatorDuplicateVar { node_id, .. }
             | Self::LoopAccumulatorExprUnparseable { node_id, .. }
+            | Self::CapacityGroupConflict { node_id }
+            | Self::GroupTokenInvalid { node_id, .. }
             | Self::WorkspaceResourceUnknown { node_id, .. }
             | Self::AssetBindingUnknown { node_id, .. }
             | Self::AssetBindingAmbiguous { node_id, .. }

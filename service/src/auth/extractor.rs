@@ -189,6 +189,16 @@ pub async fn require_auth_middleware(
             req.extensions_mut().insert(user);
             return Ok(next.run(req).await);
         }
+        // Worker control-plane credential path: a `wkr_`-prefixed bearer resolves
+        // against the local `workers` table — the exact parallel of the `rnr_`
+        // runner path above (mekhan-native, offline in dev_noop, never Zitadel).
+        // Any non-`wkr_` bearer or a failed verify still falls through UNCHANGED
+        // to the cookie path below.
+        if token.starts_with("wkr_") {
+            let user = super::worker_token::verify_worker_token(&state.db, token).await?;
+            req.extensions_mut().insert(user);
+            return Ok(next.run(req).await);
+        }
     }
 
     let jar = CookieJar::from_headers(req.headers());

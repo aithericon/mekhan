@@ -258,6 +258,106 @@ impl RunnerNatsSigner {
             .sign(&self.account_kp);
         Ok(jwt)
     }
+
+    /// Mint a scoped user JWT for an enrolled *worker* (Phase A, Grouped +
+    /// Enrolled Workers), bound to the worker-supplied `user_public_key`. Signed
+    /// by the SAME account keypair that signs runner JWTs — workers and runners
+    /// share the one runners-account signer, only the scope differs.
+    ///
+    /// The worker is a competing *pull* consumer, NOT a presence-push grant
+    /// target, so the scope is materially different from [`Self::mint_runner_jwt`]:
+    ///   SUBSCRIBE allow: per advertised backend wire, the group's pull filter
+    ///     `executor-<wire>.*.<group>.>` (the `*` is the priority token, the
+    ///     `<group>` is the second coarse routing coordinate, the `>` spans the
+    ///     exec-id tail) — plus `worker.{id}.>` for its own control/presence
+    ///     inbox. When the worker is UNGROUPED (`group = None`) it gets only the
+    ///     `worker.{id}.>` subscribe; the anonymous `executor-<wire>` pull path
+    ///     is governed by the (dev-open) JetStream pull perms, not a core
+    ///     subscribe, exactly as the runner job-delivery comment above explains.
+    ///   PUBLISH allow: `worker.{id}.presence` (its heartbeat), and the shared
+    ///     status/events fan-in `executor.status.*.>` / `executor.events.*.>`
+    ///     (a worker reports on whatever exec-id it is currently draining, so the
+    ///     `*` spans the exec-id — it does not get a `.claim` subject; that was
+    ///     the presence-push grant a worker never participates in).
+    /// The JWT carries no expiry (long-lived; rotation = re-mint).
+    pub fn mint_worker_jwt(
+        &self,
+        user_public_key: &str,
+        worker_id: Uuid,
+        group: Option<&str>,
+        backends: &[String],
+    ) -> Result<String, MintError> {
+        if !user_public_key.starts_with('U') {
+            return Err(MintError::InvalidUserKey(format!(
+                "expected a NATS user key (starts with 'U'), got: {user_public_key}"
+            )));
+        }
+
+        let mut sub_allow = vec![format!("worker.{worker_id}.>")];
+        if let Some(group) = group {
+            if !group.is_empty() {
+                // Defense in depth: `group` is validated at the registration-token
+                // mint API, but it lands here as a literal NATS subject token, so
+                // reject anything that isn't a single safe token before granting
+                // the group pull filter (no '.', '*', '>', or whitespace
+                // broadening it). Reuses the same `MintError::InvalidPool` variant
+                // — it is the generic "unsafe subject token" mint error.
+                if !group
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                {
+                    return Err(MintError::InvalidPool(group.to_string()));
+                }
+                // One group pull filter per advertised backend wire. Backend
+                // wire-names are `[a-z_]`, so they are valid NATS subject tokens
+                // (no validation needed here). `executor_pool_namespace` is the
+                // single source of truth for the `executor-<wire>` prefix the
+                // compiler stamps onto a grouped step.
+                for wire in backends {
+                    let ns = aithericon_backends::executor_pool_namespace(wire);
+                    sub_allow.push(format!("{ns}.*.{group}.>"));
+                }
+            }
+        }
+
+        // A worker publishes its presence heartbeat and the per-job status/events
+        // it drains. No `.claim` — that is the presence-push admission grant a
+        // worker never participates in (it competes on a pull queue).
+        let pub_allow = vec![
+            format!("worker.{worker_id}.presence"),
+            "executor.status.*.>".to_string(),
+            "executor.events.*.>".to_string(),
+        ];
+
+        let pub_perm: Permission = Permission::builder()
+            .allow(Some(StringList::from(pub_allow)))
+            .try_into()
+            .map_err(|e| MintError::BuildClaims(format!("pub permission: {e}")))?;
+        let sub_perm: Permission = Permission::builder()
+            .allow(Some(StringList::from(sub_allow)))
+            .try_into()
+            .map_err(|e| MintError::BuildClaims(format!("sub permission: {e}")))?;
+        // Allow transient reply subjects (request/reply). `max(1)` matches the
+        // common NATS default — one in-flight response per request.
+        let resp_perm: ResponsePermission = ResponsePermission::builder()
+            .max(Some(1i64))
+            .try_into()
+            .map_err(|e| MintError::BuildClaims(format!("resp permission: {e}")))?;
+
+        let user: User = User::builder()
+            .pub_(Some(pub_perm))
+            .sub(Some(sub_perm))
+            .resp(Some(resp_perm))
+            .try_into()
+            .map_err(|e| MintError::BuildClaims(format!("user claims: {e}")))?;
+
+        // No `.expires(..)` → long-lived JWT (rotation is an explicit re-mint).
+        let jwt = Token::new(user_public_key.to_string())
+            .name(format!("worker-{worker_id}"))
+            .claims(user)
+            .sign(&self.account_kp);
+        Ok(jwt)
+    }
 }
 
 /// Resolve the data dir: `MEKHAN_DATA_DIR` or `~/.aithericon/mekhan`.
@@ -496,5 +596,75 @@ mod tests {
         assert!(signer
             .mint_runner_jwt(&user_pub, Uuid::new_v4(), Some("lab_fleet-1"))
             .is_ok());
+    }
+
+    #[test]
+    fn mints_grouped_worker_jwt_with_pull_filter_and_presence() {
+        let signer = RunnerNatsSigner::from_keypair(KeyPair::new_account());
+        let user_pub = KeyPair::new_user().public_key();
+        let id = Uuid::new_v4();
+        let group = "groupG";
+        let backends = vec!["python".to_string(), "docker".to_string()];
+
+        let jwt = signer
+            .mint_worker_jwt(&user_pub, id, Some(group), &backends)
+            .expect("mint should succeed for a valid user key");
+
+        let claims = decode_claims(&jwt);
+        assert_eq!(claims["iss"], signer.account_public_key());
+        assert_eq!(claims["sub"], user_pub);
+
+        // SUBSCRIBE: one group pull filter per advertised backend wire + the
+        // worker's own control inbox. The filter is `executor-<wire>.*.<group>.>`
+        // (priority `*`, the group token, then the exec-id tail).
+        let sub_allow = allow_list(&claims, "sub");
+        assert!(sub_allow.contains(&format!("worker.{id}.>")));
+        assert!(sub_allow.contains(&format!("executor-python.*.{group}.>")));
+        assert!(sub_allow.contains(&format!("executor-docker.*.{group}.>")));
+
+        // PUBLISH: presence heartbeat + the shared status/events fan-in. NO
+        // `.claim` — a worker is a pull competitor, not a presence-push target.
+        let pub_allow = allow_list(&claims, "pub");
+        assert!(pub_allow.contains(&format!("worker.{id}.presence")));
+        assert!(pub_allow.contains(&"executor.status.*.>".to_string()));
+        assert!(pub_allow.contains(&"executor.events.*.>".to_string()));
+        assert!(
+            !pub_allow.iter().any(|s| s.ends_with(".claim")),
+            "a worker must never get a `.claim` publish subject, got {pub_allow:?}"
+        );
+
+        // ResponsePermission present so request/reply works.
+        assert!(claims["nats"]["resp"].is_object());
+    }
+
+    #[test]
+    fn ungrouped_worker_omits_pull_filter() {
+        let signer = RunnerNatsSigner::from_keypair(KeyPair::new_account());
+        let user_pub = KeyPair::new_user().public_key();
+        let id = Uuid::new_v4();
+
+        let jwt = signer
+            .mint_worker_jwt(&user_pub, id, None, &["python".to_string()])
+            .expect("mint should succeed");
+        let claims = decode_claims(&jwt);
+        let sub_allow = allow_list(&claims, "sub");
+
+        assert!(sub_allow.contains(&format!("worker.{id}.>")));
+        assert!(
+            !sub_allow.iter().any(|s| s.starts_with("executor-")),
+            "an ungrouped worker gets no group pull filter, got {sub_allow:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_worker_group_with_subject_metacharacters() {
+        let signer = RunnerNatsSigner::from_keypair(KeyPair::new_account());
+        let user_pub = KeyPair::new_user().public_key();
+        for bad in ["*", ">", "a.b", "x.>", "has space", "g*"] {
+            let err = signer
+                .mint_worker_jwt(&user_pub, Uuid::new_v4(), Some(bad), &["python".to_string()])
+                .expect_err("a worker group with NATS subject metacharacters must be rejected");
+            assert!(matches!(err, MintError::InvalidPool(_)), "group {bad:?}");
+        }
     }
 }

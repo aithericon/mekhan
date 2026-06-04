@@ -890,6 +890,7 @@ fn aliased_pool_bad_request_is_compile_error() {
             deployment_model:
                 mekhan_service::models::template::DeploymentModel::Executor {
                     capacity: Some(binding),
+                    ..
                 },
             ..
         } = &mut node.data

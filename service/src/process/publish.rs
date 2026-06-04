@@ -549,8 +549,10 @@ async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
         // Only the worker-pool / presence-pool dispatch shapes reach a backend
         // work queue; `Scheduled` (cluster lease) does not.
         let pool_alias = match deployment_model {
-            DeploymentModel::Executor { capacity: None } => None,
-            DeploymentModel::Executor { capacity: Some(binding) } => Some(binding.alias.as_str()),
+            DeploymentModel::Executor { capacity: None, .. } => None,
+            DeploymentModel::Executor { capacity: Some(binding), .. } => {
+                Some(binding.alias.as_str())
+            }
             _ => continue,
         };
 

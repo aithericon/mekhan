@@ -4952,7 +4952,13 @@ fn automated_step_executor_unchanged_emits_lifecycle_no_bridge() {
     let graph = WorkflowGraph {
         nodes: vec![
             start_node("s"),
-            automated_node_with_deployment("auto", DeploymentModel::Executor { capacity: None }),
+            automated_node_with_deployment(
+                "auto",
+                DeploymentModel::Executor {
+                    capacity: None,
+                    group: None,
+                },
+            ),
             end_node("e"),
         ],
         edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
@@ -4973,6 +4979,82 @@ fn automated_step_executor_unchanged_emits_lifecycle_no_bridge() {
         !has_place(&air, "p_auto_sched_out"),
         "executor dispatch must not emit a scheduler bridge_out"
     );
+
+    // BYTE-STABLE namespace golden: an ungrouped default-inline step stamps the
+    // unchanged base `executor-<wire>` literal (Docker backend → executor-docker)
+    // and never the grouped slash form.
+    let air_str = serde_json::to_string(&air).unwrap();
+    assert!(
+        air_str.contains(r#"d.executor_namespace = \"executor-docker\";"#),
+        "ungrouped step must stamp the base executor-docker namespace: {air_str}"
+    );
+    assert!(
+        !air_str.contains("executor-docker/"),
+        "ungrouped step must NOT stamp a grouped (slash) namespace"
+    );
+}
+
+#[test]
+fn automated_step_executor_group_stamps_partition_namespace() {
+    // A `group` on the default-inline executor path narrows the pull namespace to
+    // `executor-<wire>/<group>` (a competing pull pool of enrolled group workers),
+    // leaving the rest of the lowering byte-stable.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_node_with_deployment(
+                "auto",
+                DeploymentModel::Executor {
+                    capacity: None,
+                    group: Some("groupG".to_string()),
+                },
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+    let air = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
+        .expect("grouped executor dispatch should compile");
+    let air_str = serde_json::to_string(&air).unwrap();
+    assert!(
+        air_str.contains(r#"d.executor_namespace = \"executor-docker/groupG\";"#),
+        "grouped step must stamp executor-docker/groupG: {air_str}"
+    );
+}
+
+#[test]
+fn automated_step_executor_capacity_and_group_is_compile_error() {
+    use mekhan_service::models::template::CapacityBinding;
+    // `capacity` (presence-push admission) + `group` (pull coordinate) are mutually
+    // exclusive — a step asking for both is a hard compile error.
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_node_with_deployment(
+                "auto",
+                DeploymentModel::Executor {
+                    capacity: Some(CapacityBinding {
+                        alias: "prod_gpu".to_string(),
+                        request: None,
+                    }),
+                    group: Some("groupG".to_string()),
+                },
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+    let err = compile_to_air(&graph, "t", "", &std::collections::HashMap::new())
+        .expect_err("capacity + group must be a compile error");
+    assert_eq!(err.kind(), "capacity_group_conflict", "got: {err}");
 }
 
 #[test]
@@ -6519,14 +6601,44 @@ fn deployment_model_surface_round_trips() {
     // Default = plain executor dispatch, no pool. Serializes to a bare
     // `{"mode":"executor"}`.
     let exec_default = DeploymentModel::default();
-    assert_eq!(exec_default, DeploymentModel::Executor { capacity: None });
+    assert_eq!(
+        exec_default,
+        DeploymentModel::Executor {
+            capacity: None,
+            group: None,
+        }
+    );
+    // Byte-stable: an unset `group` (and unset `capacity`) serializes to the
+    // SAME bare `{"mode":"executor"}` — no new keys leak into existing AIR.
     assert_eq!(
         serde_json::to_value(&exec_default).unwrap(),
         json!({ "mode": "executor" })
     );
-    // A bare `{"mode":"executor"}` deserializes back to no-pool.
+    // A bare `{"mode":"executor"}` deserializes back to no-pool / no-group.
     let parsed: DeploymentModel = serde_json::from_value(json!({ "mode": "executor" })).unwrap();
-    assert_eq!(parsed, DeploymentModel::Executor { capacity: None });
+    assert_eq!(
+        parsed,
+        DeploymentModel::Executor {
+            capacity: None,
+            group: None,
+        }
+    );
+
+    // A `group`-only executor (the identity-plane pull coordinate) round-trips
+    // and is mutually independent of `capacity`.
+    let grouped: DeploymentModel =
+        serde_json::from_value(json!({ "mode": "executor", "group": "groupG" })).unwrap();
+    assert_eq!(
+        grouped,
+        DeploymentModel::Executor {
+            capacity: None,
+            group: Some("groupG".to_string()),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&grouped).unwrap(),
+        json!({ "mode": "executor", "group": "groupG" })
+    );
 
     // Executor with a pool binding (alias required).
     let pooled: DeploymentModel = serde_json::from_value(
@@ -6539,7 +6651,8 @@ fn deployment_model_surface_round_trips() {
             capacity: Some(CapacityBinding {
                 alias: "prod_gpu".to_string(),
                 request: Some(json!({ "gpu_count": 2 })),
-            })
+            }),
+            group: None,
         }
     );
     // alias is REQUIRED: a `pool` without it is a hard deserialize error.
