@@ -240,6 +240,13 @@ pub(crate) fn lower_channels(
     // the gathered output (`Gather`). For a DATA channel the raw deposit place IS
     // the consumer-facing place (the OPEN descriptor lands there verbatim).
     let mut channel_routes = serde_json::Map::new();
+    // Data-plane CLOSE routing (docs/25 §6): a data channel's `close` bracket
+    // deposits onto a SEPARATE producer-status place, NOT the consumer-facing
+    // `open` place — otherwise the consumer fires twice (once on `open`, once on
+    // the subjectless `close`) and the empty close-firing races the real one and
+    // can win with an empty drain. Keyed channel name → close-sink place id; only
+    // data channels populate it.
+    let mut channel_close_routes = serde_json::Map::new();
     // The deposit places the `control_emit` handler routes tokens into. Each
     // must be declared as an OUTPUT ARC of `t_{id}_control_emit` (port name ==
     // place id) — the engine validates the handler's returned token keys (place
@@ -255,9 +262,9 @@ pub(crate) fn lower_channels(
         // channel (no scatter/gather split; bulk bytes stay out-of-band). The
         // `open` token flows to the edge-wired consumer EARLY (mid-job, when
         // `open_output` is called); the matching `close` token only updates
-        // producer status. Both `open` and `close` ride the `control_emit` seam
-        // and are routed to this place, so it is registered as a deposit place /
-        // output arc exactly like a control deposit place.
+        // producer status. The `open` rides `channel_routes` to the consumer
+        // place; the `close` rides `channel_close_routes` to a SEPARATE sink so
+        // it never reaches the consumer (see the close-routing note above).
         if matches!(ch.plane, ChannelPlane::Data) {
             let p_chan: PlaceHandle<DynamicToken> = ctx.signal(
                 format!("p_{id}_{seg}"),
@@ -266,6 +273,20 @@ pub(crate) fn lower_channels(
             channel_routes
                 .insert(ch.name.clone(), serde_json::Value::String(p_chan.id().to_string()));
             deposit_places.push(p_chan.clone());
+
+            // CLOSE sink: a producer-status place the `close` bracket lands on,
+            // NOT wired to any consumer. The consumer drains the transport to its
+            // own `is_eof` (out-of-band), so it never needs the net `close`
+            // token; depositing `close` here (instead of onto `p_{id}_{seg}`)
+            // keeps the consumer firing EXACTLY once, on `open`.
+            let p_close: PlaceHandle<DynamicToken> = ctx.state(
+                format!("p_{id}_{seg}_close"),
+                format!("{label} - Data Channel '{}' Close (producer status)", ch.name),
+            );
+            channel_close_routes
+                .insert(ch.name.clone(), serde_json::Value::String(p_close.id().to_string()));
+            deposit_places.push(p_close.clone());
+
             ports.push(ChannelPort {
                 name: ch.name.clone(),
                 direction: ChannelDirection::Out,
@@ -465,9 +486,23 @@ pub(crate) fn lower_channels(
         for place in &deposit_places {
             t = t.auto_output(place.id().to_string(), place);
         }
+        // Emit `channel_close_routes` only when ≥1 data channel populated it, so
+        // a control-only node's AIR stays byte-stable (the handler defaults the
+        // map to empty and falls back to `channel_routes`).
+        let mut effect_config = serde_json::Map::new();
+        effect_config.insert(
+            "channel_routes".to_string(),
+            serde_json::Value::Object(channel_routes),
+        );
+        if !channel_close_routes.is_empty() {
+            effect_config.insert(
+                "channel_close_routes".to_string(),
+                serde_json::Value::Object(channel_close_routes),
+            );
+        }
         t.effect_with_config(
             effects::CONTROL_EMIT.handler_id,
-            serde_json::json!({ "channel_routes": serde_json::Value::Object(channel_routes) }),
+            serde_json::Value::Object(effect_config),
         );
     }
 
@@ -890,6 +925,47 @@ mod tests {
         assert!(
             outs.iter().any(|a| a["place"] == "p_step_frames"),
             "control_emit must declare an output arc to the data deposit place 'p_step_frames'; got {outs:?}"
+        );
+    }
+
+    /// A data channel's `close` bracket MUST route to a SEPARATE producer-status
+    /// place (`p_{id}_{name}_close`), NOT the consumer-facing `open` place — else
+    /// the consumer fires twice (on `open` and on the subjectless `close`) and the
+    /// empty close-firing races + can win with an empty drain (the bug the
+    /// audio-transcribe demo exposed live). Regression guard: assert the separate
+    /// place exists, is a control_emit output arc, and that `channel_close_routes`
+    /// points the channel at it while `channel_routes` keeps the consumer place.
+    #[test]
+    fn data_channel_close_routes_to_separate_sink() {
+        let graph = graph_with_channels(json!([data_channel()]));
+        let air =
+            compile_to_air(&graph, "ch-data-close", "d", &std::collections::HashMap::new()).unwrap();
+
+        let places = place_ids(&air);
+        assert!(
+            places.iter().any(|p| p == "p_step_frames_close"),
+            "data channel must synthesize a separate close sink place: {places:?}"
+        );
+
+        let t = transition(&air, "t_step_control_emit");
+        let outs = t["outputs"].as_array().expect("control_emit output arcs");
+        assert!(
+            outs.iter().any(|a| a["place"] == "p_step_frames_close"),
+            "control_emit must declare an output arc to the close sink 'p_step_frames_close'; got {outs:?}"
+        );
+
+        let config = t["logic"]
+            .get("Effect")
+            .and_then(|e| e.get("config"))
+            .or_else(|| t["logic"].get("config"))
+            .expect("config present");
+        assert_eq!(
+            config["channel_routes"]["frames"], "p_step_frames",
+            "open routes to the consumer-facing place"
+        );
+        assert_eq!(
+            config["channel_close_routes"]["frames"], "p_step_frames_close",
+            "close routes to the separate sink, NOT the consumer place"
         );
     }
 
