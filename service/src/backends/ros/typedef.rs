@@ -12,9 +12,9 @@
 //!
 //! | rosapi type                                   | FieldKind | notes |
 //! |-----------------------------------------------|-----------|-------|
-//! | `double`, `float`                             | `Number`  | float64=double, float32=float |
-//! | `int8`…`int64`, `uint8`…`uint64`, `byte`, `char` | `Number` | |
-//! | `bool`                                        | `Bool`    | |
+//! | `double`, `float`, `float64`, `float32`       | `Number`  | rosapi may rename (float64→double) or keep the original name |
+//! | `int8`…`int64`, `uint8`…`uint64`, `byte`, `char`, `octet` | `Number` | |
+//! | `bool`, `boolean`                             | `Bool`    | Jazzy reports `boolean` (IDL name) |
 //! | `string`, `wstring`                           | `Text`    | |
 //! | `time`, `duration`, `builtin_interfaces/*`    | `Json`    | opaque stamp |
 //! | anything containing `/` (a nested message)    | `Json`    | + recursive JSON-Schema `schema` override |
@@ -80,15 +80,34 @@ fn resolve<'a>(typedefs: &'a [TypeDef], type_name: &str) -> Option<&'a TypeDef> 
 /// array). These map directly to a scalar [`FieldKind`].
 fn primitive_kind(rosapi_type: &str) -> Option<FieldKind> {
     match rosapi_type {
-        // rosapi renames: float64 → double, float32 → float.
-        "double" | "float" => Some(FieldKind::Number),
+        // Numeric. rosapi may report floats renamed (float64→double,
+        // float32→float) OR under their original names depending on the rosidl
+        // version, so accept both. `octet`/`byte`/`char` are byte-width ints.
+        "double" | "float" | "float64" | "float32" => Some(FieldKind::Number),
         "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
-        | "byte" | "char" => Some(FieldKind::Number),
-        "bool" => Some(FieldKind::Bool),
+        | "byte" | "char" | "octet" => Some(FieldKind::Number),
+        // rosapi reports bool as `boolean` (the IDL name) on Jazzy; older/other
+        // versions use `bool`. Accept both.
+        "bool" | "boolean" => Some(FieldKind::Bool),
         "string" | "wstring" => Some(FieldKind::Text),
         // time / duration are opaque stamps → Json.
         "time" | "duration" => Some(FieldKind::Json),
         _ => None,
+    }
+}
+
+/// JSON-Schema for a primitive ROS leaf appearing INSIDE a schema override
+/// (an array element or a nested-message field). Numbers are emitted as
+/// **nullable** (`["number", "null"]`): rosbridge serializes the IEEE-754
+/// specials ROS floats routinely carry — `NaN` / `±Inf` (e.g. the
+/// uninitialized `effort` array a ros2_control fake JointState publishes) — as
+/// JSON `null`, and a strict `{"type":"number"}` would reject those otherwise-
+/// valid messages mid-net at the runtime `Data__*` schema gate. Bool / text /
+/// opaque-json keep their base schema (those wire types are never `null`).
+fn leaf_schema(kind: FieldKind) -> Value {
+    match kind {
+        FieldKind::Number => json!({ "type": ["number", "null"] }),
+        other => other.base_schema(),
     }
 }
 
@@ -102,7 +121,7 @@ fn type_schema(
     in_flight: &mut Vec<String>,
 ) -> Value {
     if let Some(kind) = primitive_kind(rosapi_type) {
-        return kind.base_schema();
+        return leaf_schema(kind);
     }
     // A nested message type (contains `/`). builtin_interfaces/* are opaque
     // stamps; everything else we resolve recursively from the typedef list.
@@ -253,11 +272,12 @@ mod tests {
         assert_eq!(linear.kind, FieldKind::Json, "nested message → Json");
         let schema = linear.schema.as_ref().expect("nested message carries schema");
         assert_eq!(schema["type"], "object");
-        // Vector3's three double fields resolve to Number schemas.
+        // Vector3's three double fields resolve to nullable-Number schemas
+        // (rosbridge renders NaN/±Inf as JSON null — see `leaf_schema`).
         let props = &schema["properties"];
-        assert_eq!(props["x"], json!({ "type": "number" }));
-        assert_eq!(props["y"], json!({ "type": "number" }));
-        assert_eq!(props["z"], json!({ "type": "number" }));
+        assert_eq!(props["x"], json!({ "type": ["number", "null"] }));
+        assert_eq!(props["y"], json!({ "type": ["number", "null"] }));
+        assert_eq!(props["z"], json!({ "type": ["number", "null"] }));
 
         let angular = port.fields.iter().find(|f| f.name == "angular").unwrap();
         assert_eq!(angular.kind, FieldKind::Json);
@@ -301,11 +321,19 @@ mod tests {
         // The rosapi-specific vocabulary: float64→double, float32→float, both Number.
         assert_eq!(primitive_kind("double"), Some(FieldKind::Number));
         assert_eq!(primitive_kind("float"), Some(FieldKind::Number));
+        // …but rosapi may also keep the original float names.
+        assert_eq!(primitive_kind("float64"), Some(FieldKind::Number));
+        assert_eq!(primitive_kind("float32"), Some(FieldKind::Number));
         assert_eq!(primitive_kind("int32"), Some(FieldKind::Number));
         assert_eq!(primitive_kind("uint8"), Some(FieldKind::Number));
         assert_eq!(primitive_kind("byte"), Some(FieldKind::Number));
         assert_eq!(primitive_kind("char"), Some(FieldKind::Number));
+        assert_eq!(primitive_kind("octet"), Some(FieldKind::Number));
+        // Jazzy rosapi reports bool as `boolean` (the IDL name); accept both. The
+        // xArm's PlanJoint/PlanExec services are the first ROS types with a bool
+        // field, so this arm was previously unexercised against real rosapi.
         assert_eq!(primitive_kind("bool"), Some(FieldKind::Bool));
+        assert_eq!(primitive_kind("boolean"), Some(FieldKind::Bool));
         assert_eq!(primitive_kind("string"), Some(FieldKind::Text));
         assert_eq!(primitive_kind("wstring"), Some(FieldKind::Text));
         assert_eq!(primitive_kind("time"), Some(FieldKind::Json));
@@ -351,5 +379,87 @@ mod tests {
         assert_eq!(port.fields.len(), 1);
         assert_eq!(port.fields[0].name, "delta");
         assert_eq!(port.fields[0].kind, FieldKind::Number);
+    }
+
+    #[test]
+    fn array_field_maps_to_json_with_array_schema() {
+        // xarm_msgs/PlanJoint request: `float64[] target` — the FIRST ROS type
+        // with an array field (every turtle type was flat scalars). rosapi
+        // renames float64 → double and reports a variable-length array as
+        // fieldarraylen 0 (!= -1 → array). The array path was code-complete but
+        // unexercised until the xArm; this locks it.
+        let td = parse(
+            r#"[
+              {
+                "type": "xarm_msgs/PlanJoint_Request",
+                "fieldnames": ["target"],
+                "fieldtypes": ["double"],
+                "fieldarraylen": [0]
+              }
+            ]"#,
+        );
+        let port = typedefs_to_port(&td, "xarm_msgs/PlanJoint_Request", "out", "Output");
+        assert_eq!(port.fields.len(), 1);
+        let target = &port.fields[0];
+        assert_eq!(target.name, "target");
+        assert_eq!(target.kind, FieldKind::Json, "array field → Json");
+        let schema = target.schema.as_ref().expect("array field carries a schema");
+        assert_eq!(schema["type"], "array");
+        assert_eq!(
+            schema["items"],
+            json!({ "type": ["number", "null"] }),
+            "double[] items are nullable numbers (rosbridge renders NaN/±Inf as null)"
+        );
+    }
+
+    #[test]
+    fn joint_state_arrays_and_nested_header() {
+        // sensor_msgs/JointState: a nested Header + a string array + three
+        // primitive arrays — the `await_topic /joint_states` output port for the
+        // xArm demo. Exercises array-of-primitive AND nested-message resolution
+        // in one port.
+        let td = parse(
+            r#"[
+              {
+                "type": "sensor_msgs/JointState",
+                "fieldnames": ["header", "name", "position", "velocity", "effort"],
+                "fieldtypes": ["std_msgs/Header", "string", "double", "double", "double"],
+                "fieldarraylen": [-1, 0, 0, 0, 0]
+              },
+              {
+                "type": "std_msgs/Header",
+                "fieldnames": ["stamp", "frame_id"],
+                "fieldtypes": ["builtin_interfaces/Time", "string"],
+                "fieldarraylen": [-1, -1]
+              }
+            ]"#,
+        );
+        let port = typedefs_to_port(&td, "sensor_msgs/JointState", "out", "Output");
+        assert_eq!(port.fields.len(), 5);
+        let by = |n: &str| port.fields.iter().find(|f| f.name == n).unwrap();
+
+        // Every JointState top-level field is an array or nested message → Json
+        // with a schema override the variable picker can descend into.
+        for f in &port.fields {
+            assert_eq!(f.kind, FieldKind::Json, "{} → Json", f.name);
+            assert!(f.schema.is_some(), "{} carries a schema override", f.name);
+        }
+
+        // position: double[] → array of nullable number (NaN/±Inf → null).
+        let pos = by("position").schema.clone().unwrap();
+        assert_eq!(pos["type"], "array");
+        assert_eq!(pos["items"], json!({ "type": ["number", "null"] }));
+
+        // name: string[] → array of string.
+        let name = by("name").schema.clone().unwrap();
+        assert_eq!(name["type"], "array");
+        assert_eq!(name["items"], json!({ "type": "string" }));
+
+        // header: nested std_msgs/Header → object schema with frame_id (string)
+        // and an opaque builtin_interfaces/Time stamp ({}).
+        let header = by("header").schema.clone().unwrap();
+        assert_eq!(header["type"], "object");
+        assert_eq!(header["properties"]["frame_id"], json!({ "type": "string" }));
+        assert_eq!(header["properties"]["stamp"], json!({}));
     }
 }

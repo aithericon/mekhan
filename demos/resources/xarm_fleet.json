@@ -1,0 +1,6 @@
+{
+  "path": "xarm_fleet",
+  "resource_type": "runner_group",
+  "display_name": "xArm Fleet (dev)",
+  "config": {}
+}
