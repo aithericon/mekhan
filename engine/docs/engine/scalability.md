@@ -223,14 +223,32 @@ Concurrency already scales (§2.5), so this matters only for a *single* hot net.
 ### P4 — Close the rehydration data gap (measurement, not optimization)
 Cold-wake rehydration (JetStream replay on first access after a restart) is
 **unmeasured** — the L1 `replay` number is pure projection, not the I/O. The
-intended `live wake` axis was cut because **idle-hibernation did not evict nets**
-in testing (they stayed `in_memory: true` — `HibernationMaster` likely not
-running / activity KV not created), so `wake` was a no-op on a hot net. Before
-relying on hibernate/wake for capacity:
-1. Investigate why idle nets don't evict.
+intended `live wake` axis was cut, but **not because hibernation is broken**.
+
+Hibernation works and is correctly gated on activity: `ActivityTracker::touch`
+is called only on **NATS-stimulus paths** — signal delivery
+(`global_signal_listener`), cross-net bridge tokens (`global_bridge_listener`),
+human-task results, token injection, and wake/resolve. It is **not** called by
+the synchronous HTTP `/scenario` (deploy) or `/command/evaluate` handlers. The
+benchmark drove nets purely over those HTTP paths, so its nets **never wrote an
+activity entry** (verified: `KV_NET_ACTIVITY` was empty while `KV_NET_METADATA`
+held the nets) → `HibernationMaster` never spawned a sleep task for them → they
+never hibernated. A real workflow net is signal/trigger-driven (those paths
+touch), so it hibernates normally. Note the design consequence: a net's idle
+clock measures time since the last **external** stimulus, not internal eval
+activity.
+
+To measure cold-wake rehydration, either:
+1. Drive a net through a touching path (NATS inject/signal) so it actually
+   hibernates, then time the wake; or
 2. Measure restart-based cold rehydration (events persist in `PETRI_GLOBAL`
    across a cold boot; the net rehydrates on first access). The diff vs the L1
    `replay` projection cost is the JetStream-pull I/O tax.
+
+(Minor real gap worth a ticket: a net driven *only* via synchronous
+`/command/evaluate` never registers activity, so it never hibernates. Whether
+that matters depends on whether anything in production drives nets that way —
+normally they're stimulus-driven, so probably not.)
 
 ---
 
@@ -243,5 +261,7 @@ exponential, lives in the capacity/pool-net path — fix with a join-key index);
 preserving selection determinism); **write round-trip** (~0.55 ms/event, ~1700
 ev/s per net, but concurrency scales to ~21k+ aggregate with no observed
 plateau, so the platform scales horizontally). The one open data gap is
-**cold-wake rehydration**, currently unmeasurable because idle-hibernation isn't
-evicting nets — worth fixing before depending on wake/hibernate.
+**cold-wake rehydration**: hibernation works (it's gated on NATS-stimulus
+activity, which the benchmark's HTTP-only drive never triggered), so the
+measurement just needs a net driven through a touching path (inject/signal) or a
+restart-based probe.

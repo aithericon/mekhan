@@ -15,13 +15,16 @@
 //!   path serialize `M` nets evaluated at once? Aggregate throughput vs `M`.
 //!
 //! A third axis — **cold-wake rehydration** (the I/O tax on replaying a net's
-//! event log from JetStream, vs the L1 `replay` projection cost) — is deferred:
-//! it needs a reliable net-eviction trigger, and in testing the engine's
-//! idle-hibernation did not evict nets within a usable window (they stayed
-//! `in_memory: true`), so a `wake` call is a no-op `get_or_create` on a hot net.
-//! The correct measurement is restart-based (events persist in `PETRI_GLOBAL`
-//! across a cold engine boot; the net rehydrates on first access) and is
-//! recipe-level orchestration. The `EngineClient::wake` / `event_count`
+//! event log from JetStream, vs the L1 `replay` projection cost) — is deferred.
+//! It needs the net to actually hibernate first, and these subcommands drive
+//! nets purely over HTTP (`/scenario` + `/command/evaluate`), neither of which
+//! calls `ActivityTracker::touch` — only the NATS-stimulus paths (signal /
+//! inject / bridge / wake) do. So a benchmark net never registers activity and
+//! never hibernates (the activity KV stays empty), making `wake` a no-op
+//! `get_or_create` on a hot net. Hibernation itself is fine; the measurement
+//! just needs a touching drive path (NATS inject/signal) or a restart-based
+//! probe (events persist in `PETRI_GLOBAL` across a cold boot; the net
+//! rehydrates on first access). The `EngineClient::wake` / `event_count`
 //! primitives are kept for that follow-up.
 //!
 //! Requires a live engine. Bring one up with `just infra nats-up && just run`
