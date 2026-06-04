@@ -245,10 +245,12 @@ To measure cold-wake rehydration, either:
    across a cold boot; the net rehydrates on first access). The diff vs the L1
    `replay` projection cost is the JetStream-pull I/O tax.
 
-(Minor real gap worth a ticket: a net driven *only* via synchronous
-`/command/evaluate` never registers activity, so it never hibernates. Whether
-that matters depends on whether anything in production drives nets that way —
-normally they're stimulus-driven, so probably not.)
+(Fixed: previously a net driven *only* over the HTTP command API never
+registered activity and so never hibernated — `ActivityTracker::touch` was
+called only on the NATS-stimulus paths. The net-scoped HTTP command handlers now
+record activity through an `ActivitySink` port too, so hibernation is
+transport-independent; read endpoints deliberately don't touch, so polling can't
+keep a net alive.)
 
 ---
 
