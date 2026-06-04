@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000310",
+  "name": "31 · xArm Trajectory Action (ROS)",
+  "description": "Drives the simulated UFACTORY xArm 6 (xarm_ros2, ROS 2 Jazzy, ros2_control fake hardware) through the FollowJointTrajectory action on the joint_trajectory_controller — the production path real industrial arms are commanded with, not the MoveIt planner services of demo 30. A plain three-step net sends a nested trajectory goal (six joint_names + one points entry targeting [0,-0.3,-0.3,0,0.6,0] over 3s), then reads /joint_states to confirm the arm reached the commanded configuration. The action result (error_code/error_string) is intentionally not surfaced — it rides stdout_tail, never an outputs entry — so success is proven by net completion (the backend only succeeds on GoalStatus SUCCEEDED) plus the downstream joint readback. LIVE ONLY: requires `just dev xarm-up`, which builds the headless xArm fake-mode image and enrolls an `xarm_fleet` runner advertising `ros.robot_model=xarm6`; without it there is no capacity and the instance parks at the first claim."
+}
