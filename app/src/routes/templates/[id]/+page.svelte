@@ -156,6 +156,9 @@
 		}
 	}
 
+	// Persist a description edit from the settings panel. Optimistic; rethrows
+	// so the panel can surface the failure inline (its sheet covers the page
+	// error banner).
 	async function handleDescriptionChange(description: string) {
 		if (!template) return;
 		const prev = template;
@@ -164,7 +167,7 @@
 			template = await updateTemplate(templateId, { description });
 		} catch (e) {
 			template = prev;
-			error = e instanceof Error ? e.message : 'Failed to update description';
+			throw e;
 		}
 	}
 
@@ -328,7 +331,6 @@
 	<div class="flex h-full flex-col" data-testid="template-editor-page">
 		<EditorToolbar
 			templateName={template?.name ?? 'New Workflow'}
-			templateDescription={template?.description ?? null}
 			ownerId={template?.owner_template_id ?? undefined}
 			{ownerName}
 			published={template?.published ?? false}
@@ -344,7 +346,6 @@
 			ontests={() => (testsPanelOpen = true)}
 			onsettings={template ? () => (settingsPanelOpen = true) : undefined}
 			onrename={handleRename}
-			ondescriptionchange={handleDescriptionChange}
 		/>
 
 		{#if error}
@@ -428,7 +429,7 @@
 	<SheetContent class="w-full max-w-md p-0 sm:max-w-md">
 		<SheetTitle class="sr-only">Template settings</SheetTitle>
 		{#if template}
-			<TemplateSettingsPanel {template} />
+			<TemplateSettingsPanel {template} ondescriptionchange={handleDescriptionChange} />
 		{/if}
 	</SheetContent>
 </Sheet.Root>

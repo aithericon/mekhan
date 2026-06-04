@@ -3,8 +3,10 @@
 	import X from '@lucide/svelte/icons/x';
 	import Globe from '@lucide/svelte/icons/globe';
 	import Lock from '@lucide/svelte/icons/lock';
+	import FileText from '@lucide/svelte/icons/file-text';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
 		getTemplateTags,
@@ -15,9 +17,44 @@
 
 	interface Props {
 		template: Template;
+		/** Persist a new description (parent owns the API call + state).
+		 *  Rejects on failure so we can surface it inline. */
+		ondescriptionchange?: (description: string) => Promise<void>;
 	}
 
-	let { template }: Props = $props();
+	let { template, ondescriptionchange }: Props = $props();
+
+	// Description. Published versions are server-locked (the PUT 409s, same as
+	// rename), so editing is offered on drafts only. The draft re-seeds when the
+	// template identity changes (e.g. a new-version fork swaps the prop).
+	let draftDesc = $state('');
+	let descDirty = $state(false);
+	let savingDesc = $state(false);
+	let descError = $state<string | null>(null);
+	let seededDescId = $state('');
+
+	$effect(() => {
+		if (template.id !== seededDescId) {
+			seededDescId = template.id;
+			draftDesc = template.description ?? '';
+			descDirty = false;
+			descError = null;
+		}
+	});
+
+	async function saveDesc() {
+		if (!descDirty || savingDesc || template.published) return;
+		savingDesc = true;
+		descError = null;
+		try {
+			await ondescriptionchange?.(draftDesc.trim());
+			descDirty = false;
+		} catch (e) {
+			descError = e instanceof Error ? e.message : 'Failed to save description';
+		} finally {
+			savingDesc = false;
+		}
+	}
 
 	type Visibility = 'workspace' | 'public';
 
@@ -116,6 +153,48 @@
 			Tags and visibility apply to every version of this template.
 		</p>
 	</header>
+
+	<!-- Description -->
+	<section class="space-y-3">
+		<div class="flex items-center gap-2 text-sm font-medium">
+			<FileText class="size-4 text-muted-foreground" />
+			Description
+		</div>
+		<p class="text-sm text-muted-foreground">
+			Shown in the templates list and the run dialog.
+			{#if template.published}
+				Locked on published versions — fork a new version to edit.
+			{/if}
+		</p>
+
+		<Textarea
+			bind:value={draftDesc}
+			oninput={() => (descDirty = true)}
+			disabled={template.published || savingDesc}
+			placeholder="Describe what this workflow does…"
+			rows={4}
+			data-testid="settings-description-input"
+		/>
+
+		{#if !template.published}
+			<div class="flex items-center gap-3">
+				<Button
+					size="sm"
+					onclick={saveDesc}
+					disabled={!descDirty || savingDesc}
+					data-testid="settings-save-description"
+				>
+					{savingDesc ? 'Saving…' : 'Save description'}
+				</Button>
+				{#if descDirty && !savingDesc}
+					<span class="text-sm text-muted-foreground">Unsaved changes</span>
+				{/if}
+			</div>
+		{/if}
+		{#if descError}
+			<div class="text-sm text-destructive" data-testid="settings-description-error">{descError}</div>
+		{/if}
+	</section>
 
 	<!-- Tags -->
 	<section class="space-y-3">
