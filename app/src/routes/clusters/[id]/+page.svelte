@@ -108,10 +108,10 @@
 <div class="h-full overflow-y-auto">
 	<div class="mx-auto max-w-6xl px-6 py-8 animate-rise">
 		<a
-			href="/clusters"
+			href="/fleet"
 			class="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
 		>
-			<ChevronLeft class="size-4" /> Clusters
+			<ChevronLeft class="size-4" /> Control Plane
 		</a>
 
 		<div class="mb-4 flex items-start justify-between gap-3">

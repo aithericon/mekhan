@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupFleet } from './grouping';
+import { groupFleet, filterFleetByGroup } from './grouping';
 import type { RunnerSummary, RunnerPresenceSnapshot } from '$lib/api/runners';
 import type { ResourceSummary } from '$lib/api/resources';
 
@@ -80,5 +80,39 @@ describe('groupFleet', () => {
 		const sections = groupFleet([runner('a', 'orphan')], { a: present('a') }, []);
 		expect(sections).toHaveLength(1);
 		expect(sections[0]).toMatchObject({ kind: 'unbacked', alias: 'orphan', resource: null });
+	});
+});
+
+describe('filterFleetByGroup', () => {
+	const runners = [runner('a', 'lab'), runner('b', 'lab'), runner('c', 'gpu'), runner('d', null)];
+	const groups = [groupResource('lab'), groupResource('gpu')];
+
+	it('is a no-op when alias is null/undefined (preserves unfiltered callers)', () => {
+		expect(filterFleetByGroup(runners, groups, null)).toEqual({
+			runners,
+			groupResources: groups
+		});
+		expect(filterFleetByGroup(runners, groups, undefined)).toEqual({
+			runners,
+			groupResources: groups
+		});
+	});
+
+	it('keeps only the matching group’s runners + backing resource', () => {
+		const { runners: rs, groupResources: gs } = filterFleetByGroup(runners, groups, 'lab');
+		expect(rs.map((r) => r.id)).toEqual(['a', 'b']);
+		expect(gs.map((g) => g.path)).toEqual(['lab']);
+	});
+
+	it('returns empty runners for a group with no members, and no backing res for an unknown alias', () => {
+		expect(filterFleetByGroup(runners, groups, 'ghost')).toEqual({
+			runners: [],
+			groupResources: []
+		});
+	});
+
+	it('treats an absent group field as ungrouped (never matched by a real alias)', () => {
+		const { runners: rs } = filterFleetByGroup([runner('x', null)], [], 'lab');
+		expect(rs).toEqual([]);
 	});
 });

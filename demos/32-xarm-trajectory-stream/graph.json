@@ -1,0 +1,132 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "xArm Trajectory Feedback Stream",
+        "initial": {
+          "id": "in",
+          "label": "Begin",
+          "fields": []
+        }
+      }
+    },
+    {
+      "id": "move",
+      "type": "automated_step",
+      "slug": "move",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Move (trajectory action, streaming feedback)",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`). Commands a single-waypoint trajectory to the proven-reachable joint target [0, -0.3, -0.3, 0, 0.6, 0] (reused from demo 30) on the xArm 6 driven through ros2_control fake hardware. This is a STREAMING action node (`streamOutput: true`): as the controller follows the trajectory it publishes structured `FollowJointTrajectory_Feedback` frames (`{ header, joint_names, desired, actual, error }` — each a nested JointTrajectoryPoint), far richer than the turtle's scalar `{ remaining }`. The backend dedups the DUPLICATED frames rosbridge emits and emits each DISTINCT feedback as a streamed `OutputSet` on the node's `stream` handle; the slim control token carries `stream_count == number of distinct feedbacks` over the `control` edge to size the fold's end-of-stream gather barrier. The terminal action RESULT (`error_code`) rides `stdout_tail` ONLY — it is NOT a referenceable output, and success is implicit (the backend only succeeds when GoalStatus == 4 SUCCEEDED). The goal is authored as free-form JSON in `config.fields` and passed to rosbridge verbatim (nested array-of-structs, no mapper involvement); `interface_typedefs` carries the flat `FollowJointTrajectory_Result` typedef so the deriver can shape the result port for this non-bundled action. Runs on an `xarm_fleet` runner that satisfies `ros.robot_model == xarm6`; the rosbridge endpoint is runner-local (`EXECUTOR_ROS__WS_URL`).",
+        "streamOutput": true,
+        "deploymentModel": {
+          "mode": "executor",
+          "capacity": { "alias": "xarm_fleet" }
+        },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+                "points": [
+                  { "positions": [0.0, -0.3, -0.3, 0.0, 0.6, 0.0], "time_from_start": { "sec": 3, "nanosec": 0 } }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              { "type": "control_msgs/FollowJointTrajectory_Result", "fieldnames": ["error_code", "error_string"], "fieldtypes": ["int32", "string"], "fieldarraylen": [-1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "fold",
+      "type": "stream_fold",
+      "slug": "fold",
+      "position": { "x": 600, "y": 160 },
+      "data": {
+        "type": "stream_fold",
+        "label": "Fold Feedback",
+        "description": "Drains the trajectory action's feedback stream (one structured `FollowJointTrajectory_Feedback` chunk per distinct feedback) and reduces it into an ordered Array, gating net completion on the end-of-stream count carried on the move node's control token.",
+        "resultVar": "item",
+        "reduce": {
+          "kind": "array"
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 880, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          {
+            "targetField": "feedback_count",
+            "expression": "fold.output.len()"
+          },
+          {
+            "targetField": "sample_frame",
+            "expression": "if fold.output.len() > 0 { fold.output[0] } else { #{} }"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_move",
+      "source": "start",
+      "target": "move",
+      "targetHandle": "in",
+      "type": "sequence"
+    },
+    {
+      "id": "e_move_stream",
+      "source": "move",
+      "sourceHandle": "stream",
+      "target": "fold",
+      "targetHandle": "stream",
+      "type": "sequence"
+    },
+    {
+      "id": "e_move_control",
+      "source": "move",
+      "target": "fold",
+      "targetHandle": "control",
+      "type": "sequence"
+    },
+    {
+      "id": "e_fold_end",
+      "source": "fold",
+      "target": "end",
+      "targetHandle": "in",
+      "type": "sequence"
+    }
+  ]
+}

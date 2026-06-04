@@ -25,11 +25,22 @@
 
 	let { workspace_id }: Props = $props();
 
+	// Resource types the Control Plane (/fleet) now owns — hidden here so the
+	// two surfaces don't both list them. Client-side filter only; the shared
+	// listResources endpoint is untouched.
+	const CONTROL_PLANE_TYPES = new Set(['capacity', 'datacenter']);
+
 	let resources = $state<ResourceSummary[]>([]);
 	let types = $state<ResourceTypeInfo[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let typeFilter = $state<string>('');
+
+	// Rows + dropdown options with the Control-Plane-owned types stripped out.
+	const visibleResources = $derived(
+		resources.filter((r) => !CONTROL_PLANE_TYPES.has(r.resource_type))
+	);
+	const visibleTypes = $derived(types.filter((t) => !CONTROL_PLANE_TYPES.has(t.name)));
 
 	let editorOpen = $state(false);
 	let editingId = $state<string | null>(null);
@@ -111,12 +122,12 @@
 			>
 				<Select.Trigger class="h-9 min-w-[160px]">
 					{typeFilter
-						? (types.find((t) => t.name === typeFilter)?.display_name ?? typeFilter)
+						? (visibleTypes.find((t) => t.name === typeFilter)?.display_name ?? typeFilter)
 						: 'All types'}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="All types" />
-					{#each types as t (t.name)}
+					{#each visibleTypes as t (t.name)}
 						<Select.Item value={t.name} label={t.display_name} />
 					{/each}
 				</Select.Content>
@@ -144,7 +155,7 @@
 		<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">
 			Loading…
 		</div>
-	{:else if resources.length === 0}
+	{:else if visibleResources.length === 0}
 		<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
 			<KeyRound class="size-10 text-muted-foreground/40" />
 			<p class="mt-3 text-sm text-muted-foreground">No resources defined</p>
@@ -158,7 +169,7 @@
 		</div>
 	{:else}
 		<div class="space-y-2">
-			{#each resources as r (r.id)}
+			{#each visibleResources as r (r.id)}
 				<div
 					class="group flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/40"
 					data-testid="resource-item-{r.id}"

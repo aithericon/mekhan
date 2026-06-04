@@ -459,6 +459,34 @@ mod tests {
     }
 
     #[test]
+    fn derive_action_follow_joint_trajectory_result() {
+        // control_msgs FollowJointTrajectory: the RESULT type is flat
+        // (error_code: int32, error_string: string). Embedded typedefs (as the
+        // live runner catalog reports them) derive the result port + a
+        // synthetic feedback_count — generalizing the action-derive path to a
+        // non-bundled, real industrial-arm action.
+        let port = derive_output_port(&json!({
+            "operation": "send_action_goal",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "interface_typedefs": [
+                {
+                    "type": "control_msgs/FollowJointTrajectory_Result",
+                    "fieldnames": ["error_code", "error_string"],
+                    "fieldtypes": ["int32", "string"],
+                    "fieldarraylen": [-1, -1]
+                }
+            ],
+        }));
+        assert_eq!(port.fields.len(), 3);
+        let ec = port.fields.iter().find(|f| f.name == "error_code").unwrap();
+        assert_eq!(ec.kind, FieldKind::Number);
+        let es = port.fields.iter().find(|f| f.name == "error_string").unwrap();
+        assert_eq!(es.kind, FieldKind::Text);
+        let fc = port.fields.iter().find(|f| f.name == "feedback_count").unwrap();
+        assert_eq!(fc.kind, FieldKind::Number);
+    }
+
+    #[test]
     fn derive_absent_embedded_typedefs_falls_back_to_bundled() {
         // (ii) No `interface_typedefs` key → the bundled path is unchanged.
         // Pose still derives its 5 Numbers from the bundled snapshot.

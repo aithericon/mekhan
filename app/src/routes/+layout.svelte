@@ -22,17 +22,13 @@
 		{ href: '/assets', label: 'Assets', testid: 'nav-assets', desc: 'Curated record collections' }
 	];
 
-	// Low-traffic engine/admin views.
+	// Low-traffic engine/admin views. Clusters + Capability Types are subsumed
+	// by the Control Plane (Fleet): clusters are reached via Scheduler cards →
+	// /clusters/[id], capability types from inside the control plane. The
+	// /clusters/[id] + /admin/capability-types routes still exist.
 	const internalItems: NavMenuItem[] = [
 		{ href: '/nets', label: 'Engine', testid: 'nav-nets', desc: 'Raw petri nets' },
-		{ href: '/processes', label: 'Processes', testid: 'nav-processes', desc: 'Raw engine processes' },
-		{ href: '/clusters', label: 'Clusters', testid: 'nav-clusters', desc: 'Datacenters + live lease state' },
-		{
-			href: '/admin/capability-types',
-			label: 'Capability Types',
-			testid: 'nav-capability-types',
-			desc: 'Runner requirement registry'
-		}
+		{ href: '/processes', label: 'Processes', testid: 'nav-processes', desc: 'Raw engine processes' }
 	];
 
 	onMount(async () => {

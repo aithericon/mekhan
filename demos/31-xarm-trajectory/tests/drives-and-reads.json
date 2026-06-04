@@ -1,0 +1,17 @@
+{
+  "name": "drives-and-reads",
+  "enabled": true,
+  "start_tokens": [
+    {
+      "start_block_id": "start",
+      "token": {}
+    }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.positions", "op": "exists" },
+    { "path": "result.value.joint_names", "op": "exists" },
+    { "path": "result.value.executed", "op": "exists" },
+    { "path": "result.value.executed", "op": "eq", "value": true }
+  ]
+}

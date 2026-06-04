@@ -219,6 +219,14 @@ use utoipa::OpenApi;
             // allocations and cluster-leases endpoints (`LeaseResponse` is an
             // alias for it, so only the one schema needs registering).
             crate::models::responses::AllocationResponse,
+            // Capacity aggregator DTOs (docs/23 + docs/24). `CapacitySummary`
+            // appears only inside the `Vec<_>` response, so register it + the
+            // tagged-live union + holder shape + the backend authority enum for
+            // frontend codegen.
+            crate::handlers::capacities::CapacitySummary,
+            crate::handlers::capacities::CapacityLive,
+            crate::handlers::capacities::GrantHolder,
+            crate::models::capacity::CapacityBackend,
         ),
     ),
     tags(
@@ -248,6 +256,7 @@ use utoipa::OpenApi;
         (name = "runners", description = "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."),
         (name = "workers", description = "Grouped + Enrolled Workers — the identity plane on the executor worker pool: enrolled, group-scoped, revocable workers that still PULL. Public `POST /enroll` is authed by a `wt_` registration token in the body; workers then authenticate with a mekhan-native `wkr_` bearer. A group is backed by a `capacity` resource with the `worker` preset. Plus the anonymous worker-pool coverage read."),
         (name = "capability-types", description = "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."),
+        (name = "capacities", description = "Capacity aggregator (docs/23 + docs/24) — the unified Control-Plane read: every `capacity` + `datacenter` resource classified by the SINGLE dispatch authority (`CapacityAxes::backend`) with live utilization (token holders / presence online / worker coverage / scheduler lease state)."),
     ),
 )]
 pub struct ApiDoc;

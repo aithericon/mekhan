@@ -1,6 +1,6 @@
 {
-  "path": "ros_fleet",
+  "path": "xarm_fleet",
   "resource_type": "capacity",
-  "display_name": "ROS Fleet (dev)",
+  "display_name": "xArm Fleet (dev)",
   "config": { "preset": "instrument" }
 }

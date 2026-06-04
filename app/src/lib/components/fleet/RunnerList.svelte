@@ -18,16 +18,13 @@
 		SheetDescription,
 		SheetClose
 	} from '$lib/components/ui/sheet';
-	import { CopyButton } from '$lib/components/ui/copy-button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import * as Select from '$lib/components/ui/select';
-	import { Input } from '$lib/components/ui/input';
 	import { toast } from 'svelte-sonner';
 	import Server from '@lucide/svelte/icons/server';
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
-	import Terminal from '@lucide/svelte/icons/terminal';
 	import Info from '@lucide/svelte/icons/info';
 	import {
 		listRunners,
@@ -35,22 +32,32 @@
 		getRunnerPresence,
 		revokeRunner,
 		listRegistrationTokens,
-		createRegistrationToken,
 		revokeRegistrationToken,
 		type RunnerSummary,
 		type RunnerDetail,
 		type RunnerPresenceSnapshot,
-		type RegistrationTokenSummary,
-		type CreatedRegistrationToken
+		type RegistrationTokenSummary
 	} from '$lib/api/runners';
-	import { listResources, createResource, type ResourceSummary } from '$lib/api/resources';
+	import { listResources, type ResourceSummary } from '$lib/api/resources';
 	import { capacityTarget } from '$lib/editor/deployment-run-target';
-	import { groupFleet, type FleetSection } from './grouping';
+	import { groupFleet, filterFleetByGroup, type FleetSection } from './grouping';
 	import { fmtMsAgo, fmtDate } from './format';
 	import StatusDot from './StatusDot.svelte';
 	import BackendChips from './BackendChips.svelte';
 	import GroupSectionHeader from './GroupSectionHeader.svelte';
 	import FleetEmpty from './FleetEmpty.svelte';
+	import EnrollSheet from './EnrollSheet.svelte';
+
+	type Props = {
+		/** When set, scope the list to this group alias (the capacity `path`):
+		 *  only its runners + tokens, no cross-group sections. Omitted ⇒ the full
+		 *  fleet split into sections (the Control Plane's runner-management panel). */
+		group?: string | null;
+		/** Roster mode: a per-group view (used by /fleet/[id]). Hides the
+		 *  group-section chrome (there is only one group) and scopes Enroll to it. */
+		roster?: boolean;
+	};
+	let { group = null, roster = false }: Props = $props();
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -67,22 +74,10 @@
 	// Revoke
 	let revoking = $state<string | null>(null);
 	let revokingToken = $state<string | null>(null);
-	let backingGroup = $state<string | null>(null);
 
-	// Enroll modal. `enrollGroupSel` is one of: '' (no group), an existing group
-	// alias, or the '__new__' sentinel (create a new group inline before minting).
-	const NEW_GROUP = '__new__';
+	// Enroll sheet (mint + reveal-once now lives in EnrollSheet). In roster mode
+	// the sheet is scoped to this group; otherwise it shows a group picker.
 	let enrollOpen = $state(false);
-	let enrollName = $state('');
-	let enrollGroupSel = $state('');
-	let enrollNewGroup = $state('');
-	let enrollMaxUses = $state('');
-	let enrollReusable = $state(false);
-	let enrollExpiresAt = $state('');
-	let enrolling = $state(false);
-
-	// Reveal-once token sheet
-	let revealed = $state<(CreatedRegistrationToken & { name: string; group: string }) | null>(null);
 
 	// Detail drawer (full record incl. capabilities + nats_public_key)
 	let detail = $state<RunnerDetail | null>(null);
@@ -115,12 +110,16 @@
 				listResources({ resource_type: 'capacity', perPage: 200 }),
 				listRegistrationTokens({ perPage: 200 })
 			]);
-			runners = rPage.items;
 			presence = pSnaps;
 			// A runner group is a presence `capacity` (the instrument preset);
 			// other capacity flavours (seeded limits, worker queues) are not groups.
-			groups = gPage.items.filter((r) => capacityTarget(r) === 'runner_group');
-			tokens = tPage.items;
+			const allGroups = gPage.items.filter((r) => capacityTarget(r) === 'runner_group');
+			// When scoped to one group, drop everything else (runners, backing res,
+			// and tokens for other groups).
+			const filtered = filterFleetByGroup(rPage.items, allGroups, group);
+			runners = filtered.runners;
+			groups = filtered.groupResources;
+			tokens = group == null ? tPage.items : tPage.items.filter((t) => t.group === group);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load runners';
 			runners = [];
@@ -168,87 +167,6 @@
 	/** Back an UNBACKED group: create its presence `capacity` resource (the
 	    `instrument` preset deploys the pool net), upgrading present-but-unadmitted
 	    runners on the next heartbeat. */
-	async function handleBackGroup(alias: string) {
-		if (backingGroup) return;
-		backingGroup = alias;
-		try {
-			await createResource({
-				path: alias,
-				resource_type: 'capacity',
-				config: { preset: 'instrument' }
-			});
-			toast.success(`Group "${alias}" created — pool net deployed.`);
-			await load();
-		} catch (e) {
-			toast.error(`Could not create group: ${e instanceof Error ? e.message : e}`);
-		} finally {
-			backingGroup = null;
-		}
-	}
-
-	function openEnroll() {
-		enrollName = '';
-		enrollGroupSel = '';
-		enrollNewGroup = '';
-		enrollMaxUses = '';
-		enrollReusable = false;
-		enrollExpiresAt = '';
-		enrollOpen = true;
-	}
-
-	async function handleEnroll(e: Event) {
-		e.preventDefault();
-		if (enrolling) return;
-		enrolling = true;
-		try {
-			// Resolve the chosen group. Creating a new one deploys its pool net
-			// BEFORE the token is minted, so the backend's backed-group check passes
-			// and the enrolled runner is guaranteed a pool to be admitted into.
-			let group: string | undefined;
-			if (enrollGroupSel === NEW_GROUP) {
-				const path = enrollNewGroup.trim();
-				if (!path) {
-					toast.error('Enter a name for the new group.');
-					enrolling = false;
-					return;
-				}
-				try {
-					await createResource({
-						path,
-						resource_type: 'capacity',
-						config: { preset: 'instrument' }
-					});
-				} catch (ce) {
-					// A 409 (already exists) is fine — reuse it; anything else aborts.
-					const msg = ce instanceof Error ? ce.message : String(ce);
-					if (!msg.includes('409')) throw ce;
-				}
-				group = path;
-			} else if (enrollGroupSel) {
-				group = enrollGroupSel;
-			}
-
-			const created = await createRegistrationToken({
-				group,
-				// Always send the explicit checkbox value: the backend defaults an
-				// OMITTED `reusable` to `true`, so `enrollReusable || undefined` would
-				// silently mint a reusable token whenever the box is left unchecked.
-				reusable: enrollReusable,
-				max_uses: enrollMaxUses ? parseInt(enrollMaxUses, 10) : undefined,
-				expires_at: enrollExpiresAt ? `${enrollExpiresAt}T23:59:59Z` : undefined
-			});
-			// Stash the name/group alongside the revealed token so the CLI snippet can use them.
-			revealed = { ...created, name: enrollName.trim(), group: group ?? '' };
-			enrollOpen = false;
-			toast.success('Token minted — copy it now.');
-			await load();
-		} catch (e) {
-			toast.error(`Enroll failed: ${e instanceof Error ? e.message : e}`);
-		} finally {
-			enrolling = false;
-		}
-	}
-
 	// ── Formatting helpers ─────────────────────────────────────────────────────
 
 	/** Produce a compact key=value capability summary string. */
@@ -288,13 +206,8 @@
 		}
 	}
 
-	/** Build the CLI enroll line shown in the reveal sheet. */
-	function cliLine(token: string, name: string, group: string): string {
-		const origin = typeof window !== 'undefined' ? window.location.origin : '';
-		let cmd = `aithericon-executor register --url ${origin} --token ${token}`;
-		if (name) cmd += ` --name ${name}`;
-		if (group) cmd += ` --group ${group}`;
-		return cmd;
+	function openEnroll() {
+		enrollOpen = true;
 	}
 </script>
 
@@ -356,22 +269,9 @@
 			{#each sections as section (section.kind + ':' + (section.alias ?? '∅'))}
 				{@const rows = shown(section)}
 				<section data-testid="group-section-{section.alias ?? 'ungrouped'}">
-					<GroupSectionHeader {section}>
-						{#snippet action()}
-							{#if section.kind === 'unbacked'}
-								<Button
-									variant="outline"
-									size="sm"
-									class="h-8 gap-1 border-amber-500/50 text-amber-800 hover:bg-amber-500/20 dark:text-amber-300"
-									onclick={() => section.alias && handleBackGroup(section.alias)}
-									disabled={backingGroup === section.alias}
-								>
-									<Plus class="size-3.5" />
-									{backingGroup === section.alias ? 'Creating…' : 'Create group'}
-								</Button>
-							{/if}
-						{/snippet}
-					</GroupSectionHeader>
+					{#if !roster}
+						<GroupSectionHeader {section} />
+					{/if}
 
 					<!-- Section rows -->
 					{#if rows.length === 0}
@@ -506,204 +406,8 @@
 	{/if}
 </div>
 
-<!-- ── Enroll modal (mint registration token) ──────────────────────────────── -->
-<Sheet.Root
-	open={enrollOpen}
-	onOpenChange={(o: boolean) => {
-		if (!o) enrollOpen = false;
-	}}
->
-	<SheetContent class="w-[480px] sm:max-w-[480px]">
-		<div class="space-y-4 p-2">
-			<div class="space-y-1">
-				<SheetTitle class="flex items-center gap-2 text-lg font-semibold">
-					<Plus class="size-4" />
-					Enroll a new runner
-				</SheetTitle>
-				<SheetDescription class="text-sm text-muted-foreground">
-					Mint a one-time registration token. Hand it to the executor — it enrolls itself using
-					<code class="rounded bg-muted px-1 py-0.5 font-mono text-sm">
-						aithericon-executor register
-					</code>.
-				</SheetDescription>
-			</div>
-
-			<form class="space-y-3" onsubmit={handleEnroll}>
-				<div class="space-y-1">
-					<label
-						for="enroll-name"
-						class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
-					>
-						Runner name
-					</label>
-					<Input id="enroll-name" bind:value={enrollName} required placeholder="e.g. gpu-node-01" />
-					<p class="text-sm text-muted-foreground">
-						Required — the generated <code>register</code> command needs
-						<code>--name</code>.
-					</p>
-				</div>
-
-				<!-- Group: pick an existing presence capacity, none, or create one inline. -->
-				<div class="space-y-1">
-					<label
-						for="enroll-group"
-						class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
-					>
-						Group
-					</label>
-					<Select.Root
-						type="single"
-						value={enrollGroupSel}
-						onValueChange={(v) => (enrollGroupSel = v ?? '')}
-					>
-						<Select.Trigger id="enroll-group" class="h-9 w-full" data-testid="enroll-group-select">
-							{#if enrollGroupSel === NEW_GROUP}
-								Create new group…
-							{:else if enrollGroupSel}
-								{enrollGroupSel}
-							{:else}
-								No group
-							{/if}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="No group" />
-							{#each groups as g (g.id)}
-								<Select.Item value={g.path} label={g.path} />
-							{/each}
-							<Select.Item value={NEW_GROUP} label="＋ Create new group…" />
-						</Select.Content>
-					</Select.Root>
-					{#if enrollGroupSel === NEW_GROUP}
-						<Input
-							class="mt-1"
-							bind:value={enrollNewGroup}
-							placeholder="new group name, e.g. gpu_lab"
-							data-testid="enroll-new-group"
-						/>
-						<p class="text-sm text-muted-foreground">
-							Creates a presence <code class="font-mono">capacity</code> resource (snake_case, the
-							<code class="font-mono">instrument</code> preset) and deploys its pool net before
-							minting the token.
-						</p>
-					{:else}
-						<p class="text-sm text-muted-foreground">
-							A group must be backed by a presence <code class="font-mono">capacity</code> resource —
-							its pool net is where the runner's unit is admitted.
-						</p>
-					{/if}
-				</div>
-
-				<div class="grid gap-3 sm:grid-cols-2">
-					<div class="space-y-1">
-						<label
-							for="enroll-max"
-							class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
-						>
-							Max uses <span class="normal-case">(optional)</span>
-						</label>
-						<Input
-							id="enroll-max"
-							type="number"
-							min="1"
-							bind:value={enrollMaxUses}
-							placeholder="unlimited"
-						/>
-					</div>
-					<div class="space-y-1">
-						<label
-							for="enroll-expires"
-							class="text-sm font-medium uppercase tracking-wide text-muted-foreground"
-						>
-							Expires <span class="normal-case">(optional)</span>
-						</label>
-						<Input id="enroll-expires" type="date" bind:value={enrollExpiresAt} />
-					</div>
-				</div>
-
-				<div class="flex items-center gap-2">
-					<input
-						id="enroll-reusable"
-						type="checkbox"
-						bind:checked={enrollReusable}
-						class="size-4 rounded border-border"
-					/>
-					<label for="enroll-reusable" class="text-sm text-muted-foreground"> Reusable token </label>
-				</div>
-
-				<div class="flex gap-2 pt-1">
-					<Button type="submit" disabled={enrolling || !enrollName.trim()} class="flex-1">
-						{enrolling ? 'Minting…' : 'Mint token'}
-					</Button>
-					<SheetClose>
-						<Button type="button" variant="outline">Cancel</Button>
-					</SheetClose>
-				</div>
-			</form>
-		</div>
-	</SheetContent>
-</Sheet.Root>
-
-<!-- ── Reveal-once token sheet ─────────────────────────────────────────────── -->
-<Sheet.Root
-	open={revealed !== null}
-	onOpenChange={(o: boolean) => {
-		if (!o) revealed = null;
-	}}
->
-	<SheetContent class="w-[520px] sm:max-w-[520px]">
-		<div class="space-y-4 p-2">
-			<div class="space-y-1">
-				<SheetTitle class="flex items-center gap-2 text-lg font-semibold">
-					<Terminal class="size-4" />
-					Registration token
-				</SheetTitle>
-				<SheetDescription class="text-sm text-muted-foreground">
-					Copy this now — it is not stored and will never be shown again.
-				</SheetDescription>
-			</div>
-
-			<div
-				class="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-400"
-			>
-				<TriangleAlert class="mt-0.5 size-3.5 shrink-0" />
-				<span>Anyone with this token can enroll an executor that acts on your behalf.</span>
-			</div>
-
-			{#if revealed}
-				<!-- Token secret -->
-				<div>
-					<p class="mb-1 text-sm font-medium uppercase tracking-wide text-muted-foreground">Token</p>
-					<div class="flex items-center gap-2">
-						<code
-							class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-sm text-foreground"
-							data-testid="token-secret"
-						>
-							{revealed.token}
-						</code>
-						<CopyButton text={revealed.token} />
-					</div>
-				</div>
-
-				<!-- CLI enroll line -->
-				<div>
-					<p class="mb-1 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-						Ready-to-paste CLI command
-					</p>
-					<div class="flex items-start gap-2">
-						<code class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-sm text-foreground">
-							{cliLine(revealed.token, revealed.name, revealed.group)}
-						</code>
-						<CopyButton text={cliLine(revealed.token, revealed.name, revealed.group)} />
-					</div>
-				</div>
-			{/if}
-
-			<SheetClose>
-				<Button variant="outline" class="w-full">Done</Button>
-			</SheetClose>
-		</div>
-	</SheetContent>
-</Sheet.Root>
+<!-- ── Enroll sheet (mint + reveal-once) ───────────────────────────────────── -->
+<EnrollSheet bind:open={enrollOpen} group={roster ? group : null} onenrolled={load} />
 
 <!-- ── Runner detail drawer ────────────────────────────────────────────────── -->
 <Sheet.Root
