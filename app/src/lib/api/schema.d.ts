@@ -4677,6 +4677,18 @@ export interface components {
             name: string;
             /** @description ROS interface type, e.g. `geometry_msgs/msg/Twist`. */
             type: string;
+            /**
+             * @description Optional raw rosapi message-details typedefs for this interface's
+             *     type(s) — the FLAT ARRAY of `{ type, fieldnames, fieldtypes,
+             *     fieldarraylen }` entries (the root typedef plus every nested typedef
+             *     referenced transitively), byte-identical to the bundled snapshot shape
+             *     in `service/src/backends/ros/bundled/*.json`. The editor copies the
+             *     chosen entry's value into the node config under `interface_typedefs`,
+             *     where the ROS deriver lowers it to a typed `Port` (generalizing port
+             *     derivation to any robot's interfaces, not just the bundled captures).
+             *     Stored verbatim in the JSONB `catalog` column (no migration needed).
+             */
+            typedefs?: unknown;
         };
         /**
          * @description Detail view returned by `GET /api/v1/job-templates/{id}`: the template plus

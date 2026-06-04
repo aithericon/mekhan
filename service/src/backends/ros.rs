@@ -181,6 +181,18 @@ fn output_root_key(interface_type: &str, operation: RosOperation) -> Option<Stri
     }
 }
 
+/// True when `tds` contains a typedef whose (normalized) `type` matches `key`.
+/// Used to decide whether the config-embedded `interface_typedefs` actually
+/// describes the requested root — present-but-fieldless (an empty ack) still
+/// counts as resolved, so this checks for the type's PRESENCE, never its field
+/// count. Matches both the literal and `/msg/`-normalized name forms (the same
+/// resolution policy `typedef::typedefs_to_port` applies).
+fn root_present(tds: &[typedef::TypeDef], key: &str) -> bool {
+    let normalized = typedef::normalize_type_name(key);
+    tds.iter()
+        .any(|td| td.type_name == key || td.type_name == normalized)
+}
+
 /// Derive the ROS step's output port from its config.
 ///
 /// Reads `interface_type` + `operation`, resolves the bundled rosapi typedef
@@ -219,8 +231,25 @@ fn derive_output_port(config: &Value) -> Port {
     let Some(key) = output_root_key(interface_type, operation) else {
         return empty_port();
     };
-    let Some(typedefs) = bundled::lookup(&key) else {
-        return empty_port();
+
+    // Prefer the config-embedded `interface_typedefs` (the runner's
+    // self-reported catalog, copied into the node config by the editor) so the
+    // deriver generalizes to any robot's interfaces — not just the bundled
+    // ground-truth captures. We only treat the embedded vec as authoritative
+    // when it actually carries the root type: an empty-ack response (e.g.
+    // TeleportAbsolute_Response) legitimately yields zero fields, so
+    // "resolved" must mean "the root type is present", NOT "fields non-empty".
+    // Otherwise fall through to the bundled snapshot.
+    let typedefs = match config
+        .get("interface_typedefs")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<Vec<typedef::TypeDef>>(v).ok())
+    {
+        Some(embedded) if root_present(&embedded, &key) => embedded,
+        _ => match bundled::lookup(&key) {
+            Some(tds) => tds,
+            None => return empty_port(),
+        },
     };
 
     let mut port = typedef::typedefs_to_port(&typedefs, &key, "out", "Output");
@@ -405,6 +434,97 @@ mod tests {
         assert_eq!(delta.kind, FieldKind::Number);
         let fc = port.fields.iter().find(|f| f.name == "feedback_count").unwrap();
         assert_eq!(fc.kind, FieldKind::Number);
+    }
+
+    #[test]
+    fn derive_uses_embedded_typedefs_without_bundled() {
+        // (i) A config-embedded `interface_typedefs` for turtlesim/Pose derives
+        // the 5 Number fields WITHOUT touching the bundled registry — the
+        // generalized path that lets any robot's catalog drive port derivation.
+        // (Same flat-array shape as bundled/turtlesim__Pose.json.)
+        let port = derive_output_port(&json!({
+            "operation": "await_topic",
+            "interface_type": "turtlesim/Pose",
+            "interface_typedefs": [
+                {
+                    "type": "turtlesim/Pose",
+                    "fieldnames": ["x", "y", "theta", "linear_velocity", "angular_velocity"],
+                    "fieldtypes": ["float", "float", "float", "float", "float"],
+                    "fieldarraylen": [-1, -1, -1, -1, -1]
+                }
+            ],
+        }));
+        assert_eq!(port.fields.len(), 5);
+        assert!(port.fields.iter().all(|f| f.kind == FieldKind::Number));
+    }
+
+    #[test]
+    fn derive_absent_embedded_typedefs_falls_back_to_bundled() {
+        // (ii) No `interface_typedefs` key → the bundled path is unchanged.
+        // Pose still derives its 5 Numbers from the bundled snapshot.
+        let port = derive_output_port(&json!({
+            "operation": "await_topic",
+            "interface_type": "turtlesim/Pose",
+        }));
+        assert_eq!(port.fields.len(), 5);
+        assert!(port.fields.iter().all(|f| f.kind == FieldKind::Number));
+
+        // A malformed `interface_typedefs` also falls through to bundled
+        // (the deriver is permissive — parse error must not error the derive).
+        let port = derive_output_port(&json!({
+            "operation": "await_topic",
+            "interface_type": "turtlesim/Pose",
+            "interface_typedefs": "not-an-array",
+        }));
+        assert_eq!(port.fields.len(), 5);
+    }
+
+    #[test]
+    fn derive_embedded_typedef_not_in_bundled_generalizes() {
+        // (iii) A type that is NOT in the bundled registry, supplied via the
+        // embedded `interface_typedefs`, still derives its fields — proving the
+        // generalization to arbitrary robot interfaces.
+        let port = derive_output_port(&json!({
+            "operation": "await_topic",
+            "interface_type": "fake_pkg/Widget",
+            "interface_typedefs": [
+                {
+                    "type": "fake_pkg/Widget",
+                    "fieldnames": ["width", "label"],
+                    "fieldtypes": ["double", "string"],
+                    "fieldarraylen": [-1, -1]
+                }
+            ],
+        }));
+        assert_eq!(port.fields.len(), 2);
+        let width = port.fields.iter().find(|f| f.name == "width").unwrap();
+        assert_eq!(width.kind, FieldKind::Number);
+        let label = port.fields.iter().find(|f| f.name == "label").unwrap();
+        assert_eq!(label.kind, FieldKind::Text);
+
+        // Sanity: this type is genuinely absent from bundled, so without the
+        // embedded typedefs it derives an empty port.
+        let bare = derive_output_port(&json!({
+            "operation": "await_topic",
+            "interface_type": "fake_pkg/Widget",
+        }));
+        assert!(bare.fields.is_empty());
+    }
+
+    #[test]
+    fn derive_embedded_empty_ack_response_is_resolved_empty() {
+        // An empty-ack response present in the embedded vec (0 fields) must be
+        // treated as RESOLVED (root present) — not fall back to bundled. Here
+        // there is no bundled entry for fake_pkg, so falling back would also be
+        // empty; the assertion below pins that root_present sees the type.
+        let embedded = vec![typedef::TypeDef {
+            type_name: "fake_pkg/Ack_Response".into(),
+            fieldnames: vec![],
+            fieldtypes: vec![],
+            fieldarraylen: vec![],
+        }];
+        assert!(root_present(&embedded, "fake_pkg/Ack_Response"));
+        assert!(!root_present(&embedded, "fake_pkg/Other_Response"));
     }
 
     #[test]

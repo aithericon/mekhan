@@ -12949,6 +12949,9 @@
           "type": {
             "type": "string",
             "description": "ROS interface type, e.g. `geometry_msgs/msg/Twist`."
+          },
+          "typedefs": {
+            "description": "Optional raw rosapi message-details typedefs for this interface's\ntype(s) — the FLAT ARRAY of `{ type, fieldnames, fieldtypes,\nfieldarraylen }` entries (the root typedef plus every nested typedef\nreferenced transitively), byte-identical to the bundled snapshot shape\nin `service/src/backends/ros/bundled/*.json`. The editor copies the\nchosen entry's value into the node config under `interface_typedefs`,\nwhere the ROS deriver lowers it to a typed `Port` (generalizing port\nderivation to any robot's interfaces, not just the bundled captures).\nStored verbatim in the JSONB `catalog` column (no migration needed)."
           }
         }
       },

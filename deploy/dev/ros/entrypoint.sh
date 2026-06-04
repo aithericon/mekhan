@@ -17,6 +17,12 @@ sleep 1
 # The toy robot.
 ros2 run turtlesim turtlesim_node >/tmp/turtlesim.log 2>&1 &
 
-# rosbridge WebSocket (port 9090) + rosapi (interface introspection) in the
-# foreground. The launch file starts both.
+# rosapi (interface introspection: /rosapi/topics, /rosapi/message_details, …).
+# The Jazzy `rosbridge_websocket_launch.xml` does NOT start rosapi_node, so the
+# runner's interface-catalog publish (which introspects entirely over rosapi)
+# never resolves unless we launch it ourselves. Run it as a background node so
+# `ros2 launch rosbridge_server …` can stay PID 1's foreground child.
+ros2 run rosapi rosapi_node >/tmp/rosapi.log 2>&1 &
+
+# rosbridge WebSocket (port 9090) in the foreground.
 exec ros2 launch rosbridge_server rosbridge_websocket_launch.xml
