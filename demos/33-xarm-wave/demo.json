@@ -1,0 +1,5 @@
+{
+  "templateId": "00000000-0000-0000-0000-000000000330",
+  "name": "33 · xArm Wave (always-visible motion)",
+  "description": "A self-contained showcase for the SIMULATED xArm 6: one FollowJointTrajectory action carrying FOUR distinct waypoints (base sweep + shoulder/elbow/wrist flex, returning home) so the arm ALWAYS performs a visible ~8s wave — unlike demos 31/32, whose single fixed target is a no-op once the arm is already parked there. Start → sweep (send_action_goal /xarm6_traj_controller/follow_joint_trajectory, control_msgs/action/FollowJointTrajectory, 4-point trajectory) → read_state (await_topic /joint_states) → End. End maps positions/joint_names/executed. LIVE ONLY: requires `just dev xarm-up`; open the noVNC viewer it prints (http://localhost:<service_port+43>/vnc.html) and run this to WATCH the 3D arm move."
+}

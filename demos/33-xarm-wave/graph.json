@@ -1,0 +1,126 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": 40, "y": 160 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "xArm Wave",
+        "initial": { "id": "in", "label": "Begin", "fields": [] }
+      }
+    },
+    {
+      "id": "sweep",
+      "type": "automated_step",
+      "slug": "sweep",
+      "position": { "x": 320, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Wave (multi-waypoint trajectory)",
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`). Unlike demos 31/32 — which command a single fixed pose, so the arm only visibly moves the FIRST time (afterwards it is already there) — this goal carries FOUR distinct waypoints in one `trajectory_msgs/JointTrajectory.points` array, staggered at 2/4/6/8s. The ros2_control joint_trajectory_controller interpolates smoothly through all of them, so the arm ALWAYS sweeps through a visible wave (base left→right, shoulder/elbow/wrist flexing) regardless of where it started, and returns home. This is the showcase demo: open the noVNC viewer (`just dev xarm-up` prints the URL) and run it to watch the arm dance. Runs on an `xarm_fleet` runner satisfying `ros.robot_model == xarm6`.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "send_action_goal",
+            "interface_name": "/xarm6_traj_controller/follow_joint_trajectory",
+            "interface_type": "control_msgs/action/FollowJointTrajectory",
+            "fields": {
+              "trajectory": {
+                "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+                "points": [
+                  { "positions": [1.0, -0.4, -0.5, 0.3, 0.7, 0.4], "time_from_start": { "sec": 2, "nanosec": 0 } },
+                  { "positions": [-1.0, -0.6, -0.3, -0.3, 0.9, -0.4], "time_from_start": { "sec": 4, "nanosec": 0 } },
+                  { "positions": [0.0, -0.2, -0.8, 0.5, 0.4, 0.0], "time_from_start": { "sec": 6, "nanosec": 0 } },
+                  { "positions": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "time_from_start": { "sec": 8, "nanosec": 0 } }
+                ]
+              }
+            },
+            "interface_typedefs": [
+              { "type": "control_msgs/FollowJointTrajectory_Result", "fieldnames": ["error_code", "error_string"], "fieldtypes": ["int32", "string"], "fieldarraylen": [-1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "error_code", "label": "Error code", "kind": "number" },
+            { "name": "error_string", "label": "Error string", "kind": "text" },
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "read_state",
+      "type": "automated_step",
+      "slug": "read_state",
+      "position": { "x": 600, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Read Joint State",
+        "description": "ROS `await_topic` on `/joint_states` (`sensor_msgs/msg/JointState`). Captures where the arm ended up after the wave (back at home). Array output fields (`name`/`position`/`velocity`/`effort`) derive to Json ports with array schema overrides; numeric leaves are nullable because rosbridge renders the fake controller's NaN `effort` as JSON null.",
+        "deploymentModel": { "mode": "executor", "capacity": { "alias": "xarm_fleet" } },
+        "requirements": {
+          "constraints": [
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
+          ]
+        },
+        "executionSpec": {
+          "backendType": "ros",
+          "config": {
+            "operation": "await_topic",
+            "interface_name": "/joint_states",
+            "interface_type": "sensor_msgs/msg/JointState",
+            "fields": {},
+            "interface_typedefs": [
+              { "type": "sensor_msgs/JointState", "fieldnames": ["header", "name", "position", "velocity", "effort"], "fieldtypes": ["std_msgs/Header", "string", "double", "double", "double"], "fieldarraylen": [-1, 0, 0, 0, 0] },
+              { "type": "std_msgs/Header", "fieldnames": ["stamp", "frame_id"], "fieldtypes": ["builtin_interfaces/Time", "string"], "fieldarraylen": [-1, -1] },
+              { "type": "builtin_interfaces/Time", "fieldnames": ["sec", "nanosec"], "fieldtypes": ["int32", "uint32"], "fieldarraylen": [-1, -1] }
+            ]
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "header", "label": "Header", "kind": "json", "schema": { "type": "object", "properties": { "stamp": {}, "frame_id": { "type": "string" } } } },
+            { "name": "name", "label": "Name", "kind": "json", "schema": { "type": "array", "items": { "type": "string" } } },
+            { "name": "position", "label": "Position", "kind": "json", "schema": { "type": "array", "items": { "type": ["number", "null"] } } },
+            { "name": "velocity", "label": "Velocity", "kind": "json", "schema": { "type": "array", "items": { "type": ["number", "null"] } } },
+            { "name": "effort", "label": "Effort", "kind": "json", "schema": { "type": "array", "items": { "type": ["number", "null"] } } }
+          ]
+        },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 880, "y": 160 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "joint_names", "expression": "read_state.name" },
+          { "targetField": "positions", "expression": "read_state.position" },
+          { "targetField": "executed", "expression": "true" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_sweep", "source": "start", "target": "sweep", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_sweep_read", "source": "sweep", "target": "read_state", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_read_end", "source": "read_state", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}
