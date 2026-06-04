@@ -295,6 +295,20 @@ _infra-wipe:
         echo "  · ${project}_${vol} (absent or already gone)"
       fi
     done
+    # Clear persisted worker/runner ENROLLMENT identities. Enrollment state —
+    # the workers/runners rows, their wkr_/rnr_ tokens, the scoped NATS creds,
+    # AND the default-group `routing_partition` UUID the worker binds its grouped
+    # consumer to — all live in the Postgres we just wiped. But each daemon caches
+    # its identity in `{base_dir}/{worker,runner}/identity.json` and self-enroll
+    # NO-OPS when that file is present (the intended `down`/`up` identity reuse).
+    # After a DB WIPE that cache is STALE: the new `ensure_default_worker_group`
+    # mints a FRESH default-group UUID, so a reused worker identity keeps binding a
+    # `routing_partition` that resolves to no current capacity — its grouped
+    # consumer (`executor-<wire>-grp.<prio>.<old_uuid>.>`) drains nothing and every
+    # executor job hangs. Remove the identities so the next `up` re-enrolls against
+    # the fresh DB and binds the current default-group partition.
+    echo "▶ clearing stale worker/runner enrollment identities…"
+    find "{{work_dir}}" -type d \( -name worker -o -name runner \) -prune -exec rm -rf {} + 2>/dev/null || true
 
 _wait-infra:
     #!/usr/bin/env bash
@@ -398,6 +412,22 @@ up-ollama:
       echo "▶ pulling model: $model  (first run only; can take several minutes)"
       ollama pull "$model"
       echo "  ✓ pulled $model"
+    fi
+
+    # Demo 36 (internal model pool) pins a SMALL, fast model so its degenerate
+    # Agent inference reliably completes inside the template-test's 60s wall
+    # clock even on a CPU-only / contended box (a 9B can take >60s there). ~1.3 GB,
+    # pulled alongside the main model so `just dev` + `mekhan test
+    # 36-internal-pool-agent` works out of the box. If you change this, also update
+    # the model id in the demo's graph.json + the internal_pool_registry /
+    # internal_pool_qwen fixtures. Override-free: independent of OLLAMA_MODEL.
+    demo_model="${DEMO36_MODEL:-llama3.2:1b}"
+    if ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -Fxq "$demo_model"; then
+      echo "  ✓ demo-36 model already present: $demo_model"
+    else
+      echo "▶ pulling demo-36 model: $demo_model  (~1.3 GB, small/fast for the live test)"
+      ollama pull "$demo_model"
+      echo "  ✓ pulled $demo_model"
     fi
 
 down-ollama:

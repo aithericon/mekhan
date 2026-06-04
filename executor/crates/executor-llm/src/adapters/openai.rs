@@ -18,16 +18,18 @@ impl CompletionPort for OpenAiAdapter {
         request: &CompletionRequest,
         env: &HashMap<String, String>,
     ) -> Result<CompletionResponse, LlmError> {
-        let api_key = env
-            .get("OPENAI_API_KEY")
-            .cloned()
-            .ok_or_else(|| LlmError::Config("OPENAI_API_KEY not set".into()))?;
+        // OPTIONAL: a self-hosted OpenAI-compatible endpoint (the in-cluster
+        // `internal_llm` pool router, an Ollama `/v1` shim) may be
+        // unauthenticated. When no key is staged we send NO `Authorization`
+        // header; the public OpenAI API will 401, which surfaces as a normal
+        // API error rather than a pre-flight config failure.
+        let api_key = env.get("OPENAI_API_KEY").cloned();
         let base_url = env
             .get("OPENAI_BASE_URL")
             .cloned()
             .unwrap_or_else(|| "https://api.openai.com".into());
 
-        openai_complete(request, &api_key, &base_url).await
+        openai_complete(request, api_key.as_deref(), &base_url).await
     }
 
     fn name(&self) -> &str {
@@ -256,7 +258,7 @@ fn parse_finish_reason(reason: Option<&str>) -> LlmStopReason {
 
 async fn openai_complete(
     request: &CompletionRequest,
-    api_key: &str,
+    api_key: Option<&str>,
     base_url: &str,
 ) -> Result<CompletionResponse, LlmError> {
     // Decide which json mode to try first based on what we've learned
@@ -272,11 +274,16 @@ async fn openai_complete(
     let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
 
+    // Attach `Authorization: Bearer <key>` only when a key is present — a
+    // keyless self-hosted endpoint gets an unauthenticated request.
+    let bearer = |rb: reqwest::RequestBuilder| match api_key {
+        Some(key) => rb.header("Authorization", format!("Bearer {key}")),
+        None => rb,
+    };
+
     // First attempt — respect the cached/default capability.
     let body = build_request_body(request, initial_capability);
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {api_key}"))
+    let response = bearer(client.post(&url))
         .json(&body)
         .send()
         .await
@@ -302,9 +309,7 @@ async fn openai_complete(
                 );
             }
             let retry_body = build_request_body(request, JsonModeCapability::JsonObjectOnly);
-            client
-                .post(&url)
-                .header("Authorization", format!("Bearer {api_key}"))
+            bearer(client.post(&url))
                 .json(&retry_body)
                 .send()
                 .await

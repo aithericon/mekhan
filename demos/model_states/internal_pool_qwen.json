@@ -1,7 +1,0 @@
-{
-  "model_id": "qwen3.5:9b",
-  "state": "loaded",
-  "replicas": 1,
-  "registry_resource": "internal_pool_registry",
-  "note": "Seeded loaded for demo 36 (internal model pool). Served through internal_pool_router → in-cluster router; GET /api/v1/models reports it loaded."
-}

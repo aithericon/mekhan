@@ -1,0 +1,7 @@
+{
+  "model_id": "llama3.2:1b",
+  "state": "loaded",
+  "replicas": 1,
+  "registry_resource": "internal_pool_registry",
+  "note": "Seeded loaded for demo 36 (internal model pool). Small/fast model served through internal_pool_router \u2192 in-cluster router; GET /api/v1/models reports it loaded."
+}
