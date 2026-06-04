@@ -130,6 +130,19 @@ RUN mkdir -p /root/.fluxbox \
 # to this container's own nodes. (The turtle harness stays on domain 0.)
 ENV ROS_DOMAIN_ID=42
 
+# ── Path C motion-bridge: adds /plan_to_pose returning the planned trajectory
+#    (stock xarm_pose_plan returns only {success}). A plain rclpy node calling
+#    move_group's own /compute_ik + /plan_kinematic_path, returning the inner
+#    JointTrajectory as JSON for the platform to splice into Path B. Own thin
+#    layer placed AFTER the heavy xarm_ros2/MoveIt colcon build + the rosapi
+#    seds, so editing the bridge never busts the multi-GB cache. Source the
+#    just-built workspace overlay (/ros2_ws/install) so the new package's
+#    interface generation resolves moveit_msgs/geometry_msgs/trajectory_msgs.
+COPY motion_bridge /ros2_ws/src/aithericon_motion_bridge
+RUN . /opt/ros/jazzy/setup.sh \
+    && . /ros2_ws/install/setup.sh \
+    && colcon build --packages-select aithericon_motion_bridge
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

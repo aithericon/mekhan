@@ -1,0 +1,16 @@
+{
+  "name": "plans-gates-executes",
+  "enabled": true,
+  "start_tokens": [
+    { "start_block_id": "start", "token": {} }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.planned", "op": "eq", "value": true },
+    { "path": "result.value.plan_ok", "op": "eq", "value": true },
+    { "path": "result.value.point_count", "op": "gt", "value": 0 },
+    { "path": "result.value.planning_time", "op": "exists" },
+    { "path": "result.value.positions", "op": "exists" },
+    { "path": "result.value.joint_names", "op": "exists" }
+  ]
+}

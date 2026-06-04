@@ -1,0 +1,21 @@
+# Path C Slice 1 plan primitive: plan a MoveIt motion to a Cartesian end-effector
+# pose and RETURN the planned trajectory (the stock xarm_pose_plan does not).
+#
+# --- request ---
+geometry_msgs/Pose target            # goal end-effector pose
+string  group                        # planning group; empty -> node default "xarm6"
+string  frame_id                     # planning frame; empty -> node default "link_base"
+float64 allowed_planning_time        # 0 -> node default (5.0)
+int32   num_planning_attempts        # 0 -> node default (10)
+---
+# --- response: opaque inner JointTrajectory + typed metrics sidecar ---
+# All response fields are flat scalars + one string -> trivial, crash-free rosapi
+# typedefs. Top-level numeric metrics are NOT auto-nullable, so the node MUST emit
+# finite numbers (0 / sentinels) on every failure path, never NaN.
+bool    success
+string  trajectory                   # opaque trajectory_msgs/JointTrajectory as JSON (spliced verbatim into Path B)
+float64 planning_time                # seconds, from MotionPlanResponse
+int32   point_count                  # len(trajectory.points)
+float64 total_duration               # last point time_from_start, seconds
+int32   error_code                   # MoveItErrorCodes.val (1 == SUCCESS)
+string  error_message                # human-readable on failure
