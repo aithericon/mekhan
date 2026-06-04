@@ -5,6 +5,7 @@
 	import { TooltipProvider } from '$lib/components/ui/tooltip';
 	import { ModeWatcher } from 'mode-watcher';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import InternalNavMenu from '$lib/components/InternalNavMenu.svelte';
 	import WorkspacePicker from '$lib/components/WorkspacePicker.svelte';
 	import User from '@lucide/svelte/icons/user';
 	import { auth } from '$lib/auth/store.svelte';
@@ -50,45 +51,7 @@
 			<Button variant="ghost" size="sm" href="/fleet" data-testid="nav-fleet">Fleet</Button>
 			<Button variant="ghost" size="sm" href="/assets" data-testid="nav-assets">Assets</Button>
 			<span class="mx-1 h-4 w-px bg-border" aria-hidden="true"></span>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/nets"
-				data-testid="nav-nets"
-				class="text-muted-foreground"
-				title="Engine debug: raw petri nets"
-			>
-				Engine
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/clusters"
-				data-testid="nav-clusters"
-				title="Registered datacenters + live lease state"
-			>
-				Clusters
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/processes"
-				data-testid="nav-processes"
-				class="text-muted-foreground"
-				title="Engine debug: raw processes (usually accessed via an instance)"
-			>
-				Processes
-			</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				href="/admin/capability-types"
-				data-testid="nav-capability-types"
-				class="text-muted-foreground"
-				title="Typed capability registry for runner Requirements matching"
-			>
-				Capability Types
-			</Button>
+			<InternalNavMenu />
 			<div class="ml-auto flex items-center gap-1">
 				{#if auth.isAuthenticated}
 					<WorkspacePicker />
