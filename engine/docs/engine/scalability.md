@@ -65,7 +65,9 @@ round-trip:
 tick** without firing — and in the live engine the eval loop is re-triggered on
 every incoming event. So a "waiting" join couples its `m^k` cost to the **event
 rate**. This is exactly the pool-net worker×job / gather-correlate path — i.e.
-the capacity model — so it is not academic.
+the capacity model — so it is not academic. (Fixed: the negative-binding memo,
+§4 P1 increment 2, records the "no binding" verdict and skips the re-scan until
+an input place changes — decoupling the cost from the event rate.)
 
 ---
 
@@ -126,8 +128,12 @@ The exponential is gone — both curves are now linear in `m` (`O(m·k)`). What
 the index deliberately does **not** touch: a guard that is not an `==`
 correlation, the chief example being the presence-pool grant
 `satisfies(claim.requirements, unit.caps)` (a ClassAd capability match, N
-runners × M claims, re-paid per eval tick while claims wait). That one needs
-the memoization step (§4 P1, increment 2).
+runners × M claims). The per-tick re-payment of that scan while claims wait is
+now eliminated by the negative-binding memo (§4 P1, increment 2): the verdict
+is computed once and skipped until an input place changes. The index still does
+not *prune* the `satisfies` scan itself — when the join's inputs do change, the
+one scan it then runs is still `O(N·M)` (increment 3 / a compiled `satisfies`
+shrinks that constant).
 
 ### 2.4 Write throughput — the per-event round-trip
 The eval loop is event-sourced through NATS on **every** firing. `append`
@@ -209,13 +215,28 @@ exactly the join-style binding that explodes. Tackled in increments:
   indexable. Selection-equivalent (identical first binding, same order) ⇒
   replay-deterministic; verified against a brute-force oracle and the
   `resource_pool` determinism test. Results in §2.3.
-- **Increment 2 — memoize the binding search across eval ticks. ⬜ Next.** A
-  waiting join re-pays its search on *every* event tick even when its input
-  places are unchanged. Cache the "no valid binding" result per transition and
-  invalidate only when a token arrives at one of its input places. This is
-  **guard-agnostic**, so it is the fix for the one case the index can't help:
-  the presence-pool `satisfies(...)` grant, whose cost couples to the event
-  rate while claims wait. Decouples binding cost from event rate.
+- **Increment 2 — memoize the binding search across eval ticks. ✅ Implemented
+  (`application/src/binding_memo.rs` + `evaluation.rs`).** A waiting join re-pays
+  its search on *every* event tick even when its input places are unchanged.
+  A per-net **negative-binding memo** records the "no valid binding" verdict per
+  transition and the selector skips those transitions until one of their input
+  places actually changes. This is **guard-agnostic**, so it is the fix for the
+  one case the index can't help: the presence-pool `satisfies(...)` grant, whose
+  cost otherwise couples to the event rate while claims wait. The memo is
+  **negative only** (a positive binding feeds selection ordering + consumes
+  tokens, so it is always recomputed fresh) and is reconciled from the **same
+  event delta that advances the marking cache** — so it can never lag the
+  marking the loop evaluates against. Invalidated exactly by a token
+  add/remove/update at an input place (a `place → consumers` reverse index), a
+  guard change (`TransitionScriptUpdated`), or a net (re)load. Because it only
+  ever suppresses transitions that would return `None` anyway, it is
+  **selection-equivalent** ⇒ replay-deterministic (verified against the
+  `resource_pool` determinism + conservation tests). Decouples binding cost from
+  event rate: in a waiting-`m^2`-join-under-churn microbench
+  (`test-harness/tests/binding_memo_tick.rs`, debug, m=150), the warm per-tick
+  cost drops from **624,110 µs → 254 µs (~2,460×)**, and the gap grows with
+  `m^2` while the memo stays flat. The cold (first) tick still pays the scan
+  once.
 - **Increment 3 — compiled guard (cheap constant). ⬜ Later.** Guards are
   re-parsed from source on *every* combination (`rhai_runtime.rs`
   `eval_with_scope(script)`), which is why ~2–7 µs/combo is mostly *parse*.
@@ -295,8 +316,10 @@ Event-log growth is cheap and linear — **don't add marking snapshots for CPU
 reasons.** The real costs, in order of severity: **binding** (`m^k`, the only
 exponential, lives in the capacity/pool-net path — the equi-join index now
 collapses every `==`-correlated guard to `O(m·k)`, e.g. arity-3 m=100
-7.8 s → 0.21 ms; the `satisfies()` capability grant remains, pending the
-per-tick memoization step); **scan** (O(N²) for wide/deep nets — fix with an
+7.8 s → 0.21 ms; and the negative-binding memo now stops *any* waiting guarded
+join — including the `satisfies()` capability grant the index can't prune —
+from re-paying its scan on every event tick, ~2,460× on a waiting-`m^2`
+microbench); **scan** (O(N²) for wide/deep nets — fix with an
 incremental enabled-set, preserving selection determinism); **write
 round-trip** (~0.55 ms/event, ~1700
 ev/s per net, but concurrency scales to ~21k+ aggregate with no observed

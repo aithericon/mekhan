@@ -1,6 +1,7 @@
 pub mod adapter_scheduler;
 pub mod analysis;
 pub(crate) mod binding;
+pub(crate) mod binding_memo;
 pub mod bridge_validation;
 pub mod catalogue_handlers;
 pub mod effect;
