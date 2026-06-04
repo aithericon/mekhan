@@ -209,34 +209,56 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // below selects `logic()` only when EMPTY — but the leased case is the only
     // one that needs the `logic_rhai` deferral, so we MUST keep this constant
     // stamp on the `logic()` side). See the branch-selection note below.
-    // Identity-plane GROUP coordinate (docs/23/24): an optional `capacity`-resource
-    // alias on `DeploymentModel::Executor.group` narrows the DEFAULT-inline pull
-    // namespace from `executor-<wire>` to `executor-<wire>/<group>` so only enrolled
-    // workers of that group compete for this step's jobs. It is a SECOND coarse pull
-    // coordinate — the step stays on the plain pull path (the `capacity` + `group`
-    // mutual-exclusion is gated up top before the pooled dispatch). `None` ⇒ the
-    // unchanged base namespace (BYTE-STABLE). The token is interpolated verbatim into
-    // a NATS subject segment, so validate it as a single safe subject token here
-    // (mirrors `handlers::runners::is_safe_group`). Only meaningful on the
-    // default-inline (non-leased) arm: a leased body borrows the holder's namespace.
-    let step_group: Option<&str> = match &cx.node.data {
+    // Unified worker dispatch (docs/23/24): EVERY default-inline executor step
+    // routes through a worker GROUP partition on the parallel `executor-<wire>-grp`
+    // stream. The step's `Executor.group` alias names the group; a step that names
+    // NO group is stamped with the workspace's always-seeded `default` worker group.
+    // The partition token is the group's `capacity`-resource UUID (NOT its alias):
+    // workspace-safe by construction (two workspaces can both own a `default` group
+    // without colliding on a queue) and a valid JetStream stream + NATS subject
+    // token. The `capacity` + `group` mutual-exclusion is gated up top before the
+    // pooled dispatch, so here we have at most a plain `group`. Only meaningful on
+    // the default-inline (non-leased) arm: a leased body borrows the holder's
+    // namespace.
+    //
+    // Resolve the alias → UUID through the same `cx.known_resources` registry the
+    // datacenter/limit resolution uses: `discover_resource_globals` already added
+    // the step's group (or `default`) as a head, so the worker `capacity` row is in
+    // the map keyed by its path. The validity gate runs FIRST (a malformed explicit
+    // alias is a clearer error than a failed lookup); an unresolved group (including
+    // a missing `default`, which should never happen — it is always seeded) is a
+    // hard `WorkerGroupUnresolved`.
+    let step_group_alias: &str = match &cx.node.data {
         WorkflowNodeData::AutomatedStep {
             deployment_model: DeploymentModel::Executor { group: Some(g), .. },
             ..
-        } => Some(g.as_str()),
-        _ => None,
+        } if !g.is_empty() => g.as_str(),
+        _ => crate::worker_groups::DEFAULT_WORKER_GROUP_PATH,
     };
-    if let Some(g) = step_group {
-        let safe = !g.is_empty()
-            && g.chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-        if !safe {
-            return Err(CompileError::GroupTokenInvalid {
-                node_id: cx.node.id.clone(),
-                group: g.to_string(),
-            });
-        }
+    if !step_group_alias.is_empty()
+        && !step_group_alias
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(CompileError::GroupTokenInvalid {
+            node_id: cx.node.id.clone(),
+            group: step_group_alias.to_string(),
+        });
     }
+    // The routing PARTITION is the worker group's capacity-resource UUID, resolved
+    // through `cx.known_resources` (the publish path's `discover_resource_globals`
+    // injects the group/`default` head, so the worker `capacity` row is in the
+    // map keyed by its path). When the registry does NOT carry the row — the
+    // direct `compile_to_air` path used by tests + analyze, which threads an empty
+    // `KnownResources` and no DB — fall back to the alias itself as the partition
+    // token. The alias is already validated as a safe subject token above, and for
+    // the implicit group it is literally `default`; this keeps the no-registry
+    // compile path working while production gets the workspace-safe UUID.
+    let step_group_partition: String = cx
+        .known_resources
+        .get(step_group_alias)
+        .map(|r| r.id.to_string())
+        .unwrap_or_else(|| step_group_alias.to_string());
 
     let leased_holder = enclosing_leased_scope_slug(cx.node, cx.graph);
     // Branch selection (preserved): the leased (borrow-carrying) literal must
@@ -256,19 +278,20 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
             format!(r#" d.executor_namespace = {holder_slug}.lease.executor_namespace;"#)
         }
         None => {
-            // Default inline worker-pool body: stamp the constant per-backend
-            // namespace so the engine routes to `executor-<wire>` instead of the
-            // retired `executor_jobs` fallback. A static literal — no borrow ref.
-            // We've necessarily reached this code with an `ExecutorJob` backend
-            // (the `EngineEffect` arm above early-returns via `lower_engine_effect`
-            // before any job-token build), so the DispatchMode gate is STRUCTURAL.
+            // Default inline worker body: stamp the per-backend GROUP namespace
+            // `executor-<wire>-grp/<partition>` so the engine routes to the
+            // group's partition on the parallel `executor-<wire>-grp` stream. A
+            // static literal — no borrow ref. We've necessarily reached this code
+            // with an `ExecutorJob` backend (the `EngineEffect` arm above
+            // early-returns via `lower_engine_effect` before any job-token build),
+            // so the DispatchMode gate is STRUCTURAL.
             //
-            // An identity-plane `group` narrows this to `executor-<wire>/<group>`
-            // (a competing pull pool of enrolled group workers); `None` keeps the
-            // unchanged base literal — BYTE-STABLE for every existing ungrouped step.
+            // `<partition>` is the worker group's capacity-resource UUID (the
+            // step's named group, or the workspace's `default` group). There is no
+            // bare `executor-<wire>` dispatch path any more — every job is grouped.
             format!(
                 r#" d.executor_namespace = "{ns}";"#,
-                ns = backend_type.executor_namespace_for_group(step_group)
+                ns = backend_type.executor_namespace_for_group(&step_group_partition)
             )
         }
     };
@@ -1460,18 +1483,27 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // allocators), we stamp it onto the job token so the engine's submit
     // handler targets the warm executor.
     let lease_stage_push = r#"job_inputs.push(#{ "name": "lease.json", "source": #{ "type": "inline", "value": grant } }); "#;
-    // Default-route to the per-backend worker-pool namespace (`executor.<wire>`),
-    // then let a grant-supplied namespace override. A concurrency_limit grant carries
-    // no `executor_namespace` (only `grant_id`/`unit_id`), so without this
-    // default its body would fall back to the RETIRED `executor_jobs` queue —
-    // which the worker-pool daemon no longer consumes — and rot silently. With
-    // the default, concurrency_limit bodies are drained by the shared worker-pool
-    // daemon on `executor.<wire>`. presence grants (`runner.{id}`) and
-    // datacenter/lease grants (`lease-<grant>`) DO carry an `executor_namespace`,
-    // so the override wins and their exclusive routing is unchanged at runtime.
+    // Default-route to the workspace's `default` worker GROUP partition
+    // (`executor-<wire>-grp/<default_uuid>`), then let a grant-supplied namespace
+    // override. A concurrency_limit grant carries no `executor_namespace` (only
+    // `grant_id`/`unit_id`), so without this default its body would have no queue
+    // to land on — there is no bare `executor-<wire>` dispatch path any more
+    // (unified single-stream model). With the default, concurrency_limit bodies
+    // are drained by the workspace's default-group workers. presence grants
+    // (`runner.{id}`) and datacenter/lease grants (`lease-<grant>`) DO carry an
+    // `executor_namespace`, so the override wins and their exclusive routing is
+    // unchanged at runtime. The partition is the default group's capacity-resource
+    // UUID, resolved through `cx.known_resources` (the seeder + the `discover` head
+    // injection guarantee it is in the map in production); the no-registry compile
+    // path (tests / analyze) falls back to the literal `default` token.
+    let default_group_partition: String = cx
+        .known_resources
+        .get(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH)
+        .map(|r| r.id.to_string())
+        .unwrap_or_else(|| crate::worker_groups::DEFAULT_WORKER_GROUP_PATH.to_string());
     let ns_stamp = format!(
         r#" d.executor_namespace = "{ns}"; if grant.executor_namespace != () {{ d.executor_namespace = grant.executor_namespace; }} "#,
-        ns = backend_type.executor_namespace()
+        ns = backend_type.executor_namespace_for_group(&default_group_partition)
     );
 
     // Carry the full lease so the hold echo + held parking both keep every

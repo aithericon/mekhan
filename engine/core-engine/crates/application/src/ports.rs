@@ -120,6 +120,21 @@ pub trait StateProjection: Send + Sync {
 // re-exported via the `use` at the top of this file. Tests below
 // continue to verify the behavior through the re-export.
 
+/// Port for recording net activity (outbound), used to drive idle-based
+/// hibernation. Implementations note that a net was interacted with, resetting
+/// its idle timer.
+///
+/// This is a port so the activity signal can be raised at *every* stimulus
+/// boundary — both the NATS listeners and the HTTP command handlers — without
+/// the API layer depending on the concrete (NATS-KV-backed) tracker. A net's
+/// liveness must not depend on which transport drove it.
+#[async_trait::async_trait]
+pub trait ActivitySink: Send + Sync {
+    /// Record that `net_id` was just interacted with (resets its idle timer).
+    /// Best-effort: implementations swallow failures.
+    async fn record_activity(&self, net_id: &str);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

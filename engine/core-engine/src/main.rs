@@ -180,6 +180,13 @@ async fn main() {
     if let Some(kv) = metadata_kv_for_registry {
         registry.set_metadata_lookup(Arc::new(KvMetadataLookup { metadata_kv: kv }));
     }
+    // Let the HTTP command handlers record net activity, so an HTTP-driven net
+    // has the same idle/hibernation lifecycle as a NATS-stimulated one (the
+    // NATS listeners already touch this same tracker). No-op if hibernation is
+    // disabled (no activity KV).
+    if let Some(ref activity) = activity_tracker {
+        registry.set_activity_sink(activity.clone());
+    }
     if let Some(cfg) = engine_config.build_scheduler_config() {
         registry.set_scheduler_config(cfg);
     }

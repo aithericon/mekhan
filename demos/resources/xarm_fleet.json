@@ -1,0 +1,6 @@
+{
+  "path": "xarm_fleet",
+  "resource_type": "capacity",
+  "display_name": "xArm Fleet (dev)",
+  "config": { "preset": "instrument" }
+}

@@ -35,6 +35,6 @@ pub use registry::{
     ROS_META, SMTP_META, SURYA_META,
 };
 pub use types::{
-    executor_pool_namespace, DispatchMode, ExecutionBackendType, ResourceChannel,
-    EXECUTOR_NS_PREFIX,
+    executor_pool_namespace, executor_pool_namespace_for_group, DispatchMode, ExecutionBackendType,
+    ResourceChannel, EXECUTOR_NS_PREFIX,
 };

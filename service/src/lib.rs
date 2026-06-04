@@ -26,6 +26,7 @@ pub mod runners_presence;
 pub mod s3;
 pub mod scope;
 pub mod triggers;
+pub mod worker_groups;
 pub mod yjs;
 
 use std::sync::Arc;
@@ -215,6 +216,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::clusters::list_cluster_leases))
         .routes(routes!(handlers::clusters::fleet_metrics))
         .routes(routes!(handlers::clusters::cluster_metrics))
+        // Capacity aggregator — the unified Control-Plane read: every
+        // `capacity` + `datacenter` resource classified by the SINGLE dispatch
+        // authority (`CapacityAxes::backend`) with live utilization.
+        .routes(routes!(handlers::capacities::list_capacities))
         // Template tests
         .routes(routes!(
             handlers::template_tests::list_tests,

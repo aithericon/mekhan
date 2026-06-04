@@ -14,6 +14,7 @@ import '../just/cargo.just'
 
 mod infra 'just/infra.just'
 mod demo 'just/demo.just'
+mod bench 'just/bench.just'
 
 # Default recipe - show available commands
 default:

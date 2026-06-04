@@ -309,6 +309,12 @@ where
     /// to call `terminate`, which creates a one-way cycle resolved at use
     /// time). See `set_subworkflow_cancellor` and [`RegistryCancellor`].
     subworkflow_cancellor: RwLock<Option<Arc<dyn SubWorkflowCancellor>>>,
+    /// Activity sink for idle-based hibernation. When set (by main.rs after the
+    /// registry is `Arc`-wrapped, mirroring `subworkflow_cancellor`), the HTTP
+    /// command handlers record activity here so an HTTP-driven net has the same
+    /// idle/hibernation lifecycle as a NATS-stimulated one. `None` in tests and
+    /// when hibernation is disabled (no activity KV).
+    activity_sink: RwLock<Option<Arc<dyn petri_application::ActivitySink>>>,
     /// The multi-cluster `ClusterRegistry` (docs/16). When set, the per-net
     /// `ResourceLease{Acquire,Release}` handlers are registered with a client
     /// that delegates to it (lazy per-cluster build + idle-teardown) instead of
@@ -353,6 +359,7 @@ where
             scheduler_config: None,
             timer_client: None,
             subworkflow_cancellor: RwLock::new(None),
+            activity_sink: RwLock::new(None),
             #[cfg(any(feature = "slurm", feature = "nomad"))]
             cluster_registry: RwLock::new(None),
             #[cfg(feature = "executor")]
@@ -501,6 +508,27 @@ where
     /// to use the handler is created.
     pub fn set_subworkflow_cancellor(&self, cancellor: Arc<dyn SubWorkflowCancellor>) {
         *self.subworkflow_cancellor.write() = Some(cancellor);
+    }
+
+    /// Install the activity sink used for idle-based hibernation. After this,
+    /// the HTTP command handlers call [`touch_activity`](Self::touch_activity)
+    /// so an HTTP-driven net registers activity exactly like a NATS-stimulated
+    /// one. Takes `&self` so main.rs can call it after the registry is
+    /// `Arc`-wrapped. Left `None` (a no-op) when hibernation is disabled.
+    pub fn set_activity_sink(&self, sink: Arc<dyn petri_application::ActivitySink>) {
+        *self.activity_sink.write() = Some(sink);
+    }
+
+    /// Record activity for `net_id` (resets its idle timer), if an activity sink
+    /// is installed. Called by the HTTP command/mutation handlers so a net's
+    /// hibernation lifecycle is independent of whether it was driven over NATS
+    /// or HTTP. Read-only endpoints deliberately do **not** call this, so
+    /// polling (e.g. a status dashboard) can't keep a net from hibernating.
+    pub async fn touch_activity(&self, net_id: &str) {
+        let sink = self.activity_sink.read().clone();
+        if let Some(sink) = sink {
+            sink.record_activity(net_id).await;
+        }
     }
 
     /// Install the multi-cluster `ClusterRegistry` (docs/16). After this, every

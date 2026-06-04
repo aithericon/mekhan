@@ -81,6 +81,14 @@ pub struct DemoMetadata {
     /// `templateId` — paste it here verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_template_id: Option<String>,
+    /// Slug of the project this demo is grouped under in the catalogue.
+    /// Absent ⇒ the shared [`DEMO_PROJECT_SLUG`] ("demos") project — the
+    /// historical default. Set to a known slug (see [`project_for_slug`]) to
+    /// split a family of demos into its own heading, e.g. the online-clinic
+    /// port set under `"online-clinic"`. Ignored for `private` demos (they're
+    /// hidden from the catalogue and never attached to a project).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// One parsed demo directory.
@@ -537,13 +545,52 @@ const DEMO_WORKSPACE_ID: uuid::Uuid = uuid::Uuid::nil();
 /// heading in the default workspace instead of scattered among user templates.
 /// `UNIQUE (workspace_id, slug)` makes the slug the idempotency key.
 const DEMO_PROJECT_SLUG: &str = "demos";
-const DEMO_PROJECT_DISPLAY_NAME: &str = "Demos";
-const DEMO_PROJECT_DESCRIPTION: &str = "Built-in example workflows seeded by mekhan-service.";
 
-/// Upsert the demo project in the default workspace and return its id. Keyed
+/// One seeded project heading: its stable slug, display name, and blurb.
+/// `slug` is the `(workspace_id, slug)` idempotency key; the rest is purely
+/// cosmetic catalogue copy.
+struct SeedProject {
+    slug: &'static str,
+    display_name: &'static str,
+    description: &'static str,
+}
+
+/// The catalogue's built-in project headings. A demo names one by slug via
+/// `demo.json::project`; an absent / unknown slug falls back to [`DEMO_PROJECT_SLUG`].
+/// Projects are a non-ACL grouping inside a workspace (see migration 20240125),
+/// so this is purely organizational — it keeps related demos collected under
+/// one heading instead of scattered among user templates.
+const SEED_PROJECTS: &[SeedProject] = &[
+    SeedProject {
+        slug: DEMO_PROJECT_SLUG,
+        display_name: "Demos",
+        description: "Built-in example workflows seeded by mekhan-service.",
+    },
+    SeedProject {
+        slug: "online-clinic",
+        display_name: "Online Clinic",
+        description: "Online-clinic document-intake workflows (OCR → classify → \
+                      extract → safety gate) ported onto mekhan primitives.",
+    },
+];
+
+/// Resolve a demo's declared `project` slug to a seeded project, falling back
+/// to the shared "Demos" heading when the slug is absent or unrecognized.
+fn project_for_slug(slug: Option<&str>) -> &'static SeedProject {
+    let want = slug.unwrap_or(DEMO_PROJECT_SLUG);
+    SEED_PROJECTS
+        .iter()
+        .find(|p| p.slug == want)
+        .unwrap_or(&SEED_PROJECTS[0])
+}
+
+/// Upsert a seeded project in the default workspace and return its id. Keyed
 /// on `(workspace_id, slug)`; `ON CONFLICT DO UPDATE` keeps the display name /
 /// description fresh and guarantees a `RETURNING id` even on the conflict path.
-async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, DemoSeedError> {
+async fn ensure_project(
+    state: &crate::AppState,
+    project: &SeedProject,
+) -> Result<uuid::Uuid, DemoSeedError> {
     let (id,): (uuid::Uuid,) = sqlx::query_as(
         "INSERT INTO projects (workspace_id, slug, display_name, description, created_by) \
               VALUES ($1, $2, $3, $4, $5) \
@@ -553,9 +600,9 @@ async fn ensure_demo_project(state: &crate::AppState) -> Result<uuid::Uuid, Demo
          RETURNING id",
     )
     .bind(DEMO_WORKSPACE_ID)
-    .bind(DEMO_PROJECT_SLUG)
-    .bind(DEMO_PROJECT_DISPLAY_NAME)
-    .bind(DEMO_PROJECT_DESCRIPTION)
+    .bind(project.slug)
+    .bind(project.display_name)
+    .bind(project.description)
     .bind(DEMO_SEEDER_AUTHOR_ID)
     .fetch_one(&state.db)
     .await?;
@@ -1194,7 +1241,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .fetch_one(&state.db)
     .await?;
 
-    // Group the demo under the shared "Demos" project. Keyed on
+    // Group the demo under its declared project (default "Demos"). Keyed on
     // `base_template_id` (= `template_id` here, since this is v1), so the
     // attachment follows the live `is_latest` version automatically.
     // Best-effort: a grouping failure must not fail the seed.
@@ -1204,7 +1251,8 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     // `project_templates` row for them would be dead weight, not a demo a
     // user can open from the project view.
     if visibility != "private" {
-        match ensure_demo_project(state).await {
+        let project = project_for_slug(demo.metadata.project.as_deref());
+        match ensure_project(state, project).await {
             Ok(project_id) => {
                 if let Err(e) = sqlx::query(
                     "INSERT INTO project_templates (project_id, base_template_id, added_by) \
@@ -1367,8 +1415,8 @@ pub async fn purge_seeded(state: &crate::AppState) -> Result<DemoResetReport, De
         report.tests_removed += del_tests.rows_affected() as usize;
 
         // Project grouping keys on base_template_id with no FK to templates,
-        // so detach explicitly (leaves the now-empty "Demos" project in place
-        // for the next reseed to reuse).
+        // so detach explicitly (leaves the now-empty project heading in place
+        // for the next reseed to reuse, whichever project it was attached to).
         sqlx::query("DELETE FROM project_templates WHERE base_template_id = $1")
             .bind(base)
             .execute(&state.db)

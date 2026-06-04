@@ -345,6 +345,13 @@ async fn main() -> anyhow::Result<()> {
         asset_resolver,
     };
 
+    // Unified worker dispatch: every workspace must own its always-seeded
+    // "default" worker group (a `capacity` resource, `worker` preset) so a step
+    // / worker that names no group routes through it. Seed it for every existing
+    // workspace before the listener accepts requests. Idempotent + best-effort
+    // (a migration also backfills it, for installs that never reboot here).
+    mekhan_service::worker_groups::ensure_default_worker_group_all_workspaces(&state).await;
+
     // Seed built-in demos before the listener accepts requests. Idempotent
     // by stable template id (see `mekhan_service::demos`); best-effort —
     // a failure to seed logs a warning and is otherwise transparent. Gated
