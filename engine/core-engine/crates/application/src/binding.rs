@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use petri_domain::{
@@ -6,6 +6,7 @@ use petri_domain::{
 };
 use serde_json::Value as JsonValue;
 
+use crate::join_index::extract_join_constraints;
 use crate::rhai_runtime::token_color_to_json;
 use crate::schema_registry::SchemaRegistry;
 use crate::TransitionExecutor;
@@ -142,6 +143,34 @@ pub(crate) fn find_valid_binding(
             return Some(binding);
         }
         // FIFO failed schema validation — fall through to search all combinations
+    }
+
+    // Indexed equi-join fast path. When the guard declares cross-port equality
+    // correlations (e.g. `.correlate()` → `a.k == b.k`), prune the m^k
+    // cross-product to only the key-agreeing combinations. The guard is still
+    // evaluated on every survivor, so this removes only provably-failing
+    // combinations — see `crate::join_index`. `JoinPlan::build` returns `None`
+    // (→ fall through to the full cross-product) whenever the structure is not
+    // safely indexable.
+    if let Some(guard_script) = &transition.guard {
+        if input_arcs.len() >= 2 {
+            let constraints = extract_join_constraints(guard_script);
+            if let Some(plan) =
+                JoinPlan::build(transition, input_arcs, &arc_tokens, &constraints)
+            {
+                let ctx = JoinCtx {
+                    executor,
+                    transition,
+                    input_arcs,
+                    arc_tokens: &arc_tokens,
+                    schema_registry,
+                    guard_script,
+                    plan: &plan,
+                };
+                let mut indices = vec![0usize; input_arcs.len()];
+                return ctx.search(0, &mut indices);
+            }
+        }
     }
 
     // Search all combinations for one that satisfies the guard (and schema)
@@ -452,6 +481,283 @@ fn merge_reply_routing(existing: ReplyRouting, incoming: &ReplyRouting) -> Optio
         reply_to,
         reply_channels,
     })
+}
+
+// ── Indexed equi-join binding ──────────────────────────────────────────────
+
+/// How each input arc is enumerated under an indexed join plan.
+enum ArcRole {
+    /// Index is irrelevant to the built binding (read arcs use the newest
+    /// token; `count_from` gather arcs do their own filtering) — pin to 0.
+    Pinned,
+    /// No join constraint applies: enumerate the full `0..len` range, exactly
+    /// as the cross-product would (normal Single unjoined, or normal Batch).
+    Free,
+    /// Joined: candidate indices are pruned to those whose key matches the
+    /// already-fixed partner tokens via `back_edges`.
+    Joined(Vec<BackEdge>),
+}
+
+/// A pruning edge from a later arc to an earlier (already-fixed) partner arc:
+/// `self_token[self_path] == partner_token[partner_path]` is necessary.
+struct BackEdge {
+    partner: usize,
+    self_path: Vec<String>,
+    partner_path: Vec<String>,
+}
+
+/// A plan for enumerating only key-agreeing token combinations of a guarded
+/// multi-input transition, built from the guard's equi-join constraints.
+struct JoinPlan {
+    roles: Vec<ArcRole>,
+    /// `colors[arc_idx][token_idx]` — token color JSON, precomputed once.
+    colors: Vec<Vec<JsonValue>>,
+    /// `(arc_idx, self_path) → (scalar key → ascending token indices)`.
+    maps: HashMap<(usize, Vec<String>), HashMap<String, Vec<usize>>>,
+}
+
+impl JoinPlan {
+    /// Build an indexed plan, or `None` to signal "not safely indexable — use
+    /// the full cross-product". Returns `None` when there are no usable
+    /// constraints (both sides must map to indexable arcs) or when any join
+    /// value is a compound (array/object), which cannot be safely bucketed.
+    fn build(
+        transition: &Transition,
+        input_arcs: &[&PetriArc],
+        arc_tokens: &[Vec<&Token>],
+        constraints: &[crate::join_index::JoinConstraint],
+    ) -> Option<Self> {
+        if constraints.is_empty() {
+            return None;
+        }
+        let k = input_arcs.len();
+
+        let mut port_to_arc: HashMap<&str, usize> = HashMap::with_capacity(k);
+        for (i, arc) in input_arcs.iter().enumerate() {
+            port_to_arc.insert(arc.port_name.as_str(), i);
+        }
+
+        // An arc is indexable only if its index selects exactly one token whose
+        // value we can key on: a normal (non-read, non-gather) Single arc.
+        let indexable: Vec<bool> = input_arcs
+            .iter()
+            .map(|arc| {
+                if arc.read || arc.count_from.is_some() {
+                    return false;
+                }
+                let card = transition
+                    .input_port(&arc.port_name)
+                    .map(|p| &p.cardinality)
+                    .unwrap_or(&PortCardinality::Single);
+                matches!(card, PortCardinality::Single)
+            })
+            .collect();
+
+        // Collect back-edges (always attached to the LATER arc, so its partner
+        // is already fixed when we reach it) from usable constraints.
+        let mut back: Vec<Vec<BackEdge>> = (0..k).map(|_| Vec::new()).collect();
+        let mut needed_maps: HashSet<(usize, Vec<String>)> = HashSet::new();
+        let mut any_usable = false;
+
+        for con in constraints {
+            let (ia, ib) = match (
+                port_to_arc.get(con.port_a.as_str()),
+                port_to_arc.get(con.port_b.as_str()),
+            ) {
+                (Some(&a), Some(&b)) => (a, b),
+                _ => continue,
+            };
+            if ia == ib || !indexable[ia] || !indexable[ib] {
+                continue;
+            }
+            // Normalize so `lo < hi`; the back-edge hangs on `hi`.
+            let (lo, lo_path, hi, hi_path) = if ia < ib {
+                (ia, &con.path_a, ib, &con.path_b)
+            } else {
+                (ib, &con.path_b, ia, &con.path_a)
+            };
+            back[hi].push(BackEdge {
+                partner: lo,
+                self_path: hi_path.clone(),
+                partner_path: lo_path.clone(),
+            });
+            needed_maps.insert((hi, hi_path.clone()));
+            any_usable = true;
+        }
+
+        if !any_usable {
+            return None;
+        }
+
+        // Precompute token colors once (m·k total, vs m^k guard evals saved).
+        let colors: Vec<Vec<JsonValue>> = arc_tokens
+            .iter()
+            .map(|toks| toks.iter().map(|t| token_color_to_json(&t.color)).collect())
+            .collect();
+
+        // Every join value (map keys AND probe values) must be a scalar so the
+        // canonical key faithfully mirrors guard equality; bail otherwise.
+        let mut key_paths: HashSet<(usize, Vec<String>)> = needed_maps.clone();
+        for edges in &back {
+            for be in edges {
+                key_paths.insert((be.partner, be.partner_path.clone()));
+            }
+        }
+        for (arc_i, path) in &key_paths {
+            for color in &colors[*arc_i] {
+                scalar_key(pluck_path(color, path))?;
+            }
+        }
+
+        // Build the index maps for arcs probed by a back-edge.
+        let mut maps: HashMap<(usize, Vec<String>), HashMap<String, Vec<usize>>> = HashMap::new();
+        for (arc_i, path) in needed_maps {
+            let mut m: HashMap<String, Vec<usize>> = HashMap::new();
+            for (idx, color) in colors[arc_i].iter().enumerate() {
+                let key = scalar_key(pluck_path(color, &path)).expect("validated scalar above");
+                m.entry(key).or_default().push(idx); // pushed in ascending idx order
+            }
+            maps.insert((arc_i, path), m);
+        }
+
+        let roles = input_arcs
+            .iter()
+            .enumerate()
+            .map(|(i, arc)| {
+                if arc.read || arc.count_from.is_some() {
+                    ArcRole::Pinned
+                } else if !back[i].is_empty() {
+                    ArcRole::Joined(std::mem::take(&mut back[i]))
+                } else {
+                    ArcRole::Free
+                }
+            })
+            .collect();
+
+        Some(JoinPlan {
+            roles,
+            colors,
+            maps,
+        })
+    }
+}
+
+/// Shared context for the recursive pruned search.
+struct JoinCtx<'a> {
+    executor: &'a TransitionExecutor,
+    transition: &'a Transition,
+    input_arcs: &'a [&'a PetriArc],
+    arc_tokens: &'a [Vec<&'a Token>],
+    schema_registry: Option<&'a SchemaRegistry>,
+    guard_script: &'a str,
+    plan: &'a JoinPlan,
+}
+
+impl JoinCtx<'_> {
+    /// Depth-first search over arcs in order, enumerating only key-agreeing
+    /// combinations in the same lexicographic order the cross-product would,
+    /// returning the first binding that passes the guard. Deterministic ⇒
+    /// replay-safe.
+    fn search(&self, level: usize, indices: &mut Vec<usize>) -> Option<TokenBinding> {
+        if level == self.input_arcs.len() {
+            let binding = build_binding_for_indices(
+                self.transition,
+                self.input_arcs,
+                self.arc_tokens,
+                indices,
+                self.schema_registry,
+            )?;
+            return match self.executor.evaluate_guard(self.guard_script, &binding.port_inputs) {
+                Ok(true) => Some(binding),
+                _ => None,
+            };
+        }
+
+        for cand in self.candidates(level, indices) {
+            indices[level] = cand;
+            if let Some(binding) = self.search(level + 1, indices) {
+                return Some(binding);
+            }
+        }
+        None
+    }
+
+    /// Ascending candidate indices for `level`, given the indices already fixed
+    /// for earlier arcs.
+    fn candidates(&self, level: usize, indices: &[usize]) -> Vec<usize> {
+        let size = self.arc_tokens[level].len();
+        match &self.plan.roles[level] {
+            ArcRole::Pinned => vec![0],
+            ArcRole::Free => (0..size).collect(),
+            ArcRole::Joined(back_edges) => {
+                let mut cand: Option<Vec<usize>> = None;
+                for be in back_edges {
+                    let partner_color = &self.plan.colors[be.partner][indices[be.partner]];
+                    let key = scalar_key(pluck_path(partner_color, &be.partner_path))
+                        .expect("validated scalar above");
+                    let matches = self
+                        .plan
+                        .maps
+                        .get(&(level, be.self_path.clone()))
+                        .and_then(|m| m.get(&key))
+                        .cloned()
+                        .unwrap_or_default();
+                    cand = Some(match cand {
+                        None => matches,
+                        Some(prev) => intersect_sorted(&prev, &matches),
+                    });
+                }
+                cand.unwrap_or_else(|| (0..size).collect())
+            }
+        }
+    }
+}
+
+/// Walk a dotted field path into a JSON value.
+fn pluck_path<'a>(value: &'a JsonValue, path: &[String]) -> Option<&'a JsonValue> {
+    let mut cur = value;
+    for seg in path {
+        cur = cur.get(seg)?;
+    }
+    Some(cur)
+}
+
+/// Canonical bucket key for a join value, mirroring the runtime's `==`
+/// equality classes (numbers coerced to f64, ±0 normalized). Returns `None`
+/// for compound values (array/object), which we refuse to index. A missing
+/// field and JSON null share the null bucket (both become Rhai `()`).
+fn scalar_key(value: Option<&JsonValue>) -> Option<String> {
+    match value {
+        None | Some(JsonValue::Null) => Some("u".to_string()),
+        Some(JsonValue::Bool(b)) => Some(format!("b{b}")),
+        Some(JsonValue::Number(n)) => {
+            let mut f = n.as_f64().unwrap_or(f64::NAN);
+            if f == 0.0 {
+                f = 0.0; // normalize -0.0 → +0.0 (Rhai treats them equal)
+            }
+            Some(format!("n{:016x}", f.to_bits()))
+        }
+        Some(JsonValue::String(s)) => Some(format!("s{s}")),
+        Some(JsonValue::Array(_)) | Some(JsonValue::Object(_)) => None,
+    }
+}
+
+/// Intersect two ascending index vectors, preserving ascending order.
+fn intersect_sorted(a: &[usize], b: &[usize]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -937,5 +1243,191 @@ mod tests {
         };
         let merged = merge_reply_routing(existing, &incoming).expect("identical should merge");
         assert_eq!(merged.reply_to.unwrap().place_name, "reply_inbox");
+    }
+
+    // ── Indexed equi-join binding ──────────────────────────────────────
+
+    /// Reference binder: the full cross-product, used to prove the indexed
+    /// fast path is selection-equivalent (identical first binding).
+    fn brute_force(
+        executor: &TransitionExecutor,
+        transition: &Transition,
+        input_arcs: &[&PetriArc],
+        marking: &Marking,
+    ) -> Option<TokenBinding> {
+        let arc_tokens: Vec<Vec<&Token>> = input_arcs
+            .iter()
+            .map(|arc| marking.tokens_at(&arc.place_id).iter().collect())
+            .collect();
+        let sizes: Vec<usize> = arc_tokens.iter().map(|t| t.len()).collect();
+        if sizes.iter().any(|&s| s == 0) {
+            return None;
+        }
+        for indices in CombinationIterator::new(sizes) {
+            if let Some(binding) =
+                build_binding_for_indices(transition, input_arcs, &arc_tokens, &indices, None)
+            {
+                if let Some(guard) = &transition.guard {
+                    match executor.evaluate_guard(guard, &binding.port_inputs) {
+                        Ok(true) => return Some(binding),
+                        _ => continue,
+                    }
+                } else {
+                    return Some(binding);
+                }
+            }
+        }
+        None
+    }
+
+    /// Build a 2-input guarded transition + its arcs over two places.
+    fn guarded_pair(
+        guard: &str,
+    ) -> (TransitionExecutor, Transition, PlaceId, PlaceId, PetriArc, PetriArc) {
+        let executor = TransitionExecutor::new();
+        let pa = PlaceId::named("place_a");
+        let pb = PlaceId::named("place_b");
+        let t_id = TransitionId::named("join");
+        let mut t = transition_with_ports(vec![Port::new("a"), Port::new("b")]);
+        t.guard = Some(guard.to_string());
+        let arc_a = PetriArc::input(pa.clone(), t_id.clone(), "a");
+        let arc_b = PetriArc::input(pb.clone(), t_id, "b");
+        (executor, t, pa, pb, arc_a, arc_b)
+    }
+
+    fn consumed_ids(b: &TokenBinding) -> Vec<TokenId> {
+        b.consumed_tokens.iter().map(|(_, id)| id.clone()).collect()
+    }
+
+    #[test]
+    fn indexed_join_matches_on_key_and_equals_bruteforce() {
+        let (executor, t, pa, pb, arc_a, arc_b) = guarded_pair("a.k == b.k");
+        let mut marking = Marking::new();
+        // a: keys 1,2,3   b: keys 3,2,1  → first lex match is a[0](k1) with b[2](k1)
+        for k in [1, 2, 3] {
+            marking.add_token(pa.clone(), data_token(json!({ "k": k })));
+        }
+        for k in [3, 2, 1] {
+            marking.add_token(pb.clone(), data_token(json!({ "k": k })));
+        }
+        let arcs: Vec<&PetriArc> = vec![&arc_a, &arc_b];
+
+        let indexed = find_valid_binding(&executor, &t, &arcs, &marking, None).expect("binds");
+        let brute = brute_force(&executor, &t, &arcs, &marking).expect("brute binds");
+
+        assert_eq!(indexed.port_inputs["a"]["k"], 1);
+        assert_eq!(indexed.port_inputs["b"]["k"], 1);
+        // Selection-equivalent: identical tokens consumed, identical order.
+        assert_eq!(consumed_ids(&indexed), consumed_ids(&brute));
+    }
+
+    #[test]
+    fn indexed_join_no_match_returns_none() {
+        let (executor, t, pa, pb, arc_a, arc_b) = guarded_pair("a.k == b.k");
+        let mut marking = Marking::new();
+        marking.add_token(pa.clone(), data_token(json!({ "k": 1 })));
+        marking.add_token(pb.clone(), data_token(json!({ "k": 2 })));
+        let arcs: Vec<&PetriArc> = vec![&arc_a, &arc_b];
+        assert!(find_valid_binding(&executor, &t, &arcs, &marking, None).is_none());
+        assert!(brute_force(&executor, &t, &arcs, &marking).is_none());
+    }
+
+    #[test]
+    fn indexed_join_with_extra_predicate_filters_via_guard() {
+        // Index prunes to key matches; the guard's `>` still filters.
+        let (executor, t, pa, pb, arc_a, arc_b) = guarded_pair("a.k == b.k && a.v > b.v");
+        let mut marking = Marking::new();
+        // a: (k1,v5)(k1,v9)   b: (k1,v7)  → a[0] fails v>7, a[1] passes
+        marking.add_token(pa.clone(), data_token(json!({ "k": 1, "v": 5 })));
+        marking.add_token(pa.clone(), data_token(json!({ "k": 1, "v": 9 })));
+        marking.add_token(pb.clone(), data_token(json!({ "k": 1, "v": 7 })));
+        let arcs: Vec<&PetriArc> = vec![&arc_a, &arc_b];
+
+        let indexed = find_valid_binding(&executor, &t, &arcs, &marking, None).expect("binds");
+        let brute = brute_force(&executor, &t, &arcs, &marking).expect("brute binds");
+        assert_eq!(indexed.port_inputs["a"]["v"], 9);
+        assert_eq!(consumed_ids(&indexed), consumed_ids(&brute));
+    }
+
+    #[test]
+    fn string_keyed_join_like_grant_id() {
+        // Mirrors t_release: req.grant_id == held.grant_id over many holds.
+        let (executor, t, pa, pb, arc_a, arc_b) = guarded_pair("a.grant_id == b.grant_id");
+        let mut marking = Marking::new();
+        for id in ["g0", "g1", "g2", "g3", "g4"] {
+            marking.add_token(pb.clone(), data_token(json!({ "grant_id": id })));
+        }
+        // single release targeting g3
+        marking.add_token(pa.clone(), data_token(json!({ "grant_id": "g3" })));
+        let arcs: Vec<&PetriArc> = vec![&arc_a, &arc_b];
+
+        let indexed = find_valid_binding(&executor, &t, &arcs, &marking, None).expect("binds");
+        let brute = brute_force(&executor, &t, &arcs, &marking).expect("brute binds");
+        assert_eq!(indexed.port_inputs["b"]["grant_id"], "g3");
+        assert_eq!(consumed_ids(&indexed), consumed_ids(&brute));
+    }
+
+    #[test]
+    fn numeric_int_float_equality_not_split() {
+        // Guard equality coerces numerics; 3 (int) and 3.0 (float) must join.
+        let (executor, t, pa, pb, arc_a, arc_b) = guarded_pair("a.k == b.k");
+        let mut marking = Marking::new();
+        marking.add_token(pa.clone(), data_token(json!({ "k": 3 })));
+        marking.add_token(pb.clone(), data_token(json!({ "k": 3.0 })));
+        let arcs: Vec<&PetriArc> = vec![&arc_a, &arc_b];
+        // If the engine's guard considers them equal, the indexed path must too
+        // (must not bucket them apart). Cross-product is the oracle.
+        let indexed = find_valid_binding(&executor, &t, &arcs, &marking, None);
+        let brute = brute_force(&executor, &t, &arcs, &marking);
+        assert_eq!(
+            indexed.map(|b| consumed_ids(&b)),
+            brute.map(|b| consumed_ids(&b)),
+        );
+    }
+
+    #[test]
+    fn three_way_chain_join() {
+        // p0.key == p1.key && p1.key == p2.key — the bench `match` shape.
+        let executor = TransitionExecutor::new();
+        let (p0, p1, p2) = (
+            PlaceId::named("p0"),
+            PlaceId::named("p1"),
+            PlaceId::named("p2"),
+        );
+        let t_id = TransitionId::named("j3");
+        let mut t = transition_with_ports(vec![Port::new("p0"), Port::new("p1"), Port::new("p2")]);
+        t.guard = Some("p0.key == p1.key && p1.key == p2.key".to_string());
+        let arc0 = PetriArc::input(p0.clone(), t_id.clone(), "p0");
+        let arc1 = PetriArc::input(p1.clone(), t_id.clone(), "p1");
+        let arc2 = PetriArc::input(p2.clone(), t_id, "p2");
+
+        let mut marking = Marking::new();
+        for k in 0..4 {
+            marking.add_token(p0.clone(), data_token(json!({ "key": k })));
+            marking.add_token(p1.clone(), data_token(json!({ "key": k })));
+            marking.add_token(p2.clone(), data_token(json!({ "key": k })));
+        }
+        let arcs: Vec<&PetriArc> = vec![&arc0, &arc1, &arc2];
+
+        let indexed = find_valid_binding(&executor, &t, &arcs, &marking, None).expect("binds");
+        let brute = brute_force(&executor, &t, &arcs, &marking).expect("brute binds");
+        assert_eq!(indexed.port_inputs["p0"]["key"], 0);
+        assert_eq!(consumed_ids(&indexed), consumed_ids(&brute));
+    }
+
+    #[test]
+    fn non_equi_guard_falls_back_to_crossproduct() {
+        // `a.v > b.v` extracts no equi-join → cross-product path; still correct.
+        let (executor, t, pa, pb, arc_a, arc_b) = guarded_pair("a.v > b.v");
+        let mut marking = Marking::new();
+        marking.add_token(pa.clone(), data_token(json!({ "v": 1 })));
+        marking.add_token(pa.clone(), data_token(json!({ "v": 9 })));
+        marking.add_token(pb.clone(), data_token(json!({ "v": 5 })));
+        let arcs: Vec<&PetriArc> = vec![&arc_a, &arc_b];
+
+        let indexed = find_valid_binding(&executor, &t, &arcs, &marking, None).expect("binds");
+        let brute = brute_force(&executor, &t, &arcs, &marking).expect("brute binds");
+        assert_eq!(indexed.port_inputs["a"]["v"], 9);
+        assert_eq!(consumed_ids(&indexed), consumed_ids(&brute));
     }
 }

@@ -8,6 +8,8 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import StringListEditor from '../shared/StringListEditor.svelte';
 	import * as Select from '$lib/components/ui/select';
+	import SchemaBuilder from '$lib/schema/SchemaBuilder.svelte';
+	import { getWorkflowDefinitions } from '$lib/editor/workflow-definitions.svelte';
 
 	// Editor for a single PortField in a typed Port. Structurally mirrors
 	// InputBlockEditor.svelte (human-task field editor) but operates on the
@@ -45,7 +47,9 @@
 		file: 'File',
 		signature: 'Signature',
 		timestamp: 'Timestamp',
-		json: 'JSON'
+		json: 'JSON',
+		object: 'Object',
+		array: 'Array'
 	};
 
 	// Port-authorable subset: excludes radio / range / rating / date (those are
@@ -62,7 +66,9 @@
 		'file',
 		'signature',
 		'timestamp',
-		'json'
+		'json',
+		'object',
+		'array'
 	];
 </script>
 
@@ -99,7 +105,16 @@
 				type="single"
 				value={field.kind}
 				onValueChange={(v) => {
-					if (v) onchange({ ...field, kind: v as FieldKind });
+					if (!v) return;
+					const kind = v as FieldKind;
+					// `field.schema` is the nested-shape override authored for
+					// object/array (and meaningful for json). Switching to a plain
+					// scalar kind must drop it — the backend's `json_schema(field)`
+					// treats `Some(schema)` as an override for ALL kinds, so a stale
+					// schema would silently make a scalar field behave as the old
+					// container.
+					const keepsSchema = kind === 'object' || kind === 'array' || kind === 'json';
+					onchange({ ...field, kind, ...(keepsSchema ? {} : { schema: undefined }) });
 				}}
 				disabled={readonly}
 			>
@@ -181,6 +196,23 @@
 								...field,
 								options: values.map((v) => ({ value: v, label: v }))
 							})}
+					/>
+				</div>
+			{/if}
+
+			{#if field.kind === 'object' || field.kind === 'array'}
+				<div class="space-y-1.5">
+					<Label class="text-sm text-muted-foreground">Nested Schema</Label>
+					<!--
+						Object/Array fields carry a JSON Schema in field.schema.
+						SchemaBuilder edits it in place; the schema is stored verbatim
+						and round-trips through the compiler's json_schema(field) path
+						(Some(schema) → returned verbatim; None → permissive fallback).
+					-->
+					<SchemaBuilder
+						schema={field.schema ?? (field.kind === 'object' ? {} : { type: 'array' })}
+						onchange={(schema) => onchange({ ...field, schema })}
+						definitions={getWorkflowDefinitions()}
 					/>
 				</div>
 			{/if}

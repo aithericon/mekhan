@@ -76,11 +76,11 @@ up:
     @just dev::_infra-up
     @just dev::_wait-infra
     @just dev::up-ollama
-    @just dev::up-executor
     @just dev::up-engine
     @just dev::_wait-engine-stream
     @just dev::up-mekhan
     @just dev::pg-demo-seed
+    @just dev::up-executor || true
     @just dev::up-app
     @just dev::up-runner || true
     @just dev::_summary
@@ -93,11 +93,11 @@ up-auth:
     @just dev::_infra-up
     @just dev::_wait-infra
     @just dev::up-ollama
-    @just dev::up-executor
     @just dev::up-engine
     @just dev::_wait-engine-stream
     @just dev::up-mekhan bff
     @just dev::pg-demo-seed
+    @just dev::up-executor || true
     @just dev::up-app
     @just dev::up-runner || true
     @just dev::_summary "ENABLED (BFF + Zitadel PAT introspection)"
@@ -528,7 +528,33 @@ pg-demo-seed:
     echo "  ✓ demo_pg.widgets seeded (schema demo_pg, 3 baseline rows)"
 
 # ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
-
+#
+# The dev executor is the platform's WORKER. Workers are no longer anonymous:
+# every worker enrolls into a worker GROUP and binds its consumer to that
+# group's grouped stream (`executor-<wire>-grp/<partition>`), where the
+# partition is the group's `capacity`-resource UUID. There is NO bare
+# `executor-<wire>` dispatch path any more. So this recipe mirrors `up-runner`:
+# it waits for mekhan + the workspace's auto-seeded "default" worker group,
+# mints a worker registration token for group "default", and boots the executor
+# with EXECUTOR_WORKER_REG_TOKEN set. The executor SELF-ENROLLS on boot
+# (`maybe_enroll_worker`): POSTs /api/v1/workers/enroll, writes
+# `{base_dir}/worker/identity.json` (carrying the wkr_ token + routing
+# partition), and binds the grouped consumer. Identity reuse is automatic — the
+# base_dir persists across a data-preserving `down`/`up`, and self-enroll
+# no-ops when identity.json is already present.
+#
+# ⚠️⚠️  `just dev reset` IS REQUIRED after upgrading to the unified-worker
+#       dispatch model.  Any demo AIR compiled before this change still routes
+#       jobs to the now-RETIRED bare `executor-<wire>` stream, which no worker
+#       consumes — those steps would HANG forever.  A `reset` recompiles every
+#       seeded demo to the grouped `executor-<wire>-grp/<default-uuid>` stream
+#       this enrolled worker actually drains.  ⚠️⚠️
+#
+# Wired into `up` AFTER mekhan (needs the control plane to mint a token +
+# enroll), kept SOFT (`up-executor || true`) so a missing seed never wedges
+# `just dev` — it warns + skips like up-runner.
+#
+# Worker daemon: enrolls into the "default" group, drains its grouped stream
 up-executor:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -537,13 +563,35 @@ up-executor:
       echo "  executor already running (pid $(cat {{pid_dir}}/executor.pid))"
       exit 0
     fi
+    # Wait for mekhan to be ready AND to have seeded the workspace's "default"
+    # worker group (a `capacity` resource at path "default" with the `worker`
+    # preset). The worker MUST enroll into a real group — there is no anonymous
+    # path — so the seed must exist before we mint a token. Soft-skip (exit 0)
+    # if it never appears so `just dev` is never blocked by a worker that can't
+    # enroll. `/api/v1/capacities` returns a bare array of {path, …}.
+    echo "▶ waiting for mekhan + default worker-group seed…"
+    ready=""
+    for _ in $(seq 1 60); do
+      if curl -fsS "{{service_url}}/api/v1/capacities" 2>/dev/null \
+           | jq -e '.[]? | select(.path=="default")' >/dev/null 2>&1; then
+        ready=1; break
+      fi
+      sleep 1
+    done
+    if [ -z "$ready" ]; then
+      echo "  ⚠ mekhan/default worker-group seed not ready after 60s — skipping executor" >&2
+      echo "    (no worker capacity until 'just dev up-executor'; AutomatedSteps would hang)" >&2
+      exit 0
+    fi
     echo "▶ building executor (features: {{executor_features}})…"
     (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
 
     mkdir -p "{{work_dir}}/executor"
     # Write a fresh executor.toml each `up` so config drift can't accumulate.
     # base_dir is absolute so the run dir + runner script paths don't compound
-    # with the executor's CWD when launching the subprocess.
+    # with the executor's CWD when launching the subprocess. The base_dir is
+    # STABLE across restarts, so the worker's `{base_dir}/worker/identity.json`
+    # (written at first enroll) persists and self-enroll no-ops on `down`/`up`.
     exec_base="$PWD/{{work_dir}}/executor"
     cat > "{{work_dir}}/executor/executor.toml" <<EOF
     name        = "dev-executor"
@@ -582,12 +630,39 @@ up-executor:
     http_port = {{cancel_port}}
     EOF
 
+    # Mint a worker registration token for the "default" group ONLY when this
+    # worker isn't already enrolled. The executor self-enroll is idempotent —
+    # it skips when `{base_dir}/worker/identity.json` exists — but the
+    # registration token is single-use server-side, so re-minting on every `up`
+    # would leak tokens. So: reuse silently when identity.json is present, mint
+    # a fresh token only when (re)enrolling (post-reset / first boot). We pass
+    # the token + mekhan URL via env; the daemon's `maybe_enroll_worker` does
+    # the POST /api/v1/workers/enroll + writes identity.json + binds the grouped
+    # consumer to the returned routing partition (the group's capacity UUID).
+    reg_token=""
+    if [ -f "$exec_base/worker/identity.json" ]; then
+      wid=$(jq -r '.worker_id // empty' "$exec_base/worker/identity.json" 2>/dev/null || true)
+      echo "▶ reusing enrolled worker ${wid:-?} (identity.json present — no re-enroll)"
+    else
+      echo "▶ minting worker registration token (group=default)…"
+      reg_token=$(curl -fsS -X POST "{{service_url}}/api/v1/workers/registration-tokens" \
+          -H 'content-type: application/json' -d '{"group":"default"}' | jq -r '.token')
+      if [ -z "$reg_token" ] || [ "$reg_token" = "null" ]; then
+        echo "  ⚠ failed to mint worker registration token — skipping executor" >&2
+        exit 0
+      fi
+      echo "  ✓ token minted; worker will self-enroll into group=default on boot"
+    fi
+
     echo "▶ starting executor…"
     # CWD must contain executor.toml — executor loads `./executor.toml`.
     # Use bash -c so we can `cd` before exec inside nohup's child shell.
     # VAULT_ADDR is set so PlanSecretsHook can unwrap per-job wrapping tokens
     # the engine attaches; VAULT_TOKEN is intentionally NOT set on the
     # executor — it authenticates by exchanging the wrapping token itself.
+    # EXECUTOR_MEKHAN_URL + EXECUTOR_WORKER_REG_TOKEN drive the boot-time
+    # self-enroll into the "default" worker group (the reg token is empty when
+    # already enrolled — the daemon then just reuses the on-disk identity).
     # Honor CARGO_TARGET_DIR so the binary lookup follows the same
     # redirect cargo did. Shared-target setups (umbrella .envrc) put
     # everything under `~/.cache/cargo-targets/...`; the bare workspace
@@ -600,8 +675,10 @@ up-executor:
     pid=$(just/scripts/spawn-daemon.sh executor "{{pid_dir}}/executor.pid" "{{log_dir}}/executor.log" \
       -- env RUST_LOG="info,aithericon_executor=debug" \
         VAULT_ADDR="{{vault_addr}}" \
+        EXECUTOR_MEKHAN_URL="{{service_url}}" \
+        EXECUTOR_WORKER_REG_TOKEN="$reg_token" \
         bash -c 'cd "{{work_dir}}/executor" && exec "$0"' "$bin")
-    echo "  ✓ executor (pid $pid)  log: {{log_dir}}/executor.log"
+    echo "  ✓ executor (pid $pid)  log: {{log_dir}}/executor.log  (worker group: default)"
 
 down-executor:
     @just dev::_kill executor

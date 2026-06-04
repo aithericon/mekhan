@@ -11,6 +11,13 @@
 	// receives the full next object. ResourceEditModal adapts its string-based
 	// model around this (see that file).
 
+	// `discriminatorOf` is centralised in the shared schema model so the builder
+	// and SchemaForm always use the same detection logic. Imported here for use
+	// in `deriveFieldSpecs` and re-exported so existing callers and tests that
+	// import from './SchemaForm.svelte' continue to work without changes.
+	import { discriminatorOf } from '$lib/schema/builder-model';
+	export { discriminatorOf };
+
 	export type JsonType =
 		| 'string'
 		| 'integer'
@@ -85,6 +92,11 @@
 		};
 	}
 
+	// `variantsOf` remains local: it is only used by `deriveFieldSpecs` to
+	// enumerate variant property bags for the value-entry form. The shared
+	// `discriminatorOf` (imported above) handles its own variant extraction
+	// internally. Keeping this private avoids coupling the value-form's Variant
+	// shape to the shared schema model.
 	type Variant = { props: Record<string, Record<string, unknown>>; required: string[] };
 
 	function variantsOf(schema: Record<string, unknown>): Variant[] | null {
@@ -97,28 +109,6 @@
 			>,
 			required: (((v as Record<string, unknown>).required ?? []) as string[]) ?? []
 		}));
-	}
-
-	/**
-	 * The discriminator field of a `oneOf`/`anyOf` schema, or `null` for a plain
-	 * object schema. The discriminator is the property present in EVERY variant
-	 * with a single-value `enum` (the serde internally-tagged-enum shape — e.g. a
-	 * datacenter's `scheduler_flavor`).
-	 */
-	export function discriminatorOf(
-		schema: Record<string, unknown> | null | undefined
-	): string | null {
-		if (!schema) return null;
-		const variants = variantsOf(schema);
-		if (!variants) return null;
-		for (const name of Object.keys(variants[0].props)) {
-			const constInAll = variants.every((v) => {
-				const q = v.props[name];
-				return Array.isArray(q?.enum) && (q.enum as unknown[]).length === 1;
-			});
-			if (constInAll) return name;
-		}
-		return null;
 	}
 
 	/**

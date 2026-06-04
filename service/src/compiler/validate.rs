@@ -2087,7 +2087,12 @@ pub(crate) fn validate_human_task_steps_refs(graph: &WorkflowGraph) -> Result<()
                 // agent-tool SubWorkflow). The leaf carries an explicit JSON
                 // Schema — accept when it describes an array; the runtime
                 // SchemaRegistry enforces the full shape.
-                TokenShape::Schema(v) => {
+                // NOTE: `resolve` now unwraps a final schema-backed leaf to its
+                // structural shadow, so an array schema usually arrives here as
+                // `TokenShape::Array` (accepted above). This arm still catches a
+                // raw `Schema` leaf surfaced by any non-unwrapping path: check
+                // the *raw* JSON Schema's declared `type`.
+                TokenShape::Schema { raw: v, .. } => {
                     let is_array = v.get("type").and_then(|t| t.as_str()) == Some("array");
                     if !is_array {
                         return Err(CompileError::HumanTaskStepsRefNotArray {

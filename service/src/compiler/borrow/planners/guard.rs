@@ -550,6 +550,10 @@ fn field_kind_descriptor(kind: &crate::models::template::FieldKind) -> crate::co
         FieldKind::Timestamp => "Timestamp",
         FieldKind::File => "FileRef",
         FieldKind::Json => return TyDescriptor::Any,
+        // Container markers have no scalar picker descriptor — a global compared
+        // by a guard literal must be scalar. Degrade to `Any` (drilling into a
+        // nested global field goes through its `.schema` structural shadow).
+        FieldKind::Object | FieldKind::Array => return TyDescriptor::Any,
         // Text / Textarea / Select / Signature are all string-shaped.
         FieldKind::Text | FieldKind::Textarea | FieldKind::Select | FieldKind::Signature => "String",
     };
@@ -570,7 +574,7 @@ fn scalar_ty_of_kind(kind: &crate::models::template::FieldKind) -> ScalarTy {
         FieldKind::Bool => ScalarTy::Bool,
         FieldKind::Timestamp => ScalarTy::Timestamp,
         FieldKind::File => ScalarTy::FileRef,
-        FieldKind::Json => ScalarTy::Json,
+        FieldKind::Json | FieldKind::Object | FieldKind::Array => ScalarTy::Json,
         FieldKind::Text | FieldKind::Textarea | FieldKind::Select | FieldKind::Signature => {
             ScalarTy::String
         }

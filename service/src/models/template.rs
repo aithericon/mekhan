@@ -1796,6 +1796,16 @@ pub enum FieldKind {
     Signature,
     Timestamp,
     Json,
+    /// First-class container marker for a nested JSON object. The recursive
+    /// SHAPE lives in [`PortField::schema`] (a JSON Schema); this kind only
+    /// marks the field as an object container. With a `schema` the emitted
+    /// contract is that schema verbatim; without one it falls back to a
+    /// permissive `{"type":"object","additionalProperties":true}`.
+    Object,
+    /// First-class container marker for a nested JSON array. The element/item
+    /// SHAPE lives in [`PortField::schema`]; without one it falls back to a
+    /// permissive `{"type":"array"}`.
+    Array,
 }
 
 impl FieldKind {
@@ -1813,6 +1823,12 @@ impl FieldKind {
             // File is a catalog reference (`file_metadata::StoragePath`); accept
             // any string or object, validation happens deeper.
             Self::File => value.is_string() || value.is_object(),
+            // Container markers: shallow shape check only — deep validation is
+            // deferred to the runtime `SchemaRegistry` via the emitted schema.
+            // (Null is tolerated as absent by `validate_token` before we ever
+            // get here, so no explicit null arm is needed.)
+            Self::Object => value.is_object(),
+            Self::Array => value.is_array(),
         }
     }
 
@@ -1831,6 +1847,11 @@ impl FieldKind {
             Self::File => json!({"type": "string"}),
             // Json is the opaque escape hatch — anything goes.
             Self::Json => json!({}),
+            // Container markers with no author `schema` override stay permissive:
+            // an object accepts any keys, an array any items. A `field.schema`
+            // (handled in `json_schema`) replaces these verbatim.
+            Self::Object => json!({"type": "object", "additionalProperties": true}),
+            Self::Array => json!({"type": "array"}),
         }
     }
 
@@ -3907,6 +3928,72 @@ mod schema_tests {
         assert!(FieldKind::Json.accepts(&json!({"any": [1, 2, 3]})));
         assert!(FieldKind::Json.accepts(&json!("scalar")));
         assert_eq!(FieldKind::Json.base_schema(), json!({}));
+
+        // Object accepts only JSON objects; emits a permissive object base.
+        assert!(FieldKind::Object.accepts(&json!({"k": 1})));
+        assert!(!FieldKind::Object.accepts(&json!([1, 2])));
+        assert!(!FieldKind::Object.accepts(&json!("x")));
+        assert_eq!(base_type(FieldKind::Object).as_deref(), Some("object"));
+        assert_eq!(
+            FieldKind::Object.base_schema()["additionalProperties"],
+            json!(true)
+        );
+
+        // Array accepts only JSON arrays; emits a permissive array base.
+        assert!(FieldKind::Array.accepts(&json!([1, 2, 3])));
+        assert!(!FieldKind::Array.accepts(&json!({"k": 1})));
+        assert!(!FieldKind::Array.accepts(&json!("x")));
+        assert_eq!(base_type(FieldKind::Array).as_deref(), Some("array"));
+    }
+
+    #[test]
+    fn object_array_fields_emit_permissive_schema_without_override() {
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![
+                pf("payload", FieldKind::Object, false),
+                pf("items", FieldKind::Array, false),
+            ],
+        };
+        let schema = port.json_schema();
+        assert_eq!(
+            schema["properties"]["payload"],
+            json!({"type": "object", "additionalProperties": true})
+        );
+        assert_eq!(schema["properties"]["items"], json!({"type": "array"}));
+    }
+
+    #[test]
+    fn object_array_fields_emit_schema_override_verbatim() {
+        let nested = json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "qty": {"type": "number"},
+            },
+            "required": ["id"],
+            "additionalProperties": false,
+        });
+        let arr = json!({
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        });
+        let mut obj_field = pf("payload", FieldKind::Object, false);
+        obj_field.schema = Some(nested.clone());
+        let mut arr_field = pf("items", FieldKind::Array, false);
+        arr_field.schema = Some(arr.clone());
+        let port = Port {
+            id: "in".into(),
+            label: "In".into(),
+            fields: vec![obj_field, arr_field],
+        };
+        let schema = port.json_schema();
+        // The author override wins verbatim — constraints (`required`,
+        // `minItems`) are preserved for the runtime SchemaRegistry.
+        assert_eq!(schema["properties"]["payload"], nested);
+        assert_eq!(schema["properties"]["items"], arr);
     }
 
     #[test]

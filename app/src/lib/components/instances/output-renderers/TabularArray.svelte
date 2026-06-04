@@ -1,6 +1,8 @@
 <script lang="ts">
 	import PrimitiveValue from './PrimitiveValue.svelte';
 	import FileReference from './FileReference.svelte';
+	import SchemaValueView from '$lib/schema/SchemaValueView.svelte';
+	import { isPrimitive, isFileRef } from '$lib/schema/model';
 	import type { RendererProps } from './types';
 
 	let { value, ctx }: RendererProps = $props();
@@ -29,28 +31,6 @@
 		}
 		return out;
 	});
-
-	function isPrimitive(v: unknown): boolean {
-		return v === null || v === undefined || typeof v !== 'object';
-	}
-
-	function isFileRef(v: unknown): boolean {
-		return (
-			!!v &&
-			typeof v === 'object' &&
-			!Array.isArray(v) &&
-			typeof (v as Record<string, unknown>).url === 'string'
-		);
-	}
-
-	function compactJson(v: unknown): string {
-		try {
-			const s = JSON.stringify(v);
-			return s.length > 40 ? s.slice(0, 37) + '…' : s;
-		} catch {
-			return String(v);
-		}
-	}
 </script>
 
 <div class="overflow-hidden rounded-md border border-border">
@@ -79,7 +59,8 @@
 								{:else if isFileRef(cell)}
 									<FileReference value={cell} {ctx} />
 								{:else}
-									<code class="rounded bg-muted px-1.5 py-0.5 font-mono text-sm text-muted-foreground">{compactJson(cell)}</code>
+									<!-- Nested objects/arrays expand inline instead of collapsing to compactJson. -->
+									<SchemaValueView value={cell} {ctx} depth={1} />
 								{/if}
 							</td>
 						{/each}

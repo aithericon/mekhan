@@ -4980,17 +4980,19 @@ fn automated_step_executor_unchanged_emits_lifecycle_no_bridge() {
         "executor dispatch must not emit a scheduler bridge_out"
     );
 
-    // BYTE-STABLE namespace golden: an ungrouped default-inline step stamps the
-    // unchanged base `executor-<wire>` literal (Docker backend → executor-docker)
-    // and never the grouped slash form.
+    // Unified worker dispatch: a step naming NO group routes through the
+    // workspace's `default` worker group. With no resource registry on this
+    // direct `compile_to_air` path the partition token falls back to the literal
+    // `default` alias, so the stamped namespace is `executor-docker-grp/default`.
+    // There is no bare `executor-docker` dispatch path any more.
     let air_str = serde_json::to_string(&air).unwrap();
     assert!(
-        air_str.contains(r#"d.executor_namespace = \"executor-docker\";"#),
-        "ungrouped step must stamp the base executor-docker namespace: {air_str}"
+        air_str.contains(r#"d.executor_namespace = \"executor-docker-grp/default\";"#),
+        "group-less step must route through the default worker group: {air_str}"
     );
     assert!(
-        !air_str.contains("executor-docker/"),
-        "ungrouped step must NOT stamp a grouped (slash) namespace"
+        !air_str.contains(r#"d.executor_namespace = \"executor-docker\";"#),
+        "the bare executor-docker dispatch path is retired"
     );
 }
 

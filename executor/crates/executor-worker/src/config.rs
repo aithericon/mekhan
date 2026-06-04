@@ -352,6 +352,21 @@ pub struct ExecutorConfig {
     /// Environment variable: `EXECUTOR_WORKER_REG_TOKEN=wt_...`.
     #[serde(default)]
     pub worker_reg_token: Option<String>,
+
+    /// The dispatch routing partition for an enrolled worker — the capacity-
+    /// resource UUID of the group this worker competes in (unified worker model).
+    /// Every worker-pool consumer binds `PartitionedPool { partition:
+    /// worker_routing_partition }` on the `executor-<wire>-grp` stream family. It
+    /// is workspace-safe by construction (two workspaces' "default" groups never
+    /// collide) and is a valid JetStream/NATS subject token (`[0-9a-f-]`, no
+    /// dots). Populated by the boot-time self-enroll (the enroll response's
+    /// `routing_partition`) or auto-discovered from
+    /// `{base_dir}/worker/identity.json` in `normalize()`. There is no anonymous
+    /// worker path — a worker-pool daemon without this is a hard config error.
+    ///
+    /// Environment variable: `EXECUTOR_WORKER_ROUTING_PARTITION=<uuid>`.
+    #[serde(default)]
+    pub worker_routing_partition: Option<String>,
 }
 
 /// ROS backend connection settings.
@@ -397,8 +412,16 @@ pub struct RunnerIdentity {
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct WorkerIdentity {
     pub worker_id: String,
+    /// Display-only group alias (the human-facing group name).
     #[serde(default)]
     pub group: Option<String>,
+    /// The capacity-resource UUID this worker's grouped consumer binds as its
+    /// partition token (`executor-<wire>-grp.<prio>.<routing_partition>.>`) — the
+    /// unified dispatch routing key. Optional on disk only for forward-read of
+    /// pre-unification identities; the daemon hard-errors when it resolves to
+    /// nothing (no anonymous worker path).
+    #[serde(default)]
+    pub routing_partition: Option<String>,
     pub workspace_id: String,
 }
 
@@ -691,6 +714,11 @@ impl ExecutorConfig {
                     if self.worker_group.is_none() {
                         self.worker_group = identity.group;
                     }
+                    // The unified routing key (capacity-resource UUID). Filled
+                    // from disk only when an explicit env/config value was unset.
+                    if self.worker_routing_partition.is_none() {
+                        self.worker_routing_partition = identity.routing_partition;
+                    }
                 }
             }
         }
@@ -881,6 +909,7 @@ mod tests {
             worker_id: None,
             worker_group: None,
             worker_reg_token: None,
+            worker_routing_partition: None,
         }
     }
 
@@ -999,14 +1028,14 @@ mod tests {
     #[test]
     fn normalize_discovers_worker_identity_and_group_from_disk() {
         // Write a {base_dir}/worker/identity.json and confirm normalize() picks
-        // up worker_id + the inherited group, and defaults nats_creds to the
-        // worker.creds file when present.
+        // up worker_id + the inherited group + the routing partition, and
+        // defaults nats_creds to the worker.creds file when present.
         let tmp = std::env::temp_dir().join(format!("exec-worker-test-{}", std::process::id()));
         let worker_dir = tmp.join("worker");
         std::fs::create_dir_all(&worker_dir).unwrap();
         std::fs::write(
             worker_dir.join("identity.json"),
-            br#"{"worker_id":"wkr-123","group":"xrd_bench","workspace_id":"ws-1"}"#,
+            br#"{"worker_id":"wkr-123","group":"xrd_bench","routing_partition":"11111111-1111-1111-1111-111111111111","workspace_id":"ws-1"}"#,
         )
         .unwrap();
         std::fs::write(worker_dir.join("worker.creds"), b"creds").unwrap();
@@ -1018,6 +1047,10 @@ mod tests {
 
         assert_eq!(config.worker_id.as_deref(), Some("wkr-123"));
         assert_eq!(config.worker_group.as_deref(), Some("xrd_bench"));
+        assert_eq!(
+            config.worker_routing_partition.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
         assert_eq!(
             config.nats_creds.as_deref(),
             Some(worker_dir.join("worker.creds").to_string_lossy().as_ref())
@@ -1050,7 +1083,11 @@ mod tests {
     }
 
     #[test]
-    fn normalize_no_worker_identity_is_anonymous() {
+    fn normalize_no_worker_identity_leaves_routing_unset() {
+        // No identity on disk → no worker_id / group / routing_partition. This
+        // is a valid CONFIG state (e.g. a runner or PerJob daemon), but a
+        // worker-pool daemon in this state is a hard startup error (the daemon
+        // enforces mandatory enrollment — see the executor-service binary).
         let tmp =
             std::env::temp_dir().join(format!("exec-worker-test-anon-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -1059,6 +1096,7 @@ mod tests {
         config.normalize();
         assert!(config.worker_id.is_none());
         assert!(config.worker_group.is_none());
+        assert!(config.worker_routing_partition.is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

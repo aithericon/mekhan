@@ -1047,3 +1047,253 @@ mod scope_reachability_tests {
         assert!(!by_path.contains_key("start.document.url"));
     }
 }
+
+/// A schema-override port (`PortField.schema`) must be drillable on the
+/// read-side (display/resolution/picker) WITHOUT weakening runtime
+/// enforcement: `to_json_schema` still emits the raw schema with all its
+/// constraints. These cover the variant's two faces in one place.
+#[cfg(test)]
+mod schema_override_drilldown_tests {
+    use super::*;
+    use crate::compiler::token_shape::port::port_to_shape;
+    use crate::models::template::{PortField, Position};
+    use serde_json::json;
+
+    fn schema_field(name: &str, schema: serde_json::Value) -> PortField {
+        PortField {
+            schema: Some(schema),
+            name: name.to_string(),
+            label: name.to_string(),
+            kind: FieldKind::Json,
+            required: true,
+            options: None,
+            description: None,
+            accept: None,
+        }
+    }
+
+    fn start_with_fields(fields: Vec<PortField>) -> WorkflowNode {
+        WorkflowNode {
+            id: "start".to_string(),
+            node_type: "start".to_string(),
+            slug: None,
+            position: Position { x: 0.0, y: 0.0 },
+            data: WorkflowNodeData::Start {
+                label: "Start".to_string(),
+                description: None,
+                initial: Port {
+                    id: "in".to_string(),
+                    label: "Input".to_string(),
+                    fields,
+                },
+                process_name: None,
+            },
+            parent_id: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    /// The constraint-rich schema we attach to the override field — `required`,
+    /// `enum`, and `minimum` are exactly the things that must survive into the
+    /// runtime `SchemaRegistry` verbatim.
+    fn customer_schema() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "required": ["name", "tier"],
+            "properties": {
+                "name": { "type": "string" },
+                "tier": { "type": "string", "enum": ["gold", "silver"] },
+                "address": {
+                    "type": "object",
+                    "properties": {
+                        "city": { "type": "string" },
+                        "zip": { "type": "integer", "minimum": 1000 }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn schema_backed_port_resolves_nested_leaf_to_dotted_path() {
+        let node = start_with_fields(vec![schema_field("customer", customer_schema())]);
+        // `port_to_shape` builds the structural shadow; with no active
+        // definitions bracket, plain (non-`$ref`) schemas still parse fully.
+        let shape = port_to_shape(
+            &Port {
+                id: "in".into(),
+                label: "in".into(),
+                fields: vec![schema_field("customer", customer_schema())],
+            },
+            &node,
+            "declared port field",
+        );
+
+        // (a) find_by_leaf drills through the schema-backed field into its
+        // structural shadow and returns the nested leaf's dotted path.
+        let hit = shape
+            .find_by_leaf("city")
+            .expect("nested `city` should resolve through the schema shadow");
+        assert_eq!(hit.0, "customer.address.city");
+        assert_eq!(hit.1, "String");
+
+        let zip = shape
+            .find_by_leaf("zip")
+            .expect("nested `zip` should resolve through the schema shadow");
+        assert_eq!(zip.0, "customer.address.zip");
+        // integer → Number in the structural vocabulary.
+        assert_eq!(zip.1, "Number");
+
+        // resolve() (the by-value path walker) is also transparent.
+        let (resolved, _) = shape
+            .resolve(&["customer".into(), "address".into(), "city".into()])
+            .expect("dotted resolve through schema shadow");
+        assert_eq!(resolved.kind_label(), "String");
+    }
+
+    #[test]
+    fn schema_backed_port_preserves_raw_constraints_in_to_json_schema() {
+        let node = start_with_fields(vec![schema_field("customer", customer_schema())]);
+        let TokenShape::Object(map) = port_to_shape(
+            &Port {
+                id: "in".into(),
+                label: "in".into(),
+                fields: node_fields(&node),
+            },
+            &node,
+            "declared port field",
+        ) else {
+            panic!("expected object");
+        };
+        let customer = &map["customer"].shape;
+
+        // The leaf is a schema-backed variant carrying BOTH faces.
+        let TokenShape::Schema { raw, structural } = customer else {
+            panic!("expected Schema variant, got {customer:?}");
+        };
+
+        // (b) to_json_schema returns the ORIGINAL schema verbatim — every
+        // constraint (required / enum / minimum) intact for the runtime
+        // SchemaRegistry.
+        assert_eq!(customer.to_json_schema(), customer_schema());
+        assert_eq!(**raw, customer_schema());
+        assert_eq!(
+            raw.get("required"),
+            Some(&json!(["name", "tier"])),
+            "required[] must survive into to_json_schema"
+        );
+
+        // The structural shadow is the read-side view: drillable object.
+        assert!(matches!(structural.as_ref(), TokenShape::Object(_)));
+        // kind_label/display delegate to the shadow — never the literal "Schema".
+        assert_eq!(customer.kind_label(), "Object");
+    }
+
+    fn node_fields(node: &WorkflowNode) -> Vec<PortField> {
+        match &node.data {
+            WorkflowNodeData::Start { initial, .. } => initial.fields.clone(),
+            _ => vec![],
+        }
+    }
+
+    /// Phase 2 — an `Object`-KIND field carrying a nested `.schema` behaves
+    /// exactly like the Phase 1 schema-override path: the structural shadow is
+    /// drillable (`find_by_leaf` resolves a nested leaf) AND `to_json_schema`
+    /// preserves the override verbatim. The new container *kind* and the rich
+    /// `.schema` are not in tension — `.schema` always wins.
+    fn object_kind_schema_field(name: &str, schema: serde_json::Value) -> PortField {
+        PortField {
+            schema: Some(schema),
+            name: name.to_string(),
+            label: name.to_string(),
+            kind: FieldKind::Object,
+            required: true,
+            options: None,
+            description: None,
+            accept: None,
+        }
+    }
+
+    #[test]
+    fn object_kind_field_with_schema_is_drillable_and_preserves_override() {
+        let node = start_with_fields(vec![object_kind_schema_field(
+            "customer",
+            customer_schema(),
+        )]);
+        let shape = port_to_shape(
+            &Port {
+                id: "in".into(),
+                label: "in".into(),
+                fields: node_fields(&node),
+            },
+            &node,
+            "declared port field",
+        );
+
+        // Drillable: nested leaves resolve through the structural shadow.
+        let hit = shape
+            .find_by_leaf("city")
+            .expect("nested `city` should resolve for an Object-kind schema field");
+        assert_eq!(hit.0, "customer.address.city");
+        assert_eq!(hit.1, "String");
+
+        // Override preserved verbatim for the runtime SchemaRegistry.
+        let TokenShape::Object(map) = &shape else {
+            panic!("expected object");
+        };
+        let customer = &map["customer"].shape;
+        let TokenShape::Schema { raw, structural } = customer else {
+            panic!("Object-kind field with a .schema must lower to Schema, got {customer:?}");
+        };
+        assert_eq!(customer.to_json_schema(), customer_schema());
+        assert_eq!(**raw, customer_schema());
+        assert!(matches!(structural.as_ref(), TokenShape::Object(_)));
+        assert_eq!(customer.kind_label(), "Object");
+    }
+
+    /// An `Object`/`Array`-kind field WITHOUT a `.schema` lowers to the empty
+    /// structural container (drillable-but-shapeless object / `Any`-element
+    /// array), per `port_to_shape`'s no-override arms.
+    #[test]
+    fn container_kind_field_without_schema_lowers_to_empty_container() {
+        let port = Port {
+            id: "in".into(),
+            label: "in".into(),
+            fields: vec![
+                PortField {
+                    schema: None,
+                    name: "blob".into(),
+                    label: "blob".into(),
+                    kind: FieldKind::Object,
+                    required: false,
+                    options: None,
+                    description: None,
+                    accept: None,
+                },
+                PortField {
+                    schema: None,
+                    name: "list".into(),
+                    label: "list".into(),
+                    kind: FieldKind::Array,
+                    required: false,
+                    options: None,
+                    description: None,
+                    accept: None,
+                },
+            ],
+        };
+        let node = start_with_fields(port.fields.clone());
+        let TokenShape::Object(map) = port_to_shape(&port, &node, "declared port field") else {
+            panic!("expected object");
+        };
+        assert!(
+            matches!(&map["blob"].shape, TokenShape::Object(m) if m.is_empty()),
+            "schemaless Object field -> empty object container"
+        );
+        assert!(
+            matches!(&map["list"].shape, TokenShape::Array(inner) if matches!(**inner, TokenShape::Any)),
+            "schemaless Array field -> Array<Any>"
+        );
+    }
+}

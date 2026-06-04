@@ -26,6 +26,7 @@ pub mod runners_presence;
 pub mod s3;
 pub mod scope;
 pub mod triggers;
+pub mod worker_groups;
 pub mod yjs;
 
 use std::sync::Arc;

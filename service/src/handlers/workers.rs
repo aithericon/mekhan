@@ -322,22 +322,52 @@ pub async fn enroll_worker(
         ApiError::forbidden("registration token is no longer usable (revoked, expired, or exhausted)")
     })?;
 
-    // 5. Mint the worker credential + insert the row. workspace_id + group flow
-    //    from the (re-read) registration token; enrolled_by = its created_by. The
-    //    advertised `backends` come from the enroll body (JSON array column).
+    // 5. Resolve the ROUTING PARTITION (unified worker dispatch, docs/23/24): the
+    //    worker competes in a group whose partition token is that group's
+    //    `capacity`-resource UUID, NOT its alias. The token's `group` names the
+    //    group; a token that names none inherits the workspace's always-seeded
+    //    `default` group. We resolve the alias → UUID here (the `default` group is
+    //    guaranteed by the startup seeder + the migration backfill). The human
+    //    alias stays in `worker_group` for display; the UUID is the routing key
+    //    the executor binds + the JWT subscribe filter uses.
+    let group_alias = claimed
+        .group
+        .as_deref()
+        .filter(|g| !g.is_empty())
+        .unwrap_or(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH);
+    let routing_partition = crate::worker_groups::resolve_worker_group_uuid(
+        &state.db,
+        claimed.workspace_id,
+        group_alias,
+    )
+    .await?
+    .ok_or_else(|| {
+        // Should never fire: the default group is always seeded, and an explicit
+        // group is gated at registration-token mint (`worker_group_exists`).
+        ApiError::bad_request(format!(
+            "worker group '{group_alias}' does not resolve to a worker `capacity` \
+             resource in this workspace"
+        ))
+    })?;
+
+    // 6. Mint the worker credential + insert the row. workspace_id + group +
+    //    routing_partition flow from the (re-read) registration token + the
+    //    resolution above; enrolled_by = its created_by. The advertised
+    //    `backends` come from the enroll body (JSON array column).
     let worker_id = Uuid::new_v4();
     let minted = crate::models::runner::mint_token(WORKER_TOKEN_PREFIX, worker_id);
     let backends_json = serde_json::json!(req.backends);
 
     let insert = sqlx::query(
         "INSERT INTO workers \
-            (id, workspace_id, name, worker_group, token_hash, nats_public_key, backends, enrolled_by) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            (id, workspace_id, name, worker_group, routing_partition, token_hash, nats_public_key, backends, enrolled_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(worker_id)
     .bind(claimed.workspace_id)
     .bind(req.name.trim())
     .bind(&claimed.group)
+    .bind(routing_partition)
     .bind(&minted.token_hash)
     .bind(&req.nats_public_key)
     .bind(&backends_json)
@@ -365,11 +395,14 @@ pub async fn enroll_worker(
     // can connect immediately. A mint failure (e.g. a malformed public key) must
     // NOT fail enrollment: log a warning and return `nats_jwt: None`. The worker
     // can always fetch one later via `POST /api/v1/workers/{id}/nats-creds`.
+    // The JWT's group pull filter is the ROUTING PARTITION (UUID), not the alias:
+    // the worker subscribes to `executor-<wire>-grp.*.<routing_partition>.>`.
+    let partition_token = routing_partition.to_string();
     let nats_jwt = req.nats_public_key.as_deref().and_then(|pubkey| {
         match state.runner_nats_signer.mint_worker_jwt(
             pubkey,
             worker_id,
-            claimed.group.as_deref(),
+            Some(partition_token.as_str()),
             &req.backends,
         ) {
             Ok(jwt) => Some(jwt),
@@ -391,6 +424,7 @@ pub async fn enroll_worker(
             worker_token: minted.full_token,
             workspace_id: claimed.workspace_id,
             group: claimed.group,
+            routing_partition,
             nats_jwt,
         }),
     ))
@@ -485,9 +519,12 @@ pub async fn issue_worker_nats_creds(
     // (treating a malformed / non-array blob as "no backends").
     let backends: Vec<String> = serde_json::from_value(row.backends.clone()).unwrap_or_default();
 
+    // The pull filter is the ROUTING PARTITION (UUID), not the human alias —
+    // `executor-<wire>-grp.*.<routing_partition>.>`.
+    let partition_token = row.routing_partition.to_string();
     let nats_jwt = state
         .runner_nats_signer
-        .mint_worker_jwt(pubkey, id, row.group.as_deref(), &backends)
+        .mint_worker_jwt(pubkey, id, Some(partition_token.as_str()), &backends)
         .map_err(|e| ApiError::internal(format!("could not mint NATS user JWT: {e}")))?;
 
     Ok(Json(WorkerNatsCreds {

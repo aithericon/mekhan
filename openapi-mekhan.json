@@ -12431,14 +12431,16 @@
         "required": [
           "id",
           "worker_token",
-          "workspace_id"
+          "workspace_id",
+          "routing_partition"
         ],
         "properties": {
           "group": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Human group alias, inherited from the registration token. Display only —\n`None` is rendered as the implicit `default` group."
           },
           "id": {
             "type": "string",
@@ -12450,6 +12452,11 @@
               "null"
             ],
             "description": "A freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the worker sent at enrollment. `null` when no public key\nwas supplied OR signing was unavailable; the worker can fetch it later via\n`POST /api/v1/workers/{id}/nats-creds`."
+          },
+          "routing_partition": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The ROUTING PARTITION the executor binds its grouped consumer to: the\nworker group's `capacity`-resource UUID (the alias resolved, or the\nworkspace's seeded `default` group when the token names none). This — NOT\n`group` — is the token the executor partitions on\n(`executor-<wire>-grp.<prio>.<routing_partition>.>`)."
           },
           "worker_token": {
             "type": "string"
@@ -12707,7 +12714,9 @@
           "file",
           "signature",
           "timestamp",
-          "json"
+          "json",
+          "object",
+          "array"
         ]
       },
       "FieldMapping": {
@@ -15872,6 +15881,7 @@
               "required": [
                 "id",
                 "name",
+                "routing_partition",
                 "status",
                 "backends",
                 "enrolled_at"
@@ -15903,6 +15913,11 @@
                 },
                 "name": {
                   "type": "string"
+                },
+                "routing_partition": {
+                  "type": "string",
+                  "format": "uuid",
+                  "description": "The worker-group `capacity`-resource UUID this worker's `PartitionedPool`\nbinds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value\nthe enroll response returns — surfaced on the list row so the Queue detail\nUI can show each worker's live partition without re-enrolling."
                 },
                 "status": {
                   "type": "string"
@@ -20138,6 +20153,7 @@
           "id",
           "workspace_id",
           "name",
+          "routing_partition",
           "status",
           "backends",
           "enrolled_at"
@@ -20180,6 +20196,11 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "routing_partition": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The worker-group `capacity`-resource UUID this worker's `PartitionedPool`\nbinds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`)."
           },
           "status": {
             "type": "string"
@@ -20261,6 +20282,7 @@
         "required": [
           "id",
           "name",
+          "routing_partition",
           "status",
           "backends",
           "enrolled_at"
@@ -20292,6 +20314,11 @@
           },
           "name": {
             "type": "string"
+          },
+          "routing_partition": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The worker-group `capacity`-resource UUID this worker's `PartitionedPool`\nbinds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value\nthe enroll response returns — surfaced on the list row so the Queue detail\nUI can show each worker's live partition without re-enrolling."
           },
           "status": {
             "type": "string"

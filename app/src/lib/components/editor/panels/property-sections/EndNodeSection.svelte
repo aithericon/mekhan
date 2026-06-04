@@ -14,6 +14,8 @@
 	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import RefPicker from './RefPicker.svelte';
+	import OutputSchemaSection from './OutputSchemaSection.svelte';
+	import { portToSchemaNode } from '$lib/schema/model';
 
 	type FieldMapping = components['schemas']['FieldMapping'];
 
@@ -114,4 +116,9 @@
 		upstream takes precedence — its error envelope is preserved instead of
 		overwritten.
 	</p>
+
+	<!-- Terminal port schema — shown when a typed terminal port is declared. -->
+	{#if data.terminal && (data.terminal.fields?.length ?? 0) > 0}
+		<OutputSchemaSection node={portToSchemaNode(data.terminal)} title="Terminal port schema" />
+	{/if}
 </div>

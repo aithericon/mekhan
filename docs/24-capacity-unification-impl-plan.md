@@ -32,6 +32,11 @@ The design dialogue confirmed doc 23 and added three sharper claims, which drive
    decomposition** — *identity & admission* / *liveness & telemetry* / *capacity & dispatch* —
    that runners currently fuse and that this arc separates.
 
+   > **Update (D1, below):** "pull from a *shared* queue" is now "pull from the worker GROUP's
+   > queue". Enrollment + grouping became MANDATORY for workers — there is no anonymous worker —
+   > but dispatch discipline is still pull (competing consumers), so the orthogonality holds: the
+   > group is a routing partition, not a switch to push.
+
 ## 1. The three planes (target architecture)
 
 | Plane | Governs | Worker (today → target) | Runner (instrument) | Operator (future) |
@@ -60,9 +65,13 @@ No wire-format change, no executor-binary change, no engine change, no migration
   modelled as capabilities; the publish-time "is a live capacity serving this step's backend?"
   check collapses the two split paths (`BackendCoverage::is_covered` for workers,
   `RunnerPresence::pool_covers` for runners) into **one** `satisfies`-shaped membership query over
-  `FleetLiveness`. Realises doc 23 §6 at the *eligibility/coverage* layer; the compiler keeps
-  stamping `executor-<wire>` (the trivial predicate already **is** the static partition — doc 23
-  §4.1 — so no lowering rewrite is needed for the common case).
+  `FleetLiveness`. Realises doc 23 §6 at the *eligibility/coverage* layer.
+
+  > **Superseded by the unified-worker dispatch model (D1, below).** This slice originally had the
+  > compiler keep stamping the bare `executor-<wire>` stream (the trivial predicate as the static
+  > partition). That anonymous path is now **retired**: the compiler stamps every executor step with
+  > its worker GROUP'S grouped stream, and a step naming no group inherits the workspace's seeded
+  > `default` group. See **§ D1 — Unified worker dispatch** below.
 
 - **S3 — Capacity as a first-class resource with guarded trait-space axes + presets.** A
   `capacity` resource type (generalising `runner_group`) carries the doc 23 §3 axes in its
@@ -100,10 +109,10 @@ No wire-format change, no executor-binary change, no engine change, no migration
   parameterised builder by `{capacity_source, guard}`). They already share net-id, inboxes, and
   grant reply; the collapse is low-logic but must be proven *byte-stable* against live instrument
   AIR — so it waits for a live gate, not this offline slice.
-- **Grouped + enrolled workers** (identity plane for workers): reusable `rt_` group tokens baked
-  into an autoscaler launch template, per-worker scoped NATS JWT (`executor-<wire>.<group>.>`),
-  group as a second coarse routing coordinate reusing the `runner-jobs/{id}` subject-partition
-  mechanism. Touches the executor binary + NATS wire — the heaviest plane, deferred.
+- ~~**Grouped + enrolled workers** (identity plane for workers)~~ — **DONE** (see § D1 below).
+  Every worker now enrolls into a group, gets a per-worker scoped NATS JWT keyed on the group's
+  capacity-resource UUID, and binds a partitioned consumer on the group's grouped stream. The
+  anonymous worker path is gone.
 - **The `consume` discipline / non-integer capacity** (LLM/HTTP quota), **elastic** capacity
   (HPC, mostly built via `datacenter` + `Scheduled{operation:lease}` — doc 23 §7/§9.1), and the
   **ranking/fairness negotiator** (doc 23 §4.4) — all per doc 23 §11 step 2+.
@@ -127,3 +136,37 @@ modules (liveness registry, cell validation), `ci::openapi-drift` after regen, `
 Adversarial review focus: the instrument/presence-pool admission path must be byte-identical
 (no change to `runners_presence` inject/reap or `presence_pool_net`), and the worker telemetry
 must carry **no** control side-effect (a dropped worker never reaps an instance).
+
+## D1 — Unified worker dispatch (correction to the original anonymous-pool decision)
+
+The original plan (refinement #3, S2, and the deferred "grouped + enrolled workers" item above)
+modelled worker dispatch as a **two-plane** thing: an *anonymous* worker pulling the bare
+`executor-<wire>` stream, with grouped/enrolled workers as a strictly-additive, deferred second
+mode (`executor-<wire>-grp/<group>`). That split is now **collapsed into one model**:
+
+1. **Every worker enrolls.** There is no anonymous worker path — enrollment + group membership are
+   mandatory. A worker boots with a registration token, POSTs `/api/v1/workers/enroll`, and gets
+   back its routing partition.
+2. **Every executor job routes through a group.** The compiler stamps each executor-dispatched
+   `AutomatedStep` with its worker group's stream. A step that names no group is stamped with the
+   workspace's always-seeded **`default`** worker group.
+3. **One stream shape:** `executor-<wire>-grp/<partition>`. The bare `executor-<wire>` stream + the
+   anonymous `Pool` consumer are **retired as a dispatch target** (the stream *family* prefix
+   stays; nothing competes on the bare stream).
+4. **Partition = the group's capacity-resource UUID** (not its path/alias). This is workspace-safe
+   by construction — two workspaces can both own a `default` group without colliding on a queue —
+   and the UUID is a valid JetStream/NATS subject token (`[0-9a-f-]`, no dots).
+5. **The `default` worker group is a real `capacity` resource** (path `default`, the `worker`
+   preset = `liveness=competing_consumer` + `dispatch=pull`), seeded **per workspace**,
+   idempotently, at workspace creation AND at startup for every existing workspace, plus a
+   migration backfill (`migrations/20240144000000_default_worker_group.sql`).
+
+Touched: `shared/backends/src/types.rs` (`executor_namespace_for_group`), the compiler lowering
+(`compiler/lower/automated_step.rs` stamps `d.executor_namespace`), `handlers/workers.rs` +
+`worker_groups.rs` (enroll resolves alias→UUID, seeds `default`), and the executor binary
+(`executor-service` self-enrolls on boot, binds `ConsumerMode::PartitionedPool { partition }`).
+
+**Operational note:** because the bare `executor-<wire>` dispatch target is gone, any AIR compiled
+before this change routes to a stream no worker drains and would hang — **`just dev reset` is
+required** to recompile seeded demos onto the grouped stream. The dev `up-executor` recipe now
+enrolls the dev worker into `default` (mirroring `up-runner`).

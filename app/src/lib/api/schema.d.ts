@@ -4505,6 +4505,10 @@ export interface components {
          *     `wkr_{id}.{secret}` credential, returned ONCE and never stored in plaintext.
          */
         EnrolledWorker: {
+            /**
+             * @description Human group alias, inherited from the registration token. Display only —
+             *     `None` is rendered as the implicit `default` group.
+             */
             group?: string | null;
             /** Format: uuid */
             id: string;
@@ -4515,6 +4519,15 @@ export interface components {
              *     `POST /api/v1/workers/{id}/nats-creds`.
              */
             nats_jwt?: string | null;
+            /**
+             * Format: uuid
+             * @description The ROUTING PARTITION the executor binds its grouped consumer to: the
+             *     worker group's `capacity`-resource UUID (the alias resolved, or the
+             *     workspace's seeded `default` group when the token names none). This — NOT
+             *     `group` — is the token the executor partitions on
+             *     (`executor-<wire>-grp.<prio>.<routing_partition>.>`).
+             */
+            routing_partition: string;
             worker_token: string;
             /** Format: uuid */
             workspace_id: string;
@@ -4624,7 +4637,7 @@ export interface components {
          *     escape hatch for legacy / dynamic payloads). Snake-case wire values.
          * @enum {string}
          */
-        FieldKind: "text" | "textarea" | "number" | "bool" | "select" | "file" | "signature" | "timestamp" | "json";
+        FieldKind: "text" | "textarea" | "number" | "bool" | "select" | "file" | "signature" | "timestamp" | "json" | "object" | "array";
         /**
          * @description A single field mapping for `Trigger.payload_mapping`. Each entry projects
          *     an event scope into a typed token field via a Rhai expression. The compiler
@@ -5950,6 +5963,14 @@ export interface components {
                 /** Format: date-time */
                 last_seen_at?: string | null;
                 name: string;
+                /**
+                 * Format: uuid
+                 * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+                 *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value
+                 *     the enroll response returns — surfaced on the list row so the Queue detail
+                 *     UI can show each worker's live partition without re-enrolling.
+                 */
+                routing_partition: string;
                 status: string;
             }[];
             /** Format: int64 */
@@ -8057,6 +8078,12 @@ export interface components {
             nats_public_key?: string | null;
             /** Format: date-time */
             revoked_at?: string | null;
+            /**
+             * Format: uuid
+             * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+             *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`).
+             */
+            routing_partition: string;
             status: string;
             /** Format: uuid */
             workspace_id: string;
@@ -8115,6 +8142,14 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
             name: string;
+            /**
+             * Format: uuid
+             * @description The worker-group `capacity`-resource UUID this worker's `PartitionedPool`
+             *     binds to (`executor-<wire>-grp.<prio>.<routing_partition>.>`). Same value
+             *     the enroll response returns — surfaced on the list row so the Queue detail
+             *     UI can show each worker's live partition without re-enrolling.
+             */
+            routing_partition: string;
             status: string;
         };
         WorkflowEdge: {

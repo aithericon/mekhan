@@ -311,6 +311,44 @@ async fn discover_resource_globals(
             }
         }
 
+        // Unified worker dispatch (docs/23/24): EVERY executor-dispatched step
+        // routes through a worker GROUP partition. Resolve the group's `capacity`
+        // resource into the registry so the compiler can stamp its UUID as the
+        // routing partition. NOT marked `declared` here: the group/default is
+        // resolved (and hard-failed) at lowering against the resolved registry,
+        // with a worker-group-specific message — adding it to `declared` would
+        // double-report as a generic `WorkspaceResourceUnknown`.
+        //
+        //   - default-inline `Executor` (`capacity: None`): the step's `group`
+        //     alias, or the implicit `default` group when it names none.
+        //   - pooled `Executor { capacity }` + `Scheduled`: their NON-lease
+        //     default route lands on the workspace's `default` group, so the
+        //     `default` head must resolve for them too.
+        if let WorkflowNodeData::AutomatedStep {
+            deployment_model,
+            ..
+        } = &node.data
+        {
+            match deployment_model {
+                crate::models::template::DeploymentModel::Executor {
+                    capacity: None,
+                    group,
+                } => {
+                    let alias = group
+                        .as_deref()
+                        .filter(|g| !g.is_empty())
+                        .unwrap_or(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH);
+                    envelope_heads.insert(alias.to_string());
+                }
+                _ => {
+                    // Pooled / Scheduled bodies default-route to the workspace's
+                    // `default` group when their grant carries no namespace.
+                    envelope_heads
+                        .insert(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH.to_string());
+                }
+            }
+        }
+
         // `Scheduled { scheduler: Some(alias) }` — a declared datacenter binding.
         if let WorkflowNodeData::AutomatedStep {
             deployment_model:
