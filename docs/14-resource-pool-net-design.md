@@ -241,6 +241,15 @@ solve. Encoding that as token matching would reinvent a scheduler badly — the
 `find_valid_binding` Cartesian cost is the early warning of that mistake. **Do
 not model a real DC as tokens.**
 
+(The binding optimizations in [`engine/docs/engine/scalability.md`](../engine/docs/engine/scalability.md)
+§4 P1 — an equi-join index over `==`-correlated guards, and a per-tick
+negative-binding memo — do **not** change this conclusion. They cheapen the
+*legitimate* homogeneous pool, where admission genuinely is the firing rule:
+the index prunes only equality correlations, not arbitrary heterogeneous
+placement, and the memo removes only the per-tick re-payment, not the cost of a
+single real scan. A real DC's placement is neither an equi-join nor cheap to
+scan once — the warning stands.)
+
 ### The load-bearing property: the claim contract is scheduler-agnostic
 
 The instance-side lowering (M3, `lower_automated_step_pooled`) does *not* care
