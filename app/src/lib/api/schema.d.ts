@@ -778,6 +778,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/executions/{execution_id}/channels/{channel}/data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/executions/{execution_id}/channels/{channel}/data
+         * @description Stream the raw, reordered, concatenated payload bytes of one execution's
+         *     data-plane channel. The response `Content-Type` is taken from the channel's
+         *     first envelope (default `application/octet-stream`). The stream ends at the
+         *     `is_eof` envelope, or — for a never-closed / nonexistent channel — when no
+         *     further envelope arrives within `IDLE_TIMEOUT` (returns what was seen; an
+         *     empty channel yields a 200 with no body). The ephemeral consumer is reaped
+         *     by NATS via `inactive_threshold` once this response future is dropped.
+         */
+        get: operations["tap_channel_data"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/files/upload/{id}/{node_id}": {
         parameters: {
             query?: never;
@@ -7359,6 +7385,13 @@ export interface components {
             /** @description `EffectFailed` payload (error_message, retryable, ...) for failed steps. */
             error?: unknown;
             /**
+             * @description Executor `execution_id` (`mekhan-{net}-{uuid}`) for AutomatedStep/Agent
+             *     steps — the key the datastream tap scopes a channel's bytes by
+             *     (`GET /api/v1/executions/{execution_id}/channels/{c}/data`). `None` for
+             *     non-executor nodes (Start/End/Decision/...).
+             */
+            execution_id?: string | null;
+            /**
              * @description `{ "<producer_node_id>": <envelope> }` grouped by upstream owner of
              *     each read-arc place this step consumed.
              */
@@ -10513,6 +10546,49 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    tap_channel_data: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AutomatedStep execution id (the `execution_id` stamped on the parked output envelope). */
+                execution_id: string;
+                /** @description Data-plane channel name (Rhai-identifier-safe slug). */
+                channel: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Concatenated channel payload bytes; Content-Type echoes the channel envelope's content_type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Malformed execution_id or channel path component. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description JetStream consumer could not be opened. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

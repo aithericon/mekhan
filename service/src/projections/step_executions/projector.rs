@@ -74,6 +74,13 @@ pub struct StepExecutionRow {
     /// `workflow_terminals[*]` (End nodes). Absent for nodes that completed
     /// via a control-flow output (Decision, ParallelSplit, ...).
     pub outputs: Option<serde_json::Value>,
+    /// The executor `execution_id` (`mekhan-{net}-{uuid}`) hoisted off the
+    /// AutomatedStep/Agent envelope before `outputs` is unwrapped to its
+    /// business fields. It's the key the datastream tap
+    /// (`/api/v1/executions/{execution_id}/channels/{c}/data`) scopes a
+    /// channel's out-of-band bytes by, so the UI can play data channels. None
+    /// for nodes that aren't executor jobs (Start/End/Decision/...).
+    pub execution_id: Option<String>,
     /// For Decision/branching nodes: the `OutputKey` of the output that
     /// received the token, rendered as its wire form (`"edge:<id>"`,
     /// `"named:<id>"`).
@@ -363,6 +370,7 @@ impl State {
                 status: StepStatus::Pending,
                 inputs: None,
                 outputs: None,
+                execution_id: None,
                 branch_taken: None,
                 started_at: Some(arrived_at),
                 completed_at: None,
@@ -486,6 +494,7 @@ impl State {
                 status: StepStatus::Pending,
                 inputs: None,
                 outputs: None,
+                execution_id: None,
                 branch_taken: None,
                 started_at: None,
                 completed_at: None,
@@ -559,10 +568,13 @@ impl State {
             // 5a. data_port deposit (Start/HumanTask/AutomatedStep/Loop/SubWorkflow park)
             if let Some(dp_owner) = lookups.data_port_to_node.get(&place_id.0) {
                 if dp_owner == &owner {
-                    row.outputs = Some(canonical_output_payload(
-                        owner_kind,
-                        token_color_to_json(&token.color),
-                    ));
+                    let raw = token_color_to_json(&token.color);
+                    // Hoist execution_id off the full envelope before unwrapping
+                    // `outputs` to the business fields (the unwrap drops it).
+                    if let Some(eid) = raw.get("execution_id").and_then(|v| v.as_str()) {
+                        row.execution_id = Some(eid.to_string());
+                    }
+                    row.outputs = Some(canonical_output_payload(owner_kind, raw));
                     if row.status != StepStatus::Failed {
                         row.status = StepStatus::Completed;
                         row.completed_at = Some(ts);
@@ -642,6 +654,7 @@ impl State {
                 status: StepStatus::Pending,
                 inputs: None,
                 outputs: None,
+                execution_id: None,
                 branch_taken: None,
                 started_at: None,
                 completed_at: None,
@@ -714,6 +727,7 @@ impl State {
                         status: StepStatus::Skipped,
                         inputs: None,
                         outputs: None,
+                execution_id: None,
                         branch_taken: None,
                         started_at: None,
                         completed_at: None,

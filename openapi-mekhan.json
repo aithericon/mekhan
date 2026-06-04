@@ -2230,6 +2230,64 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/channels/{channel}/data": {
+      "get": {
+        "tags": [
+          "executions"
+        ],
+        "summary": "GET /api/v1/executions/{execution_id}/channels/{channel}/data",
+        "description": "Stream the raw, reordered, concatenated payload bytes of one execution's\ndata-plane channel. The response `Content-Type` is taken from the channel's\nfirst envelope (default `application/octet-stream`). The stream ends at the\n`is_eof` envelope, or — for a never-closed / nonexistent channel — when no\nfurther envelope arrives within `IDLE_TIMEOUT` (returns what was seen; an\nempty channel yields a 200 with no body). The ephemeral consumer is reaped\nby NATS via `inactive_threshold` once this response future is dropped.",
+        "operationId": "tap_channel_data",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "AutomatedStep execution id (the `execution_id` stamped on the parked output envelope).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "path",
+            "description": "Data-plane channel name (Rhai-identifier-safe slug).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Concatenated channel payload bytes; Content-Type echoes the channel envelope's content_type.",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "Malformed execution_id or channel path component.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "JetStream consumer could not be opened.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/files/upload/{id}/{node_id}": {
       "post": {
         "tags": [
@@ -18462,6 +18520,13 @@
           "error": {
             "description": "`EffectFailed` payload (error_message, retryable, ...) for failed steps."
           },
+          "execution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Executor `execution_id` (`mekhan-{net}-{uuid}`) for AutomatedStep/Agent\nsteps — the key the datastream tap scopes a channel's bytes by\n(`GET /api/v1/executions/{execution_id}/channels/{c}/data`). `None` for\nnon-executor nodes (Start/End/Decision/...)."
+          },
           "inputs": {
             "description": "`{ \"<producer_node_id>\": <envelope> }` grouped by upstream owner of\neach read-arc place this step consumed."
           },
@@ -21616,6 +21681,10 @@
     {
       "name": "instances",
       "description": "Running workflow instances deployed to the petri-lab engine."
+    },
+    {
+      "name": "executions",
+      "description": "AutomatedStep execution introspection — data-plane channel byte taps (out-of-band streaming channel payloads over JetStream)."
     },
     {
       "name": "processes",

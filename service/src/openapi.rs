@@ -232,6 +232,7 @@ use utoipa::OpenApi;
     tags(
         (name = "templates", description = "Workflow template CRUD, versioning, publish, compile-to-AIR."),
         (name = "instances", description = "Running workflow instances deployed to the petri-lab engine."),
+        (name = "executions", description = "AutomatedStep execution introspection — data-plane channel byte taps (out-of-band streaming channel payloads over JetStream)."),
         (name = "processes", description = "HPI process inspection — metrics, logs, tasks, artifacts."),
         (name = "processes-live", description = "SSE backfill + live streams for process metrics, logs, and artifacts."),
         (name = "tasks", description = "Human task lifecycle — list, complete, cancel."),

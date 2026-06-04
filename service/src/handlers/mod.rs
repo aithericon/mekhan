@@ -7,6 +7,7 @@ pub mod cloud_layer_proxy;
 pub mod clusters;
 pub mod container_images;
 pub mod demos;
+pub mod executions;
 pub mod files;
 pub mod health;
 pub mod instances;

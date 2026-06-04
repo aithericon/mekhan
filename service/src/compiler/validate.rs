@@ -858,6 +858,17 @@ pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileErro
             if !seen.insert(ch.name.as_str()) {
                 return Err(invalid("duplicate channel name on this node".to_string()));
             }
+            // The channel handle `id` IS `ch.name` (the wiring contract). An
+            // AutomatedStep node also exposes fixed `in`/`out`/`error` handles;
+            // a channel sharing one of those names would collide on the same
+            // node, silently cross-wiring the fixed port's edges (the editor
+            // resolves edges purely by handle id). Reserve them.
+            if matches!(ch.name.as_str(), "in" | "out" | "error") {
+                return Err(invalid(
+                    "channel name is reserved (collides with the fixed in/out/error handle); rename it"
+                        .to_string(),
+                ));
+            }
 
             match ch.plane {
                 ChannelPlane::Control => match ch.contract {

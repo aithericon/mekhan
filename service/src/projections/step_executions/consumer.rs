@@ -276,13 +276,13 @@ async fn upsert_rows(
                 template_id, template_version, node_kind,
                 status, inputs, outputs, branch_taken,
                 started_at, completed_at, error, last_sequence,
-                created_at, updated_at
+                execution_id, created_at, updated_at
             ) VALUES (
                 $1, $2, $3,
                 $4, $5, $6,
                 $7, $8, $9, $10,
                 $11, $12, $13, $14,
-                NOW(), NOW()
+                $15, NOW(), NOW()
             )
             ON CONFLICT (instance_id, node_id, iteration_index) DO UPDATE SET
                 status = EXCLUDED.status,
@@ -293,6 +293,7 @@ async fn upsert_rows(
                 completed_at = EXCLUDED.completed_at,
                 error = EXCLUDED.error,
                 last_sequence = EXCLUDED.last_sequence,
+                execution_id = EXCLUDED.execution_id,
                 updated_at = NOW()
             WHERE step_execution.last_sequence <= EXCLUDED.last_sequence
             "#,
@@ -311,6 +312,7 @@ async fn upsert_rows(
         .bind(row.completed_at)
         .bind(row.error.as_ref())
         .bind(row.last_sequence as i64)
+        .bind(row.execution_id.as_deref())
         .execute(db)
         .await?;
     }

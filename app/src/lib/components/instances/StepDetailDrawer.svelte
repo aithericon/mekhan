@@ -8,11 +8,12 @@
 	import Workflow from '@lucide/svelte/icons/workflow';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import CopyButton from '$lib/components/ui/copy-button/CopyButton.svelte';
-	import type { AllocationResponse, InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
+	import type { AllocationResponse, Channel, InstanceChild, StepExecution, WorkflowNode } from '$lib/api/client';
 	import type { NodeInterface } from '$lib/types/node-interface';
-	import type { LeaseRuntime } from '$lib/stores/instance-marking.svelte';
+	import type { ChannelRuntime, LeaseRuntime } from '$lib/stores/instance-marking.svelte';
 	import { nodeKindMeta } from './node-kind-meta';
 	import { SmartValue } from './output-renderers';
+	import ChannelsPanel from './ChannelsPanel.svelte';
 	import StepLogs from './StepLogs.svelte';
 	import Server from '@lucide/svelte/icons/server';
 	import Cpu from '@lucide/svelte/icons/cpu';
@@ -49,6 +50,11 @@
 		 *  (datacenter leases / token-pool grants). Rendered for Scheduled and
 		 *  LeaseScope nodes; gracefully omitted when empty. */
 		allocationRows?: AllocationResponse[];
+		/** Per-channel live lifecycle for this node, keyed by channel name,
+		 *  derived by the parent from the instance net marking. Absent → the
+		 *  Channels section renders the declared channels statically (no faked
+		 *  lifecycle). */
+		channelRuntime?: Record<string, ChannelRuntime> | null;
 		open: boolean;
 		onClose: () => void;
 		/** When the user picks a different iteration in the drawer, the parent
@@ -65,10 +71,19 @@
 		childInstances = [],
 		leaseRuntime = null,
 		allocationRows = [],
+		channelRuntime = null,
 		open,
 		onClose,
 		onSelectIteration
 	}: Props = $props();
+
+	// Statically-declared channels on this node (docs/25). Only the
+	// `automated_step` arm of `WorkflowNodeData` carries `channels`; narrow on
+	// the arm before reading. Surfaced in the Channels section; lifecycle (if
+	// available) comes from `channelRuntime`.
+	const channels = $derived<Channel[]>(
+		node?.data?.type === 'automated_step' ? (node.data.channels ?? []) : []
+	);
 
 	// Cluster-lease lifecycle palette + copy.
 	const leaseTone: Record<string, { bg: string; text: string; label: string }> = {
@@ -136,17 +151,21 @@
 	);
 
 	// ── Step-scoped logs ──────────────────────────────────────────────────────
-	// The `StepExecution` row has no execution_id of its own; it lives on the
-	// parked output envelope (executor-backed steps) and is the reliable key for
-	// scoping `hpi_logs` to this exact step+iteration. Derive it (+ the executor-
-	// reported log summary) so the Logs section can fetch precisely.
+	// `execution_id` is the reliable key for scoping `hpi_logs` to this exact
+	// step+iteration AND for addressing the step's data-plane channel bytes via
+	// the datastream tap. The projection now surfaces it as a first-class
+	// `step.execution_id` (hoisted off the envelope before `outputs` is unwrapped
+	// to its business fields); fall back to the envelope for legacy rows.
 	const stepOutputs = $derived<Record<string, unknown> | null>(
 		step?.outputs && typeof step.outputs === 'object'
 			? (step.outputs as Record<string, unknown>)
 			: null
 	);
 	const stepExecutionId = $derived<string | null>(
-		typeof stepOutputs?.execution_id === 'string' ? (stepOutputs.execution_id as string) : null
+		step?.execution_id ??
+			(typeof stepOutputs?.execution_id === 'string'
+				? (stepOutputs.execution_id as string)
+				: null)
 	);
 	const stepLogsSummary = $derived.by<{ total: number | null; byLevel: Record<string, number> | null }>(() => {
 		const d = stepOutputs?.detail;
@@ -564,6 +583,19 @@
 						/>
 					{/if}
 				</section>
+
+				{#if channels.length > 0}
+					<!-- Declared streaming channels (docs/25). Static list of
+					     name/direction/plane/element; best-effort live "opened · N
+					     elements · closed" status when the marking is available; a
+					     Play/Preview affordance for OUT data channels carrying
+					     audio/video/image (taps the channel-data endpoint). -->
+					<ChannelsPanel
+						{channels}
+						runtime={channelRuntime}
+						executionId={stepExecutionId}
+					/>
+				{/if}
 			</div>
 		{:else if leaseRuntime}
 			<!-- LeaseScope container: no step-execution row of its own. The drawer
