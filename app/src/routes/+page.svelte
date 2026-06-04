@@ -12,6 +12,7 @@
 		type TemplateSummary
 	} from '$lib/api/client';
 	import { findShowcaseTemplate } from '$lib/templates/showcase';
+	import BrandSpiral from '$lib/components/BrandSpiral.svelte';
 	import { auth } from '$lib/auth/store.svelte';
 	import Rocket from '@lucide/svelte/icons/rocket';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -154,8 +155,12 @@
 	);
 </script>
 
-<div class="h-full overflow-y-auto" data-testid="home-page">
-	<div class="mx-auto max-w-6xl px-6 py-10 animate-rise">
+<div class="relative h-full overflow-x-hidden overflow-y-auto" data-testid="home-page">
+	<!-- Abstract brand motif, faint in the top-right corner. -->
+	<BrandSpiral
+		class="pointer-events-none absolute -top-16 -right-16 z-0 size-[22rem] text-primary opacity-[0.10] select-none dark:opacity-[0.16]"
+	/>
+	<div class="relative z-10 mx-auto max-w-6xl px-6 py-10 animate-rise">
 		<!-- Header: greeting + primary CTAs ----------------------------- -->
 		<div class="flex flex-wrap items-end justify-between gap-4">
 			<div>
