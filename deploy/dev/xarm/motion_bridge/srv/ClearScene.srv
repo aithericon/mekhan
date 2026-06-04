@@ -1,0 +1,11 @@
+# Path C Slice 2: clear ALL world collision objects (and attached objects) from
+# move_group's planning scene. Enumerates current ids via /get_planning_scene
+# then REMOVEs each via an /apply_planning_scene diff. Requires confirm==true.
+#
+# --- request ---
+bool    confirm                      # must be true to act (cheap guard)
+---
+# --- response ---
+bool    success
+int32   removed_count                # number of objects removed (finite, never NaN)
+string  error_message                # human-readable on failure

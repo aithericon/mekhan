@@ -9,16 +9,30 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+# S2/S3 srv reference moveit_msgs (PoseStamped is geometry_msgs; the scene/grasp
+# srv keep their fields flat -- but moveit_msgs + shape_msgs are now interface
+# DEPENDENCIES so generation resolves cleanly and downstream introspection works).
+find_package(moveit_msgs REQUIRED)
+find_package(shape_msgs REQUIRED)
 
-# Generate the PlanToPose service. The request references geometry_msgs/Pose and
-# the response carries the INNER trajectory_msgs/JointTrajectory as an opaque
-# JSON string (declared `string trajectory`), so the only interface DEPENDENCIES
-# are geometry_msgs + trajectory_msgs. (Deliberately NOT moveit_msgs: declaring
-# the trajectory field as moveit_msgs/RobotTrajectory would trigger the deep
-# nested-recursion deriver path for no value -- decision 4.)
+# Generate the bridge services.
+#   PlanToPose / PlanCartesian carry the INNER trajectory_msgs/JointTrajectory as
+#     an opaque JSON string (declared `string trajectory`), not a moveit_msgs type,
+#     so we avoid the deep nested-recursion deriver path (decision 4).
+#   AddObject takes a geometry_msgs/PoseStamped; PlanCartesian a geometry_msgs/Pose[].
+#   The scene/grasp srv (RemoveObject/ClearScene/Grasp/Release) are flat scalars.
+# Interface DEPENDENCIES: geometry_msgs + trajectory_msgs as before, plus
+# moveit_msgs + shape_msgs (referenced by the node's scene mutation, declared here
+# so the package's interface deps stay accurate).
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/PlanToPose.srv"
-  DEPENDENCIES geometry_msgs trajectory_msgs
+  "srv/AddObject.srv"
+  "srv/RemoveObject.srv"
+  "srv/ClearScene.srv"
+  "srv/PlanCartesian.srv"
+  "srv/Grasp.srv"
+  "srv/Release.srv"
+  DEPENDENCIES geometry_msgs trajectory_msgs moveit_msgs shape_msgs
 )
 
 # Install the rclpy node so `ros2 run aithericon_motion_bridge motion_bridge_node.py`

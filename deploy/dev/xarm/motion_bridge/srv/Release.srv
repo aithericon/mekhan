@@ -1,0 +1,11 @@
+# Path C Slice 3 (decision 4): ATOMIC release = gripper open FUSED with a scene
+# detach (AttachedCollisionObject REMOVE -> object falls back into the world).
+# Gripper actuation is best-effort in fake sim; the detach is what matters.
+#
+# --- request ---
+string  object_id                    # id of the attached collision object to release + detach
+---
+# --- response ---
+bool    success                      # reflects the scene-detach op
+bool    attached                     # false after a successful release
+string  error_message                # surfaces partial state (e.g. gripper actuation skipped)

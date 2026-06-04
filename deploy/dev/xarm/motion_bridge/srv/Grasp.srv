@@ -1,0 +1,14 @@
+# Path C Slice 3 (decision 4): ATOMIC grasp = gripper actuation FUSED with a scene
+# attach. The scene attach (AttachedCollisionObject ADD on the gripper TCP link via
+# /apply_planning_scene) is what matters for subsequent collision-aware planning;
+# gripper actuation is best-effort in fake sim. Returns only after the attach.
+#
+# --- request ---
+string  object_id                    # id of the (world) collision object to grasp + attach
+float64 width                        # target gripper opening width (best-effort)
+float64 effort                       # grasp effort (best-effort)
+---
+# --- response ---
+bool    success                      # reflects the scene-attach op (atomic from caller's view)
+bool    attached                     # true after a successful attach
+string  error_message                # surfaces partial state (e.g. gripper actuation skipped)

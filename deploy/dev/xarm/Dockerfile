@@ -143,6 +143,22 @@ RUN . /opt/ros/jazzy/setup.sh \
     && . /ros2_ws/install/setup.sh \
     && colcon build --packages-select aithericon_motion_bridge
 
+# ── Enable the gripper in the fake sim. xarm6_planner_fake.launch.py hard-codes
+#    its launch_arguments and does NOT forward add_gripper, so the stock fake arm
+#    has no gripper: drive_joint never appears in /joint_states and the
+#    xarm_gripper_traj_controller action server never actuates. Patch the wrapper
+#    (installed copy is what `ros2 launch` loads; src patched too for parity) to
+#    pass add_gripper:=true, so move_group + fake ros2_control bring up the
+#    UFACTORY gripper — drive_joint is published, the gripper links render in RViz,
+#    and the motion-bridge /grasp,/release ops drive a REAL, visible gripper
+#    close/open on top of the scene attach. Additive: the separately-launched
+#    xarm_planner_node (demo 30 services) and the arm "xarm6" planning group are
+#    untouched. The `\1`-anchored sed is a harmless no-op if a future wrapper
+#    already forwards the arg.
+RUN sed -i "s/\(['\"]no_gui_ctrl['\"]: ['\"]true['\"],\)/\1\n            'add_gripper': 'true',/" \
+        /ros2_ws/install/xarm_planner/share/xarm_planner/launch/xarm6_planner_fake.launch.py \
+        /ros2_ws/src/xarm_ros2/xarm_planner/launch/xarm6_planner_fake.launch.py
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

@@ -1,0 +1,24 @@
+# Path C Slice 2: straight-line (Cartesian) plan through a list of waypoints via
+# /compute_cartesian_path, returning the INNER trajectory_msgs/JointTrajectory as
+# an opaque JSON string (same splice contract as PlanToPose) plus a `fraction` of
+# the path that was solved.
+#
+# --- request ---
+geometry_msgs/Pose[] waypoints       # ordered Cartesian waypoints for the eef
+string  group                        # planning group; empty -> node default "xarm6"
+string  frame_id                     # planning frame; empty -> node default "link_base"
+float64 eef_step                     # max step between interpolated points; 0 -> default (0.01)
+float64 jump_threshold               # joint-space jump limit; 0 -> default (0.0)
+float64 allowed_planning_time        # 0 -> node default (5.0)
+---
+# --- response: opaque inner JointTrajectory + typed metrics sidecar ---
+# Top-level numeric metrics are NOT auto-nullable, so the node MUST emit finite
+# numbers (0 / sentinels) on every failure path, never NaN.
+bool    success
+string  trajectory                   # opaque trajectory_msgs/JointTrajectory as JSON (spliced verbatim into Path B)
+float64 planning_time                # seconds
+int32   point_count                  # len(trajectory.points)
+float64 total_duration               # last point time_from_start, seconds
+float64 fraction                     # fraction of the requested Cartesian path solved (0.0..1.0)
+int32   error_code                   # MoveItErrorCodes.val (1 == SUCCESS)
+string  error_message                # human-readable on failure

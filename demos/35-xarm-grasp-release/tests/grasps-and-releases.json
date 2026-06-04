@@ -1,0 +1,15 @@
+{
+  "name": "grasps-and-releases",
+  "enabled": true,
+  "start_tokens": [
+    { "start_block_id": "start", "token": {} }
+  ],
+  "human_answers": {},
+  "assertions": [
+    { "path": "result.value.grasped", "op": "eq", "value": true },
+    { "path": "result.value.released_attached", "op": "eq", "value": false },
+    { "path": "result.value.picked", "op": "eq", "value": true },
+    { "path": "result.value.released", "op": "eq", "value": true },
+    { "path": "result.value.positions", "op": "exists" }
+  ]
+}

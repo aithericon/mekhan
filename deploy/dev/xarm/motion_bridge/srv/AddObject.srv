@@ -1,0 +1,13 @@
+# Path C Slice 2: add a collision object to move_group's STATEFUL planning scene
+# (via /apply_planning_scene). The scene persists on the live move_group across
+# jobs (decision 1) so later plans route around it.
+#
+# --- request ---
+string  object_id                    # unique id for the collision object
+string  primitive                    # box | sphere | cylinder
+float64[] dimensions                 # shape_msgs/SolidPrimitive dimensions, per primitive
+geometry_msgs/PoseStamped pose       # object pose; header.frame_id -> planning frame
+---
+# --- response ---
+bool    success
+string  error_message                # human-readable on failure

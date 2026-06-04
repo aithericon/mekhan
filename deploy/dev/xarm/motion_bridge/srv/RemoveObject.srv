@@ -1,0 +1,9 @@
+# Path C Slice 2: remove a single collision object from the planning scene
+# (via /apply_planning_scene with a CollisionObject REMOVE diff).
+#
+# --- request ---
+string  object_id                    # id of the collision object to remove
+---
+# --- response ---
+bool    success
+string  error_message                # human-readable on failure

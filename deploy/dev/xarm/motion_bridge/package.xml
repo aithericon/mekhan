@@ -28,10 +28,13 @@
   <!-- message deps referenced by the .srv (interface-generation deps) -->
   <depend>geometry_msgs</depend>
   <depend>trajectory_msgs</depend>
+  <!-- S2/S3: moveit_msgs + shape_msgs are now interface-gen deps (referenced by
+       the scene/grasp srv + node), so full build+exec <depend> not exec_depend. -->
+  <depend>moveit_msgs</depend>
+  <depend>shape_msgs</depend>
 
   <!-- runtime deps of the rclpy node -->
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>moveit_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
