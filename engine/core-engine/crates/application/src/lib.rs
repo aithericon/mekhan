@@ -13,6 +13,7 @@ pub(crate) mod firing;
 pub mod http_executor_client;
 pub mod human_handlers;
 pub(crate) mod idempotency_index;
+pub(crate) mod join_index;
 pub mod ports;
 pub mod pre_dispatch;
 pub mod process_handlers;
