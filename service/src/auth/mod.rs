@@ -29,6 +29,7 @@ pub mod model;
 pub mod port;
 pub mod resolver;
 pub mod runner_token;
+pub mod worker_token;
 pub mod zitadel;
 
 pub use authenticator::{Authenticator, SESSION_COOKIE};

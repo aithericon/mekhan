@@ -224,6 +224,8 @@
 <DeploymentSection
 	value={data.deploymentModel}
 	schedulable={allowScheduled}
+	requirements={data.requirements}
+	onRequirementsChange={(requirements) => onchange({ ...data, requirements })}
 	{readonly}
 	onchange={(dm) => onchange({ ...data, deploymentModel: dm })}
 />

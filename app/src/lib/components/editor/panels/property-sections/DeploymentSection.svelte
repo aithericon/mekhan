@@ -13,8 +13,12 @@
 		type RunTarget as Target,
 		type DeploymentLike
 	} from '$lib/editor/deployment-run-target';
+	import type { components } from '$lib/api/schema';
 	import JobTemplatePicker, { type JobTemplateRef } from './shared/JobTemplatePicker.svelte';
 	import TemplateParameterForm from './TemplateParameterForm.svelte';
+	import PlacementRequirementsSection from './PlacementRequirementsSection.svelte';
+
+	type Requirements = components['schemas']['Requirements'];
 
 	// The editor-side shape of `DeploymentModel` (executor{capacity?} | scheduled{…}).
 	// Shared by the AutomatedStep and Agent panels — both carry the identical
@@ -45,11 +49,23 @@
 		/** Whether the Scheduled (Nomad/Slurm) target is offered. Engine-effect
 		 * backends are inline-only; pass `false` to hide it. */
 		schedulable?: boolean;
+		/** The step's placement `requirements`. Placement constraints ONLY apply to
+		 * the runner_group model (capability-matched `t_grant`), so the editor is
+		 * hosted here, in the Runner-group branch. Omit (Agent panel) to hide it. */
+		requirements?: Requirements | null;
+		onRequirementsChange?: (requirements: Requirements | undefined) => void;
 		readonly?: boolean;
 		onchange: (deploymentModel: DeploymentModelValue) => void;
 	};
 
-	let { value, schedulable = true, readonly = false, onchange }: Props = $props();
+	let {
+		value,
+		schedulable = true,
+		requirements,
+		onRequirementsChange,
+		readonly = false,
+		onchange
+	}: Props = $props();
 
 	const ext = $derived(value as ExtendedDeploymentModel | undefined);
 	const allowScheduled = $derived(schedulable);
@@ -395,6 +411,16 @@
 				reached. The grant is readable in the body as <code>lease.unit_id</code>.
 			{/if}
 		</p>
+		<!-- Placement requirements belong to the runner_group model ONLY — the
+		     engine's `satisfies()` guard runs only on the presence pool's t_grant.
+		     Concurrency-limit/worker/scheduled steps carry no requirements. -->
+		{#if target === 'runner_group' && onRequirementsChange}
+			<PlacementRequirementsSection
+				requirements={requirements ?? undefined}
+				{readonly}
+				onchange={onRequirementsChange}
+			/>
+		{/if}
 	{:else if target === 'scheduled'}
 		<FormField label="Scheduler (datacenter resource)" for="scheduled-scheduler">
 			<Select.Root

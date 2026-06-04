@@ -66,10 +66,29 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         }
     }
 
+    // Identity-plane mutual-exclusion guard (docs/23/24): `capacity` (presence-PUSH
+    // admission, R3) and `group` (plain PULL routing coordinate) are mutually
+    // exclusive. A grouped step stays on the plain pull lowering below and must
+    // NOT enter `lower_automated_step_pooled` (the claim/grant handshake). Reject
+    // a step that asks for both BEFORE the pooled dispatch.
+    if let WorkflowNodeData::AutomatedStep {
+        deployment_model:
+            DeploymentModel::Executor {
+                capacity: Some(_),
+                group: Some(_),
+            },
+        ..
+    } = &cx.node.data
+    {
+        return Err(CompileError::CapacityGroupConflict {
+            node_id: cx.node.id.clone(),
+        });
+    }
+
     if matches!(
         &cx.node.data,
         WorkflowNodeData::AutomatedStep {
-            deployment_model: DeploymentModel::Executor { capacity: Some(_) },
+            deployment_model: DeploymentModel::Executor { capacity: Some(_), .. },
             ..
         }
     ) {
@@ -190,6 +209,35 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
     // below selects `logic()` only when EMPTY — but the leased case is the only
     // one that needs the `logic_rhai` deferral, so we MUST keep this constant
     // stamp on the `logic()` side). See the branch-selection note below.
+    // Identity-plane GROUP coordinate (docs/23/24): an optional `capacity`-resource
+    // alias on `DeploymentModel::Executor.group` narrows the DEFAULT-inline pull
+    // namespace from `executor-<wire>` to `executor-<wire>/<group>` so only enrolled
+    // workers of that group compete for this step's jobs. It is a SECOND coarse pull
+    // coordinate — the step stays on the plain pull path (the `capacity` + `group`
+    // mutual-exclusion is gated up top before the pooled dispatch). `None` ⇒ the
+    // unchanged base namespace (BYTE-STABLE). The token is interpolated verbatim into
+    // a NATS subject segment, so validate it as a single safe subject token here
+    // (mirrors `handlers::runners::is_safe_group`). Only meaningful on the
+    // default-inline (non-leased) arm: a leased body borrows the holder's namespace.
+    let step_group: Option<&str> = match &cx.node.data {
+        WorkflowNodeData::AutomatedStep {
+            deployment_model: DeploymentModel::Executor { group: Some(g), .. },
+            ..
+        } => Some(g.as_str()),
+        _ => None,
+    };
+    if let Some(g) = step_group {
+        let safe = !g.is_empty()
+            && g.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !safe {
+            return Err(CompileError::GroupTokenInvalid {
+                node_id: cx.node.id.clone(),
+                group: g.to_string(),
+            });
+        }
+    }
+
     let leased_holder = enclosing_leased_scope_slug(cx.node, cx.graph);
     // Branch selection (preserved): the leased (borrow-carrying) literal must
     // ride `logic_rhai` (deferred validation, since `apply_guard_borrows` later
@@ -209,14 +257,18 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
         }
         None => {
             // Default inline worker-pool body: stamp the constant per-backend
-            // namespace so the engine routes to `executor.<wire>` instead of the
+            // namespace so the engine routes to `executor-<wire>` instead of the
             // retired `executor_jobs` fallback. A static literal — no borrow ref.
             // We've necessarily reached this code with an `ExecutorJob` backend
             // (the `EngineEffect` arm above early-returns via `lower_engine_effect`
             // before any job-token build), so the DispatchMode gate is STRUCTURAL.
+            //
+            // An identity-plane `group` narrows this to `executor-<wire>/<group>`
+            // (a competing pull pool of enrolled group workers); `None` keeps the
+            // unchanged base literal — BYTE-STABLE for every existing ungrouped step.
             format!(
                 r#" d.executor_namespace = "{ns}";"#,
-                ns = backend_type.executor_namespace()
+                ns = backend_type.executor_namespace_for_group(step_group)
             )
         }
     };
@@ -917,6 +969,7 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
     let WorkflowNodeData::AutomatedStep {
         deployment_model: DeploymentModel::Executor {
             capacity: Some(binding),
+            ..
         },
         ..
     } = &cx.node.data

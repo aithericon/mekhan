@@ -9,6 +9,7 @@ pub mod compiler;
 pub mod config;
 pub mod db;
 pub mod demos;
+pub mod fleet;
 pub mod handlers;
 pub mod lifecycle;
 pub mod models;
@@ -25,7 +26,6 @@ pub mod runners_presence;
 pub mod s3;
 pub mod scope;
 pub mod triggers;
-pub mod worker_coverage;
 pub mod yjs;
 
 use std::sync::Arc;
@@ -115,13 +115,16 @@ pub struct AppState {
     /// mutate; `GET /api/v1/runners/presence` reads through it for live pool
     /// capacity (which runners hold an admitted unit right now).
     pub runner_presence: crate::runners_presence::RunnerPresence,
-    /// Worker-pool feature — shared handle to the worker backend-coverage
-    /// tracker's in-memory map. Workers heartbeat on `worker.*.presence`
-    /// advertising which `ExecutorJob` backends they serve; the coverage tasks
-    /// (`crate::worker_coverage`) keep this TTL-swept. Publish reads through it to
-    /// WARN (never fail) on backends covered by zero live workers. No HTTP route
-    /// in v1 — held here for a future fleet-coverage UI.
-    pub worker_coverage: crate::worker_coverage::BackendCoverage,
+    /// Unified fleet-liveness registry (docs/23 §2; docs/24 S1) — the shared
+    /// telemetry plane over BOTH the anonymous worker pool and the advisory
+    /// facet of enrolled runners. Workers heartbeat on `worker.*.presence`
+    /// (subscriber + TTL sweep owned by `crate::fleet`); runners mirror their
+    /// self-reported backends in from `crate::runners_presence` on each
+    /// heartbeat. Publish reads through it (`serves_backend`) to WARN (never
+    /// fail) on a step's backend served by zero live capacities. Purely
+    /// advisory — a dropped capacity NEVER reaps an instance (the runner control
+    /// binding in `runners_presence` is a separate plane).
+    pub fleet: crate::fleet::FleetLiveness,
     /// Publish-time asset resolver (docs/20 §5). Materializes the pinned
     /// records of every node-bound asset into the JSON envelope the publish
     /// handler splices into the AIR (`__assets`) before persistence. The
@@ -142,6 +145,10 @@ fn build_public_openapi_router() -> OpenApiRouter<AppState> {
         // registration token in the body, not the session cookie, so a fresh
         // runner can bootstrap its `rnr_` credential before it has one.
         .routes(routes!(handlers::runners::enroll_runner))
+        // Worker enrollment — PUBLIC by the same design as runner enroll: authed
+        // by the `wt_` registration token in the body, so a fresh worker can
+        // bootstrap its `wkr_` credential + scoped JWT before it has any.
+        .routes(routes!(handlers::workers::enroll_worker))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -317,6 +324,26 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // Worker-pool coverage (worker pool — anonymous competing consumers, NOT
         // enrolled runners). Live worker presence + per-backend coverage.
         .routes(routes!(handlers::workers::worker_coverage))
+        // Workers (Phase A, Grouped + Enrolled Workers) — the identity plane on
+        // the executor worker pool: enrolled, group-scoped, revocable workers
+        // that still PULL. `enroll` is on the PUBLIC router (authed by the `wt_`
+        // token in the body); everything here is behind the auth gate. The
+        // literal `registration-tokens` + `coverage` segments are registered
+        // BEFORE `{id}` so matchit prefers the literal over the `{id}` wildcard
+        // (same trie-ordering caveat as the runner block). Heartbeat + nats-creds
+        // are worker-token authed, self-only (subject == worker:{id}).
+        .routes(routes!(
+            handlers::workers::create_worker_registration_token,
+            handlers::workers::list_worker_registration_tokens
+        ))
+        .routes(routes!(handlers::workers::revoke_worker_registration_token))
+        .routes(routes!(handlers::workers::list_workers))
+        .routes(routes!(handlers::workers::heartbeat_worker))
+        .routes(routes!(handlers::workers::issue_worker_nats_creds))
+        .routes(routes!(
+            handlers::workers::get_worker,
+            handlers::workers::revoke_worker
+        ))
         // Phase 2 — self-service NATS scoped-creds mint/rotation. Runner-token
         // authed, self-only (subject == runner:{id}), same boundary as
         // heartbeat. Mints a fresh user JWT from the stored nats_public_key.

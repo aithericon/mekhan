@@ -231,22 +231,15 @@ impl<'a> PublishService<'a> {
         // fleet state — a satisfying runner may enroll later), and never error.
         warn_on_empty_fleet(self.state, &compiled_graph, workspace_id).await;
 
-        // Worker-coverage WARNING (non-blocking, best-effort): for every
-        // default worker-pool `AutomatedStep` whose `ExecutorJob` backend has NO
-        // live worker advertising it, log a warning — the job would otherwise sit
-        // silently at `submitted` until a covering worker connects. Never errors
-        // (transient fleet state).
+        // Backend-coverage WARNING (non-blocking, best-effort): for every
+        // `AutomatedStep` whose `ExecutorJob` backend is served by NO live
+        // capacity — worker OR runner — log a warning. The job would otherwise
+        // sit silently at `submitted` (worker pool) or land on a runner that
+        // can't run it (presence pool) until a covering capacity connects. This
+        // is the unified eligibility check (docs/24 S2) collapsing the two old
+        // split paths into one `FleetLiveness::serves_backend` query. Never
+        // errors (transient fleet state).
         warn_on_uncovered_backends(self.state, &compiled_graph).await;
-
-        // Presence-pool backend-coverage WARNING (non-blocking, best-effort): the
-        // sibling of the above for the presence-pool (instrument) path. A
-        // presence-pooled step is granted to a specific runner and runs on THAT
-        // runner's executor — but `warn_on_empty_fleet` only checks the runner's
-        // typed CAPS, never that its executor actually has the step's backend. If
-        // no live runner in the target pool advertises the backend, the granted
-        // job lands on a runner that can't run it. Warn (never hard-fail — fleet
-        // state is transient and backends are self-reported).
-        warn_on_uncovered_pool_backends(self.state, &compiled_graph).await;
 
         // Per-job NATS payloads only carry storage paths; the executor
         // downloads the file at stage time. The compile-time borrow
@@ -516,19 +509,26 @@ async fn warn_on_empty_fleet(state: &AppState, graph: &WorkflowGraph, workspace_
     }
 }
 
-/// Worker-pool feature — best-effort uncovered-backend WARNING. For each
-/// default worker-pool `AutomatedStep` (i.e. `DeploymentModel::Executor { capacity:
-/// None }`) whose backend dispatches as an `ExecutorJob`, check whether ANY live
-/// worker (TTL-swept presence over `worker.*.presence`) advertises that backend.
-/// If none does, log a warning — instances will queue at `submitted` until a
-/// covering worker connects.
+/// Unified best-effort uncovered-backend WARNING (docs/24 S2). For each
+/// `AutomatedStep` dispatched as an `ExecutorJob`, check whether ANY live
+/// capacity — worker OR runner — advertises the step's backend via the single
+/// [`crate::fleet::FleetLiveness::serves_backend`] eligibility query (the
+/// `satisfies`-shaped membership check that collapses the two formerly-split
+/// paths: worker `is_covered` + runner `pool_covers`). If none does, log a
+/// warning — the job would otherwise sit silently at `submitted` (worker pool)
+/// or land on a runner that can't run the backend (presence pool).
 ///
-/// Scope is deliberately narrow (locked design invariant): we ONLY warn on the
-/// default worker-pool path.
+/// Both pooled dispatch shapes are covered:
+/// - `Executor { capacity: None }` — the default worker pool (queues at
+///   `submitted` with no covering worker).
+/// - `Executor { capacity: Some(binding) }` — the presence pool (a grant to a
+///   runner whose executor lacks the backend fails at execution). The bound
+///   `binding.alias` is named in the message for the operator, but eligibility
+///   is the fleet-wide `serves_backend` union (advisory coverage; the engine
+///   `satisfies` guard stays caps-only and is untouched).
+///
+/// Out of scope (unchanged):
 /// - `Scheduled` steps route to a cluster (`lease-<grant>`), not the work queue.
-/// - Pooled (`Executor { capacity: Some }`) and presence-pool steps route to
-///   `runner.{id}` / held units, which the separate empty-fleet/presence path
-///   already covers.
 /// - `EngineEffect` backends (e.g. catalogue_query) never hit the work queue.
 ///
 /// NEVER hard-fails (a publish must not depend on transient fleet state).
@@ -546,10 +546,15 @@ async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
             continue;
         };
 
-        // Only the default worker-pool path partitions by backend coverage.
-        if !matches!(deployment_model, DeploymentModel::Executor { capacity: None }) {
-            continue;
-        }
+        // Only the worker-pool / presence-pool dispatch shapes reach a backend
+        // work queue; `Scheduled` (cluster lease) does not.
+        let pool_alias = match deployment_model {
+            DeploymentModel::Executor { capacity: None, .. } => None,
+            DeploymentModel::Executor { capacity: Some(binding), .. } => {
+                Some(binding.alias.as_str())
+            }
+            _ => continue,
+        };
 
         // Only `ExecutorJob` backends reach the work queue. EngineEffect (e.g.
         // catalogue_query) is handled inline by the engine.
@@ -561,73 +566,25 @@ async fn warn_on_uncovered_backends(state: &AppState, graph: &WorkflowGraph) {
         }
 
         let wire = meta.executor_wire_name();
-        if !state.worker_coverage.is_covered(wire).await {
-            tracing::warn!(
-                node_id = %node.id,
-                backend = wire,
-                "publish: backend `{wire}` is covered by NO live worker — \
-                 instances of this step will queue at `submitted` until a worker \
-                 serving `{wire}` connects"
-            );
-        }
-    }
-}
-
-/// Runner-fleet feature — best-effort uncovered-backend WARNING for the
-/// PRESENCE-POOL (instrument) path, the sibling of [`warn_on_uncovered_backends`].
-///
-/// For each presence-pooled `AutomatedStep` (`DeploymentModel::Executor { capacity:
-/// Some(binding) }`) whose backend dispatches as an `ExecutorJob`, check whether
-/// ANY live runner admitted to that pool (`binding.alias`) advertises the step's
-/// backend ([`crate::runners_presence::RunnerPresence::pool_covers`]). If none
-/// does, log a warning: the step's typed Requirements may match a runner's caps,
-/// but that runner's executor can't run the backend, so the granted job fails on
-/// the runner. This closes the seam where `warn_on_empty_fleet` checks only caps
-/// and `warn_on_uncovered_backends` skips pooled steps.
-///
-/// Backends are the runner's self-reported, set-membership dimension (docs/23
-/// §4) — checked here purely as advisory coverage, NEVER routed through the
-/// engine `satisfies` guard (which stays caps-only). NEVER hard-fails.
-async fn warn_on_uncovered_pool_backends(state: &AppState, graph: &WorkflowGraph) {
-    use crate::models::template::DeploymentModel;
-    use aithericon_backends::DispatchMode;
-
-    for node in &graph.nodes {
-        let WorkflowNodeData::AutomatedStep {
-            execution_spec,
-            deployment_model,
-            ..
-        } = &node.data
-        else {
-            continue;
-        };
-
-        // Only the presence-pool path: `Executor { capacity: Some }`. The bound alias
-        // is the `resources.path` shared with the runner's `group` alias.
-        let DeploymentModel::Executor { capacity: Some(binding) } = deployment_model else {
-            continue;
-        };
-
-        // Only `ExecutorJob` backends reach the runner's work queue. EngineEffect
-        // (e.g. catalogue_query) is handled inline by the engine.
-        let Some(meta) = crate::backends::lookup(execution_spec.backend_type) else {
-            continue;
-        };
-        if !matches!(meta.dispatch_mode(), DispatchMode::ExecutorJob) {
-            continue;
-        }
-
-        let wire = meta.executor_wire_name();
-        if !state.runner_presence.pool_covers(&binding.alias, wire).await {
-            tracing::warn!(
-                node_id = %node.id,
-                backend = wire,
-                pool = %binding.alias,
-                "publish: presence-pool step's backend `{wire}` is advertised by NO \
-                 live runner in pool `{}` — a grant to a runner lacking `{wire}` will \
-                 fail at execution; instances will queue until a covering runner checks in",
-                binding.alias
-            );
+        if !state.fleet.serves_backend(wire).await {
+            match pool_alias {
+                Some(alias) => tracing::warn!(
+                    node_id = %node.id,
+                    backend = wire,
+                    pool = %alias,
+                    "publish: presence-pool step's backend `{wire}` is served by NO \
+                     live capacity (no worker or runner in pool `{alias}` advertises it) — \
+                     a grant to a capacity lacking `{wire}` will fail at execution; \
+                     instances will queue until a covering capacity checks in"
+                ),
+                None => tracing::warn!(
+                    node_id = %node.id,
+                    backend = wire,
+                    "publish: backend `{wire}` is served by NO live capacity — \
+                     instances of this step will queue at `submitted` until a worker \
+                     serving `{wire}` connects"
+                ),
+            }
         }
     }
 }

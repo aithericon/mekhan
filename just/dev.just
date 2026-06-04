@@ -755,8 +755,8 @@ down-runner:
 # worktree's port block: MEKHAN_SERVICE_PORT + 40 (slot 0 → 13140; slot N≥1 →
 # base+40, e.g. slot 2 → 20240). The container is namespaced with the compose
 # project prefix (mekhan-s<slot>) so two worktrees' turtles don't collide. The
-# runner's executor.toml sets `[ros] ws_url = ws://localhost:<bridge>` and
-# `[mekhan] url = <service_url>` (the EXECUTOR_MEKHAN__URL knob the runner-side
+# runner's executor.toml sets `[ros] ws_url = ws://localhost:<bridge>` and the
+# flat `mekhan_url = <service_url>` (the EXECUTOR_MEKHAN_URL knob the runner-side
 # interface-catalog publish reads).
 ros-up:
     #!/usr/bin/env bash
@@ -818,8 +818,8 @@ ros-up:
     mkdir -p "$runner_base"
     # Runner-mode executor.toml. Distinct base_dir. The ROS backend is
     # runner-local: `[ros] ws_url` points at the turtle container's host port.
-    # `[mekhan] url` is the EXECUTOR_MEKHAN__URL knob the runner-side interface
-    # catalog publish reads (POSTs to /api/v1/runners/{id}/interfaces). NATS is
+    # The flat `mekhan_url` is the EXECUTOR_MEKHAN_URL knob the runner-side
+    # interface catalog publish reads (POSTs to /api/v1/runners/{id}/interfaces). NATS is
     # anonymous (open dev server). `namespace` LEFT UNSET so config normalize()
     # rewrites it to the shared `runner-jobs` partition (where presence-pool
     # grants route) — see up-runner.
@@ -828,6 +828,10 @@ ros-up:
     nats_url    = "{{nats_url}}"
     base_dir    = "$runner_base"
     concurrency = 2
+    # Flat top-level key (the EXECUTOR_MEKHAN_URL knob): the runner-side ROS
+    # interface-catalog publish POSTs to {{service_url}}/api/v1/runners/{id}/interfaces.
+    # Must precede any [section] — TOML scopes bare keys to the preceding table.
+    mekhan_url  = "{{service_url}}"
 
     [storage]
     backend  = "s3"
@@ -849,9 +853,6 @@ ros-up:
 
     [ros]
     ws_url = "ws://localhost:$bridge_port"
-
-    [mekhan]
-    url = "{{service_url}}"
     EOF
 
     # Reuse a STABLE runner identity across restarts (see up-runner for the full

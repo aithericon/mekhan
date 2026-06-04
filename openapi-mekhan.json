@@ -8099,6 +8099,47 @@
         }
       }
     },
+    "/api/v1/workers": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`GET /api/v1/workers` — paginated, workspace-scoped (live workers only).",
+        "operationId": "list_workers",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of workers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_WorkerSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workers/coverage": {
       "get": {
         "tags": [
@@ -8114,6 +8155,359 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkerCoverageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workers/enroll": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`POST /api/v1/workers/enroll` — GitLab-style enrollment. PUBLIC: authed by the\n`wt_` token in the body. The enrolled worker inherits the registration token's\n`workspace_id` + `group`; `enrolled_by` is the token's `created_by`. Mints the\n`wkr_` credential (shown once) and, if a NATS public key was supplied, a scoped\nworker JWT.",
+        "operationId": "enroll_worker",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollWorkerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Worker enrolled (worker_token shown once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrolledWorker"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid registration token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Revoked / expired / exhausted registration token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Worker name already exists in workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workers/registration-tokens": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`GET /api/v1/workers/registration-tokens` — paginated, workspace-scoped (live\ntokens only). Never carries the hash.",
+        "operationId": "list_worker_registration_tokens",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated registration tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_WorkerRegistrationTokenSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`POST /api/v1/workers/registration-tokens` — mint a registration token. The\n`token` is returned ONCE. Cookie-only (browser human boundary), mirroring\n`runners`/`auth_tokens` so a machine token can't mint enrollment secrets.",
+        "operationId": "create_worker_registration_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkerRegistrationTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Registration token created (shown once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedWorkerRegistrationToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workers/registration-tokens/{id}": {
+      "delete": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`DELETE /api/v1/workers/registration-tokens/{id}` — revoke a registration\ntoken (soft delete; existing workers keep their credentials).",
+        "operationId": "revoke_worker_registration_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Registration token id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Registration token revoked"
+          },
+          "404": {
+            "description": "Registration token not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workers/{id}": {
+      "get": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`GET /api/v1/workers/{id}` — admin view (workspace-scoped).",
+        "operationId": "get_worker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Worker id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worker detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Worker not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`DELETE /api/v1/workers/{id}` — revoke (soft delete + status='revoked'). D2\nrevocation: immediate control-plane lockout (heartbeat/creds 401) + future\nenroll blocked. The live NATS connection is not booted (deferred follow-up).",
+        "operationId": "revoke_worker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Worker id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Worker revoked"
+          },
+          "404": {
+            "description": "Worker not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workers/{id}/heartbeat": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`POST /api/v1/workers/{id}/heartbeat` — bump `last_seen_at`. Authorized by the\nworker credential: the principal's subject MUST be `worker:{id}` so a worker\ncan only heartbeat itself.",
+        "operationId": "heartbeat_worker",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Worker id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Heartbeat recorded"
+          },
+          "401": {
+            "description": "Wrong / foreign / revoked worker token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Worker not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workers/{id}/nats-creds": {
+      "post": {
+        "tags": [
+          "workers"
+        ],
+        "summary": "`POST /api/v1/workers/{id}/nats-creds` — mint/rotate the worker's scoped NATS\nuser JWT. Worker-token authed, self-only: the principal's subject MUST be\n`worker:{id}` (same boundary as heartbeat). The JWT is freshly signed from the\nworker row's stored `nats_public_key` + advertised backends; 404 if no public\nkey is stored. Long-lived (no expiry) — calling this again rotates it.",
+        "operationId": "issue_worker_nats_creds",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Worker id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Freshly signed scoped NATS user JWT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerNatsCreds"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong / foreign / revoked worker token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Worker not found or no stored nats_public_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -9749,6 +10143,94 @@
           }
         }
       },
+      "CapacityAmount": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A configured integer unit count (the worker pool's `N`).",
+            "required": [
+              "capacity_amount",
+              "capacity_kind"
+            ],
+            "properties": {
+              "capacity_amount": {
+                "type": "integer",
+                "format": "int32",
+                "description": "A configured integer unit count (the worker pool's `N`).",
+                "minimum": 0
+              },
+              "capacity_kind": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Emergent from live presence — one unit per checked-in unit. No count is\ndeclared (the presence controller injects/expires units).",
+            "required": [
+              "capacity_kind"
+            ],
+            "properties": {
+              "capacity_kind": {
+                "type": "string",
+                "enum": [
+                  "presence_driven"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Scheduler-granted, unbounded a priori (HPC). Reserved; not built here.",
+            "required": [
+              "capacity_kind"
+            ],
+            "properties": {
+              "capacity_kind": {
+                "type": "string",
+                "enum": [
+                  "elastic"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "How much concurrent work the capacity offers (doc 23 §3 \"capacity amount\").\n\n`Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per\nlive presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC)."
+      },
+      "CapacityAxes": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CapacityAmount"
+          },
+          {
+            "type": "object",
+            "required": [
+              "liveness",
+              "dispatch",
+              "exclusivity",
+              "eligibility"
+            ],
+            "properties": {
+              "dispatch": {
+                "$ref": "#/components/schemas/Dispatch"
+              },
+              "eligibility": {
+                "$ref": "#/components/schemas/Eligibility"
+              },
+              "exclusivity": {
+                "$ref": "#/components/schemas/Exclusivity"
+              },
+              "liveness": {
+                "$ref": "#/components/schemas/Liveness"
+              }
+            }
+          }
+        ],
+        "description": "The full point in the trait-space a `capacity` resource names. This is the\ntyped view of the axes stored as strings in `public_config`; the create\npath parses the wire strings into this and runs [`CapacityAxes::validate`]."
+      },
       "CapacityBinding": {
         "type": "object",
         "description": "A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.capacity`, expressing \"no\ncapacity binding\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a `concurrency_limit` or `runner_group` resource.",
@@ -9762,6 +10244,29 @@
           },
           "request": {
             "description": "Claim-schema-shaped request params (the kind's `claim_schema` in\n`aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`\nand validated against the kind's `claim_schema`. `None` ⇒ the kind's\ndefault placement (e.g. one token)."
+          }
+        }
+      },
+      "CapacityPreset": {
+        "type": "object",
+        "description": "One named preset (doc 23 §7): a coherent, legible axis set the create form\nprefills so an operator names a kind (\"worker\") and gets the locked axes,\noverriding only the free ones. Presets are legibility over the substrate —\nthe substrate (the validated holes) is what makes the missing cells\nreachable.\n\nThe fields are owned `String`s (not `&'static str`) so this is a clean\n`Deserialize`-able wire DTO surfaced on `ResourceTypeInfo.capacity_presets`;\nthe const table is built by [`presets`].",
+        "required": [
+          "name",
+          "display_name",
+          "axes"
+        ],
+        "properties": {
+          "axes": {
+            "$ref": "#/components/schemas/CapacityAxes",
+            "description": "The coherent axis set this preset locks in."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "UI label."
+          },
+          "name": {
+            "type": "string",
+            "description": "Stable wire id (`worker` / `instrument` / `hpc`)."
           }
         }
       },
@@ -10939,6 +11444,39 @@
           }
         }
       },
+      "CreateWorkerRegistrationTokenRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/workers/registration-tokens`.",
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_uses": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "reusable": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Defaults to `true` (reusable) when omitted."
+          }
+        }
+      },
       "CreatedRegistrationToken": {
         "type": "object",
         "description": "Response for a freshly-minted registration token. `token` is the full\n`rt_{id}.{secret}` credential, returned ONCE.",
@@ -11016,6 +11554,47 @@
           "secret": {
             "type": "string",
             "description": "The Personal Access Token. Present only here, only once."
+          }
+        }
+      },
+      "CreatedWorkerRegistrationToken": {
+        "type": "object",
+        "description": "Response for a freshly-minted worker registration token. `token` is the full\n`wt_{id}.{secret}` credential, returned ONCE.",
+        "required": [
+          "id",
+          "token",
+          "reusable"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "max_uses": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "reusable": {
+            "type": "boolean"
+          },
+          "token": {
+            "type": "string"
           }
         }
       },
@@ -11237,7 +11816,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Dispatch to our executor daemon pool over the NATS work queue (jobs are\npulled by the long-running executor workers — NOT in-process). `capacity:\nNone` is the plain path: our worker pool is currently unbounded (no\ncontrol plane gating concurrency yet), so a job runs as soon as a worker\nis free. `capacity: Some` adds BOUNDED admission on top — a `concurrency_limit`\nclaim/register/release handshake so contended infrastructure (GPUs, lab\nmachines, LLM slots) is admission-controlled by the Petri firing rule\n(R3). The bound alias MUST be a `concurrency_limit` OR `runner_group` resource — a `datacenter`\nbelongs under [`DeploymentModel::Scheduled`].",
+            "description": "Dispatch to our executor daemon pool over the NATS work queue (jobs are\npulled by the long-running executor workers — NOT in-process). `capacity:\nNone` is the plain path: our worker pool is currently unbounded (no\ncontrol plane gating concurrency yet), so a job runs as soon as a worker\nis free. `capacity: Some` adds BOUNDED admission on top — a `concurrency_limit`\nclaim/register/release handshake so contended infrastructure (GPUs, lab\nmachines, LLM slots) is admission-controlled by the Petri firing rule\n(R3). The bound alias MUST be a `concurrency_limit` OR `runner_group` resource — a `datacenter`\nbelongs under [`DeploymentModel::Scheduled`].\n\n`group` is the orthogonal IDENTITY-PLANE coordinate (docs/23/24): an\noptional `capacity`-resource alias (the `worker` preset:\n`competing_consumer · pull · hold · fixed · partition`) that narrows the\npull routing from `executor-<wire>` to `executor-<wire>/<group>` so only\nenrolled workers of that group compete for the step's jobs. It stays a\nCOMPETING pull pool — the group is a second coarse routing coordinate, NOT\na per-worker push partition. `None` ⇒ the unchanged literal\n`executor-<wire>` (byte-stable AIR). `group` is mutually exclusive with\n`capacity`: `capacity` is the presence-PUSH admission handshake (R3),\n`group` is a plain pull coordinate — a step cannot be both (the compiler\nrejects `Some` + `Some`).",
             "required": [
               "mode"
             ],
@@ -11250,6 +11829,12 @@
                   {
                     "$ref": "#/components/schemas/CapacityBinding"
                   }
+                ]
+              },
+              "group": {
+                "type": [
+                  "string",
+                  "null"
                 ]
               },
               "mode": {
@@ -11310,6 +11895,14 @@
           }
         ],
         "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a `concurrency_limit` admission lives under [`DeploymentModel::Executor`]'s `capacity`\n  (the body runs on our executor pool holding the typed lease — R1–R3\n  machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
+      },
+      "Dispatch": {
+        "type": "string",
+        "description": "How work reaches the capacity (doc 23 §3 \"dispatch discipline\").",
+        "enum": [
+          "pull",
+          "push"
+        ]
       },
       "DispatchMode": {
         "oneOf": [
@@ -11471,6 +12064,14 @@
           }
         }
       },
+      "Eligibility": {
+        "type": "string",
+        "description": "The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate\nshape rather than chosen by hand: a single coarse equality (`backend == x`)\nIS a partition key (free competing-consumers, no matcher); a richer\nconjunction needs the guarded matcher.",
+        "enum": [
+          "partition",
+          "predicate"
+        ]
+      },
       "EngineStatus": {
         "type": "object",
         "required": [
@@ -11516,6 +12117,38 @@
           }
         }
       },
+      "EnrollWorkerRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/workers/enroll`. Authenticated by the\n`registration_token` in the body, not by the auth gate.",
+        "required": [
+          "registration_token",
+          "name"
+        ],
+        "properties": {
+          "backends": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Executor backends this worker serves (wire-names). The scoped JWT's\nSUBSCRIBE grant is built per advertised backend. Defaults to `[]`."
+          },
+          "name": {
+            "type": "string",
+            "description": "Operator-facing worker name; must be unique within the workspace."
+          },
+          "nats_public_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional NATS account public key the worker will use."
+          },
+          "registration_token": {
+            "type": "string",
+            "description": "`wt_{id}.{secret}` registration token."
+          }
+        }
+      },
       "EnrolledRunner": {
         "type": "object",
         "description": "Response body for a successful enrollment. `runner_token` is the full\n`rnr_{id}.{secret}` credential, returned ONCE and never stored in plaintext.",
@@ -11543,6 +12176,41 @@
             "description": "Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the runner sent at enrollment. `null` when no public\nkey was supplied OR signing was unavailable; the runner can fetch it\nlater via `POST /api/v1/runners/{id}/nats-creds`."
           },
           "runner_token": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "EnrolledWorker": {
+        "type": "object",
+        "description": "Response body for a successful enrollment. `worker_token` is the full\n`wkr_{id}.{secret}` credential, returned ONCE and never stored in plaintext.",
+        "required": [
+          "id",
+          "worker_token",
+          "workspace_id"
+        ],
+        "properties": {
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nats_jwt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the worker sent at enrollment. `null` when no public key\nwas supplied OR signing was unavailable; the worker can fetch it later via\n`POST /api/v1/workers/{id}/nats-creds`."
+          },
+          "worker_token": {
             "type": "string"
           },
           "workspace_id": {
@@ -11703,6 +12371,14 @@
             ]
           }
         }
+      },
+      "Exclusivity": {
+        "type": "string",
+        "description": "Hold-vs-consume (doc 23 §3 \"exclusivity discipline\" — the real fork of §5).",
+        "enum": [
+          "hold",
+          "consume"
+        ]
       },
       "ExecutionBackendType": {
         "type": "string",
@@ -13434,6 +14110,15 @@
           }
         }
       },
+      "Liveness": {
+        "type": "string",
+        "description": "How a capacity proves it is available (doc 23 §3 \"liveness\").\n\n`lease` is reserved now (doc 24 §5) so the model has a slot for the\nHPC/`datacenter` allocation path; this slice does not re-express the lease\nadapter as a `capacity`, but the axis value must exist so a future preset\ncan name it.",
+        "enum": [
+          "competing_consumer",
+          "presence",
+          "lease"
+        ]
+      },
       "LlmConfig": {
         "type": "object",
         "description": "Configuration for the LLM backend.",
@@ -14787,6 +15472,148 @@
               "properties": {
                 "capabilities": {
                   "description": "Advertised capabilities (the same `capabilities` JSON object the runner\nenrolled with). Included on the list row so the fleet UI can show a caps\nsummary inline without an extra per-runner round-trip. `{}` when none."
+                },
+                "enrolled_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "group": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "last_seen_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_WorkerRegistrationTokenSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row for worker registration tokens. MUST NOT carry `token_hash`.",
+              "required": [
+                "id",
+                "reusable",
+                "uses",
+                "created_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "group": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "max_uses": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "reusable": {
+                  "type": "boolean"
+                },
+                "uses": {
+                  "type": "integer",
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PaginatedResponse_WorkerSummary": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "Compact list-row shape. Returned by `GET /api/v1/workers` — MUST NOT carry\n`token_hash`.",
+              "required": [
+                "id",
+                "name",
+                "status",
+                "backends",
+                "enrolled_at"
+              ],
+              "properties": {
+                "backends": {
+                  "description": "Advertised executor backends (the same `backends` JSON array the worker\nenrolled with). Included on the list row so the fleet UI can show the\nserved-backend summary inline without an extra per-worker round-trip. `[]`\nwhen none."
                 },
                 "enrolled_at": {
                   "type": "string",
@@ -16356,6 +17183,16 @@
           "schema"
         ],
         "properties": {
+          "capacity_presets": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CapacityPreset"
+            },
+            "description": "Named trait-space presets (doc 23 §7) the create form can prefill —\npopulated ONLY for the `capacity` type (`Some([worker, instrument,\nhpc])`), `None` for every other kind. A create call names a preset via\nthe `preset` config key to get the locked axes, overriding only the free\nones. See `models::capacity`."
+          },
           "display_name": {
             "type": "string"
           },
@@ -19026,6 +19863,173 @@
           }
         }
       },
+      "WorkerDetail": {
+        "type": "object",
+        "description": "Admin view returned by `GET /api/v1/workers/{id}`. MUST NOT carry\n`token_hash`.",
+        "required": [
+          "id",
+          "workspace_id",
+          "name",
+          "status",
+          "backends",
+          "enrolled_at"
+        ],
+        "properties": {
+          "backends": {},
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nats_public_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkerNatsCreds": {
+        "type": "object",
+        "description": "Response for `POST /api/v1/workers/{id}/nats-creds` — a freshly-minted scoped\nNATS user JWT plus the issuing account signing key's public key. The worker\nassembles its own `.creds` file from this JWT and its locally-held user nkey\nseed.",
+        "required": [
+          "nats_jwt",
+          "account_public_key"
+        ],
+        "properties": {
+          "account_public_key": {
+            "type": "string",
+            "description": "The runners-account signing key's PUBLIC key (`A…`) — the JWT issuer and\nthe value the NATS server's account resolver must trust. (Workers share\nthe runner-account signer; see [`crate::runners_nats`].)"
+          },
+          "nats_jwt": {
+            "type": "string",
+            "description": "Freshly signed scoped user JWT, bound to the worker's stored\n`nats_public_key`."
+          }
+        }
+      },
+      "WorkerRegistrationTokenSummary": {
+        "type": "object",
+        "description": "Compact list-row for worker registration tokens. MUST NOT carry `token_hash`.",
+        "required": [
+          "id",
+          "reusable",
+          "uses",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "max_uses": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "reusable": {
+            "type": "boolean"
+          },
+          "uses": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "WorkerSummary": {
+        "type": "object",
+        "description": "Compact list-row shape. Returned by `GET /api/v1/workers` — MUST NOT carry\n`token_hash`.",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "backends",
+          "enrolled_at"
+        ],
+        "properties": {
+          "backends": {
+            "description": "Advertised executor backends (the same `backends` JSON array the worker\nenrolled with). Included on the list row so the fleet UI can show the\nserved-backend summary inline without an extra per-worker round-trip. `[]`\nwhen none."
+          },
+          "enrolled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "WorkflowEdge": {
         "type": "object",
         "required": [
@@ -20399,6 +21403,10 @@
     {
       "name": "runners",
       "description": "Lab Runner Fleet — workspace-scoped runners + GitLab-style enrollment. Public `POST /enroll` is authed by a `rt_` registration token in the body; runners then authenticate with a mekhan-native `rnr_` bearer (SHA-256 hash stored, works offline)."
+    },
+    {
+      "name": "workers",
+      "description": "Grouped + Enrolled Workers — the identity plane on the executor worker pool: enrolled, group-scoped, revocable workers that still PULL. Public `POST /enroll` is authed by a `wt_` registration token in the body; workers then authenticate with a mekhan-native `wkr_` bearer. A group is backed by a `capacity` resource with the `worker` preset. Plus the anonymous worker-pool coverage read."
     },
     {
       "name": "capability-types",

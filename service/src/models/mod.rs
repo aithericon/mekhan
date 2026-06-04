@@ -1,6 +1,7 @@
 pub mod asset;
 pub mod auth_token;
 pub mod capability;
+pub mod capacity;
 pub mod error;
 pub mod image_materialization;
 pub mod instance;
@@ -10,4 +11,5 @@ pub mod runner;
 pub mod responses;
 pub mod template;
 pub mod template_test;
+pub mod worker;
 pub mod workspace;

@@ -44,6 +44,7 @@ use uuid::Uuid;
 use futures::StreamExt;
 
 use crate::compiler::well_known;
+use crate::fleet::FleetLiveness;
 use crate::models::runner::RunnerRow;
 use crate::nats::MekhanNats;
 use crate::petri::client::PetriClient;
@@ -158,14 +159,16 @@ impl RunnerPresence {
     /// Whether ANY currently-present runner in the pool aliased `pool_alias`
     /// advertises the backend wire-name `wire`.
     ///
-    /// This is the runner-side analogue of
-    /// [`crate::worker_coverage::BackendCoverage::is_covered`] (which serves the
-    /// default worker pool): it answers "is this presence-pool step's backend
-    /// covered by a live runner in its target pool?" for the best-effort
-    /// publish-time warning. Matches by the `pool` alias (the `resources.path`
-    /// shared by `runner.group` and `CapacityBinding.alias`), so no net-id
-    /// resolution is needed. Advisory only — a `false` here never blocks a
-    /// publish, it just logs a queue-risk warning.
+    /// The runner-side, POOL-SCOPED coverage primitive: it answers "is this
+    /// presence-pool step's backend covered by a live runner in its TARGET
+    /// pool?", matching by the `pool` alias (the `resources.path` shared by
+    /// `runner.group` and `CapacityBinding.alias`), so no net-id resolution is
+    /// needed. Advisory only — a `false` here never blocks anything.
+    ///
+    /// As of docs/24 S2 the publish-time backend-coverage warning no longer calls
+    /// this — it uses the fleet-wide [`crate::fleet::FleetLiveness::serves_backend`]
+    /// union (worker OR runner, pool-agnostic). This pool-scoped variant is kept
+    /// for callers that need per-pool coverage and is exercised by its unit test.
     pub async fn pool_covers(&self, pool_alias: &str, wire: &str) -> bool {
         let map = self.0.lock().await;
         map.values().any(|e| {
@@ -314,9 +317,21 @@ async fn handle_presence(
     db: &PgPool,
     nats: &MekhanNats,
     presence: &PresenceMap,
+    fleet: &FleetLiveness,
     runner_id: Uuid,
     backends: Vec<String>,
 ) {
+    // Mirror the runner's advisory facet (its self-reported backends) into the
+    // shared fleet-liveness registry on EVERY heartbeat — telemetry only (docs/24
+    // S1). This feeds the unified publish-time `serves_backend` eligibility query
+    // alongside the worker pool; it has NO bearing on the pool-net control binding
+    // injected below (caps stay authoritative there). The runner controller owns
+    // this entry's lifecycle, so it is removed only by `drop_runner` on expiry —
+    // the fleet module's worker sweep never touches it.
+    fleet
+        .upsert_runner(runner_id.to_string(), backends.clone())
+        .await;
+
     // Fast path: already present → just bump last_seen under the lock and return.
     // We still re-touch last_seen_at periodically below, but avoid a DB lookup on
     // every heartbeat of an already-admitted runner.
@@ -455,7 +470,12 @@ fn parse_backends(payload: &[u8]) -> Vec<String> {
 /// Presence pings are ephemeral liveness (not a durable command stream), so this
 /// uses a plain core subscription rather than a JetStream durable — a missed
 /// ping is harmless (the next one re-acquires; the sweep handles a true absence).
-pub(crate) async fn start_presence_subscriber(nats: MekhanNats, db: PgPool, presence: PresenceMap) {
+pub(crate) async fn start_presence_subscriber(
+    nats: MekhanNats,
+    db: PgPool,
+    presence: PresenceMap,
+    fleet: FleetLiveness,
+) {
     let mut sub = match nats.client().subscribe("runner.*.presence").await {
         Ok(s) => s,
         Err(e) => {
@@ -471,7 +491,7 @@ pub(crate) async fn start_presence_subscriber(nats: MekhanNats, db: PgPool, pres
             continue;
         };
         let backends = parse_backends(&msg.payload);
-        handle_presence(&db, &nats, &presence, runner_id, backends).await;
+        handle_presence(&db, &nats, &presence, &fleet, runner_id, backends).await;
     }
 
     tracing::warn!("presence subscriber stream ended");
@@ -483,7 +503,11 @@ pub(crate) async fn start_presence_subscriber(nats: MekhanNats, db: PgPool, pres
 ///
 /// Mirrors the session-sweep spawn pattern in `lifecycle.rs` /
 /// `main.rs` (an interval-driven background loop).
-pub(crate) async fn start_presence_sweep(nats: MekhanNats, presence: PresenceMap) {
+pub(crate) async fn start_presence_sweep(
+    nats: MekhanNats,
+    presence: PresenceMap,
+    fleet: FleetLiveness,
+) {
     let ttl = presence_ttl();
     let mut tick = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
     tracing::info!(
@@ -512,6 +536,12 @@ pub(crate) async fn start_presence_sweep(nats: MekhanNats, presence: PresenceMap
         };
 
         for (runner_id, pool_net_id) in expired {
+            // Telemetry plane: a TTL-missed runner is offline, so drop its
+            // advisory mirror from the shared fleet-liveness registry (docs/24
+            // S1). This runs for BOTH pool-backed and liveness-only entries — it
+            // is pure telemetry and never touches the pool-net control binding.
+            fleet.drop_runner(&runner_id.to_string()).await;
+
             if pool_net_id.is_empty() {
                 // Liveness-only entry (runner not admitted to any pool): nothing to
                 // expire on the engine — flipping `present = false` above is enough
@@ -537,18 +567,25 @@ pub(crate) fn new_presence_map() -> PresenceMap {
 /// (bridge + signal) and does not need the engine HTTP client today.
 /// `presence` is the SHARED handle also stored in [`crate::AppState`] so the read
 /// API (`GET /api/v1/runners/presence`) observes the very map the tasks mutate.
+/// `fleet` is the shared [`FleetLiveness`] registry: both tasks mirror each
+/// runner's advisory backend facet into it (subscriber upserts on heartbeat,
+/// sweep drops on TTL miss) so the unified publish-time eligibility check sees
+/// runners alongside workers (docs/24 S1) — telemetry only, never the pool-net
+/// control binding.
 pub fn spawn_presence_controller(
     presence: RunnerPresence,
     nats: MekhanNats,
     db: PgPool,
     _petri: PetriClient,
+    fleet: FleetLiveness,
 ) {
     tokio::spawn(start_presence_subscriber(
         nats.clone(),
         db.clone(),
         presence.map().clone(),
+        fleet.clone(),
     ));
-    tokio::spawn(start_presence_sweep(nats, presence.map().clone()));
+    tokio::spawn(start_presence_sweep(nats, presence.map().clone(), fleet));
 }
 
 #[cfg(test)]

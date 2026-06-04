@@ -2666,6 +2666,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/workers` — paginated, workspace-scoped (live workers only). */
+        get: operations["list_workers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workers/coverage": {
         parameters: {
             query?: never;
@@ -2681,6 +2698,140 @@ export interface paths {
         get: operations["worker_coverage"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/workers/enroll` — GitLab-style enrollment. PUBLIC: authed by the
+         *     `wt_` token in the body. The enrolled worker inherits the registration token's
+         *     `workspace_id` + `group`; `enrolled_by` is the token's `created_by`. Mints the
+         *     `wkr_` credential (shown once) and, if a NATS public key was supplied, a scoped
+         *     worker JWT.
+         */
+        post: operations["enroll_worker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/registration-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/workers/registration-tokens` — paginated, workspace-scoped (live
+         *     tokens only). Never carries the hash.
+         */
+        get: operations["list_worker_registration_tokens"];
+        put?: never;
+        /**
+         * `POST /api/v1/workers/registration-tokens` — mint a registration token. The
+         *     `token` is returned ONCE. Cookie-only (browser human boundary), mirroring
+         *     `runners`/`auth_tokens` so a machine token can't mint enrollment secrets.
+         */
+        post: operations["create_worker_registration_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/registration-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/workers/registration-tokens/{id}` — revoke a registration
+         *     token (soft delete; existing workers keep their credentials).
+         */
+        delete: operations["revoke_worker_registration_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /api/v1/workers/{id}` — admin view (workspace-scoped). */
+        get: operations["get_worker"];
+        put?: never;
+        post?: never;
+        /**
+         * `DELETE /api/v1/workers/{id}` — revoke (soft delete + status='revoked'). D2
+         *     revocation: immediate control-plane lockout (heartbeat/creds 401) + future
+         *     enroll blocked. The live NATS connection is not booted (deferred follow-up).
+         */
+        delete: operations["revoke_worker"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/workers/{id}/heartbeat` — bump `last_seen_at`. Authorized by the
+         *     worker credential: the principal's subject MUST be `worker:{id}` so a worker
+         *     can only heartbeat itself.
+         */
+        post: operations["heartbeat_worker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workers/{id}/nats-creds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/workers/{id}/nats-creds` — mint/rotate the worker's scoped NATS
+         *     user JWT. Worker-token authed, self-only: the principal's subject MUST be
+         *     `worker:{id}` (same boundary as heartbeat). The JWT is freshly signed from the
+         *     worker row's stored `nats_public_key` + advertised backends; 404 if no public
+         *     key is stored. Long-lived (no expiry) — calling this again rotates it.
+         */
+        post: operations["issue_worker_nats_creds"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3382,6 +3533,38 @@ export interface components {
             name: string;
         };
         /**
+         * @description How much concurrent work the capacity offers (doc 23 §3 "capacity amount").
+         *
+         *     `Fixed(n)` carries its count; `PresenceDriven` is emergent (one unit per
+         *     live presence, e.g. an instrument); `Elastic` is scheduler-granted (HPC).
+         */
+        CapacityAmount: {
+            /**
+             * Format: int32
+             * @description A configured integer unit count (the worker pool's `N`).
+             */
+            capacity_amount: number;
+            /** @enum {string} */
+            capacity_kind: "fixed";
+        } | {
+            /** @enum {string} */
+            capacity_kind: "presence_driven";
+        } | {
+            /** @enum {string} */
+            capacity_kind: "elastic";
+        };
+        /**
+         * @description The full point in the trait-space a `capacity` resource names. This is the
+         *     typed view of the axes stored as strings in `public_config`; the create
+         *     path parses the wire strings into this and runs [`CapacityAxes::validate`].
+         */
+        CapacityAxes: components["schemas"]["CapacityAmount"] & {
+            dispatch: components["schemas"]["Dispatch"];
+            eligibility: components["schemas"]["Eligibility"];
+            exclusivity: components["schemas"]["Exclusivity"];
+            liveness: components["schemas"]["Liveness"];
+        };
+        /**
          * @description A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).
          *     Lives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the
          *     compiler wrap the executor body with a claim/register/release handshake
@@ -3408,6 +3591,25 @@ export interface components {
              *     default placement (e.g. one token).
              */
             request?: unknown;
+        };
+        /**
+         * @description One named preset (doc 23 §7): a coherent, legible axis set the create form
+         *     prefills so an operator names a kind ("worker") and gets the locked axes,
+         *     overriding only the free ones. Presets are legibility over the substrate —
+         *     the substrate (the validated holes) is what makes the missing cells
+         *     reachable.
+         *
+         *     The fields are owned `String`s (not `&'static str`) so this is a clean
+         *     `Deserialize`-able wire DTO surfaced on `ResourceTypeInfo.capacity_presets`;
+         *     the const table is built by [`presets`].
+         */
+        CapacityPreset: {
+            /** @description The coherent axis set this preset locks in. */
+            axes: components["schemas"]["CapacityAxes"];
+            /** @description UI label. */
+            display_name: string;
+            /** @description Stable wire id (`worker` / `instrument` / `hpc`). */
+            name: string;
         };
         /**
          * @description Cardinality of an asset type (docs/20 §4.2). `Object` is the 1-row
@@ -3916,6 +4118,16 @@ export interface components {
              */
             name: string;
         };
+        /** @description Request body for `POST /api/v1/workers/registration-tokens`. */
+        CreateWorkerRegistrationTokenRequest: {
+            /** Format: date-time */
+            expires_at?: string | null;
+            group?: string | null;
+            /** Format: int32 */
+            max_uses?: number | null;
+            /** @description Defaults to `true` (reusable) when omitted. */
+            reusable?: boolean | null;
+        };
         /**
          * @description Response for a freshly-minted registration token. `token` is the full
          *     `rt_{id}.{secret}` credential, returned ONCE.
@@ -3943,6 +4155,21 @@ export interface components {
             name: string;
             /** @description The Personal Access Token. Present only here, only once. */
             secret: string;
+        };
+        /**
+         * @description Response for a freshly-minted worker registration token. `token` is the full
+         *     `wt_{id}.{secret}` credential, returned ONCE.
+         */
+        CreatedWorkerRegistrationToken: {
+            /** Format: date-time */
+            expires_at?: string | null;
+            group?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            max_uses?: number | null;
+            reusable: boolean;
+            token: string;
         };
         /** @enum {string} */
         CronCatchup: "fire_missed" | "skip_missed";
@@ -4047,6 +4274,7 @@ export interface components {
          */
         DeploymentModel: {
             capacity?: null | components["schemas"]["CapacityBinding"];
+            group?: string | null;
             /** @enum {string} */
             mode: "executor";
         } | {
@@ -4065,6 +4293,11 @@ export interface components {
             /** @description `datacenter` resource alias. */
             scheduler?: string | null;
         };
+        /**
+         * @description How work reaches the capacity (doc 23 §3 "dispatch discipline").
+         * @enum {string}
+         */
+        Dispatch: "pull" | "push";
         /**
          * @description Lowering mode — intrinsic to the backend, decided at the decl, NOT the
          *     step. Orthogonal to `DeploymentModel` (Inline / Scheduled) which is a
@@ -4116,6 +4349,14 @@ export interface components {
             thumbnail_url?: string | null;
             url: string;
         };
+        /**
+         * @description The eligibility evaluation strategy (doc 23 §4), DERIVED from the predicate
+         *     shape rather than chosen by hand: a single coarse equality (`backend == x`)
+         *     IS a partition key (free competing-consumers, no matcher); a richer
+         *     conjunction needs the guarded matcher.
+         * @enum {string}
+         */
+        Eligibility: "partition" | "predicate";
         EngineStatus: {
             available: boolean;
             run_mode?: string | null;
@@ -4135,6 +4376,23 @@ export interface components {
             registration_token: string;
         };
         /**
+         * @description Request body for `POST /api/v1/workers/enroll`. Authenticated by the
+         *     `registration_token` in the body, not by the auth gate.
+         */
+        EnrollWorkerRequest: {
+            /**
+             * @description Executor backends this worker serves (wire-names). The scoped JWT's
+             *     SUBSCRIBE grant is built per advertised backend. Defaults to `[]`.
+             */
+            backends?: string[];
+            /** @description Operator-facing worker name; must be unique within the workspace. */
+            name: string;
+            /** @description Optional NATS account public key the worker will use. */
+            nats_public_key?: string | null;
+            /** @description `wt_{id}.{secret}` registration token. */
+            registration_token: string;
+        };
+        /**
          * @description Response body for a successful enrollment. `runner_token` is the full
          *     `rnr_{id}.{secret}` credential, returned ONCE and never stored in plaintext.
          */
@@ -4150,6 +4408,25 @@ export interface components {
              */
             nats_jwt?: string | null;
             runner_token: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description Response body for a successful enrollment. `worker_token` is the full
+         *     `wkr_{id}.{secret}` credential, returned ONCE and never stored in plaintext.
+         */
+        EnrolledWorker: {
+            group?: string | null;
+            /** Format: uuid */
+            id: string;
+            /**
+             * @description A freshly-signed scoped NATS *user* JWT, minted from the
+             *     `nats_public_key` the worker sent at enrollment. `null` when no public key
+             *     was supplied OR signing was unavailable; the worker can fetch it later via
+             *     `POST /api/v1/workers/{id}/nats-creds`.
+             */
+            nats_jwt?: string | null;
+            worker_token: string;
             /** Format: uuid */
             workspace_id: string;
         };
@@ -4213,6 +4490,11 @@ export interface components {
             tokens: components["schemas"]["TokenInfo"][];
             transition_name?: string | null;
         };
+        /**
+         * @description Hold-vs-consume (doc 23 §3 "exclusivity discipline" — the real fork of §5).
+         * @enum {string}
+         */
+        Exclusivity: "hold" | "consume";
         /**
          * @description Discriminator selecting which executor backend handles an automated step.
          *
@@ -4880,6 +5162,16 @@ export interface components {
             /** Format: double */
             value: number;
         };
+        /**
+         * @description How a capacity proves it is available (doc 23 §3 "liveness").
+         *
+         *     `lease` is reserved now (doc 24 §5) so the model has a slot for the
+         *     HPC/`datacenter` allocation path; this slice does not re-express the lease
+         *     adapter as a `capacity`, but the axis value must exist so a future preset
+         *     can name it.
+         * @enum {string}
+         */
+        Liveness: "competing_consumer" | "presence" | "lease";
         /** @description Configuration for the LLM backend. */
         LlmConfig: {
             /** @description API key. Falls back to provider-specific env var if absent. */
@@ -5495,6 +5787,54 @@ export interface components {
                  *     summary inline without an extra per-runner round-trip. `{}` when none.
                  */
                 capabilities: unknown;
+                /** Format: date-time */
+                enrolled_at: string;
+                group?: string | null;
+                /** Format: uuid */
+                id: string;
+                /** Format: date-time */
+                last_seen_at?: string | null;
+                name: string;
+                status: string;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_WorkerRegistrationTokenSummary: {
+            items: {
+                /** Format: date-time */
+                created_at: string;
+                /** Format: date-time */
+                expires_at?: string | null;
+                group?: string | null;
+                /** Format: uuid */
+                id: string;
+                /** Format: int32 */
+                max_uses?: number | null;
+                reusable: boolean;
+                /** Format: int32 */
+                uses: number;
+            }[];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /** Format: int64 */
+            total: number;
+        };
+        PaginatedResponse_WorkerSummary: {
+            items: {
+                /**
+                 * @description Advertised executor backends (the same `backends` JSON array the worker
+                 *     enrolled with). Included on the list row so the fleet UI can show the
+                 *     served-backend summary inline without an extra per-worker round-trip. `[]`
+                 *     when none.
+                 */
+                backends: unknown;
                 /** Format: date-time */
                 enrolled_at: string;
                 group?: string | null;
@@ -6268,6 +6608,14 @@ export interface components {
          *     renders it field-by-field.
          */
         ResourceTypeInfo: {
+            /**
+             * @description Named trait-space presets (doc 23 §7) the create form can prefill —
+             *     populated ONLY for the `capacity` type (`Some([worker, instrument,
+             *     hpc])`), `None` for every other kind. A create call names a preset via
+             *     the `preset` config key to get the locked axes, overriding only the free
+             *     ones. See `models::capacity`.
+             */
+            capacity_presets?: components["schemas"]["CapacityPreset"][] | null;
             display_name: string;
             /**
              * @description `true` for the `kv` escape hatch: the field set is per-INSTANCE,
@@ -7575,6 +7923,83 @@ export interface components {
             backends: components["schemas"]["BackendCoverageEntry"][];
             /** @description Live workers (TTL-swept), each with its advertised backends + freshness. */
             workers: components["schemas"]["WorkerCoverageEntry"][];
+        };
+        /**
+         * @description Admin view returned by `GET /api/v1/workers/{id}`. MUST NOT carry
+         *     `token_hash`.
+         */
+        WorkerDetail: {
+            backends: unknown;
+            /** Format: date-time */
+            enrolled_at: string;
+            group?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+            name: string;
+            nats_public_key?: string | null;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            status: string;
+            /** Format: uuid */
+            workspace_id: string;
+        };
+        /**
+         * @description Response for `POST /api/v1/workers/{id}/nats-creds` — a freshly-minted scoped
+         *     NATS user JWT plus the issuing account signing key's public key. The worker
+         *     assembles its own `.creds` file from this JWT and its locally-held user nkey
+         *     seed.
+         */
+        WorkerNatsCreds: {
+            /**
+             * @description The runners-account signing key's PUBLIC key (`A…`) — the JWT issuer and
+             *     the value the NATS server's account resolver must trust. (Workers share
+             *     the runner-account signer; see [`crate::runners_nats`].)
+             */
+            account_public_key: string;
+            /**
+             * @description Freshly signed scoped user JWT, bound to the worker's stored
+             *     `nats_public_key`.
+             */
+            nats_jwt: string;
+        };
+        /** @description Compact list-row for worker registration tokens. MUST NOT carry `token_hash`. */
+        WorkerRegistrationTokenSummary: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            group?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: int32 */
+            max_uses?: number | null;
+            reusable: boolean;
+            /** Format: int32 */
+            uses: number;
+        };
+        /**
+         * @description Compact list-row shape. Returned by `GET /api/v1/workers` — MUST NOT carry
+         *     `token_hash`.
+         */
+        WorkerSummary: {
+            /**
+             * @description Advertised executor backends (the same `backends` JSON array the worker
+             *     enrolled with). Included on the list row so the fleet UI can show the
+             *     served-backend summary inline without an extra per-worker round-trip. `[]`
+             *     when none.
+             */
+            backends: unknown;
+            /** Format: date-time */
+            enrolled_at: string;
+            group?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+            name: string;
+            status: string;
         };
         WorkflowEdge: {
             id: string;
@@ -14142,6 +14567,29 @@ export interface operations {
             };
         };
     };
+    list_workers: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated list of workers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_WorkerSummary"];
+                };
+            };
+        };
+    };
     worker_coverage: {
         parameters: {
             query?: never;
@@ -14158,6 +14606,285 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkerCoverageResponse"];
+                };
+            };
+        };
+    };
+    enroll_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollWorkerRequest"];
+            };
+        };
+        responses: {
+            /** @description Worker enrolled (worker_token shown once) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrolledWorker"];
+                };
+            };
+            /** @description Invalid registration token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Revoked / expired / exhausted registration token */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Worker name already exists in workspace */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_worker_registration_tokens: {
+        parameters: {
+            query?: {
+                page?: number;
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated registration tokens */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedResponse_WorkerRegistrationTokenSummary"];
+                };
+            };
+        };
+    };
+    create_worker_registration_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkerRegistrationTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Registration token created (shown once) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedWorkerRegistrationToken"];
+                };
+            };
+            /** @description No session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_worker_registration_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Registration token id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registration token revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Registration token not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Worker detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerDetail"];
+                };
+            };
+            /** @description Worker not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Worker revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Worker not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    heartbeat_worker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Heartbeat recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Wrong / foreign / revoked worker token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Worker not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    issue_worker_nats_creds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Worker id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Freshly signed scoped NATS user JWT */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerNatsCreds"];
+                };
+            };
+            /** @description Wrong / foreign / revoked worker token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Worker not found or no stored nats_public_key */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
         };

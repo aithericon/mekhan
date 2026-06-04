@@ -4,9 +4,12 @@
 	// so the engine's `satisfies(requirements, caps)` matcher selects an appropriate
 	// pool unit. Empty constraints → matches any runner (default).
 	//
-	// Follows the EXACT same patch+onchange idiom as RetryPolicySection — no bind:,
-	// every mutation rebuilds and calls onchange({ ...data, requirements: {...} }).
-	import type { AutomatedStepNodeData } from '$lib/types/editor';
+	// Edits the `requirements` field directly (no `data` coupling): every mutation
+	// rebuilds the constraint list and calls `onchange(requirements | undefined)`.
+	// Hosted by `DeploymentSection` inside the Runner-group branch — placement
+	// requirements ONLY apply to the runner_group model (the engine's
+	// `satisfies()` guard runs only on the presence pool's `t_grant`), so the
+	// gating lives there rather than as an always-on section.
 	import type { components } from '$lib/api/schema';
 	import { onMount } from 'svelte';
 	import * as Select from '$lib/components/ui/select';
@@ -17,6 +20,7 @@
 
 	type Constraint = components['schemas']['Constraint'];
 	type ConstraintOp = components['schemas']['ConstraintOp'];
+	type Requirements = components['schemas']['Requirements'];
 
 	// Ops that take a value input
 	const OPS_WITH_VALUE: ConstraintOp[] = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in'];
@@ -37,12 +41,12 @@
 	const ALL_OPS: ConstraintOp[] = [...OPS_WITH_VALUE, ...OPS_WITHOUT_VALUE];
 
 	type Props = {
-		data: AutomatedStepNodeData;
+		requirements: Requirements | null | undefined;
 		readonly?: boolean;
-		onchange: (data: AutomatedStepNodeData) => void;
+		onchange: (requirements: Requirements | undefined) => void;
 	};
 
-	let { data, readonly = false, onchange }: Props = $props();
+	let { requirements, readonly = false, onchange }: Props = $props();
 
 	// ── Capability types (loaded once on mount) ────────────────────────────────
 	let capabilityTypes = $state<CapabilityTypeSummary[]>([]);
@@ -59,8 +63,8 @@
 			});
 	});
 
-	// ── Local constraint list, derived from data ───────────────────────────────
-	const constraints = $derived<Constraint[]>(data.requirements?.constraints ?? []);
+	// ── Local constraint list, derived from the bound requirements ──────────────
+	const constraints = $derived<Constraint[]>(requirements?.constraints ?? []);
 
 	// ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -85,16 +89,8 @@
 	// ── Mutation helpers ───────────────────────────────────────────────────────
 
 	function emit(next: Constraint[]) {
-		if (next.length === 0) {
-			// Omit the field entirely when the list is empty (cleaner wire shape).
-			// eslint-disable-next-line @typescript-eslint/no-unused-vars
-			const { requirements: _r, ...rest } = data as AutomatedStepNodeData & {
-				requirements?: unknown;
-			};
-			onchange(rest as AutomatedStepNodeData);
-		} else {
-			onchange({ ...data, requirements: { constraints: next } });
-		}
+		// Empty list ⇒ `undefined` so the caller can omit the field entirely.
+		onchange(next.length === 0 ? undefined : { constraints: next });
 	}
 
 	function addConstraint() {
@@ -152,7 +148,7 @@
 	}
 </script>
 
-<div class="space-y-3 border-t border-border/40 pt-3">
+<div class="space-y-3 pt-2">
 	<span class="text-sm font-medium text-muted-foreground">Placement requirements</span>
 
 	{#if constraints.length === 0}
@@ -362,7 +358,7 @@
 	{/if}
 
 	<p class="text-sm italic text-muted-foreground">
-		Constraints are AND-ed. Only runners whose advertised capabilities satisfy all constraints can
-		claim this step. Applies to runner-group steps only — concurrency-limit steps ignore requirements.
+		Constraints are AND-ed — only a runner whose advertised capabilities satisfy all of them can
+		claim this step.
 	</p>
 </div>

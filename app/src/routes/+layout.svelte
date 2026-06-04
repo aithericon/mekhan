@@ -42,6 +42,7 @@
 		<a href="/" class="text-sm font-semibold tracking-tight text-foreground" data-testid="nav-home">Mekhan</a>
 		<nav class="ml-8 flex flex-1 items-center gap-1 text-sm" data-testid="nav-bar">
 			<Button variant="ghost" size="sm" href="/templates" data-testid="nav-templates">Templates</Button>
+			<Button variant="ghost" size="sm" href="/projects" data-testid="nav-projects">Projects</Button>
 			<Button variant="ghost" size="sm" href="/instances" data-testid="nav-instances">Instances</Button>
 			<Button variant="ghost" size="sm" href="/tasks" data-testid="nav-tasks">Tasks</Button>
 			<Button variant="ghost" size="sm" href="/catalogue" data-testid="nav-catalogue">Catalogue</Button>

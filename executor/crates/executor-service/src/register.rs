@@ -392,6 +392,173 @@ pub async fn refresh_creds() -> Result<(), BoxErr> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Phase B — grouped + enrolled workers: boot-time self-enroll
+// ---------------------------------------------------------------------------
+
+/// Worker enroll request body — shared wire contract with mekhan's
+/// `POST /api/v1/workers/enroll` (`EnrollWorkerRequest`). Do not rename fields
+/// without changing both sides.
+#[derive(Debug, Serialize)]
+struct EnrollWorkerRequest {
+    registration_token: String,
+    name: String,
+    /// `None` serializes as JSON `null`; mekhan treats null/omitted alike (no
+    /// scoped JWT minted in that case).
+    nats_public_key: Option<String>,
+    /// Executor backend wire-names this daemon serves (set-membership). The
+    /// scoped JWT mekhan mints is allowed to drain exactly these.
+    backends: Vec<String>,
+}
+
+/// Worker enroll response body — shared wire contract (`EnrolledWorker`).
+/// `id` / `workspace_id` are mekhan `Uuid`s on the wire (JSON strings); we keep
+/// them as `String` here since the daemon only echoes them.
+#[derive(Debug, Deserialize)]
+struct EnrolledWorker {
+    id: String,
+    /// `wkr_<uuid>.<secret>` — returned ONCE, never re-fetchable.
+    #[allow(dead_code)]
+    worker_token: String,
+    workspace_id: String,
+    /// Routing group inherited from the registration token. This is the group
+    /// the worker COMPETES in (not a per-worker partition).
+    #[serde(default)]
+    group: Option<String>,
+    /// Scoped NATS user JWT minted from the `nats_public_key` we sent. `None`
+    /// when no key was sent OR mekhan's signing key is unavailable.
+    #[serde(default)]
+    nats_jwt: Option<String>,
+}
+
+/// On-disk worker identity persisted under `{base_dir}/worker/identity.json`.
+/// Mirrors `aithericon_executor_worker::WorkerIdentity` (the daemon reads it
+/// back in `ExecutorConfig::normalize()`); field names must stay in sync.
+#[derive(Debug, Serialize)]
+struct WorkerIdentityWire<'a> {
+    worker_id: &'a str,
+    group: Option<&'a str>,
+    workspace_id: &'a str,
+}
+
+/// Outcome of a successful boot-time worker enrollment, returned to the daemon
+/// so it can wire the inherited group into the grouped consumer bind and set
+/// `nats_creds`/`worker_id` without re-reading config.
+pub struct EnrolledWorkerLocal {
+    pub worker_id: String,
+    /// The routing group inherited from the registration token (mekhan's
+    /// response). `None` is a valid (ungrouped) enrollment.
+    pub group: Option<String>,
+    /// Absolute path to the assembled `.creds` file, when mekhan returned a JWT.
+    pub creds_path: Option<PathBuf>,
+}
+
+/// Self-enroll this worker into a mekhan worker fleet on daemon boot.
+///
+/// Mirrors the runner [`register`] path (local nkey, POST enroll, assemble
+/// `.creds`) but is non-interactive: it reads `mekhan_url` + the served backend
+/// `wire`s from the daemon, not CLI flags. The returned `group` is inherited
+/// from the registration token (we do NOT pass a group to mekhan — the token
+/// carries it) and becomes the worker's routing group. Idempotent at the
+/// caller: skip when `{base_dir}/worker/identity.json` already exists.
+///
+/// `name` is the operator-stable worker label (the daemon's `config.name`);
+/// `backends` are the wire-names this binary registered.
+pub async fn enroll_worker(
+    mekhan_url: &str,
+    registration_token: &str,
+    name: &str,
+    backends: Vec<String>,
+    base_dir: &str,
+) -> Result<EnrolledWorkerLocal, BoxErr> {
+    // Generate a NATS user nkey locally; only the public key crosses the wire
+    // (the seed is persisted and folded into the `.creds` file).
+    let keypair = nkeys::KeyPair::new_user();
+    let nats_public_key = keypair.public_key();
+    let nats_seed = keypair
+        .seed()
+        .map_err(|e| format!("failed to extract nkey seed: {e}"))?;
+
+    let worker_dir = PathBuf::from(base_dir).join("worker");
+    let enroll_url = format!(
+        "{}/api/v1/workers/enroll",
+        mekhan_url.trim_end_matches('/')
+    );
+    let body = EnrollWorkerRequest {
+        registration_token: registration_token.to_string(),
+        name: name.to_string(),
+        nats_public_key: Some(nats_public_key),
+        backends,
+    };
+
+    info!(url = %enroll_url, %name, "self-enrolling worker");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&enroll_url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("worker enroll request to {enroll_url} failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("worker enroll rejected by {enroll_url}: HTTP {status}\n{text}").into());
+    }
+
+    let enrolled: EnrolledWorker = resp
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse worker enroll response: {e}"))?;
+
+    std::fs::create_dir_all(&worker_dir)
+        .map_err(|e| format!("failed to create {}: {e}", worker_dir.display()))?;
+
+    let identity = WorkerIdentityWire {
+        worker_id: &enrolled.id,
+        group: enrolled.group.as_deref(),
+        workspace_id: &enrolled.workspace_id,
+    };
+    let identity_path = worker_dir.join("identity.json");
+    let identity_json = serde_json::to_vec_pretty(&identity)
+        .map_err(|e| format!("failed to serialize worker identity: {e}"))?;
+    std::fs::write(&identity_path, &identity_json)
+        .map_err(|e| format!("failed to write {}: {e}", identity_path.display()))?;
+
+    let token_path = worker_dir.join("worker.token");
+    write_secret(&token_path, enrolled.worker_token.as_bytes())?;
+
+    let nk_path = worker_dir.join("user.nk");
+    write_secret(&nk_path, nats_seed.as_bytes())?;
+
+    // Assemble + persist the `.creds` the daemon connects with, when mekhan
+    // returned a JWT. The seed is the one generated locally above.
+    let creds_path = worker_dir.join("worker.creds");
+    let creds_written = if let Some(jwt) = enrolled.nats_jwt.as_deref() {
+        let creds = assemble_creds(jwt, &nats_seed);
+        write_secret(&creds_path, creds.as_bytes())?;
+        true
+    } else {
+        false
+    };
+
+    info!(
+        worker_id = %enrolled.id,
+        workspace_id = %enrolled.workspace_id,
+        group = ?enrolled.group,
+        dir = %worker_dir.display(),
+        nats_creds = creds_written,
+        "worker enrolled"
+    );
+
+    Ok(EnrolledWorkerLocal {
+        worker_id: enrolled.id,
+        group: enrolled.group,
+        creds_path: creds_written.then_some(creds_path),
+    })
+}
+
 /// Write a secret file and lock it down to owner-only (0600) on unix.
 fn write_secret(path: &std::path::Path, bytes: &[u8]) -> Result<(), BoxErr> {
     std::fs::write(path, bytes).map_err(|e| format!("failed to write {}: {e}", path.display()))?;

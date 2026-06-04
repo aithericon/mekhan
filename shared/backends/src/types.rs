@@ -129,6 +129,34 @@ impl ExecutionBackendType {
         executor_pool_namespace(self.as_wire_str())
     }
 
+    /// The worker-pool namespace narrowed by an optional identity-plane `group`
+    /// (docs/23/24). `None` returns the unchanged base `executor-<wire>`
+    /// (BYTE-STABLE — existing ungrouped AIR is untouched); `Some(g)` returns
+    /// `executor-<wire>-grp/<group>`.
+    ///
+    /// Grouped jobs land on a SEPARATE stream from the anonymous pool: the
+    /// stream-ns is `executor-<wire>-grp` (apalis-nats `split_namespace` reads
+    /// the segment after the slash as the subject-partition token), so the
+    /// engine routes grouped jobs to `executor-<wire>-grp.<prio>.<group>.<exec>`
+    /// on stream `executor-<wire>-grp_<prio>`, while ungrouped jobs stay on
+    /// `executor-<wire>.<prio>.<exec>` (stream `executor-<wire>_<prio>`). This is
+    /// the D1 isolation decision (docs/24): a parallel grouped stream — NOT a
+    /// stream-per-group — bounded by backend count exactly like the anonymous
+    /// pool, mirroring the way ALL runners share one `runner-jobs` stream
+    /// partitioned by id. It means an anonymous `executor-<wire>` Pool consumer
+    /// (filter `executor-<wire>.<prio>.>`) can never see — let alone steal — a
+    /// grouped job, with no change to the shared apalis Pool-filter logic.
+    /// `<group>` is the subject-partition token; many workers in the group share
+    /// one durable and COMPETE (a second coarse routing coordinate, NOT a
+    /// per-worker push partition). The token must be a single safe subject token
+    /// (`[A-Za-z0-9_-]`); the caller (the compiler) validates it before stamping.
+    pub fn executor_namespace_for_group(&self, group: Option<&str>) -> String {
+        match group {
+            None => self.executor_namespace(),
+            Some(g) => format!("{}-grp/{g}", self.executor_namespace()),
+        }
+    }
+
     /// Inverse of [`Self::as_wire_str`]. Returns `None` for any unknown
     /// wire tag — callers should treat that as a 404 / validation error
     /// rather than a fallback to a default backend.

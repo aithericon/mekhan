@@ -300,6 +300,7 @@ async fn discover_resource_globals(
             deployment_model:
                 crate::models::template::DeploymentModel::Executor {
                     capacity: Some(binding),
+                    ..
                 },
             ..
         } = &node.data
