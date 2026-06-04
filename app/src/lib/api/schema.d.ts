@@ -382,6 +382,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/capacities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * `GET /api/v1/capacities` — every `capacity` + `datacenter` resource in the
+         *     workspace, classified by backend with live utilization. One read powers the
+         *     whole Control-Plane capacity surface.
+         */
+        get: operations["list_capacities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalogue": {
         parameters: {
             query?: never;
@@ -3565,6 +3586,15 @@ export interface components {
             liveness: components["schemas"]["Liveness"];
         };
         /**
+         * @description The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).
+         *     Supersets the shared `aithericon_resources::pool::PoolBackend` (which only
+         *     names the three admission-net flavours) with the two **no-admission-net**
+         *     cases: `Queue` (a pull worker queue — no grant) and `Deferred` (the
+         *     `consume` quota path, whose admission mechanism is not yet built).
+         * @enum {string}
+         */
+        CapacityBackend: "queue" | "tokens" | "presence" | "scheduler" | "deferred";
+        /**
          * @description A binding to a Tokens or Presence `capacity` resource for executor-pool admission (`docs/14`).
          *     Lives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the
          *     compiler wrap the executor body with a claim/register/release handshake
@@ -3593,6 +3623,49 @@ export interface components {
             request?: unknown;
         };
         /**
+         * @description Live utilization for one capacity, tagged by its backend. The shape mirrors
+         *     the backend so the UI renders the right gauge without a second lookup.
+         */
+        CapacityLive: {
+            holders: components["schemas"]["GrantHolder"][];
+            /** Format: int32 */
+            in_use: number;
+            /** @enum {string} */
+            kind: "tokens";
+            /** Format: int32 */
+            seeded: number;
+        } | {
+            backends: string[];
+            /** @enum {string} */
+            kind: "presence";
+            /** Format: int32 */
+            online: number;
+            /** Format: int32 */
+            total: number;
+        } | {
+            /** Format: int32 */
+            backends_covered: number;
+            /** Format: int32 */
+            backends_total: number;
+            /** @enum {string} */
+            kind: "queue";
+            /** Format: int32 */
+            workers: number;
+        } | {
+            /** Format: int64 */
+            active_leases: number;
+            draining: boolean;
+            flavor: string;
+            /** @enum {string} */
+            kind: "scheduler";
+            /** Format: double */
+            success_rate?: number | null;
+            watcher_state: string;
+        } | {
+            /** @enum {string} */
+            kind: "none";
+        };
+        /**
          * @description One named preset (doc 23 §7): a coherent, legible axis set the create form
          *     prefills so an operator names a kind ("worker") and gets the locked axes,
          *     overriding only the free ones. Presets are legibility over the substrate —
@@ -3610,6 +3683,23 @@ export interface components {
             display_name: string;
             /** @description Stable wire id (`worker` / `limit` / `instrument`). */
             name: string;
+        };
+        /** @description One capacity resource, classified + live. The unified Control-Plane row. */
+        CapacitySummary: {
+            axes?: null | components["schemas"]["CapacityAxes"];
+            /** @description The dispatch target, from the SINGLE authority `CapacityAxes::backend()`. */
+            backend: components["schemas"]["CapacityBackend"];
+            /** @description Human display name. */
+            display_name: string;
+            /**
+             * Format: uuid
+             * @description Resource UUID.
+             */
+            id: string;
+            /** @description Live utilization, tagged by backend. */
+            live: components["schemas"]["CapacityLive"];
+            /** @description Snake_case `path` (the alias steps + runners/workers bind to). */
+            path: string;
         };
         /**
          * @description Cardinality of an asset type (docs/20 §4.2). `Object` is the 1-row
@@ -4678,6 +4768,17 @@ export interface components {
         FleetMetrics: {
             clusters: components["schemas"]["ClusterMetrics"][];
             fleet_total: components["schemas"]["ClusterMetrics"];
+        };
+        /**
+         * @description One holder of a live token grant, best-effort decoded from an `allocations`
+         *     row. `instance_id` is the owning workflow instance (NULL for pool-management
+         *     grants); `since` is the RFC3339 `acquired_at`.
+         */
+        GrantHolder: {
+            /** @description Owning workflow instance UUID (string), when the grant resolved one. */
+            instance_id?: string | null;
+            /** @description RFC3339 acquisition timestamp, when recorded. */
+            since?: string | null;
         };
         /** @description Flattened guard diagnostic (`node_id` is highlighted in the editor). */
         GuardDiagnosticDto: {
@@ -9796,6 +9897,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_capacities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace capacities, classified + live */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapacitySummary"][];
                 };
             };
         };

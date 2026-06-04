@@ -135,7 +135,8 @@ pub struct CapacityAxes {
 /// names the three admission-net flavours) with the two **no-admission-net**
 /// cases: `Queue` (a pull worker queue — no grant) and `Deferred` (the
 /// `consume` quota path, whose admission mechanism is not yet built).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum CapacityBackend {
     /// Broker-balanced pull queue (competing consumers). NO admission net is
     /// deployed — workers subscribe and compete directly.

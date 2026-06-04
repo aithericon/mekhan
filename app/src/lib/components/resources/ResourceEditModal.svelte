@@ -10,11 +10,11 @@
 	import { Input } from '$lib/components/ui/input';
 	import { FormField } from '$lib/components/ui/form-field';
 	import * as Select from '$lib/components/ui/select';
-	import SchemaForm, {
+	import SchemaFields, {
 		deriveFieldSpecs,
 		discriminatorOf,
 		type FieldSpec as SchemaFieldSpec
-	} from '$lib/components/editor/panels/shared/SchemaForm.svelte';
+	} from './SchemaFields.svelte';
 	import X from '@lucide/svelte/icons/x';
 	import {
 		createResource,
@@ -33,11 +33,21 @@
 		 *  already fetched it. */
 		types?: ResourceTypeInfo[];
 		workspace_id?: string;
+		/** Optional resource_type to preselect when CREATING (resource_id null).
+		 *  e.g. the Control Plane opens this prefilled to `capacity`. Ignored on
+		 *  edit (the existing resource's type wins). */
+		prefillType?: string;
 		onsaved: () => void;
 	};
 
-	let { open = $bindable(), resource_id, types: typesProp = [], workspace_id, onsaved }: Props =
-		$props();
+	let {
+		open = $bindable(),
+		resource_id,
+		types: typesProp = [],
+		workspace_id,
+		prefillType,
+		onsaved
+	}: Props = $props();
 
 	// Locally-mutable copy: when the modal opens with no parent-provided
 	// types list, we lazy-load via `listResourceTypes()` into this slot.
@@ -133,7 +143,9 @@
 				}
 			} else {
 				mode = 'create';
-				selectedType = '';
+				// Preselect the prefill type when it's a known resource type;
+				// otherwise leave the picker on "choose a type".
+				selectedType = prefillType && types.some((t) => t.name === prefillType) ? prefillType : '';
 				path = '';
 				displayName = '';
 				fieldValues = {};
@@ -470,22 +482,13 @@
 							</p>
 						</div>
 					{:else if descriptor}
-						<div class="space-y-3 rounded-md border border-border/60 p-3">
-							<div class="text-sm font-medium text-muted-foreground">
-								{descriptor.display_name} configuration
-							</div>
-							<SchemaForm
-								schema={(descriptor.schema ?? {}) as Record<string, unknown>}
-								value={fieldValues}
-								secretFields={descriptor.secret_fields}
-								fieldOrder={[...descriptor.public_fields, ...descriptor.secret_fields]}
-								booleanWidget="select"
-								secretPlaceholder={mode === 'edit'
-									? '(leave blank to keep current)'
-									: undefined}
-								onchange={(next) => (fieldValues = next as Record<string, string>)}
-							/>
-						</div>
+						<SchemaFields
+							{descriptor}
+							bind:fieldValues
+							secretPlaceholder={mode === 'edit'
+								? '(leave blank to keep current)'
+								: undefined}
+						/>
 					{/if}
 				</div>
 			{/if}

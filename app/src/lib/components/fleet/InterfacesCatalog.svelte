@@ -19,8 +19,16 @@
 		type InterfaceEntry
 	} from '$lib/api/runners';
 	import { fmtDate } from './format';
+	import { filterFleetByGroup } from './grouping';
 	import StatusDot from './StatusDot.svelte';
 	import FleetEmpty from './FleetEmpty.svelte';
+
+	type Props = {
+		/** When set, only show runners in this group alias (the capacity `path`).
+		 *  Omitted ⇒ every runner advertising an interface catalog (the default). */
+		group?: string | null;
+	};
+	let { group = null }: Props = $props();
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -63,7 +71,8 @@
 				listRunners({ perPage: 200 }),
 				getRunnerPresence()
 			]);
-			runners = rPage.items;
+			// When scoped to a group, keep only that group's runners.
+			runners = filterFleetByGroup(rPage.items, [], group).runners;
 			presence = pSnaps;
 			// Auto-select the first runner so the panel isn't empty on open.
 			if (selectedId === null && runners.length > 0) {

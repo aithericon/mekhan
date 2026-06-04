@@ -237,7 +237,27 @@ pub async fn list_clusters(
     user: AuthUser,
 ) -> Result<Json<ClustersResponse>, ApiError> {
     let workspace_id = user.workspace_id.unwrap_or_else(Uuid::nil);
+    let clusters = assemble_cluster_summaries(&state, workspace_id).await?;
+    Ok(Json(ClustersResponse { clusters }))
+}
 
+/// Assemble the per-cluster [`ClusterSummary`] list for one workspace: overlay
+/// the engine's live `ClusterRegistry` state on the registered `datacenter`
+/// resource rows. This is the SINGLE source of cluster-summary assembly so the
+/// two readers — `GET /api/v1/clusters` (the cluster page) and
+/// `GET /api/v1/capacities` (the unified Control-Plane aggregator) — cannot
+/// drift on what "the scheduler capacity's live state" is.
+///
+/// A registered datacenter always appears (idle when no live client is
+/// resident); live engine clusters not backed by a current DB row (the `_env`
+/// dev bootstrap, or a resource deleted mid-drain) are appended when their id
+/// resolves into this workspace. The engine being unreachable degrades to the
+/// registered set rather than failing — the same read-only, don't-block
+/// discipline the capacity aggregator relies on.
+pub(crate) async fn assemble_cluster_summaries(
+    state: &AppState,
+    workspace_id: Uuid,
+) -> Result<Vec<ClusterSummary>, ApiError> {
     // Live engine state, keyed by resource_id. The engine being unreachable is a
     // bad-gateway — but we still want the registered datacenters, so tolerate an
     // empty/missing array rather than failing the whole list on a cold engine.
@@ -344,7 +364,7 @@ pub async fn list_clusters(
         }
     }
 
-    Ok(Json(ClustersResponse { clusters }))
+    Ok(clusters)
 }
 
 /// POST /api/v1/clusters/{resource_id}/reconnect
@@ -783,5 +803,24 @@ fn action_from_value(
             .unwrap_or(action)
             .to_string(),
         applied: v.get("applied").and_then(|x| x.as_bool()).unwrap_or(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::models::capacity::{axes_for_resource, CapacityBackend};
+    use serde_json::Map;
+
+    /// A `datacenter` resource is the lease/scheduler capacity: it must map
+    /// through the SINGLE dispatch authority to [`CapacityBackend::Scheduler`].
+    /// This pins the assumption `assemble_cluster_summaries` + the capacity
+    /// aggregator both rely on — a `datacenter`'s live state is the scheduler
+    /// (cluster) state, never a token/presence/queue pool.
+    #[test]
+    fn datacenter_maps_to_scheduler_backend() {
+        let empty = Map::new();
+        let axes = axes_for_resource("datacenter", &empty)
+            .expect("datacenter resolves to locked lease axes");
+        assert_eq!(axes.backend(), CapacityBackend::Scheduler);
     }
 }

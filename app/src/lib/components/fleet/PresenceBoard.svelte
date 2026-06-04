@@ -19,12 +19,20 @@
 	} from '$lib/api/runners';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
 	import { capacityTarget } from '$lib/editor/deployment-run-target';
-	import { groupFleet } from './grouping';
+	import { groupFleet, filterFleetByGroup } from './grouping';
 	import { fmtMsAgo, fmtDate } from './format';
 	import BoardHeader from './BoardHeader.svelte';
 	import GroupSectionHeader from './GroupSectionHeader.svelte';
 	import FleetCard from './FleetCard.svelte';
 	import FleetEmpty from './FleetEmpty.svelte';
+
+	type Props = {
+		/** When set, constrain the board to this group alias (the capacity `path`):
+		 *  only that group's runners + that backing resource are shown. Omitted ⇒
+		 *  the full cross-group board (the default used by the fleet page). */
+		group?: string | null;
+	};
+	let { group = null }: Props = $props();
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -52,10 +60,13 @@
 				getRunnerPresence(),
 				listResources({ resource_type: 'capacity', perPage: 200 })
 			]);
-			runners = rPage.items;
 			presence = pSnaps;
 			// A runner group is a presence `capacity` (the instrument preset).
-			groups = gPage.items.filter((r) => capacityTarget(r) === 'runner_group');
+			const allGroups = gPage.items.filter((r) => capacityTarget(r) === 'runner_group');
+			// When scoped to one group, drop everything else (runners + backing res).
+			const filtered = filterFleetByGroup(rPage.items, allGroups, group);
+			runners = filtered.runners;
+			groups = filtered.groupResources;
 			lastUpdated = new Date();
 			error = null;
 		} catch (e) {

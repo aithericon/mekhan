@@ -1456,6 +1456,30 @@
         }
       }
     },
+    "/api/v1/capacities": {
+      "get": {
+        "tags": [
+          "capacities"
+        ],
+        "summary": "`GET /api/v1/capacities` — every `capacity` + `datacenter` resource in the\nworkspace, classified by backend with live utilization. One read powers the\nwhole Control-Plane capacity surface.",
+        "operationId": "list_capacities",
+        "responses": {
+          "200": {
+            "description": "Workspace capacities, classified + live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CapacitySummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/catalogue": {
       "get": {
         "tags": [
@@ -10231,6 +10255,17 @@
         ],
         "description": "The full point in the trait-space a `capacity` resource names. This is the\ntyped view of the axes stored as strings in `public_config`; the create\npath parses the wire strings into this and runs [`CapacityAxes::validate`]."
       },
+      "CapacityBackend": {
+        "type": "string",
+        "description": "The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).\nSupersets the shared `aithericon_resources::pool::PoolBackend` (which only\nnames the three admission-net flavours) with the two **no-admission-net**\ncases: `Queue` (a pull worker queue — no grant) and `Deferred` (the\n`consume` quota path, whose admission mechanism is not yet built).",
+        "enum": [
+          "queue",
+          "tokens",
+          "presence",
+          "scheduler",
+          "deferred"
+        ]
+      },
       "CapacityBinding": {
         "type": "object",
         "description": "A binding to a Tokens or Presence `capacity` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.capacity`, expressing \"no\ncapacity binding\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a Tokens or Presence `capacity` resource.",
@@ -10246,6 +10281,166 @@
             "description": "Claim-schema-shaped request params (the kind's `claim_schema` in\n`aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`\nand validated against the kind's `claim_schema`. `None` ⇒ the kind's\ndefault placement (e.g. one token)."
           }
         }
+      },
+      "CapacityLive": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Seeded token pool (concurrency limit): `seeded` fixed units, `in_use`\ncurrently held, with the per-holder ledger.",
+            "required": [
+              "seeded",
+              "in_use",
+              "holders",
+              "kind"
+            ],
+            "properties": {
+              "holders": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GrantHolder"
+                }
+              },
+              "in_use": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "tokens"
+                ]
+              },
+              "seeded": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Presence-driven pool (instrument / runner group): `online` present\nrunners out of `total` enrolled in this group, plus the union of their\nadvertised backends.",
+            "required": [
+              "online",
+              "total",
+              "backends",
+              "kind"
+            ],
+            "properties": {
+              "backends": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "presence"
+                ]
+              },
+              "online": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Anonymous worker queue: FLEET-GLOBAL worker count + backend coverage\n(workers carry no per-capacity binding, so this is shared telemetry).",
+            "required": [
+              "workers",
+              "backends_covered",
+              "backends_total",
+              "kind"
+            ],
+            "properties": {
+              "backends_covered": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "backends_total": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "queue"
+                ]
+              },
+              "workers": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Lease/scheduler (datacenter): live cluster state from the registry.",
+            "required": [
+              "flavor",
+              "watcher_state",
+              "active_leases",
+              "draining",
+              "kind"
+            ],
+            "properties": {
+              "active_leases": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "draining": {
+                "type": "boolean"
+              },
+              "flavor": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "scheduler"
+                ]
+              },
+              "success_rate": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "watcher_state": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Deferred (`consume` quota) or any capacity with no live source.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "none"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Live utilization for one capacity, tagged by its backend. The shape mirrors\nthe backend so the UI renders the right gauge without a second lookup."
       },
       "CapacityPreset": {
         "type": "object",
@@ -10267,6 +10462,51 @@
           "name": {
             "type": "string",
             "description": "Stable wire id (`worker` / `limit` / `instrument`)."
+          }
+        }
+      },
+      "CapacitySummary": {
+        "type": "object",
+        "description": "One capacity resource, classified + live. The unified Control-Plane row.",
+        "required": [
+          "id",
+          "path",
+          "display_name",
+          "backend",
+          "live"
+        ],
+        "properties": {
+          "axes": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CapacityAxes",
+                "description": "The resolved trait-space axes (`None` for a `capacity` whose\n`public_config` doesn't parse — it still lists, with `backend` defaulted)."
+              }
+            ]
+          },
+          "backend": {
+            "$ref": "#/components/schemas/CapacityBackend",
+            "description": "The dispatch target, from the SINGLE authority `CapacityAxes::backend()`."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "Human display name."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Resource UUID."
+          },
+          "live": {
+            "$ref": "#/components/schemas/CapacityLive",
+            "description": "Live utilization, tagged by backend."
+          },
+          "path": {
+            "type": "string",
+            "description": "Snake_case `path` (the alias steps + runners/workers bind to)."
           }
         }
       },
@@ -12895,6 +13135,26 @@
           },
           "fleet_total": {
             "$ref": "#/components/schemas/ClusterMetrics"
+          }
+        }
+      },
+      "GrantHolder": {
+        "type": "object",
+        "description": "One holder of a live token grant, best-effort decoded from an `allocations`\nrow. `instance_id` is the owning workflow instance (NULL for pool-management\ngrants); `since` is the RFC3339 `acquired_at`.",
+        "properties": {
+          "instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Owning workflow instance UUID (string), when the grant resolved one."
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC3339 acquisition timestamp, when recorded."
           }
         }
       },
@@ -21418,6 +21678,10 @@
     {
       "name": "capability-types",
       "description": "Phase 4 — admin-curated, workspace-scoped typed capability registry. Runner-advertised capabilities (enroll) + step Requirements (publish) are typed against these. Create/revoke are cookie-only (browser admin boundary)."
+    },
+    {
+      "name": "capacities",
+      "description": "Capacity aggregator (docs/23 + docs/24) — the unified Control-Plane read: every `capacity` + `datacenter` resource classified by the SINGLE dispatch authority (`CapacityAxes::backend`) with live utilization (token holders / presence online / worker coverage / scheduler lease state)."
     }
   ]
 }
