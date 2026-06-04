@@ -933,6 +933,9 @@ xarm-up:
 
     # Slot-aware rosbridge host port (+42; turtle owns +40/+41).
     bridge_port=$(( {{service_port}} + 42 ))
+    # noVNC web viewer host port (+43) — open http://localhost:$vnc_port/vnc.html
+    # to WATCH the 3D arm (RViz) execute the demo trajectories.
+    vnc_port=$(( {{service_port}} + 43 ))
     proj="${COMPOSE_PROJECT_NAME:-mekhan-s0}"
     cname="${proj}-xarm"
 
@@ -953,12 +956,13 @@ xarm-up:
       docker build -t aithericon-xarm:jazzy deploy/dev/xarm
     fi
 
-    # 2) (Re)start the xArm container on the slot-aware rosbridge port. No noVNC
-    #    viewer — fake mode runs headless (RViz disabled).
+    # 2) (Re)start the xArm container on the slot-aware host ports (rosbridge WS
+    #    + the noVNC web viewer: RViz with the MoveIt MotionPlanning display).
     docker rm -f "$cname" >/dev/null 2>&1 || true
     echo "▶ starting xArm 6 (fake hw) + rosbridge ($cname) → ws://localhost:$bridge_port (DDS domain $ros_domain)"
-    echo "  (the planner stack — move_group + controllers — takes ~20-40s to come up)"
-    docker run -d --name "$cname" -e ROS_DOMAIN_ID="$ros_domain" -p "$bridge_port:9090" aithericon-xarm:jazzy >/dev/null
+    echo "  👁  watch the 3D arm: http://localhost:$vnc_port/vnc.html"
+    echo "  (the planner stack — move_group + controllers + RViz — takes ~30-60s to come up)"
+    docker run -d --name "$cname" -e ROS_DOMAIN_ID="$ros_domain" -p "$bridge_port:9090" -p "$vnc_port:6080" aithericon-xarm:jazzy >/dev/null
 
     # 3) Wait for mekhan + the `ros` capability-type seed (shared with the turtle).
     echo "▶ waiting for mekhan + ros capability seed…"

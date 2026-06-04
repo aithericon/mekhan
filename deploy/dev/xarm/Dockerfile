@@ -85,6 +85,43 @@ RUN OBJ=/opt/ros/jazzy/lib/python3.12/site-packages/rosapi/objectutils.py \
         's/^        field_type = matches\[0\]$/        field_type = matches[0].split(",")[0].strip()/' \
         "$OBJ"
 
+# OPTIONAL browser viewer (mirrors the turtlesim harness): launch RViz with the
+# xArm MoveIt config under the Xvfb display, export it over RFB with x11vnc, and
+# wrap it as a noVNC web client so a human can open
+# http://localhost:<host-port>/vnc.html and WATCH the 3D arm execute the demo
+# trajectories. Unlike turtlesim (a 2D Qt window), RViz is an OpenGL app, so the
+# container needs a software GL stack — `libgl1-mesa-dri` provides the llvmpipe
+# renderer and `LIBGL_ALWAYS_SOFTWARE=1` (below) forces it (there's no GPU in
+# the container). `fluxbox` is a tiny window manager so RViz maps/maximizes into
+# a usable desktop instead of a bare floating window. rviz2 + the MoveIt
+# MotionPlanning RViz plugin are pulled explicitly (they normally arrive as
+# moveit deps, but pin them so `show_rviz:=true` can't fail on a missing plugin).
+# This is its own thin layer AFTER the heavy colcon build so toggling the viewer
+# never busts the multi-GB build cache.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        x11vnc \
+        novnc \
+        python3-websockify \
+        fluxbox \
+        xdotool \
+        libgl1-mesa-dri \
+        ros-jazzy-rviz2 \
+        ros-jazzy-moveit-ros-visualization \
+    && rm -rf /var/lib/apt/lists/*
+
+# Force software OpenGL (llvmpipe) — there is no GPU in the container, so RViz
+# must not try a hardware GL context (it would fail to create a window).
+ENV LIBGL_ALWAYS_SOFTWARE=1
+
+# fluxbox "remember" rule: maximize any rviz2-class window the moment it maps,
+# and keep it maximized. This is the reliable, WM-native way to fill the
+# viewport — far better than racing RViz's slow software-GL layout with an
+# xdotool resize loop (RViz also spawns tiny helper windows — a 1x1 "rviz2" and
+# a "Qt Selection Owner" — that confuse title-based matching). The entrypoint
+# additionally nudges it via xdotool as a backup.
+RUN mkdir -p /root/.fluxbox \
+    && printf '[app] (class=rviz2)\n  [Maximized]\t{yes}\n[end]\n' > /root/.fluxbox/apps
+
 # Isolate this container's ROS graph on a non-default DDS domain. Docker
 # Desktop's bridge passes DDS multicast between containers, so a default-domain
 # (0) xArm would cross-discover a default-domain turtlesim container running in
@@ -96,7 +133,8 @@ ENV ROS_DOMAIN_ID=42
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# rosbridge WebSocket (rosapi rides the same port via the launch file).
-EXPOSE 9090
+# rosbridge WebSocket (rosapi rides the same port via the launch file) + the
+# noVNC web viewer (browser → :6080/vnc.html → RViz on the Xvfb display).
+EXPOSE 9090 6080
 
 ENTRYPOINT ["/entrypoint.sh"]
