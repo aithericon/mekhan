@@ -23,7 +23,7 @@ function groupResource(path: string): ResourceSummary {
 	return {
 		id: `res-${path}`,
 		path,
-		resource_type: 'runner_group',
+		resource_type: 'capacity',
 		display_name: path,
 		latest_version: 1,
 		created_at: '2026-01-01T00:00:00Z',

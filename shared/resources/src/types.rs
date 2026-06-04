@@ -288,34 +288,18 @@ pub struct GoogleOauth {
 
 // ─── Resource-pool kinds ─────────────────────────────────────────────────────
 //
-// Two kinds that describe *contended capacity* rather than a single credential.
-// A workflow step claims against one of these by alias (`resourcePool: { alias
-// }`) and holds a typed lease for its duration. The claim/lease *schemas* are
-// pool semantics — they live in a focused side-registry (`crate::pool`), not on
-// `ResourceTypeDescriptor` (see that module's doc comment for the rationale).
-// Here we declare only the resource's own config surface, exactly like any
-// other kind.
-
-/// Platform-owned in-net capacity pool. A `ConcurrencyLimit` of capacity N is modelled
-/// (in R3) as a deployed pool net holding N identical capacity tokens; the
-/// engine's firing rule then provides admission control + mutual exclusion for
-/// free. No secret — the pool is owned by the platform, not an external system,
-/// so there is no credential to store. See `docs/14`.
-#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(
-    name = "concurrency_limit",
-    display_name = "Concurrency Limit",
-    icon = "lucide-layers"
-)]
-pub struct ConcurrencyLimit {
-    /// Number of concurrent holders the pool admits. Surfaces N capacity tokens
-    /// in the backing net.
-    pub capacity: u32,
-    /// Optional human label for one unit (e.g. `"GPU"`, `"license seat"`).
-    /// Cosmetic — drives dashboard / picker copy, never the firing rule.
-    #[serde(default)]
-    pub unit_label: Option<String>,
-}
+// Kinds that describe *contended capacity* rather than a single credential. A
+// workflow step claims against one by alias (`resourcePool: { alias }`) and
+// holds a typed lease for its duration. The claim/lease *schemas* are pool
+// semantics — they live in a focused side-registry (`crate::pool`), keyed by
+// the dispatch BACKEND, not on `ResourceTypeDescriptor` (see that module's doc
+// comment for the rationale). Here we declare only the resource's own config
+// surface, exactly like any other kind.
+//
+// There are two such kinds: the unified `Capacity` (below — it absorbs the old
+// `concurrency_limit` / `runner_group` / worker kinds as points in its
+// trait-space) and `Datacenter` (an external-allocator connection that
+// dispatches through the SAME authority by exposing locked lease axes).
 
 /// External-allocator connection: a datacenter / scheduler that owns placement.
 /// The net holds a *lease* against it (not a mirror of its state) — the external
@@ -417,48 +401,30 @@ pub struct ContainerImage {
     pub registry_password: Option<String>,
 }
 
-/// Presence-driven capacity pool (Phase 3). Like [`ConcurrencyLimit`] it is a
-/// platform-owned, credential-less *contended-capacity* kind — but its capacity
-/// is NOT a configured count. Instead it is driven by **runner presence**: each
-/// live runner that checks in is admitted as one pool unit, and its unit is
-/// reaped when the runner's presence lease lapses. The backing net
-/// (`build_presence_pool_net`) seeds NOTHING; mekhan's presence controller
-/// injects/expires units. Therefore there is deliberately **no `capacity`
-/// field** — capacity is emergent, not declared. See `docs/20` + the Phase-3
-/// presence-lease design.
-#[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
-#[resource(
-    name = "runner_group",
-    display_name = "Runner Group",
-    icon = "lucide-radio-tower"
-)]
-pub struct RunnerGroup {
-    /// Optional human label for one unit (e.g. `"runner"`, `"GPU node"`).
-    /// Cosmetic — drives dashboard / picker copy, never admission (admission is
-    /// presence-driven). Symmetric with [`ConcurrencyLimit::unit_label`].
-    #[serde(default)]
-    pub unit_label: Option<String>,
-}
-
-/// First-class **capacity** (doc 23/24, S3) — the generalisation of
-/// [`RunnerGroup`] into a named point in the unified trait-space. A capacity
-/// advertises *how* it offers work (the doc 23 §3 axes), stored here as plain
-/// strings in `public_config`; the authoritative typed view + the create-time
-/// cell validation + the named presets live service-side in
-/// `mekhan_service::models::capacity` (this crate carries no service dep). The
-/// axis vocabulary on the wire:
+/// First-class **capacity** (doc 23/24, S3) — the single contended-capacity
+/// kind. It is the unification point: a `capacity` names a point in the doc 23
+/// §3 trait-space, and the service-side dispatch authority
+/// (`mekhan_service::models::capacity::CapacityAxes::backend`) maps that point
+/// onto a dispatch backend. This absorbs the old `concurrency_limit` (seeded
+/// tokens), `runner_group` (presence), and worker (competing-consumer queue)
+/// kinds — they are deleted; their behaviours are now axis points on this one
+/// kind.
 ///
-/// - `liveness ∈ { competing_consumer, presence, lease }`
+/// The axes are stored here as plain strings in `public_config`; the
+/// authoritative typed view + the create-time cell validation + the named
+/// presets live service-side (this crate carries no service dep). The axis
+/// vocabulary on the wire:
+///
+/// - `liveness ∈ { competing_consumer, seeded, presence, lease }`
 /// - `dispatch ∈ { pull, push }`
 /// - `exclusivity ∈ { hold, consume }`
 /// - `capacity_kind ∈ { fixed, presence_driven, elastic }` (+ `capacity_amount`
 ///   for `fixed`)
 /// - `eligibility ∈ { partition, predicate }`
 ///
-/// A presence-driven capacity deploys the SAME presence-pool admission net
-/// `runner_group` does — the instrument path is byte-stable. `runner_group`
-/// stays registered (below) so existing rows + the instrument enroll path keep
-/// working; `capacity` is the forward-looking superset.
+/// `datacenter` (above) is a sibling contended-capacity kind that dispatches
+/// through the same authority via locked lease axes — it stays a typed kind for
+/// its flavored connection schema, which is orthogonal to capacity dispatch.
 #[derive(ResourceType, Serialize, Deserialize, schemars::JsonSchema)]
 #[resource(
     name = "capacity",
@@ -466,8 +432,9 @@ pub struct RunnerGroup {
     icon = "lucide-layout-grid"
 )]
 pub struct Capacity {
-    /// How we know it is available. One of `competing_consumer` / `presence` /
-    /// `lease`. Validated service-side against `models::capacity::Liveness`.
+    /// How we know it is available. One of `competing_consumer` / `seeded` /
+    /// `presence` / `lease`. Validated service-side against
+    /// `models::capacity::Liveness`.
     pub liveness: String,
     /// How work reaches it: `pull` (broker-balanced queue) or `push` (matched
     /// grant to an inbox).
@@ -484,8 +451,8 @@ pub struct Capacity {
     /// Eligibility strategy: `partition` (trivial equality ⇒ a work queue) or
     /// `predicate` (rich match ⇒ a guarded admission net).
     pub eligibility: String,
-    /// Optional human label for one unit (cosmetic; mirrors
-    /// [`RunnerGroup::unit_label`]).
+    /// Optional human label for one unit (e.g. `"runner"`, `"GPU"`, `"license
+    /// seat"`). Cosmetic — drives dashboard / picker copy, never admission.
     #[serde(default)]
     pub unit_label: Option<String>,
 }

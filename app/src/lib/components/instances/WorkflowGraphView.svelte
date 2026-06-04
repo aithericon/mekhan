@@ -239,7 +239,7 @@
 	// / Scheduled step ALSO emits `p_<id>_pending` (via the shared lease bridge),
 	// so the old place-based gate lit the capacity widget for cluster runs. The
 	// overlay is a shared-capacity dashboard and belongs ONLY to genuine
-	// concurrency_limit / runner_group steps; cluster leases are surfaced in the drawer instead.
+	// seeded/presence capacity steps; cluster leases are surfaced in the drawer instead.
 	const tokenPoolNodes = $derived.by(() => {
 		if (!graph) return [];
 		return graph.nodes.filter((n) => {
@@ -322,7 +322,7 @@
 			onPaneClick={closeDrawer}
 		/>
 		<!-- In-context capacity-contention dashboard: ONLY for workflows with a genuine
-		     concurrency_limit / runner_group step (not cluster/lease runs). Pointed at the resolved
+		     seeded/presence capacity step (not cluster/lease runs). Pointed at the resolved
 		     backing net id (`pool-<resource_id>`) read from the instance topology.
 		     `waitingNodeIds` is the predicate set from this instance's marking. -->
 		{#if hasPooledNodes && poolNetId}

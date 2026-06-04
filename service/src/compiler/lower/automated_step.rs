@@ -58,7 +58,7 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
                 &cx.node.id,
                 alias,
                 None, // Scheduled steps don't have a 'request' field
-                &["datacenter"],
+                DeploymentRole::SchedulerLease,
                 cx.known_resources,
                 cx.container_specs.get(&cx.node.id),
             )?;
@@ -658,14 +658,15 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
 
 
 /// Everything the pooled lowering needs once `Inline.capacity.alias` has been
-/// resolved to a `concurrency_limit` resource.
+/// resolved to a net-backed `capacity` (or `datacenter`) resource and its
+/// dispatch backend.
 pub(super) struct PoolBinding {
     /// Deterministic backing net id (`pool-<resource_id>`) the claim/register/
     /// release bridges target.
     pub(super) backing_net_id: String,
-    /// `Lease__<kind>` — the AIR definition name for the typed grant/lease.
+    /// `Lease__<backend>` — the AIR definition name for the typed grant/lease.
     pub(super) lease_def_name: String,
-    /// The kind's lease JSON Schema, registered into `scenario.definitions`.
+    /// The backend's lease JSON Schema, registered into `scenario.definitions`.
     pub(super) lease_schema: serde_json::Value,
     /// The validated `request` params rendered as a Rhai literal (`()` when
     /// `binding.request` is absent).
@@ -680,37 +681,63 @@ pub(super) struct PoolBinding {
     pub(super) backend: aithericon_resources::pool::PoolBackend,
 }
 
-/// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to a set
-/// of acceptable `expected_kinds`.
+/// Which deployment role resolved a pool-resource binding — the Executor.capacity
+/// entry (token/presence in-net admission) or the Scheduled/LeaseScope entry (a
+/// scheduler lease). This is the BACKEND-keyed replacement for the old
+/// `expected_kinds: &[&str]` gate: instead of naming acceptable kind strings, the
+/// caller names its role and [`resolve_binding`] checks the alias's resolved
+/// [`CapacityBackend`] is one the role accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DeploymentRole {
+    /// `Executor { capacity: { alias } }` — accepts `Tokens` or `Presence`
+    /// (platform-owned in-net admission pools).
+    ExecutorCapacity,
+    /// `Scheduled { scheduler: alias, .. }` / `LeaseScope` — accepts `Scheduler`
+    /// (a lease against an external allocator, i.e. a `datacenter`).
+    SchedulerLease,
+}
+
+/// Resolve a pool-resource alias (required) → a [`PoolBinding`], gated to the
+/// backend(s) a [`DeploymentRole`] accepts.
 ///
 /// Shared by the two claim/grant/register/release entry points — they differ
-/// ONLY in which alias they resolve and which kinds they accept:
-/// - `Executor { capacity: { alias } }` → `["concurrency_limit", "runner_group"]`. Both
-///   are platform-owned in-net capacity pools with the IDENTICAL cross-net
-///   handshake (same `pool-<id>` net id + claim/register/release inboxes +
-///   `"grant"` reply), so the downstream body-wrapping is shared; only the
-///   `Lease__<kind>` shape and the presence-only `"fail"` path differ, which the
-///   returned [`PoolBinding::backend`] discriminates.
-/// - `Scheduled { scheduler: alias, .. }` → `["datacenter"]` (R4). Same body
-///   wrapping; only the backing net + `Lease__<kind>` differ.
+/// ONLY in which alias they resolve and which backend they accept:
+/// - [`DeploymentRole::ExecutorCapacity`] → `Tokens` | `Presence`. Both are
+///   platform-owned in-net capacity pools with the IDENTICAL cross-net handshake
+///   (same `pool-<id>` net id + claim/register/release inboxes + `"grant"`
+///   reply), so the downstream body-wrapping is shared; only the
+///   `Lease__<backend>` shape and the presence-only `"fail"` path differ, which
+///   the returned [`PoolBinding::backend`] discriminates.
+/// - [`DeploymentRole::SchedulerLease`] → `Scheduler` (R4). Same body wrapping;
+///   only the backing net + `Lease__scheduler` differ.
+///
+/// The alias's backend is resolved through the SINGLE dispatch authority
+/// ([`crate::models::capacity::axes_for_resource`] → [`CapacityBackend`]), NOT a
+/// kind-string switch: a `capacity` parses its `public_config` axes; a
+/// `datacenter` returns its locked lease axes (→ `Scheduler`). The net-backed
+/// [`CapacityBackend`] then maps to a [`aithericon_resources::pool::PoolBackend`]
+/// whose claim/lease schemas this reads via `pool::schemas_for_backend`.
 ///
 /// Errors:
 /// - alias not in `known_resources` → `WorkspaceResourceUnknown` (normally
 ///   caught earlier at publish by `discover_known_resources`).
-/// - alias resolves to a kind not in `expected_kinds` → a kind-specific
-///   CompileError (`ResourcePoolNotAPool` for the Executor.capacity entry,
+/// - alias resolves to a backend the role does not accept (incl. `Queue` /
+///   `Deferred` / a non-pool resource) → a role-specific CompileError
+///   (`ResourcePoolNotAPool` for the Executor.capacity entry,
 ///   `SchedulerNotADatacenter` for the Scheduled entry) steering the author to
 ///   the right deployment model.
-/// - `request` fails validation against the kind's `claim_schema` →
+/// - `request` fails validation against the backend's claim schema →
 ///   `ResourcePoolRequestInvalid`.
 pub(super) fn resolve_binding(
     node_id: &str,
     alias: &str,
     request: Option<&serde_json::Value>,
-    expected_kinds: &[&str],
+    role: DeploymentRole,
     known: &crate::compiler::resource_refs::KnownResources,
     container: Option<&crate::compiler::compile::CompilerContainerSpec>,
 ) -> Result<PoolBinding, CompileError> {
+    use aithericon_resources::pool::PoolBackend;
+
     let resource = known
         .get(alias)
         .ok_or_else(|| CompileError::WorkspaceResourceUnknown {
@@ -719,40 +746,76 @@ pub(super) fn resolve_binding(
         })?;
     let kind = resource.type_name.clone();
 
-    // The `pool_kind` lookup gates "is it a pool kind at all"; the
-    // `expected_kinds.contains` gate enforces the Executor/Scheduled split
-    // (concurrency_limit + runner_group belong under Executor.capacity, a datacenter under
-    // Scheduled). A wrong/non-pool kind yields the entry-point-appropriate error.
-    // The error variant is keyed on whether the Scheduled entry called us (its
-    // only acceptable kind is "datacenter").
-    let scheduled_entry = expected_kinds == ["datacenter"];
-    let wrong_kind = || -> CompileError {
-        if scheduled_entry {
-            CompileError::SchedulerNotADatacenter {
+    // A role-appropriate "this alias isn't the right kind of pool" error, named
+    // by the resolved BACKEND (or "not a pool" when the resource resolves to no
+    // dispatch backend at all). The Executor.capacity entry steers the author to
+    // Scheduled; the Scheduled entry steers back to Executor.capacity.
+    let wrong_backend = |label: &str| -> CompileError {
+        match role {
+            DeploymentRole::SchedulerLease => CompileError::SchedulerNotADatacenter {
                 node_id: node_id.to_string(),
                 alias: alias.to_string(),
-                kind: kind.clone(),
-            }
-        } else {
-            CompileError::ResourcePoolNotAPool {
+                backend: label.to_string(),
+            },
+            DeploymentRole::ExecutorCapacity => CompileError::ResourcePoolNotAPool {
                 node_id: node_id.to_string(),
                 alias: alias.to_string(),
-                kind: kind.clone(),
-            }
+                backend: label.to_string(),
+            },
         }
     };
-    let pool_desc = aithericon_resources::pool::pool_kind(&kind).ok_or_else(wrong_kind)?;
-    if !expected_kinds.contains(&kind.as_str()) {
-        return Err(wrong_kind());
+
+    // Resolve the alias's axes → CapacityBackend through the single authority.
+    // A non-object public_config can't carry axes (and a `capacity` with garbage
+    // config resolves to None) — treat as "not a pool".
+    let public_map = resource
+        .public_config
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let capacity_backend = crate::models::capacity::axes_for_resource(&kind, &public_map)
+        .map(|axes| axes.backend());
+
+    // Map the resolved CapacityBackend to a net-backed PoolBackend the role
+    // accepts. Queue / Deferred / None have no admission net, so they are a
+    // "not a pool" error for either role. The role then narrows further:
+    // ExecutorCapacity rejects Scheduler; SchedulerLease accepts ONLY Scheduler.
+    let backend: PoolBackend = match capacity_backend {
+        Some(crate::models::capacity::CapacityBackend::Tokens) => PoolBackend::Tokens,
+        Some(crate::models::capacity::CapacityBackend::Presence) => PoolBackend::Presence,
+        Some(crate::models::capacity::CapacityBackend::Scheduler) => PoolBackend::Scheduler,
+        // A worker queue / deferred-quota / non-pool resource has no admission
+        // net for either role.
+        Some(crate::models::capacity::CapacityBackend::Queue) => return Err(wrong_backend("queue")),
+        Some(crate::models::capacity::CapacityBackend::Deferred) => {
+            return Err(wrong_backend("deferred"))
+        }
+        None => return Err(wrong_backend("non-pool")),
+    };
+    let role_accepts = match role {
+        DeploymentRole::ExecutorCapacity => {
+            matches!(backend, PoolBackend::Tokens | PoolBackend::Presence)
+        }
+        DeploymentRole::SchedulerLease => matches!(backend, PoolBackend::Scheduler),
+    };
+    if !role_accepts {
+        // e.g. a Scheduler-backed alias under Executor.capacity, or a
+        // Tokens/Presence-backed alias under Scheduled.
+        let label = match backend {
+            PoolBackend::Tokens => "tokens",
+            PoolBackend::Presence => "presence",
+            PoolBackend::Scheduler => "scheduler",
+        };
+        return Err(wrong_backend(label));
     }
 
-    // Flavor-gated connection validation for datacenters. Both the per-step
-    // `Scheduled.scheduler` lease path and the loop `Loop.lease.scheduler`
-    // path funnel through here, so this is the single choke point. We assert
-    // the PUBLIC connection fields the flavor needs are present; the required
-    // SECRET (slurm `ssh_key`) is structurally guaranteed by the resource-create
-    // validator. Hard-fail with no fallback.
-    if kind == "datacenter" {
+    // Flavor-gated connection validation for the scheduler lease (datacenter).
+    // Both the per-step `Scheduled.scheduler` lease path and the loop
+    // `Loop.lease.scheduler` path funnel through here, so this is the single
+    // choke point. We assert the PUBLIC connection fields the flavor needs are
+    // present; the required SECRET (slurm `ssh_key`) is structurally guaranteed
+    // by the resource-create validator. Hard-fail with no fallback.
+    if backend == PoolBackend::Scheduler {
         if let Some(missing) = datacenter_missing_connection_fields(&resource.public_config) {
             return Err(CompileError::DatacenterConnectionIncomplete {
                 node_id: node_id.to_string(),
@@ -763,14 +826,17 @@ pub(super) fn resolve_binding(
         }
     }
 
-    // Validate `request` against the kind's claim_schema before we bake it into
-    // the ClaimRequest. Same `jsonschema` crate/version the engine
+    // The backend's claim/lease schemas, keyed by PoolBackend (the service owns
+    // axes → backend; the shared crate owns backend → schema).
+    let pool_schemas = aithericon_resources::pool::schemas_for_backend(backend);
+
+    // Validate `request` against the backend's claim schema before we bake it
+    // into the ClaimRequest. Same `jsonschema` crate/version the engine
     // `SchemaRegistry` uses, so compile-time and runtime agree.
     let validated_req: Option<serde_json::Value> = match request {
         None => None,
         Some(req) => {
-            let claim_schema = (pool_desc.claim_schema)();
-            let validator = jsonschema::validator_for(&claim_schema).map_err(|e| {
+            let validator = jsonschema::validator_for(&pool_schemas.claim).map_err(|e| {
                 CompileError::ResourcePoolRequestInvalid {
                     node_id: node_id.to_string(),
                     alias: alias.to_string(),
@@ -788,16 +854,16 @@ pub(super) fn resolve_binding(
         }
     };
 
-    // Container injection (lease path): a `datacenter` lease whose holder step
+    // Container injection (lease path): a scheduler lease whose holder step
     // carries a `CompilerContainerSpec` gets the spec merged into the claim
     // `request` JSON under a `container` key — the claim `request` flows VERBATIM
     // to the engine's `acquire_lease`, which reads `request.get("container")`
     // (slurm_allocator.rs) to wrap the held alloc's drain executor in the `.sif`.
     // The merge happens AFTER schema validation (the container key is not part of
-    // the kind's claim_schema). When there is no container OR the kind is not a
-    // datacenter, `request_rhai` is byte-identical to the pre-container path
-    // (this is the hard concurrency_limit / no-container invariant).
-    let request_rhai = match container.filter(|_| kind == "datacenter") {
+    // the backend's claim_schema). When there is no container OR the backend is
+    // not the scheduler, `request_rhai` is byte-identical to the pre-container
+    // path (this is the hard token-pool / no-container invariant).
+    let request_rhai = match container.filter(|_| backend == PoolBackend::Scheduler) {
         Some(spec) => {
             let mut map = match validated_req {
                 Some(serde_json::Value::Object(obj)) => obj,
@@ -823,18 +889,34 @@ pub(super) fn resolve_binding(
 
     Ok(PoolBinding {
         backing_net_id: well_known::pool_net_id(resource.id),
-        lease_def_name: format!("Lease__{kind}"),
+        lease_def_name: lease_def_name(backend),
         // Strip the schemars envelope (`$schema`, `title`) so the registered
         // definition is a bare object schema matching the `Data__`/`Ctrl__`
         // convention — the engine wraps it as `{definitions, $ref}` and a
         // nested draft `$schema` would be redundant noise. The lease schema may
-        // carry an inlined `oneOf` (the `datacenter` flavor union) but is
+        // carry an inlined `oneOf` (the scheduler flavor union) but is
         // SELF-CONTAINED — `pool::schema_value` inlines subschemas, so there is
         // no internal `$ref`/`definitions` to lift.
-        lease_schema: sanitize_definition_schema((pool_desc.lease_schema)()),
+        lease_schema: sanitize_definition_schema(pool_schemas.lease),
         request_rhai,
-        backend: pool_desc.backend,
+        backend,
     })
+}
+
+/// The AIR definition name for a backend's typed grant/lease: `Lease__tokens` /
+/// `Lease__presence` / `Lease__scheduler`. Per-BACKEND (not per-kind) so the
+/// two presence/token capacity kinds AND the datacenter all land on their
+/// backend's one stable name. `compile_to_air` deduplicates definitions on this
+/// name (one `Lease__tokens` regardless of N pooled nodes) and the grant-inbox
+/// place's `token_schema` is `#/definitions/<name>`.
+pub(super) fn lease_def_name(backend: aithericon_resources::pool::PoolBackend) -> String {
+    use aithericon_resources::pool::PoolBackend;
+    let suffix = match backend {
+        PoolBackend::Tokens => "tokens",
+        PoolBackend::Presence => "presence",
+        PoolBackend::Scheduler => "scheduler",
+    };
+    format!("Lease__{suffix}")
 }
 
 /// Validate a `datacenter` resource's public connection config against its
@@ -977,20 +1059,22 @@ fn lower_automated_step_pooled(cx: &mut LoweringCtx) -> Result<(), CompileError>
         unreachable!("lower_automated_step_pooled only runs for Executor capacity:Some")
     };
     // Resolve `Executor.capacity.alias` (required) against the workspace-resource
-    // manifest: a `concurrency_limit` OR `runner_group` resource → `{resource_id, kind}`
-    // → the deterministic backing net `pool-<resource_id>`, validated `request`,
-    // and a typed, body-visible lease (R2/R3 + Phase 3). Both kinds share the
-    // IDENTICAL claim/grant/register/release handshake; the returned binding's
-    // `backend` discriminates the presence-only `"fail"` path inside
-    // `lower_pooled_body`. A non-pool / datacenter alias is a CompileError.
+    // manifest: a `capacity` resource whose axes resolve to a Tokens (seeded) or
+    // Presence (instrument) backend → the deterministic backing net
+    // `pool-<resource_id>`, validated `request`, and a typed, body-visible lease
+    // (R2/R3 + Phase 3). Both backends share the IDENTICAL
+    // claim/grant/register/release handshake; the returned binding's `backend`
+    // discriminates the presence-only `"fail"` path inside `lower_pooled_body`. A
+    // queue/deferred/scheduler/non-pool alias is a CompileError.
     let pool_binding = resolve_binding(
         &cx.node.id,
         &binding.alias,
         binding.request.as_ref(),
-        &["concurrency_limit", "runner_group"],
+        DeploymentRole::ExecutorCapacity,
         cx.known_resources,
-        // concurrency_limit is OUR worker pool, not a cluster — no container injection;
-        // `None` keeps concurrency_limit claim AIR byte-identical (hard invariant).
+        // A token/presence pool is OUR in-net admission pool, not a cluster — no
+        // container injection; `None` keeps the token-pool claim AIR
+        // byte-identical (hard invariant).
         None,
     )?;
     lower_pooled_body(cx, pool_binding)
@@ -1344,7 +1428,7 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
     // post-merge exactly as for inline nodes. The job's `input.json` is the
     // ORIGINAL upstream token parked in `pending.input`. ───────────────────
     //
-    // The routed `grant` token IS the typed lease (validated vs `Lease__<kind>`
+    // The routed `grant` token IS the typed lease (validated vs `Lease__<backend>`
     // on `p_grant_inbox`). We (a) stage it into the body as `lease.json` so
     // body code reads `lease.<field>` (e.g. `lease.unit_id`), mirroring the
     // resource-envelope `<alias>.json` staging, and (b) park the WHOLE lease on

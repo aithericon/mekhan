@@ -26,8 +26,8 @@
 			>no pool · unbacked</Badge
 		>
 		<span class="text-sm text-amber-700/90 dark:text-amber-400/80">
-			These runners heartbeat but are admitted to no pool — no
-			<code class="font-mono">runner_group</code> resource backs this alias.
+			These runners heartbeat but are admitted to no pool — no presence
+			<code class="font-mono">capacity</code> resource backs this alias.
 		</span>
 		{#if action}<div class="ml-auto">{@render action()}</div>{/if}
 	</div>

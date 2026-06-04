@@ -10,6 +10,8 @@
 	import {
 		resolveRunTarget,
 		initialRunTarget,
+		capacityTarget,
+		targetsByAlias,
 		type RunTarget as Target,
 		type DeploymentLike
 	} from '$lib/editor/deployment-run-target';
@@ -50,7 +52,7 @@
 		 * backends are inline-only; pass `false` to hide it. */
 		schedulable?: boolean;
 		/** The step's placement `requirements`. Placement constraints ONLY apply to
-		 * the runner_group model (capability-matched `t_grant`), so the editor is
+		 * the presence `capacity` model (capability-matched `t_grant`), so the editor is
 		 * hosted here, in the Runner-group branch. Omit (Agent panel) to hide it. */
 		requirements?: Requirements | null;
 		onRequirementsChange?: (requirements: Requirements | undefined) => void;
@@ -113,9 +115,10 @@
 
 	// ── Capacity binding ──────────────────────────────────────────────────────
 	// The binding lives under `deploymentModel.Executor.capacity` and names a
-	// `runner_group` OR a `concurrency_limit` resource — two semantically distinct
-	// models that this section presents as distinct "Run on" targets (rather than
-	// one generic "capacity" claim). `alias` is REQUIRED for a bound step.
+	// single `capacity` resource. A capacity is discriminated by its `liveness`
+	// axis — presence (a runner group) vs seeded (a concurrency limit) — which
+	// this section presents as distinct "Run on" targets (rather than one generic
+	// "capacity" claim). `alias` is REQUIRED for a bound step.
 	const capacityAlias = $derived(
 		value?.mode === 'executor'
 			? ((value as { mode: 'executor'; capacity?: null | { alias: string } }).capacity?.alias ?? '')
@@ -124,17 +127,17 @@
 
 	// ── "Run on" target — the deployment model, made first-class ──────────────
 	// `target` is LOCAL UI state, not a pure derivation. An executor value with a
-	// `capacity` object but an EMPTY alias is ambiguous (runner_group vs limit
-	// can't be told apart from the value alone) — so when the user picks "Runner
-	// group"/"Concurrency limit" (which writes `capacity:{alias:''}` until they
-	// choose a resource), `resolveRunTarget` returns null and we KEEP the local
-	// choice instead of snapping back to "Worker pool" (the reported bug). The
-	// resolution logic is unit-tested in `deployment-run-target.test.ts`.
+	// `capacity` object but an EMPTY alias is ambiguous (the runner-group vs limit
+	// liveness can't be told apart from the value alone) — so when the user picks
+	// "Runner group"/"Concurrency limit" (which writes `capacity:{alias:''}` until
+	// they choose a resource), `resolveRunTarget` returns null and we KEEP the
+	// local choice instead of snapping back to "Worker pool" (the reported bug).
+	// The resolution logic is unit-tested in `deployment-run-target.test.ts`.
 	// `untrack`: a deliberate one-time read of the initial `value` (the effect
 	// owns ongoing sync) — silences the state_referenced_locally lint.
 	let target = $state<Target>(untrack(() => initialRunTarget(value as DeploymentLike | undefined)));
 	$effect(() => {
-		const next = resolveRunTarget(value as DeploymentLike | undefined, kindByAlias);
+		const next = resolveRunTarget(value as DeploymentLike | undefined, targetByAlias);
 		if (next !== null) {
 			untrack(() => {
 				if (target !== next) target = next;
@@ -184,11 +187,11 @@
 			onchange({ mode: 'executor' } as DeploymentModelValue);
 			return;
 		}
-		// runner_group | limit → executor + a capacity claim of the matching kind.
-		// Keep the current alias only if it already matches the target's kind;
-		// otherwise start empty (the picker + a "select a …" prompt follow).
-		const wantKind = t === 'runner_group' ? 'runner_group' : 'concurrency_limit';
-		const keep = capacityAlias && kindByAlias.get(capacityAlias) === wantKind ? capacityAlias : '';
+		// runner_group | limit → executor + a capacity claim of the matching
+		// liveness. Keep the current alias only if its capacity already maps to
+		// this target; otherwise start empty (the picker + a "select a …" prompt
+		// follow).
+		const keep = capacityAlias && targetByAlias.get(capacityAlias) === t ? capacityAlias : '';
 		onchange({ mode: 'executor', capacity: { alias: keep } } as DeploymentModelValue);
 	}
 
@@ -254,11 +257,13 @@
 	}
 
 	// ── Resource pickers ──────────────────────────────────────────────────────
-	// Both capacity kinds load eagerly (small per-workspace lists) so the target
-	// derivation can resolve a bound alias → its kind, and each picker can filter
-	// to its own kind. Datacenter resources load lazily when Scheduled is active.
-	let runnerGroups = $state<ResourceSummary[]>([]);
-	let limits = $state<ResourceSummary[]>([]);
+	// The single `capacity` kind loads eagerly (a small per-workspace list) so the
+	// target derivation can resolve a bound alias → its liveness-derived target,
+	// and each picker can filter to its own liveness. Each capacity's `liveness`
+	// axis (in `public_config`, surfaced on the list summary) tells the presence
+	// (runner group) and seeded (concurrency limit) buckets apart. Datacenter
+	// resources load lazily when Scheduled is active.
+	let capacities = $state<ResourceSummary[]>([]);
 	let schedulerResources = $state<ResourceSummary[]>([]);
 	let capacityLoaded = $state(false);
 	let schedulerResourcesLoaded = $state(false);
@@ -266,13 +271,9 @@
 	$effect(() => {
 		if (capacityLoaded) return;
 		capacityLoaded = true;
-		Promise.all([
-			listResources({ resource_type: 'runner_group', perPage: 200 }),
-			listResources({ resource_type: 'concurrency_limit', perPage: 200 })
-		])
-			.then(([rg, cl]) => {
-				runnerGroups = rg.items;
-				limits = cl.items;
+		listResources({ resource_type: 'capacity', perPage: 200 })
+			.then((p) => {
+				capacities = p.items;
 			})
 			.catch(() => {
 				/* leave empty — pickers show the empty hint */
@@ -289,12 +290,11 @@
 		}
 	});
 
-	const kindByAlias = $derived.by(() => {
-		const m = new Map<string, 'runner_group' | 'concurrency_limit'>();
-		for (const r of runnerGroups) m.set(r.path, 'runner_group');
-		for (const r of limits) m.set(r.path, 'concurrency_limit');
-		return m;
-	});
+	// alias → the run target its capacity maps to (by liveness). Drives both the
+	// bound-alias resolution and each picker's per-liveness filter.
+	const targetByAlias = $derived(targetsByAlias(capacities));
+	const runnerGroups = $derived(capacities.filter((r) => capacityTarget(r) === 'runner_group'));
+	const limits = $derived(capacities.filter((r) => capacityTarget(r) === 'limit'));
 
 	/** The resource list for the active capacity target. */
 	const capacityList = $derived(target === 'runner_group' ? runnerGroups : limits);
@@ -305,7 +305,7 @@
 		}
 		const found =
 			capacityList.find((r) => r.path === capacityAlias) ??
-			[...runnerGroups, ...limits].find((r) => r.path === capacityAlias);
+			capacities.find((r) => r.path === capacityAlias);
 		return found ? `${found.path} — ${found.display_name}` : capacityAlias;
 	}
 	function schedulerLabel(): string {
@@ -381,8 +381,10 @@
 			</p>
 		{:else if capacityList.length === 0 && capacityLoaded}
 			<p class="text-sm italic text-muted-foreground">
-				No <code class="font-mono">{target === 'runner_group' ? 'runner_group' : 'concurrency_limit'}</code>
-				resources in this workspace. Add one under <code class="font-mono">/resources</code> first.
+				No <code class="font-mono">capacity</code> resources with
+				{target === 'runner_group' ? 'presence' : 'seeded'} liveness in this workspace. Add one (the
+				{target === 'runner_group' ? 'instrument' : 'limit'} preset) under
+				<code class="font-mono">/resources</code> first.
 			</p>
 		{/if}
 		{#if capacityAlias}

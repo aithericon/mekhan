@@ -10052,17 +10052,17 @@
             "type": "object",
             "description": "A configured integer unit count (the worker pool's `N`).",
             "required": [
-              "amount",
-              "kind"
+              "capacity_amount",
+              "capacity_kind"
             ],
             "properties": {
-              "amount": {
+              "capacity_amount": {
                 "type": "integer",
                 "format": "int32",
                 "description": "A configured integer unit count (the worker pool's `N`).",
                 "minimum": 0
               },
-              "kind": {
+              "capacity_kind": {
                 "type": "string",
                 "enum": [
                   "fixed"
@@ -10074,10 +10074,10 @@
             "type": "object",
             "description": "Emergent from live presence — one unit per checked-in unit. No count is\ndeclared (the presence controller injects/expires units).",
             "required": [
-              "kind"
+              "capacity_kind"
             ],
             "properties": {
-              "kind": {
+              "capacity_kind": {
                 "type": "string",
                 "enum": [
                   "presence_driven"
@@ -10089,10 +10089,10 @@
             "type": "object",
             "description": "Scheduler-granted, unbounded a priori (HPC). Reserved; not built here.",
             "required": [
-              "kind"
+              "capacity_kind"
             ],
             "properties": {
-              "kind": {
+              "capacity_kind": {
                 "type": "string",
                 "enum": [
                   "elastic"
@@ -10136,14 +10136,14 @@
       },
       "CapacityBinding": {
         "type": "object",
-        "description": "A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.capacity`, expressing \"no\ncapacity binding\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a `concurrency_limit` or `runner_group` resource.",
+        "description": "A binding to a Tokens or Presence `capacity` resource for executor-pool admission (`docs/14`).\nLives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the\ncompiler wrap the executor body with a claim/register/release handshake\nagainst the pool resource's backing net so the engine's firing rule provides\nadmission control + mutual exclusion for free.\n\n`alias` is REQUIRED (the `Option` lives on `Executor.capacity`, expressing \"no\ncapacity binding\"). It resolves at publish through the resource machinery to a backing\nnet id + kind + claim/lease schemas; `request` is validated against the\nkind's `claim_schema`. The well-known-global fallback from the prototype is\ngone — a pooled step must name a Tokens or Presence `capacity` resource.",
         "required": [
           "alias"
         ],
         "properties": {
           "alias": {
             "type": "string",
-            "description": "Which `concurrency_limit`/`runner_group` resource (by workspace alias) to claim against.\nRequired. Resolved at publish to a backing net id (`pool-<resource_id>`),\nkind, and claim/lease schemas."
+            "description": "Which Tokens/Presence `capacity` resource (by workspace alias) to claim against.\nRequired. Resolved at publish to a backing net id (`pool-<resource_id>`),\nkind, and claim/lease schemas."
           },
           "request": {
             "description": "Claim-schema-shaped request params (the kind's `claim_schema` in\n`aithericon_resources::pool`). Carried verbatim into the `ClaimRequest`\nand validated against the kind's `claim_schema`. `None` ⇒ the kind's\ndefault placement (e.g. one token)."
@@ -10169,7 +10169,7 @@
           },
           "name": {
             "type": "string",
-            "description": "Stable wire id (`worker` / `instrument` / `hpc`)."
+            "description": "Stable wire id (`worker` / `limit` / `instrument`)."
           }
         }
       },
@@ -11719,7 +11719,7 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "Dispatch to our executor daemon pool over the NATS work queue (jobs are\npulled by the long-running executor workers — NOT in-process). `capacity:\nNone` is the plain path: our worker pool is currently unbounded (no\ncontrol plane gating concurrency yet), so a job runs as soon as a worker\nis free. `capacity: Some` adds BOUNDED admission on top — a `concurrency_limit`\nclaim/register/release handshake so contended infrastructure (GPUs, lab\nmachines, LLM slots) is admission-controlled by the Petri firing rule\n(R3). The bound alias MUST be a `concurrency_limit` OR `runner_group` resource — a `datacenter`\nbelongs under [`DeploymentModel::Scheduled`].\n\n`group` is the orthogonal IDENTITY-PLANE coordinate (docs/23/24): an\noptional `capacity`-resource alias (the `worker` preset:\n`competing_consumer · pull · hold · fixed · partition`) that narrows the\npull routing from `executor-<wire>` to `executor-<wire>/<group>` so only\nenrolled workers of that group compete for the step's jobs. It stays a\nCOMPETING pull pool — the group is a second coarse routing coordinate, NOT\na per-worker push partition. `None` ⇒ the unchanged literal\n`executor-<wire>` (byte-stable AIR). `group` is mutually exclusive with\n`capacity`: `capacity` is the presence-PUSH admission handshake (R3),\n`group` is a plain pull coordinate — a step cannot be both (the compiler\nrejects `Some` + `Some`).",
+            "description": "Dispatch to our executor daemon pool over the NATS work queue (jobs are\npulled by the long-running executor workers — NOT in-process). `capacity:\nNone` is the plain path: our worker pool is currently unbounded (no\ncontrol plane gating concurrency yet), so a job runs as soon as a worker\nis free. `capacity: Some` adds BOUNDED admission on top — a seeded-token\n(`liveness=seeded`) capacity claim/register/release handshake so contended\ninfrastructure (GPUs, lab machines, LLM slots) is admission-controlled by\nthe Petri firing rule (R3). The bound alias MUST be a Tokens or Presence\n`capacity` resource — a `datacenter`\nbelongs under [`DeploymentModel::Scheduled`].\n\n`group` is the orthogonal IDENTITY-PLANE coordinate (docs/23/24): an\noptional `capacity`-resource alias (the `worker` preset:\n`competing_consumer · pull · hold · fixed · partition`) that narrows the\npull routing from `executor-<wire>` to `executor-<wire>/<group>` so only\nenrolled workers of that group compete for the step's jobs. It stays a\nCOMPETING pull pool — the group is a second coarse routing coordinate, NOT\na per-worker push partition. `None` ⇒ the unchanged literal\n`executor-<wire>` (byte-stable AIR). `group` is mutually exclusive with\n`capacity`: `capacity` is the presence-PUSH admission handshake (R3),\n`group` is a plain pull coordinate — a step cannot be both (the compiler\nrejects `Some` + `Some`).",
             "required": [
               "mode"
             ],
@@ -11797,7 +11797,7 @@
             }
           }
         ],
-        "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a `concurrency_limit` admission lives under [`DeploymentModel::Executor`]'s `capacity`\n  (the body runs on our executor pool holding the typed lease — R1–R3\n  machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
+        "description": "Where an `AutomatedStep`'s job runs. Internally tagged on the wire by\n`mode`: `{\"mode\":\"executor\", ...}` or `{\"mode\":\"scheduled\", ...}`. Keep the\n`mode` strings in lockstep with the `snake_case` derive.\n\n`executor` vs `scheduled` is the physically-honest split: our own executor\ndaemon pool (jobs dispatched over the NATS work queue and pulled by the\nlong-running executor workers) vs an external cluster. Resource admission\n*is* scheduling, so:\n- a seeded-token (`liveness=seeded`) capacity admission lives under\n  [`DeploymentModel::Executor`]'s `capacity` (the body runs on our executor\n  pool holding the typed lease — R1–R3 machinery), and\n- an external cluster is a `datacenter` resource bound under\n  [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`\n  selecting submit (today's sbatch/dispatch) vs lease (R4)."
       },
       "Dispatch": {
         "type": "string",
@@ -13755,7 +13755,7 @@
           },
           "scheduler": {
             "type": "string",
-            "description": "`datacenter` resource alias (workspace alias) the loop holds a lease\nagainst. Resolved at publish to `pool-<resource_id>` + the\n`Lease__datacenter` schema, the same path as `Scheduled.scheduler`\n(`resolve_binding(\"datacenter\")`)."
+            "description": "`datacenter` resource alias (workspace alias) the loop holds a lease\nagainst. Resolved at publish to `pool-<resource_id>` + the\n`Lease__scheduler` schema, the same path as `Scheduled.scheduler`\n(`resolve_binding(.., SchedulerLease, ..)`)."
           }
         }
       },
@@ -13993,9 +13993,10 @@
       },
       "Liveness": {
         "type": "string",
-        "description": "How a capacity proves it is available (doc 23 §3 \"liveness\").\n\n`lease` is reserved now (doc 24 §5) so the model has a slot for the\nHPC/`datacenter` allocation path; this slice does not re-express the lease\nadapter as a `capacity`, but the axis value must exist so a future preset\ncan name it.",
+        "description": "How a capacity proves it is available (doc 23 §3 \"liveness\"). This is the\naxis the dispatch authority ([`CapacityAxes::backend`]) keys off, so the\nvocabulary is 1:1 with the backing-net flavour (modulo the `consume`\nquota-admission override).",
         "enum": [
           "competing_consumer",
+          "seeded",
           "presence",
           "lease"
         ]
@@ -15304,6 +15305,9 @@
                 },
                 "path": {
                   "type": "string"
+                },
+                "public_config": {
+                  "description": "The latest version's public config — populated ONLY for `capacity`\nrows, so the editor's deployment picker can discriminate a capacity by\nits `liveness` axis (presence → runner group, seeded → concurrency\nlimit, competing_consumer → worker) without an N+1 detail fetch per\nalias. `None` for every other kind: the list endpoint otherwise stays\ncheap and never carries per-version data."
                 },
                 "resource_type": {
                   "type": "string"
@@ -17042,6 +17046,9 @@
           },
           "path": {
             "type": "string"
+          },
+          "public_config": {
+            "description": "The latest version's public config — populated ONLY for `capacity`\nrows, so the editor's deployment picker can discriminate a capacity by\nits `liveness` axis (presence → runner group, seeded → concurrency\nlimit, competing_consumer → worker) without an N+1 detail fetch per\nalias. `None` for every other kind: the list endpoint otherwise stays\ncheap and never carries per-version data."
           },
           "resource_type": {
             "type": "string"
@@ -20197,7 +20204,7 @@
               },
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
-                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a `concurrency_limit`\nadmission (`Executor.capacity`). `Scheduled` = lease through an external\ncluster (a `datacenter` resource, docs/13).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.capacity` here (post-R3\nconsolidation pivot)."
+                "description": "Where/how the job is dispatched. `Executor` (default) = our executor\ndaemon pool over the NATS work queue, optionally under a Tokens or\nPresence `capacity` admission (`Executor.capacity`). `Scheduled` =\nlease through an external cluster (a `datacenter` resource, docs/13).\n`#[serde(default)]` + the `Executor` default ⇒ every existing\ntemplate round-trips unchanged (same precedent as `retry_policy`).\n\nResource admission *is* scheduling, so the former standalone\n`resourcePool` field folded into `Executor.capacity` here (post-R3\nconsolidation pivot)."
               },
               "description": {
                 "type": [
@@ -20226,7 +20233,7 @@
                   },
                   {
                     "$ref": "#/components/schemas/Requirements",
-                    "description": "Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of\ntyped [`Constraint`]s over the pool unit's advertised `caps` (the\n`runners.capabilities` blob keyed by capability name). At claim time\nthe compiler injects these into the claim payload as a Rhai literal\nand the presence pool's `t_grant` guard\n(`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner\nwhose caps satisfy every constraint. `None` (the default) ⇒ no\nplacement constraint (matches any unit) and the claim carries an\nempty `#{ constraints: [] }`. Ignored on concurrency_limit / Scheduled /\ninline deployments (the claim there is unchanged; publish-time\nvalidation still checks the constraint shapes). Plain\n`#[serde(default, skip_serializing_if)]` ⇒ existing templates\nround-trip unchanged (same precedent as `retry_policy` /\n`deployment_model`)."
+                    "description": "Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of\ntyped [`Constraint`]s over the pool unit's advertised `caps` (the\n`runners.capabilities` blob keyed by capability name). At claim time\nthe compiler injects these into the claim payload as a Rhai literal\nand the presence pool's `t_grant` guard\n(`satisfies(claim.requirements, unit.caps)`) admits ONLY a runner\nwhose caps satisfy every constraint. `None` (the default) ⇒ no\nplacement constraint (matches any unit) and the claim carries an\nempty `#{ constraints: [] }`. Ignored on seeded / Scheduled /\ninline deployments (the claim there is unchanged; publish-time\nvalidation still checks the constraint shapes). Plain\n`#[serde(default, skip_serializing_if)]` ⇒ existing templates\nround-trip unchanged (same precedent as `retry_policy` /\n`deployment_model`)."
                   }
                 ]
               },

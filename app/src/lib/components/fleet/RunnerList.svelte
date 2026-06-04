@@ -1,12 +1,14 @@
 <script lang="ts">
 	// Fleet → Runner list, split into its groups.
-	// On mount: load listRunners() + getRunnerPresence() + the runner_group
-	// resources, then groupFleet() into sections (one per backed group, then any
-	// unbacked aliases, then ungrouped) — rendered via the shared GroupSectionHeader
-	// (same split as the Live board). A runner's `group` is only meaningful when
-	// backed by a `runner_group` resource — that resource carries the presence-pool
-	// net the runner's unit is admitted into — so the enroll dialog only lets you
-	// pick an EXISTING group (or create one inline first).
+	// On mount: load listRunners() + getRunnerPresence() + the presence `capacity`
+	// resources (the runner groups), then groupFleet() into sections (one per
+	// backed group, then any unbacked aliases, then ungrouped) — rendered via the
+	// shared GroupSectionHeader (same split as the Live board). A runner's `group`
+	// is only meaningful when backed by a presence `capacity` resource — that
+	// resource carries the presence-pool net the runner's unit is admitted into —
+	// so the enroll dialog only lets you pick an EXISTING group (or create one
+	// inline first). A runner group is a `capacity` resource created from the
+	// `instrument` preset (liveness=presence).
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import {
@@ -42,6 +44,7 @@
 		type CreatedRegistrationToken
 	} from '$lib/api/runners';
 	import { listResources, createResource, type ResourceSummary } from '$lib/api/resources';
+	import { capacityTarget } from '$lib/editor/deployment-run-target';
 	import { groupFleet, type FleetSection } from './grouping';
 	import { fmtMsAgo, fmtDate } from './format';
 	import StatusDot from './StatusDot.svelte';
@@ -109,12 +112,14 @@
 			const [rPage, pSnaps, gPage, tPage] = await Promise.all([
 				listRunners({ perPage: 200 }),
 				getRunnerPresence(),
-				listResources({ resource_type: 'runner_group', perPage: 200 }),
+				listResources({ resource_type: 'capacity', perPage: 200 }),
 				listRegistrationTokens({ perPage: 200 })
 			]);
 			runners = rPage.items;
 			presence = pSnaps;
-			groups = gPage.items;
+			// A runner group is a presence `capacity` (the instrument preset);
+			// other capacity flavours (seeded limits, worker queues) are not groups.
+			groups = gPage.items.filter((r) => capacityTarget(r) === 'runner_group');
 			tokens = tPage.items;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load runners';
@@ -160,13 +165,18 @@
 		}
 	}
 
-	/** Back an UNBACKED group: create its `runner_group` resource (deploys the
-	    pool net), upgrading present-but-unadmitted runners on the next heartbeat. */
+	/** Back an UNBACKED group: create its presence `capacity` resource (the
+	    `instrument` preset deploys the pool net), upgrading present-but-unadmitted
+	    runners on the next heartbeat. */
 	async function handleBackGroup(alias: string) {
 		if (backingGroup) return;
 		backingGroup = alias;
 		try {
-			await createResource({ path: alias, resource_type: 'runner_group', config: {} });
+			await createResource({
+				path: alias,
+				resource_type: 'capacity',
+				config: { preset: 'instrument' }
+			});
 			toast.success(`Group "${alias}" created — pool net deployed.`);
 			await load();
 		} catch (e) {
@@ -203,7 +213,11 @@
 					return;
 				}
 				try {
-					await createResource({ path, resource_type: 'runner_group', config: {} });
+					await createResource({
+						path,
+						resource_type: 'capacity',
+						config: { preset: 'instrument' }
+					});
 				} catch (ce) {
 					// A 409 (already exists) is fine — reuse it; anything else aborts.
 					const msg = ce instanceof Error ? ce.message : String(ce);
@@ -529,7 +543,7 @@
 					</p>
 				</div>
 
-				<!-- Group: pick an existing runner_group, none, or create one inline. -->
+				<!-- Group: pick an existing presence capacity, none, or create one inline. -->
 				<div class="space-y-1">
 					<label
 						for="enroll-group"
@@ -567,13 +581,14 @@
 							data-testid="enroll-new-group"
 						/>
 						<p class="text-sm text-muted-foreground">
-							Creates a <code class="font-mono">runner_group</code> resource (snake_case) and deploys
-							its pool net before minting the token.
+							Creates a presence <code class="font-mono">capacity</code> resource (snake_case, the
+							<code class="font-mono">instrument</code> preset) and deploys its pool net before
+							minting the token.
 						</p>
 					{:else}
 						<p class="text-sm text-muted-foreground">
-							A group must be backed by a <code class="font-mono">runner_group</code> resource — its
-							pool net is where the runner's unit is admitted.
+							A group must be backed by a presence <code class="font-mono">capacity</code> resource —
+							its pool net is where the runner's unit is admitted.
 						</p>
 					{/if}
 				</div>

@@ -535,17 +535,57 @@ async fn fetch_dynamic_keys(
     Ok(out)
 }
 
-/// Build `ResourceSummary`s from raw rows + the dynamic-keys side-channel
-/// in one place so every list-style endpoint stays in lockstep.
+/// For each `capacity` row, fetch the latest version's `public_config` so the
+/// list endpoint can surface the trait-space axes the editor's deployment
+/// picker discriminates on (liveness presence → runner group, seeded →
+/// concurrency limit, competing_consumer → worker). Returns a map keyed by
+/// `resource_id`, batched in ONE query per page (same UNNEST pairing as
+/// [`fetch_dynamic_keys`], so a mid-rotation read never picks a stale version).
+///
+/// Non-capacity rows are skipped — they keep `public_config: None` and the list
+/// stays cheap.
+async fn fetch_capacity_public_config(
+    db: &sqlx::PgPool,
+    rows: &[ResourceRow],
+) -> Result<std::collections::HashMap<Uuid, Value>, ApiError> {
+    let pairs: Vec<(Uuid, i32)> = rows
+        .iter()
+        .filter(|r| r.resource_type == "capacity")
+        .map(|r| (r.id, r.latest_version))
+        .collect();
+    if pairs.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let ids: Vec<Uuid> = pairs.iter().map(|(id, _)| *id).collect();
+    let versions: Vec<i32> = pairs.iter().map(|(_, v)| *v).collect();
+    let rows: Vec<(Uuid, Value)> = sqlx::query_as(
+        "SELECT resource_id, public_config FROM resource_versions \
+         WHERE (resource_id, version) IN \
+         (SELECT * FROM UNNEST($1::uuid[], $2::int4[]))",
+    )
+    .bind(&ids)
+    .bind(&versions)
+    .fetch_all(db)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Build `ResourceSummary`s from raw rows + the per-row side-channels (kv
+/// dynamic keys + capacity public config) in one place so every list-style
+/// endpoint stays in lockstep.
 fn rows_to_summaries(
     rows: Vec<ResourceRow>,
     dyn_keys: &std::collections::HashMap<Uuid, Vec<String>>,
+    capacity_public: &std::collections::HashMap<Uuid, Value>,
 ) -> Vec<ResourceSummary> {
     rows.into_iter()
         .map(|r| {
             let mut s = ResourceSummary::from(r);
             if let Some(keys) = dyn_keys.get(&s.id) {
                 s.dynamic_keys = Some(keys.clone());
+            }
+            if let Some(public) = capacity_public.get(&s.id) {
+                s.public_config = Some(public.clone());
             }
             s
         })
@@ -622,8 +662,9 @@ pub async fn list_resources(
     };
 
     let dyn_keys = fetch_dynamic_keys(&state.db, &rows).await?;
+    let capacity_public = fetch_capacity_public_config(&state.db, &rows).await?;
     Ok(Json(PaginatedResponse {
-        items: rows_to_summaries(rows, &dyn_keys),
+        items: rows_to_summaries(rows, &dyn_keys, &capacity_public),
         total,
         page: params.page,
         per_page: params.per_page,
@@ -754,8 +795,9 @@ async fn list_resources_scoped(
     let page_rows: Vec<ResourceRow> = winning.into_iter().skip(offset).take(per).collect();
 
     let dyn_keys = fetch_dynamic_keys(&state.db, &page_rows).await?;
+    let capacity_public = fetch_capacity_public_config(&state.db, &page_rows).await?;
     Ok(Json(PaginatedResponse {
-        items: rows_to_summaries(page_rows, &dyn_keys),
+        items: rows_to_summaries(page_rows, &dyn_keys, &capacity_public),
         total,
         page: params.page,
         per_page: params.per_page,
@@ -785,7 +827,7 @@ pub async fn list_resource_types() -> Json<Vec<ResourceTypeInfo>> {
             schema: schema_json_cached(d).clone(),
             dynamic_fields: d.dynamic_fields,
             // Surface the trait-space presets on the `capacity` type so the
-            // create form can offer "worker / instrument / hpc" with their
+            // create form can offer "worker / limit / instrument" with their
             // locked axes (doc 23 §7). No other kind has presets.
             capacity_presets: (d.name == "capacity")
                 .then(crate::models::capacity::presets),
@@ -940,10 +982,10 @@ pub(crate) async fn create_resource_internal(
     )
     .await?;
 
-    // R3/R4b: if this is a pool-backed kind (concurrency_limit / datacenter), deploy
-    // its backing net (idempotent, engine-down-tolerant). Runs after the
-    // resource is durably persisted.
-    ensure_pool_net_for_kind(
+    // R3/R4b: if this resource's axes resolve to a net-backed capacity backend
+    // (Tokens / Presence / Scheduler), deploy its backing net (idempotent,
+    // engine-down-tolerant). Runs after the resource is durably persisted.
+    ensure_pool_net_for_resource(
         state,
         &req.resource_type,
         workspace_id,
@@ -963,6 +1005,10 @@ pub(crate) async fn create_resource_internal(
         created_at: Utc::now(),
         updated_at: Utc::now(),
         dynamic_keys,
+        // The list endpoint surfaces `public_config` for capacity rows (the
+        // picker's discriminator); the single-row create/update/rotate returns
+        // are not the picker's source, so they omit it.
+        public_config: None,
     };
     Ok(summary)
 }
@@ -1033,21 +1079,30 @@ pub(crate) async fn reprovision_resource_secret(
     Ok(())
 }
 
-/// R3/R4b hook: for a pool-backed resource kind, (re)deploy its backing net
-/// `pool-<id>` to the engine. No-op for every other kind. Idempotent +
+/// R3/R4b hook: for a pool-backed resource, (re)deploy its backing net
+/// `pool-<id>` to the engine. No-op for every non-pool resource. Idempotent +
 /// engine-down-tolerant. Called on create AND version bump so a config change
-/// (capacity, allocator url/token) re-deploys the net.
+/// (capacity amount, allocator url/token) re-deploys the net.
 ///
-/// - `concurrency_limit` → [`crate::petri::pool_net::ensure_token_pool_net_deployed`]
-///   (capacity from `public_config`).
-/// - `datacenter` → [`crate::petri::pool_net::ensure_datacenter_adapter_deployed`]
-///   (`allocator_url` from `public_config`; the token as a
+/// This is fully axes-driven: it resolves the resource's axes through the SINGLE
+/// dispatch authority ([`crate::models::capacity::axes_for_resource`] →
+/// [`crate::models::capacity::CapacityBackend`]) and dispatches on the
+/// [`CapacityBackend`], NOT on a `match resource_type` string switch. A
+/// `capacity` parses its `public_config`; a `datacenter` returns its locked lease
+/// axes (→ `Scheduler`). Every other kind resolves to `None` and is a no-op.
+///
+/// - [`CapacityBackend::Tokens`] → [`crate::petri::pool_net::ensure_token_pool_net_deployed`]
+///   (seeded count from `capacity_amount` in `public_config`).
+/// - [`CapacityBackend::Presence`] → [`crate::petri::presence_pool_net::ensure_presence_pool_net_deployed`]
+///   (capacity-less — the net seeds nothing; the presence controller
+///   injects/expires units at runtime).
+/// - [`CapacityBackend::Scheduler`] → [`crate::petri::pool_net::ensure_datacenter_adapter_deployed`]
+///   (the `datacenter` kind: `allocator_url` from `public_config`; the token as a
 ///   `{{secret:<vault_path>#token}}` template the engine resolves at fire time —
 ///   `vault_path` from `(workspace_id, resource_id, version)`).
-/// - `runner_group` → [`crate::petri::presence_pool_net::ensure_presence_pool_net_deployed`]
-///   (Phase 3; capacity-less — the net seeds nothing, so no config is read; the
-///   presence controller injects/expires units at runtime).
-async fn ensure_pool_net_for_kind(
+/// - [`CapacityBackend::Queue`] / [`CapacityBackend::Deferred`] → no admission
+///   net (a worker queue has no per-task matcher; `consume` backing is deferred).
+async fn ensure_pool_net_for_resource(
     state: &AppState,
     resource_type: &str,
     workspace_id: Uuid,
@@ -1055,19 +1110,23 @@ async fn ensure_pool_net_for_kind(
     version: i32,
     public: &JsonMap<String, Value>,
 ) {
-    match resource_type {
-        "concurrency_limit" => {
-            // `capacity` is a required public field of the ConcurrencyLimit kind (R1),
-            // so `split_config` guarantees it is present + a u32-shaped number.
-            // Defend against a malformed blob by skipping (best-effort deploy).
+    use crate::models::capacity::{axes_for_resource, CapacityBackend};
+
+    match axes_for_resource(resource_type, public).map(|a| a.backend()) {
+        Some(CapacityBackend::Tokens) => {
+            // The seeded count is the `Fixed(n)` unit count flattened into
+            // `capacity_amount` (the `limit` preset's free axis). Absent/malformed
+            // ⇒ skip the deploy (best-effort, same posture the old path had for a
+            // malformed blob).
             let Some(capacity) = public
-                .get("capacity")
+                .get("capacity_amount")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as u32)
             else {
                 tracing::warn!(
                     %resource_id,
-                    "concurrency_limit resource has no numeric `capacity` in public_config; skipping pool-net deploy"
+                    "seeded capacity has no numeric `capacity_amount` in public_config; \
+                     skipping token pool-net deploy"
                 );
                 return;
             };
@@ -1078,15 +1137,27 @@ async fn ensure_pool_net_for_kind(
             )
             .await;
         }
-        "datacenter" => {
-            // `scheduler_flavor` (public field) is the discriminant the connection
-            // builder reads: `"slurm"` → SSH salloc/scancel, `"nomad"` → Nomad
-            // API, `"http"` (default) → POST/DELETE against `allocator_url`. The
-            // per-flavor connection fields all ride ON the resource (docs/16 §1).
-            // Secret fields (`token`/`ssh_key`/`nomad_token`) become
-            // `{{secret:<vault_path>#<field>}}` templates the engine resolves at
-            // fire time — the shared `from_public_config` builds the same shape
-            // the B-staging resolver uses, so they can't drift.
+        Some(CapacityBackend::Presence) => {
+            // A presence pool is capacity-LESS — its backing net seeds nothing and
+            // reads no config. mekhan's presence controller injects one unit per
+            // live runner (presence_acquire) and reaps it on presence-lease expiry
+            // (presence_expired). Deploy is idempotent + engine-down-tolerant.
+            crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
+                &state.petri,
+                resource_id,
+            )
+            .await;
+        }
+        Some(CapacityBackend::Scheduler) => {
+            // The `datacenter` kind. `scheduler_flavor` (public field) is the
+            // discriminant the connection builder reads: `"slurm"` → SSH
+            // salloc/scancel, `"nomad"` → Nomad API, `"http"` (default) →
+            // POST/DELETE against `allocator_url`. The per-flavor connection fields
+            // all ride ON the resource (docs/16 §1). Secret fields
+            // (`token`/`ssh_key`/`nomad_token`) become `{{secret:<vault_path>#<field>}}`
+            // templates the engine resolves at fire time — the shared
+            // `from_public_config` builds the same shape the B-staging resolver
+            // uses, so they can't drift.
             let vault_path = vault_path_for(workspace_id, resource_id, version);
             let Some(conn) = crate::petri::pool_net::DatacenterConnection::from_public_config(
                 resource_id,
@@ -1105,44 +1176,17 @@ async fn ensure_pool_net_for_kind(
 
             crate::petri::pool_net::ensure_datacenter_adapter_deployed(&state.petri, &conn).await;
         }
-        "runner_group" => {
-            // Phase 3: a presence pool is capacity-LESS — its backing net seeds
-            // nothing and reads no config. mekhan's presence controller injects
-            // one unit per live runner (presence_acquire) and reaps it on
-            // presence-lease expiry (presence_expired). Deploy is idempotent +
-            // engine-down-tolerant, exactly like the concurrency_limit path.
-            crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
-                &state.petri,
-                resource_id,
-            )
-            .await;
-        }
-        "capacity" => {
-            // S3: a `capacity` whose liveness is presence/lease-driven deploys
-            // the SAME presence-pool admission net `runner_group` does — the
-            // instrument path is byte-stable, this is the generalised superset.
+        Some(CapacityBackend::Queue) | Some(CapacityBackend::Deferred) | None => {
             // A competing_consumer (pull) capacity has NO admission net (it is a
-            // static partition / shared work queue — no per-task matcher), and a
-            // `consume`/elastic capacity's backing is deferred (doc 24 §4), so we
-            // only deploy for the presence-driven case. The axes are already
-            // validated coherent by `validate_capacity_axes` at create/rotate.
-            let liveness = public.get("liveness").and_then(Value::as_str);
-            if liveness == Some("presence") {
-                crate::petri::presence_pool_net::ensure_presence_pool_net_deployed(
-                    &state.petri,
-                    resource_id,
-                )
-                .await;
-            } else {
-                tracing::debug!(
-                    %resource_id,
-                    ?liveness,
-                    "capacity is not presence-driven; no admission net deployed (partition / \
-                     consume / elastic backing is deferred)"
-                );
-            }
+            // static partition / shared work queue — no per-task matcher); a
+            // `consume` capacity's backing is deferred (doc 24 §4); a non-pool
+            // resource is not a capacity at all.
+            tracing::debug!(
+                %resource_id,
+                resource_type,
+                "resource resolves to no admission backend; no pool-net deployed"
+            );
         }
-        _ => {}
     }
 }
 
@@ -1303,10 +1347,10 @@ pub async fn update_resource(
         )
         .await?;
 
-        // R3/R4b: re-deploy the backing net on a pool-kind version bump so a
-        // config change (capacity / allocator url+token) takes effect
+        // R3/R4b: re-deploy the backing net on a pool-resource version bump so a
+        // config change (capacity amount / allocator url+token) takes effect
         // (idempotent, engine-down-tolerant).
-        ensure_pool_net_for_kind(
+        ensure_pool_net_for_resource(
             &state,
             &row.resource_type,
             row.workspace_id,
@@ -1344,6 +1388,7 @@ pub async fn update_resource(
         created_at: row.created_at,
         updated_at: Utc::now(),
         dynamic_keys,
+        public_config: None,
     }))
 }
 
@@ -1470,6 +1515,7 @@ pub async fn rotate_resource(
         created_at: row.created_at,
         updated_at: Utc::now(),
         dynamic_keys,
+        public_config: None,
     }))
 }
 

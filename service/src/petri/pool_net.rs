@@ -719,7 +719,7 @@ impl DatacenterConnection {
 ///   the allocator and emits the typed lease `{ grant_id, node, gpu_uuid,
 ///   alloc_id, expiry }` on its `"lease"` output port → routed to `grant_outbox`
 ///   (reply channel `"grant"`). So the grant reply the instance's
-///   `p_<id>_grant_inbox` (typed `Lease__datacenter` in R2) receives IS the lease.
+///   `p_<id>_grant_inbox` (typed `Lease__scheduler` in R2) receives IS the lease.
 /// - **register** → `register_inbox` carries the lease echoed back over a PLAIN
 ///   bridge (R2's `t_acquire` sets `reg: grant`, i.e. the whole lease). `t_register`
 ///   records a CLEAN `in_use` hold carrying `{ grant_id, alloc_id, node, gpu_uuid,
@@ -754,7 +754,7 @@ pub fn build_datacenter_lease_adapter_net(conn: &DatacenterConnection) -> Scenar
     let mut ctx = Context::new(net_id).description(format!(
         "Datacenter lease adapter for resource {resource_id} (flavor {scheduler_flavor}). \
          Holds a lease against an external cluster via the resource_lease engine effects; \
-         grant reply is the typed Lease__datacenter the R2 compiled steps consume."
+         grant reply is the typed Lease__scheduler the R2 compiled steps consume."
     ));
 
     // The full per-flavor connection passed to BOTH effect transitions. Secret

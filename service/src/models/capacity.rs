@@ -12,39 +12,54 @@
 //!
 //! The discipline mirrors `models/capability.rs`: a single typed model that
 //! both the create handler (cell validation) and the type-descriptor endpoint
-//! (preset surfacing) read, so the legible "worker / instrument / hpc" presets
-//! and the holes they sit between cannot drift from each other.
+//! (preset surfacing) read, so the legible "worker / limit / instrument"
+//! presets and the holes they sit between cannot drift from each other.
+//!
+//! ## The single dispatch authority
+//! [`CapacityAxes::backend`] is the ONE function every dispatch site (the pool
+//! ensure path, the compiler's deployment-role check) calls to map a point in
+//! the trait-space onto a [`CapacityBackend`] — the dispatch target. The
+//! companion free function [`axes_for_resource`] resolves the axes for ANY pool
+//! resource: a `capacity` parses its `public_config`; a `datacenter` returns
+//! its LOCKED lease axes (so the scheduler kind routes through the SAME
+//! authority, not a kind-string switch). `CapacityBackend::pool_backend` then
+//! hands the three net-backed variants to `aithericon_resources::pool` for the
+//! backend's claim/lease schemas. Clean split: service owns axes → backend;
+//! shared owns backend → schema.
 //!
 //! ## What this slice does NOT do
-//! - No admission-net change. A presence-driven `capacity` deploys the SAME
-//!   presence-pool net `runner_group` does (the instrument path stays
-//!   byte-stable — see `handlers/resources.rs::ensure_pool_net_for_kind`).
 //! - `exclusivity = consume` is *accepted + validated but not yet
 //!   dispatchable* (doc 24 §2): the quota/`consume` admission mechanism is
-//!   deferred (doc 23 §9.2), so a `consume` capacity is a legal descriptor with
-//!   no backing net yet.
+//!   deferred (doc 23 §9.2), so a `consume` capacity resolves to
+//!   [`CapacityBackend::Deferred`] — a legal descriptor with no backing net yet.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use utoipa::ToSchema;
 
 use crate::models::error::ApiError;
 
-/// How a capacity proves it is available (doc 23 §3 "liveness").
-///
-/// `lease` is reserved now (doc 24 §5) so the model has a slot for the
-/// HPC/`datacenter` allocation path; this slice does not re-express the lease
-/// adapter as a `capacity`, but the axis value must exist so a future preset
-/// can name it.
+/// How a capacity proves it is available (doc 23 §3 "liveness"). This is the
+/// axis the dispatch authority ([`CapacityAxes::backend`]) keys off, so the
+/// vocabulary is 1:1 with the backing-net flavour (modulo the `consume`
+/// quota-admission override).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Liveness {
-    /// Alive ⇔ subscribed to a shared work queue (the worker pool). Pull-only.
+    /// Alive ⇔ subscribed to a shared work queue (the worker pool). Pull-only;
+    /// dispatches to the `Queue` backend — NO admission net.
     CompetingConsumer,
+    /// A statically-seeded token pool / semaphore: none of
+    /// competing_consumer / presence / lease — a fixed count seeded up front,
+    /// push-granted from that count. The concurrency-limit path; dispatches to
+    /// the `Tokens` backend.
+    Seeded,
     /// Presence heartbeat injects/expires a capacity unit (the instrument /
-    /// `runner_group` path).
+    /// runner-group path). Dispatches to the `Presence` backend.
     Presence,
-    /// Lease alive — an allocation is running (the HPC/`datacenter` path).
-    /// Reserved; not built in this slice.
+    /// Lease alive — an allocation is running (the HPC / `datacenter` path).
+    /// Dispatches to the `Scheduler` backend; this is the LOCKED liveness the
+    /// `datacenter` kind exposes through the same authority.
     Lease,
 }
 
@@ -115,6 +130,81 @@ pub struct CapacityAxes {
     pub eligibility: Eligibility,
 }
 
+/// The dispatch target — the SINGLE authority's output ([`CapacityAxes::backend`]).
+/// Supersets the shared `aithericon_resources::pool::PoolBackend` (which only
+/// names the three admission-net flavours) with the two **no-admission-net**
+/// cases: `Queue` (a pull worker queue — no grant) and `Deferred` (the
+/// `consume` quota path, whose admission mechanism is not yet built).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapacityBackend {
+    /// Broker-balanced pull queue (competing consumers). NO admission net is
+    /// deployed — workers subscribe and compete directly.
+    Queue,
+    /// Platform-owned in-net token pool seeded with N units (the concurrency
+    /// limit / semaphore). `build_pool_net(Seeded{n})`.
+    Tokens,
+    /// Presence-driven in-net pool — units injected/expired by the presence
+    /// controller as runners check in / lapse. `build_pool_net(Presence)`.
+    Presence,
+    /// Lease against an external allocator (the `datacenter` adapter net).
+    Scheduler,
+    /// Quota/`consume` admission — deferred (doc 23 §9.2). No backing net yet;
+    /// a `consume` capacity is a legal descriptor that does not dispatch.
+    Deferred,
+}
+
+impl CapacityBackend {
+    /// Map the three net-backed variants onto the shared
+    /// `aithericon_resources::pool::PoolBackend` whose claim/lease schemas the
+    /// compiler reads. `Queue` and `Deferred` have no admission net, hence no
+    /// pool backend — `None`.
+    pub fn pool_backend(&self) -> Option<aithericon_resources::pool::PoolBackend> {
+        use aithericon_resources::pool::PoolBackend;
+        match self {
+            CapacityBackend::Tokens => Some(PoolBackend::Tokens),
+            CapacityBackend::Presence => Some(PoolBackend::Presence),
+            CapacityBackend::Scheduler => Some(PoolBackend::Scheduler),
+            CapacityBackend::Queue | CapacityBackend::Deferred => None,
+        }
+    }
+}
+
+/// Uniform axes resolution for ANY pool resource, so every dispatch site routes
+/// through the same authority instead of a `match resource_type` string switch:
+///
+/// - `"capacity"` ⇒ parse the axis strings out of `public_config` into typed
+///   [`CapacityAxes`] (the same `serde_json::from_value` the create path runs
+///   through [`CapacityAxes::validate`]). Returns `None` if unparseable — the
+///   caller treats that as "not a dispatchable pool".
+/// - `"datacenter"` ⇒ the LOCKED lease axes (the old `hpc` point):
+///   `lease · push · hold · elastic · predicate`. The scheduler kind carries no
+///   capacity axes in its `public_config` (its config is the flavored
+///   connection), so it dispatches through here by these fixed axes —
+///   `.backend()` of the result is always [`CapacityBackend::Scheduler`].
+/// - anything else (postgres, smtp, …) ⇒ `None`: not a pool.
+pub fn axes_for_resource(
+    resource_type: &str,
+    public: &Map<String, Value>,
+) -> Option<CapacityAxes> {
+    match resource_type {
+        "capacity" => serde_json::from_value(Value::Object(public.clone())).ok(),
+        "datacenter" => Some(datacenter_lease_axes()),
+        _ => None,
+    }
+}
+
+/// The LOCKED axes a `datacenter` dispatches through: the lease/scheduler point.
+/// Pinned by a unit test so it stays exactly the lease backend.
+fn datacenter_lease_axes() -> CapacityAxes {
+    CapacityAxes {
+        liveness: Liveness::Lease,
+        dispatch: Dispatch::Push,
+        exclusivity: Exclusivity::Hold,
+        capacity_amount: CapacityAmount::Elastic,
+        eligibility: Eligibility::Predicate,
+    }
+}
+
 /// One named preset (doc 23 §7): a coherent, legible axis set the create form
 /// prefills so an operator names a kind ("worker") and gets the locked axes,
 /// overriding only the free ones. Presets are legibility over the substrate —
@@ -126,7 +216,7 @@ pub struct CapacityAxes {
 /// the const table is built by [`presets`].
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CapacityPreset {
-    /// Stable wire id (`worker` / `instrument` / `hpc`).
+    /// Stable wire id (`worker` / `limit` / `instrument`).
     pub name: String,
     /// UI label.
     pub display_name: String,
@@ -135,6 +225,26 @@ pub struct CapacityPreset {
 }
 
 impl CapacityAxes {
+    /// THE dispatch authority: map this point in the trait-space onto the
+    /// [`CapacityBackend`] every dispatch site routes through. The `consume`
+    /// exclusivity short-circuits FIRST (quota admission is deferred — doc 23
+    /// §9.2, doc 24 §2); otherwise the `liveness` axis is 1:1 with the backend:
+    ///
+    /// - `consume`            ⇒ `Deferred` (quota admission, no net yet)
+    /// - `competing_consumer` ⇒ `Queue`     (pull queue — workers, NO admission net)
+    /// - `seeded`             ⇒ `Tokens`    (seeded N — `build_pool_net(Seeded{n})`)
+    /// - `presence`           ⇒ `Presence`  (presence-driven admission net)
+    /// - `lease`              ⇒ `Scheduler` (datacenter adapter)
+    pub fn backend(&self) -> CapacityBackend {
+        match (self.liveness, self.exclusivity) {
+            (_, Exclusivity::Consume) => CapacityBackend::Deferred,
+            (Liveness::CompetingConsumer, _) => CapacityBackend::Queue,
+            (Liveness::Seeded, _) => CapacityBackend::Tokens,
+            (Liveness::Presence, _) => CapacityBackend::Presence,
+            (Liveness::Lease, _) => CapacityBackend::Scheduler,
+        }
+    }
+
     /// Create-time CELL VALIDATION (doc 24 refinement #1). Rejects the
     /// incoherent corners of the trait-space — combinations that would compile
     /// into a capacity that silently never grants — with a clear message;
@@ -147,38 +257,49 @@ impl CapacityAxes {
     ///     capacity is scheduler-granted, not a thing you push a unit grant at;
     ///   - presence-less (`competing_consumer`) × `push` — no inbox to push to;
     ///   - `competing_consumer × push` — competing-consumer liveness is the
-    ///     broker-pull discipline; pushing a grant to it has no addressee.
+    ///     broker-pull discipline; pushing a grant to it has no addressee;
+    ///   - `seeded × pull` — a seeded token pool is admission-controlled by
+    ///     push-grant from its fixed count (the engine fires a grant out of the
+    ///     seeded place); a pull queue has nothing to grant against.
     ///
     /// WARN (allowed, returned for the caller to surface): `pull × predicate`
     /// — a rich match on a pull queue is the scale-mismatch (doc 23 §10 "don't
     /// run the firehose through the matcher"); legal but rarely intended.
     pub fn validate(&self) -> Result<Vec<String>, ApiError> {
-        // A capacity is push-dispatchable only if it has an addressable inbox,
-        // which only presence/lease liveness provides. competing_consumer is the
-        // pull-only broker discipline.
-        let presence_backed = matches!(self.liveness, Liveness::Presence | Liveness::Lease);
+        // A capacity is push-dispatchable only if it has something to grant
+        // against: a presence/lease inbox, or a seeded token count the engine
+        // grants out of. competing_consumer is the pull-only broker discipline.
+        let push_grantable = matches!(
+            self.liveness,
+            Liveness::Seeded | Liveness::Presence | Liveness::Lease
+        );
 
         if matches!(self.dispatch, Dispatch::Push) {
             if matches!(self.liveness, Liveness::CompetingConsumer) {
                 return Err(ApiError::bad_request(
                     "incoherent capacity: `competing_consumer` liveness is pull-only \
                      (broker-balanced); it has no inbox to push a grant to — use \
-                     `dispatch = pull`, or pick `presence`/`lease` liveness for push",
+                     `dispatch = pull`, or pick `seeded`/`presence`/`lease` liveness \
+                     for push",
                 ));
             }
-            if !presence_backed {
+            if !push_grantable {
                 return Err(ApiError::bad_request(
-                    "incoherent capacity: `push` dispatch requires a presence-backed \
-                     liveness (`presence` or `lease`) to address the grant at — an \
-                     anonymous / presence-less capacity cannot be pushed to",
+                    "incoherent capacity: `push` dispatch requires a grantable \
+                     liveness (`seeded`, `presence`, or `lease`) to address the \
+                     grant at — an anonymous capacity cannot be pushed to",
                 ));
             }
-            if matches!(self.capacity_amount, CapacityAmount::Elastic) && !presence_backed {
-                return Err(ApiError::bad_request(
-                    "incoherent capacity: `elastic × push` has no unit to grant — \
-                     elastic capacity is scheduler-granted, not pushed",
-                ));
-            }
+        }
+
+        // A seeded token pool is admission-controlled by push-grant from its
+        // fixed count; a pull queue has no grant to make against the seed.
+        if matches!(self.liveness, Liveness::Seeded) && matches!(self.dispatch, Dispatch::Pull) {
+            return Err(ApiError::bad_request(
+                "incoherent capacity: `seeded` liveness is push-granted from its \
+                 fixed count (the engine fires a grant out of the seeded place); a \
+                 `pull` queue has nothing to grant against — use `dispatch = push`",
+            ));
         }
 
         let mut warnings = Vec::new();
@@ -199,9 +320,13 @@ impl CapacityAxes {
 /// [`CapacityAxes::validate`] cleanly; the create form prefills the locked axes
 /// and exposes only the free ones.
 ///
-/// - `worker`     = competing_consumer · pull  · hold · fixed(1) · partition
-/// - `instrument` = presence          · push  · hold · presence_driven · predicate
-/// - `hpc`        = lease             · push  · hold · elastic · predicate
+/// - `worker`     = competing_consumer · pull · hold · fixed(1)        · partition → Queue
+/// - `limit`      = seeded             · push · hold · fixed(1)        · partition → Tokens
+/// - `instrument` = presence           · push · hold · presence_driven · predicate → Presence
+///
+/// There is no `hpc`/lease preset: lease capacity is the `datacenter` kind (it
+/// dispatches through [`axes_for_resource`]'s locked lease axes), not a
+/// `capacity` preset.
 pub fn presets() -> Vec<CapacityPreset> {
     vec![
         CapacityPreset {
@@ -217,6 +342,18 @@ pub fn presets() -> Vec<CapacityPreset> {
             },
         },
         CapacityPreset {
+            name: "limit".to_string(),
+            display_name: "Concurrency limit".to_string(),
+            axes: CapacityAxes {
+                liveness: Liveness::Seeded,
+                dispatch: Dispatch::Push,
+                exclusivity: Exclusivity::Hold,
+                // The free axis on a concurrency limit is the seeded count; default 1.
+                capacity_amount: CapacityAmount::Fixed(1),
+                eligibility: Eligibility::Partition,
+            },
+        },
+        CapacityPreset {
             name: "instrument".to_string(),
             display_name: "Instrument station".to_string(),
             axes: CapacityAxes {
@@ -224,17 +361,6 @@ pub fn presets() -> Vec<CapacityPreset> {
                 dispatch: Dispatch::Push,
                 exclusivity: Exclusivity::Hold,
                 capacity_amount: CapacityAmount::PresenceDriven,
-                eligibility: Eligibility::Predicate,
-            },
-        },
-        CapacityPreset {
-            name: "hpc".to_string(),
-            display_name: "HPC allocation".to_string(),
-            axes: CapacityAxes {
-                liveness: Liveness::Lease,
-                dispatch: Dispatch::Push,
-                exclusivity: Exclusivity::Hold,
-                capacity_amount: CapacityAmount::Elastic,
                 eligibility: Eligibility::Predicate,
             },
         },
@@ -335,14 +461,46 @@ mod tests {
 
     #[test]
     fn elastic_push_with_lease_is_ok() {
-        // The hpc preset shape: elastic × push is coherent WHEN lease-backed.
+        // The datacenter/lease point: elastic × push is coherent WHEN
+        // lease-backed (the locked axes `axes_for_resource("datacenter", …)`
+        // returns).
         let a = axes(
             Liveness::Lease,
             Dispatch::Push,
             CapacityAmount::Elastic,
             Eligibility::Predicate,
         );
-        assert!(a.validate().is_ok(), "elastic × push × lease is the hpc preset");
+        assert!(
+            a.validate().is_ok(),
+            "elastic × push × lease is the datacenter lease point"
+        );
+    }
+
+    #[test]
+    fn seeded_pull_is_rejected() {
+        // A seeded token pool is push-granted from its fixed count; a pull
+        // queue has nothing to grant against.
+        let a = axes(
+            Liveness::Seeded,
+            Dispatch::Pull,
+            CapacityAmount::Fixed(4),
+            Eligibility::Partition,
+        );
+        let err = a.validate().expect_err("seeded × pull must reject");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(msg(&err).contains("push-granted"), "wrong message: {err:?}");
+    }
+
+    #[test]
+    fn limit_preset_seeded_push_is_clean() {
+        // The `limit` preset shape: seeded × push validates clean.
+        let a = axes(
+            Liveness::Seeded,
+            Dispatch::Push,
+            CapacityAmount::Fixed(8),
+            Eligibility::Partition,
+        );
+        assert!(a.validate().expect("limit shape is clean").is_empty());
     }
 
     #[test]
@@ -367,6 +525,85 @@ mod tests {
             Eligibility::Partition,
         );
         assert!(a.validate().expect("worker shape is clean").is_empty());
+    }
+
+    /// The dispatch authority: each preset routes to its expected backend.
+    #[test]
+    fn presets_map_to_expected_backends() {
+        let backend_of = |name: &str| preset_by_name(name).unwrap().axes.backend();
+        assert_eq!(backend_of("worker"), CapacityBackend::Queue);
+        assert_eq!(backend_of("limit"), CapacityBackend::Tokens);
+        assert_eq!(backend_of("instrument"), CapacityBackend::Presence);
+    }
+
+    /// `consume` exclusivity short-circuits the authority to `Deferred`
+    /// regardless of liveness (quota admission is not yet built).
+    #[test]
+    fn consume_routes_to_deferred() {
+        let a = CapacityAxes {
+            liveness: Liveness::Presence,
+            dispatch: Dispatch::Push,
+            exclusivity: Exclusivity::Consume,
+            capacity_amount: CapacityAmount::PresenceDriven,
+            eligibility: Eligibility::Predicate,
+        };
+        assert_eq!(a.backend(), CapacityBackend::Deferred);
+    }
+
+    /// The three net-backed backends expose a `PoolBackend`; the two
+    /// no-admission-net cases do not.
+    #[test]
+    fn backend_pool_backend_mapping() {
+        use aithericon_resources::pool::PoolBackend;
+        assert_eq!(CapacityBackend::Tokens.pool_backend(), Some(PoolBackend::Tokens));
+        assert_eq!(
+            CapacityBackend::Presence.pool_backend(),
+            Some(PoolBackend::Presence)
+        );
+        assert_eq!(
+            CapacityBackend::Scheduler.pool_backend(),
+            Some(PoolBackend::Scheduler)
+        );
+        assert_eq!(CapacityBackend::Queue.pool_backend(), None);
+        assert_eq!(CapacityBackend::Deferred.pool_backend(), None);
+    }
+
+    /// `axes_for_resource("datacenter", …)` returns the LOCKED lease axes whose
+    /// backend is `Scheduler` — the scheduler kind dispatches through the same
+    /// authority by these fixed axes (Risk #3 pin).
+    #[test]
+    fn datacenter_locks_to_scheduler() {
+        let empty = Map::new();
+        let axes = axes_for_resource("datacenter", &empty)
+            .expect("datacenter resolves to locked lease axes");
+        assert_eq!(axes.backend(), CapacityBackend::Scheduler);
+        assert_eq!(axes.liveness, Liveness::Lease);
+    }
+
+    /// `axes_for_resource("capacity", <instrument-shaped map>)` parses the
+    /// public_config strings and routes to `Presence`.
+    #[test]
+    fn capacity_resource_parses_to_backend() {
+        let public = serde_json::json!({
+            "liveness": "presence",
+            "dispatch": "push",
+            "exclusivity": "hold",
+            "capacity_kind": "presence_driven",
+            "eligibility": "predicate",
+        });
+        let map = public.as_object().unwrap().clone();
+        let axes = axes_for_resource("capacity", &map).expect("instrument shape parses");
+        assert_eq!(axes.backend(), CapacityBackend::Presence);
+    }
+
+    /// Non-pool kinds (and unparseable capacity config) are not dispatchable.
+    #[test]
+    fn non_pool_kinds_resolve_to_none() {
+        let empty = Map::new();
+        assert!(axes_for_resource("postgres", &empty).is_none());
+        assert!(axes_for_resource("smtp", &empty).is_none());
+        // A `capacity` with garbage public_config does not parse.
+        assert!(axes_for_resource("capacity", &empty).is_none());
     }
 
     /// Regression: the `CapacityAmount` flatten MUST serialize as

@@ -1,43 +1,21 @@
-//! R1 pool-kind tests.
+//! Pool-schema tests.
 //!
 //! Two halves:
-//!   1. the resource-kind registry exposes `concurrency_limit` + `datacenter` with the
-//!      correct secret/public field split (driven by `#[derive(ResourceType)]`);
-//!   2. the *separate* pool-kind registry (`aithericon_resources::pool`) returns
-//!      a descriptor for each, with the right backend and non-empty claim/lease
-//!      JSON Schemas.
+//!   1. the resource-kind registry exposes `datacenter` (the one remaining
+//!      contended-capacity *kind*) with the correct secret/public field split
+//!      (driven by `#[derive(ResourceType)]`). The old `concurrency_limit` /
+//!      `runner_group` kinds are GONE — they collapsed into the service-side
+//!      `capacity` axes (no kind string survives in `aithericon_resources`).
+//!   2. the *separate* pool-schema registry (`aithericon_resources::pool`)
+//!      returns the right claim/lease JSON Schemas keyed by dispatch BACKEND
+//!      (`schemas_for_backend`), not by kind name.
 //!
 //! Lives at the `tests/` boundary (not inline) for the same reason as
 //! `registry.rs`: it links the `inventory::submit!` sites exactly as a
 //! downstream binary would.
 
 use aithericon_resources::lookup;
-use aithericon_resources::pool::{pool_kind, PoolBackend};
-
-/// `concurrency_limit` registers as a no-secret kind with `capacity` + `unit_label`
-/// public.
-#[test]
-fn concurrency_limit_kind_registered() {
-    let d = lookup("concurrency_limit").expect("concurrency_limit must be registered");
-
-    assert_eq!(d.display_name, "Concurrency Limit");
-    assert_eq!(d.icon, "lucide-layers");
-    assert_eq!(d.oauth_provider, None);
-    assert!(!d.dynamic_fields);
-
-    assert!(
-        d.secret_fields.is_empty(),
-        "concurrency_limit is platform-owned — no secret; got {:?}",
-        d.secret_fields
-    );
-    let public: Vec<&str> = d.public_fields.to_vec();
-    for required in ["capacity", "unit_label"] {
-        assert!(
-            public.contains(&required),
-            "concurrency_limit.public_fields missing `{required}`; got {public:?}"
-        );
-    }
-}
+use aithericon_resources::pool::{schemas_for_backend, PoolBackend};
 
 /// `datacenter` registers with `token` secret and the connection fields public.
 #[test]
@@ -79,59 +57,74 @@ fn datacenter_kind_registered() {
     }
 }
 
-/// The pool-kind registry maps each kind's wire name to the right backend and
-/// produces non-empty claim/lease schemas. Non-pool kinds return `None`.
+/// The deleted legacy kinds must NOT be registered anymore — they collapsed
+/// into the service-side `capacity` trait-space. `capacity` is the survivor.
 #[test]
-fn pool_kind_registry_backends_and_schemas() {
-    let tokens = pool_kind("concurrency_limit").expect("concurrency_limit pool-kind must exist");
-    assert_eq!(tokens.backend, PoolBackend::Tokens);
-    assert_eq!(tokens.kind_name, "concurrency_limit");
+fn legacy_pool_kinds_are_gone() {
+    assert!(
+        lookup("concurrency_limit").is_none(),
+        "concurrency_limit kind must be deleted (absorbed into capacity{{seeded}})"
+    );
+    assert!(
+        lookup("runner_group").is_none(),
+        "runner_group kind must be deleted (absorbed into capacity{{presence}})"
+    );
+    assert!(
+        lookup("capacity").is_some(),
+        "the unified capacity kind must be registered"
+    );
+}
 
-    let sched = pool_kind("datacenter").expect("datacenter pool-kind must exist");
-    assert_eq!(sched.backend, PoolBackend::Scheduler);
-    assert_eq!(sched.kind_name, "datacenter");
-
-    // Non-pool kinds are not claimable.
-    assert!(pool_kind("postgres").is_none());
-    assert!(pool_kind("smtp").is_none());
-
-    for d in [tokens, sched] {
-        let claim = (d.claim_schema)();
-        let lease = (d.lease_schema)();
-        // Both are object schemas with a non-empty property set.
+/// The pool-schema registry produces non-empty claim/lease object schemas for
+/// each dispatch backend, keyed by `PoolBackend` (not by kind name).
+#[test]
+fn schemas_for_each_backend_are_object_schemas() {
+    for backend in [PoolBackend::Tokens, PoolBackend::Presence, PoolBackend::Scheduler] {
+        let s = schemas_for_backend(backend);
         assert_eq!(
-            claim.get("type").and_then(|v| v.as_str()),
+            s.claim.get("type").and_then(|v| v.as_str()),
             Some("object"),
-            "{} claim_schema must be an object schema",
-            d.kind_name
+            "{backend:?} claim schema must be an object schema"
         );
         assert_eq!(
-            lease.get("type").and_then(|v| v.as_str()),
+            s.lease.get("type").and_then(|v| v.as_str()),
             Some("object"),
-            "{} lease_schema must be an object schema",
-            d.kind_name
+            "{backend:?} lease schema must be an object schema"
         );
-        let lease_props = lease
+        let lease_props = s
+            .lease
             .get("properties")
             .and_then(|v| v.as_object())
-            .unwrap_or_else(|| panic!("{} lease_schema missing properties", d.kind_name));
+            .unwrap_or_else(|| panic!("{backend:?} lease schema missing properties"));
         assert!(
             !lease_props.is_empty(),
-            "{} lease_schema must declare at least one field",
-            d.kind_name
+            "{backend:?} lease schema must declare at least one field"
         );
     }
 }
 
-/// Spot-check the concrete lease fields each kind declares — these are the
-/// `<slug>.lease.<field>` borrow surfaces R2 will wire.
+/// Spot-check the concrete lease fields each backend declares — these are the
+/// `<slug>.lease.<field>` borrow surfaces the compiler (R2) wires.
 #[test]
 fn lease_schemas_declare_expected_fields() {
-    let tokens_lease = (pool_kind("concurrency_limit").unwrap().lease_schema)();
+    // Tokens (seeded) — an opaque admitted-unit identity.
+    let tokens_lease = schemas_for_backend(PoolBackend::Tokens).lease;
     let tokens_props = tokens_lease["properties"].as_object().unwrap();
     assert!(tokens_props.contains_key("unit_id"));
 
-    let dc_lease = (pool_kind("datacenter").unwrap().lease_schema)();
+    // Presence — runner identity + drain namespace + caps.
+    let presence_lease = schemas_for_backend(PoolBackend::Presence).lease;
+    let presence_props = presence_lease["properties"].as_object().unwrap();
+    for f in ["unit_id", "executor_namespace", "caps"] {
+        assert!(
+            presence_props.contains_key(f),
+            "presence lease missing `{f}`; got {:?}",
+            presence_props.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // Scheduler (datacenter) — the typed universal core + per-flavor union.
+    let dc_lease = schemas_for_backend(PoolBackend::Scheduler).lease;
     let dc_props = dc_lease["properties"].as_object().unwrap();
     // Typed core: alloc_id is the only required field; node/expiry/
     // executor_namespace are optional; scheduler is the required per-flavor

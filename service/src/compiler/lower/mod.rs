@@ -190,13 +190,13 @@ pub(crate) struct PostProcess {
     pub(crate) timeout_cancel_fanouts: Vec<crate::compiler::lower::timeout::TimeoutCancelFanout>,
     /// Typed-lease definitions a registry-resolved pooled AutomatedStep needs
     /// in the AIR `definitions` map: `(def_name, json_schema)` where `def_name`
-    /// is `Lease__<kind>`. The SDK `Context` has no public definition-register
+    /// is `Lease__<backend>`. The SDK `Context` has no public definition-register
     /// hook (only token-typed `register_schema`), so the lowering records the
     /// pair here and `compile_to_air` drains it into `scenario.definitions`
-    /// after `ctx.build()`. Deduplicated on insert by the drain (same kind
+    /// after `ctx.build()`. Deduplicated on insert by the drain (same backend
     /// across N pooled nodes ⇒ one entry).
     pub(crate) lease_definitions: Vec<(String, serde_json::Value)>,
-    /// Grant-inbox places to type with a `Lease__<kind>` ref: `(place_id,
+    /// Grant-inbox places to type with a `Lease__<backend>` ref: `(place_id,
     /// def_name)`. Drained alongside `lease_definitions` after build so the
     /// engine `SchemaRegistry` validates the routed grant reply IS the typed
     /// lease. Kept separate from `lease_definitions` because place typing is a

@@ -185,20 +185,27 @@ impl Default for RunnerPresence {
     }
 }
 
-/// Resolve a runner's `group` alias to its backing `runner_group` net id.
+/// Resolve a runner's `group` alias to its backing presence-pool net id.
 ///
 /// `runner.group` is an alias string (the `resources.path` column). It maps to a
-/// `resources` row in the runner's workspace with `resource_type = 'runner_group'`
-/// and `path = <alias>`; the net id is then [`well_known::pool_net_id`] over that
-/// resource's id. Returns `None` (with a skip log at the call site) when the
-/// runner has no group alias, or the alias resolves to no runner_group resource
-/// in its workspace.
+/// presence-backed `capacity` resource in the runner's workspace: a `resources`
+/// row with `resource_type = 'capacity'`, `path = <alias>`, and `liveness =
+/// 'presence'` (the `instrument` preset) in its latest version's `public_config`.
+/// The net id is then [`well_known::pool_net_id`] over that resource's id. Returns
+/// `None` (with a skip log at the call site) when the runner has no group alias,
+/// or the alias resolves to no presence-backed capacity in its workspace. This is
+/// the SAME lookup `handlers::runners::runner_group_exists` gates enrollment on,
+/// so the enroll gate and the runtime admission agree on what "the group exists"
+/// means.
 async fn resolve_pool_net_id(db: &PgPool, runner: &RunnerRow) -> Option<String> {
     let alias = runner.group.as_deref()?;
     let resource_id: Option<(Uuid,)> = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM resources \
-         WHERE workspace_id = $1 AND path = $2 AND resource_type = 'runner_group' \
-           AND deleted_at IS NULL",
+        "SELECT r.id FROM resources r \
+         JOIN resource_versions rv \
+           ON rv.resource_id = r.id AND rv.version = r.latest_version \
+         WHERE r.workspace_id = $1 AND r.path = $2 \
+           AND r.resource_type = 'capacity' AND r.deleted_at IS NULL \
+           AND rv.public_config ->> 'liveness' = 'presence'",
     )
     .bind(runner.workspace_id)
     .bind(alias)
@@ -365,7 +372,7 @@ async fn handle_presence(
         tracing::debug!(
             %runner_id,
             group = ?runner.group,
-            "runner present but no runner_group resource in its workspace; tracking liveness only"
+            "runner present but no presence-backed `capacity` resource in its workspace; tracking liveness only"
         );
         // No pool to admit into, but the runner IS heartbeating — record it as
         // present with an empty pool_net_id so the fleet "online" view (the read

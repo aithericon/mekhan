@@ -50,8 +50,9 @@ const PETRI_BASE = '/petri';
 /** A single active hold: one token in `in_use`.
  *
  * The hold is backend-agnostic: the `in_use` token carries a typed lease whose
- * shape depends on the capacity resource kind (`concurrency_limit` → `{ unit_id }`;
- * `datacenter` → `{ alloc_id, node?, expiry?, scheduler }`). We surface `grantId`
+ * shape depends on the capacity backend (Tokens → `{ unit_id }`; Presence →
+ * `{ unit_id, executor_namespace, caps }`; the `datacenter`/Scheduler backend →
+ * `{ alloc_id, node?, expiry?, scheduler }`). We surface `grantId`
  * (the correlation key, present on every backend) plus a generic `fields` map
  * of the remaining scalar lease fields so the view never hard-codes a field. */
 export interface HoldRecord {

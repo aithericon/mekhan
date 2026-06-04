@@ -349,11 +349,11 @@ pub(crate) fn validate_loop_body_control_refs(
 }
 
 /// The borrowable-field model of `DatacenterLease`, derived from the SAME schema
-/// the engine validates grant tokens against (`pool_kind("datacenter")
-/// .lease_schema()`) — so the borrow-checker and the runtime can never drift.
-/// `core` is the flat top-level field set (minus `scheduler`); `per_flavor` maps
-/// each `scheduler` `oneOf` variant's `flavor` discriminator to the extra fields
-/// that variant carries.
+/// the engine validates grant tokens against
+/// (`schemas_for_backend(PoolBackend::Scheduler).lease`) — so the borrow-checker
+/// and the runtime can never drift. `core` is the flat top-level field set (minus
+/// `scheduler`); `per_flavor` maps each `scheduler` `oneOf` variant's `flavor`
+/// discriminator to the extra fields that variant carries.
 struct LeaseFieldModel {
     core: std::collections::BTreeSet<String>,
     per_flavor: HashMap<String, std::collections::BTreeSet<String>>,
@@ -364,10 +364,9 @@ fn lease_field_model() -> LeaseFieldModel {
     let mut core = BTreeSet::new();
     let mut per_flavor: HashMap<String, BTreeSet<String>> = HashMap::new();
 
-    let Some(desc) = aithericon_resources::pool::pool_kind("datacenter") else {
-        return LeaseFieldModel { core, per_flavor };
-    };
-    let schema = (desc.lease_schema)();
+    let schema =
+        aithericon_resources::pool::schemas_for_backend(aithericon_resources::pool::PoolBackend::Scheduler)
+            .lease;
     let Some(props) = schema.get("properties").and_then(|v| v.as_object()) else {
         return LeaseFieldModel { core, per_flavor };
     };
@@ -913,7 +912,7 @@ pub(crate) fn validate_automated_step(
         DeploymentModel::Executor { capacity: None, .. } => {}
         DeploymentModel::Executor { capacity: Some(_), .. } => {
             return Err(err(
-                "streamInput is unsupported on a pooled (concurrency_limit) deployment — \
+                "streamInput is unsupported on a pooled (Tokens/Presence capacity) deployment — \
                  use a plain inline Executor step"
                     .to_string(),
             ));

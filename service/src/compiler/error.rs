@@ -521,35 +521,41 @@ pub enum CompileError {
         detail: String,
     },
 
-    /// An `Inline.capacity.alias` resolved to a workspace resource that is not a
-    /// `concurrency_limit`/`runner_group`. Inline admission is capacity-only: a `datacenter` is a
-    /// scheduler resource (bind it under `Scheduled`), and a plain credential
-    /// (`postgres`, …) is no pool at all. The message names the `datacenter`
-    /// case explicitly since that's the likely author mistake.
+    /// An `Executor.capacity.alias` resolved to a resource whose dispatch backend
+    /// is not a token/presence admission pool. Executor.capacity admission is
+    /// in-net-pool-only: a `scheduler` backend (a `datacenter`) is a lease
+    /// resource (bind it under `Scheduled`/`LeaseScope`); a `queue` backend (a
+    /// worker-pool `capacity`) competes directly with no admission net; and a
+    /// plain credential (`postgres`, …) is no pool at all. `backend` is the human
+    /// label of the resolved [`crate::models::capacity::CapacityBackend`]
+    /// (`scheduler` / `queue` / `deferred` / `non-pool`).
     #[error(
-        "node '{node_id}': inline capacity alias '{alias}' is a '{kind}', not a concurrency_limit/runner_group — \
-         {}",
-        if kind == "datacenter" {
-            "a datacenter is a scheduler resource; bind it under a Scheduled deployment model"
+        "node '{node_id}': Executor.capacity alias '{alias}' resolves to a {backend} capacity, \
+         not a token/presence pool — {}",
+        if backend == "scheduler" {
+            "a scheduler capacity is a lease resource; bind it under a Scheduled/LeaseScope deployment model"
         } else {
-            "point it at a concurrency_limit or runner_group resource"
+            "bind it to a capacity whose liveness is `seeded` (a concurrency limit) or `presence` (an instrument group)"
         }
     )]
     ResourcePoolNotAPool {
         node_id: String,
         alias: String,
-        kind: String,
+        backend: String,
     },
 
-    /// A `Scheduled.scheduler` alias resolved to a workspace resource that is
-    /// not a `datacenter`. The scheduler binding is `datacenter`-only (docs/13):
-    /// a `concurrency_limit` is executor-pool admission (bind it under `Executor.capacity`),
-    /// and a plain credential (`postgres`, …) is no scheduler at all.
+    /// A `Scheduled.scheduler` (or `LeaseScope.lease`) alias resolved to a
+    /// resource whose dispatch backend is not the scheduler lease. The scheduler
+    /// binding is `datacenter`-only (docs/13): a token/presence `capacity` is
+    /// executor-pool admission (bind it under `Executor.capacity`), and a plain
+    /// credential (`postgres`, …) is no scheduler at all. `backend` is the human
+    /// label of the resolved [`crate::models::capacity::CapacityBackend`]
+    /// (`tokens` / `presence` / `queue` / `deferred` / `non-pool`).
     #[error(
-        "node '{node_id}': scheduler alias '{alias}' is a '{kind}', not a datacenter — \
-         {}",
-        if kind == "concurrency_limit" || kind == "runner_group" {
-            "a concurrency_limit/runner_group is executor-pool admission; bind it under Executor.capacity"
+        "node '{node_id}': scheduler alias '{alias}' resolves to a {backend} capacity, \
+         not a scheduler capacity — {}",
+        if backend == "tokens" || backend == "presence" || backend == "queue" {
+            "this is executor-pool admission; bind it under Executor.capacity"
         } else {
             "point it at a datacenter resource"
         }
@@ -557,7 +563,7 @@ pub enum CompileError {
     SchedulerNotADatacenter {
         node_id: String,
         alias: String,
-        kind: String,
+        backend: String,
     },
 
     /// A `datacenter` resource declares `scheduler_flavor = "<flavor>"` but is

@@ -804,7 +804,7 @@ export class YjsGraphBinding {
 					data.retryPolicy ?? { maxRetries: 3, backoff: 'immediate', baseDelayMs: 0 }
 				);
 				// `deploymentModel` round-trips whole — the nested `Executor.capacity`
-				// (concurrency_limit / runner_group admission) and scheduled
+				// (seeded/presence capacity admission) and scheduled
 				// `scheduler`/`operation` knobs travel with it. Default = plain executor dispatch.
 				config.set('deploymentModel', data.deploymentModel ?? { mode: 'executor' });
 				// PROTOTYPE — persist the streaming-output flag so toggling the

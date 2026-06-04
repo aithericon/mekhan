@@ -470,7 +470,7 @@ impl State {
 }
 
 /// Extract the scheduler flavor from a lease's typed `scheduler` tagged-union
-/// (the `Lease__datacenter` `oneOf` discriminator) — the single key of the
+/// (the `Lease__scheduler` `oneOf` discriminator) — the single key of the
 /// `scheduler` object, or an explicit `scheduler_flavor` if present. Best-effort.
 fn scheduler_flavor_from_lease(lease: &serde_json::Value) -> Option<String> {
     if let Some(f) = lease.get("scheduler_flavor").and_then(|v| v.as_str()) {

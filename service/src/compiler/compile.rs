@@ -560,14 +560,13 @@ pub(crate) fn compile_to_scenario_and_interfaces_with_configs(
     let mut scenario = ctx.build();
 
     // 5b. Drain registry-resolved pool lease typing collected during lowering.
-    //     `Lease__<kind>` definitions + grant-inbox place schema_refs. Done
+    //     `Lease__<backend>` definitions + grant-inbox place schema_refs. Done
     //     here (post-build) because the SDK `Context` exposes no public
     //     definition-register hook; the pooled lowering recorded the pairs in
     //     `fixups`. Runs before merges — the grant-inbox place is a
     //     `bridge_reply_channel` state place that no pass-through merge
     //     touches, so typing it here is stable. Deduplicate definitions on the
-    //     same kind name (one `Lease__concurrency_limit` regardless of N pooled
-    //     nodes).
+    //     same backend name (one `Lease__tokens` regardless of N pooled nodes).
     for (def_name, schema) in &fixups.lease_definitions {
         scenario
             .definitions

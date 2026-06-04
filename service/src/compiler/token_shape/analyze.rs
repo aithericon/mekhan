@@ -453,7 +453,7 @@ pub(crate) fn out_shape_automated_step(node: &WorkflowNode, _in_shape: &TokenSha
     if holds_lease {
         o.insert(
             "lease",
-            TokenShape::Opaque("typed pool lease (Lease__<kind>)".to_string()),
+            TokenShape::Opaque("typed pool lease (Lease__<backend>)".to_string()),
             p("granted pool lease, staged into the body + parked"),
         );
     }

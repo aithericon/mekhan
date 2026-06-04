@@ -94,7 +94,7 @@ pub(super) fn emit_lease_bridge(
     let pool_net_id: &str = &binding.backing_net_id;
     let grant_inbox_place = format!("p_{id}_grant_inbox");
 
-    // Grant reply lands here (typed `Lease__datacenter` via the fixup).
+    // Grant reply lands here (typed `Lease__scheduler` via the fixup).
     let p_grant_inbox: PlaceHandle<DynamicToken> = ctx.bridge_reply_channel(
         grant_inbox_place.clone(),
         format!("{label} - Grant Inbox"),

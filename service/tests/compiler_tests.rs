@@ -5132,10 +5132,10 @@ fn automated_step_scheduled_emits_pooled_topology() {
     assert_eq!(bo["target_net_id"], format!("pool-{dc_id}"));
     assert_eq!(bo["target_place_name"], "claim_inbox");
 
-    // Definitions must carry Lease__datacenter.
+    // Definitions must carry Lease__scheduler (the scheduler backend's lease).
     assert!(
-        air["definitions"].get("Lease__datacenter").is_some(),
-        "expected Lease__datacenter definition"
+        air["definitions"].get("Lease__scheduler").is_some(),
+        "expected Lease__scheduler definition"
     );
 
     // Scheduled path does NOT use the inline executor lifecycle.
@@ -6698,19 +6698,31 @@ fn deployment_model_surface_round_trips() {
     ));
 }
 
-/// The two pool resource KINDS register through the same machinery as every
-/// other kind (so `/api/v1/resources` CRUD + `split_config` work for them), and
-/// the SEPARATE pool-kind registry exposes their backend + claim/lease schemas.
+/// The pool resource KINDS register through the same machinery as every other
+/// kind (so `/api/v1/resources` CRUD + `split_config` work for them), and the
+/// backend-keyed schema registry exposes each backend's claim/lease schemas. The
+/// legacy `concurrency_limit`/`runner_group` kinds are gone: `capacity` (parsed
+/// axes) and `datacenter` (locked lease axes) are the two contended-capacity
+/// kinds, and the SINGLE dispatch authority (`models::capacity`) maps their axes
+/// onto the `PoolBackend` whose schemas `schemas_for_backend` returns.
 #[test]
 fn pool_resource_kinds_and_pool_registry() {
     use aithericon_resources::lookup;
-    use aithericon_resources::pool::{pool_kind, PoolBackend};
+    use aithericon_resources::pool::{schemas_for_backend, PoolBackend};
+    use mekhan_service::models::capacity::{axes_for_resource, CapacityBackend};
 
-    // concurrency_limit: no secret, capacity public — CRUD's split_config puts
-    // everything in public_config.
-    let tp = lookup("concurrency_limit").expect("concurrency_limit kind registered");
-    assert!(tp.secret_fields.is_empty());
-    assert!(tp.public_fields.contains(&"capacity"));
+    // capacity: the unified contended-capacity kind. Its axes (liveness /
+    // dispatch / … + `capacity_amount` for fixed) live in public_config; no
+    // secret fields — CRUD's split_config puts everything in public_config.
+    let cap = lookup("capacity").expect("capacity kind registered");
+    assert!(cap.secret_fields.is_empty());
+    for f in ["liveness", "dispatch", "exclusivity", "capacity_kind", "eligibility"] {
+        assert!(
+            cap.public_fields.contains(&f),
+            "capacity.public_fields missing `{f}`; got {:?}",
+            cap.public_fields
+        );
+    }
 
     // datacenter: the per-flavor secrets are `token` (http), `ssh_key`
     // (slurm), and `nomad_token` (nomad); allocator_url/scheduler_flavor +
@@ -6739,15 +6751,35 @@ fn pool_resource_kinds_and_pool_registry() {
     assert!(dc.public_fields.contains(&"allocator_url"));
     assert!(dc.public_fields.contains(&"scheduler_flavor"));
 
-    // The pool-kind side-registry keys off the same wire name.
+    // The single dispatch authority maps a `capacity`'s parsed axes / a
+    // `datacenter`'s LOCKED lease axes onto a CapacityBackend, then onto the
+    // net-backed PoolBackend whose schemas `schemas_for_backend` returns.
+    let seeded = serde_json::json!({
+        "liveness": "seeded",
+        "dispatch": "push",
+        "exclusivity": "hold",
+        "capacity_kind": "fixed",
+        "capacity_amount": 4,
+        "eligibility": "partition",
+    });
+    let seeded_axes = axes_for_resource("capacity", seeded.as_object().unwrap())
+        .expect("seeded capacity parses");
+    assert_eq!(seeded_axes.backend(), CapacityBackend::Tokens);
     assert_eq!(
-        pool_kind("concurrency_limit").unwrap().backend,
-        PoolBackend::Tokens
+        seeded_axes.backend().pool_backend(),
+        Some(PoolBackend::Tokens)
     );
-    assert_eq!(
-        pool_kind("datacenter").unwrap().backend,
-        PoolBackend::Scheduler
-    );
-    // A non-pool kind is not in the pool registry.
-    assert!(pool_kind("postgres").is_none());
+
+    let dc_axes = axes_for_resource("datacenter", &serde_json::Map::new())
+        .expect("datacenter resolves to locked lease axes");
+    assert_eq!(dc_axes.backend(), CapacityBackend::Scheduler);
+
+    // Each net-backed PoolBackend has a claim/lease schema pair.
+    let tok = schemas_for_backend(PoolBackend::Tokens);
+    assert!(tok.claim.is_object() && tok.lease.is_object());
+    let sched = schemas_for_backend(PoolBackend::Scheduler);
+    assert!(sched.lease.is_object());
+
+    // A non-pool kind resolves to no dispatch backend at all.
+    assert!(axes_for_resource("postgres", &serde_json::Map::new()).is_none());
 }

@@ -1,7 +1,7 @@
 <!--
   PoolContentionView — live resource-pool-net contention dashboard.
 
-  Visualises a capacity (concurrency_limit / runner_group) admission Petri net's current marking:
+  Visualises a capacity (a seeded or presence `capacity`) admission Petri net's current marking:
     1. Capacity drain bar: free / in-use split with conservation indicator.
     2. Per-hold list: each active hold's grant_id + its typed lease fields.
     3. Freed units counter (cumulative since net start).

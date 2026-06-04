@@ -1,6 +1,7 @@
 <script lang="ts">
 	// Fleet → Live presence board, split into its groups.
-	// Polls getRunnerPresence() + listRunners() + the runner_group resources every
+	// Polls getRunnerPresence() + listRunners() + the presence `capacity` resources
+	// (the runner groups) every
 	// 5 s and renders one station grid per group via the shared fleet components
 	// (BoardHeader / GroupSectionHeader / FleetCard). Each station shows the
 	// executor backends that runner advertises (its set-membership dimension —
@@ -17,6 +18,7 @@
 		type RunnerPresenceSnapshot
 	} from '$lib/api/runners';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import { capacityTarget } from '$lib/editor/deployment-run-target';
 	import { groupFleet } from './grouping';
 	import { fmtMsAgo, fmtDate } from './format';
 	import BoardHeader from './BoardHeader.svelte';
@@ -48,11 +50,12 @@
 			const [rPage, pSnaps, gPage] = await Promise.all([
 				listRunners({ perPage: 200 }),
 				getRunnerPresence(),
-				listResources({ resource_type: 'runner_group', perPage: 200 })
+				listResources({ resource_type: 'capacity', perPage: 200 })
 			]);
 			runners = rPage.items;
 			presence = pSnaps;
-			groups = gPage.items;
+			// A runner group is a presence `capacity` (the instrument preset).
+			groups = gPage.items.filter((r) => capacityTarget(r) === 'runner_group');
 			lastUpdated = new Date();
 			error = null;
 		} catch (e) {

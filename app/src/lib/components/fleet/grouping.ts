@@ -2,12 +2,12 @@
 // lives, shared by the Runners list and the Live board so they can't drift.
 //
 // A runner's `group` is an alias string. It is only meaningful when BACKED by a
-// `runner_group` *resource* (the thing that carries the presence-pool net the
-// runner's unit is admitted into). This helper joins the three live inputs —
-// the runners, their presence snapshot, and the `runner_group` resources — into
-// ordered sections an operator can read at a glance:
+// presence `capacity` *resource* (the thing that carries the presence-pool net
+// the runner's unit is admitted into). This helper joins the three live inputs —
+// the runners, their presence snapshot, and the presence `capacity` resources —
+// into ordered sections an operator can read at a glance:
 //
-//   1. backed     — one per `runner_group` resource (shown even with 0 members,
+//   1. backed     — one per presence `capacity` resource (shown even with 0 members,
 //                    so a created-but-empty group is visible), sorted by alias.
 //   2. unbacked    — a group alias some runner carries that resolves to NO
 //                    resource → NO pool net → those runners heartbeat but are
@@ -27,7 +27,7 @@ export interface FleetSection {
 	kind: FleetSectionKind;
 	/** Group alias (the `runner_group` resource path); `null` for the ungrouped bucket. */
 	alias: string | null;
-	/** The backing `runner_group` resource — present only for `kind === 'backed'`. */
+	/** The backing presence `capacity` resource — present only for `kind === 'backed'`. */
 	resource: ResourceSummary | null;
 	/** Runners in this section. */
 	runners: RunnerSummary[];
@@ -44,14 +44,14 @@ type PresenceById = Record<string, RunnerPresenceSnapshot | undefined>;
  *
  * @param runners        all enrolled runners (each may carry a `group` alias)
  * @param presenceById   runner_id → live presence snapshot (for online + backends)
- * @param groupResources the `runner_group` resources (the backed groups)
+ * @param groupResources the presence `capacity` resources (the backed groups)
  */
 export function groupFleet(
 	runners: RunnerSummary[],
 	presenceById: PresenceById,
 	groupResources: ResourceSummary[]
 ): FleetSection[] {
-	// alias → backing resource (a `runner_group` resource's `path` is its alias).
+	// alias → backing resource (a presence `capacity` resource's `path` is its alias).
 	const resourceByAlias = new Map<string, ResourceSummary>();
 	for (const r of groupResources) resourceByAlias.set(r.path, r);
 

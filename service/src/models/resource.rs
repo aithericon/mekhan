@@ -81,6 +81,14 @@ pub struct ResourceSummary {
     /// resources whose fields are static on the descriptor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_keys: Option<Vec<String>>,
+    /// The latest version's public config — populated ONLY for `capacity`
+    /// rows, so the editor's deployment picker can discriminate a capacity by
+    /// its `liveness` axis (presence → runner group, seeded → concurrency
+    /// limit, competing_consumer → worker) without an N+1 detail fetch per
+    /// alias. `None` for every other kind: the list endpoint otherwise stays
+    /// cheap and never carries per-version data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_config: Option<serde_json::Value>,
 }
 
 impl From<ResourceRow> for ResourceSummary {
@@ -94,6 +102,7 @@ impl From<ResourceRow> for ResourceSummary {
             created_at: r.created_at,
             updated_at: r.updated_at,
             dynamic_keys: None,
+            public_config: None,
         }
     }
 }

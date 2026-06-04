@@ -1,30 +1,30 @@
-//! Pool-kind registry — claim/lease schemas for *contended-capacity* resource
-//! kinds.
+//! Backend-keyed pool schemas — claim/lease shapes for *contended-capacity*
+//! dispatch backends.
 //!
-//! ## Why a separate registry (not a field on `ResourceTypeDescriptor`)
+//! ## Why backend-keyed (and why a separate registry, not a `ResourceTypeDescriptor` field)
 //!
 //! Claim and lease shapes are **pool semantics**, not a universal property of
 //! every resource. A Postgres / SMTP / S3 credential has no notion of a "claim
-//! schema" or a "lease" — only contended-capacity kinds (`concurrency_limit`,
-//! `datacenter`) do. Hanging an `Option<fn() -> Value>` claim/lease pair onto
-//! [`crate::registry::ResourceTypeDescriptor`] would:
+//! schema" or a "lease" — only contended-capacity dispatch does. Hanging an
+//! `Option<fn() -> Value>` claim/lease pair onto
+//! [`crate::registry::ResourceTypeDescriptor`] would push `Option`-shaped noise
+//! onto every non-pool descriptor (postgres, smtp, …), where it is always
+//! `None`, and force a proc-macro change so the `#[derive(ResourceType)]`
+//! expansion could populate those fields.
 //!
-//! - push `Option`-shaped noise onto every non-pool descriptor (postgres, smtp,
-//!   …), where it is always `None`, and
-//! - force a proc-macro change so the `#[derive(ResourceType)]` expansion could
-//!   populate (or default) those fields.
-//!
-//! Instead we keep them in a focused side-registry, keyed by the **resource-kind
-//! wire name** (`"concurrency_limit"` / `"datacenter"`). The two registries are
-//! independent: the resource-kind registry owns the config/secret surface and
-//! CRUD; this one owns the claim/lease typing the compiler (R2) and the backends
-//! (R3/R4) read. Lookup is by the same wire name, so a pool resource's kind
-//! string is the single join key.
+//! The schemas are NOT keyed by resource-kind wire name. The single dispatch
+//! authority lives **service-side** (`mekhan_service::models::capacity`): the
+//! service resolves a pool resource's axes → a [`PoolBackend`], then asks this
+//! module for that backend's schemas via [`schemas_for_backend`]. Clean crate
+//! split: service owns axes → backend; this crate owns backend → schema. There
+//! is no kind string in this module — `concurrency_limit` / `runner_group`
+//! collapsed into the service-side `capacity` axes, and only the three backends
+//! (`Tokens` / `Presence` / `Scheduler`) survive as schema keys.
 //!
 //! Schemas are produced lazily via `schemars::schema_for!` → `serde_json` so the
-//! compiler can emit them into AIR `definitions` (`Lease__<kind>`) and validate
-//! request params against `claim_schema` — exactly the same machinery the typed
-//! ports use. R1 only *exposes + tests* this; R2 wires it into the compiler.
+//! compiler can emit them into AIR `definitions` (`Lease__<backend>`) and
+//! validate request params against the claim schema — exactly the same
+//! machinery the typed ports use.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -44,10 +44,11 @@ pub enum PoolBackend {
     Presence,
 }
 
-// ─── concurrency_limit — Tokens backend ─────────────────────────────────────────────────────────────────────────────────
+// ─── Tokens backend (seeded capacity) ────────────────────────────────────────
 
-/// Request params for a claim against a [`crate::types::ConcurrencyLimit`]. v1 admits a
-/// single unit per claim; `units` is reserved for weighted/heterogeneous claims.
+/// Request params for a claim against a seeded token pool (the `Tokens`
+/// backend — a `capacity` whose `liveness == seeded`). v1 admits a single unit
+/// per claim; `units` is reserved for weighted/heterogeneous claims.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TokenPoolClaim {
     /// Capacity weight of this claim. Absent ⇒ 1 unit.
@@ -55,7 +56,7 @@ pub struct TokenPoolClaim {
     pub units: Option<u32>,
 }
 
-/// The lease a granted `concurrency_limit` claim holds: an opaque identity for the
+/// The lease a granted seeded-token claim holds: an opaque identity for the
 /// admitted capacity unit, staged into the step body so downstream
 /// `<slug>.lease.<field>` borrows resolve (R2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -64,11 +65,12 @@ pub struct TokenPoolLease {
     pub unit_id: String,
 }
 
-// ─── runner_group — Presence backend ───────────────────────────────────────────────────────────────────────────────
+// ─── Presence backend (presence-driven capacity) ─────────────────────────────
 
-/// Request params for a claim against a [`crate::types::RunnerGroup`]. v1 admits
-/// a single unit per claim; `units` is reserved for weighted claims. Symmetric
-/// with [`TokenPoolClaim`] — a pooled step claims a presence pool exactly as it
+/// Request params for a claim against a presence-driven pool (the `Presence`
+/// backend — a `capacity` whose `liveness == presence`). v1 admits a single
+/// unit per claim; `units` is reserved for weighted claims. Symmetric with
+/// [`TokenPoolClaim`] — a pooled step claims a presence pool exactly as it
 /// claims a token pool (the cross-net handshake is identical; only the backend
 /// that services the claim differs).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -78,7 +80,7 @@ pub struct PresencePoolClaim {
     pub units: Option<u32>,
 }
 
-/// The lease a granted `runner_group` claim holds: the identity of the admitted
+/// The lease a granted presence-pool claim holds: the identity of the admitted
 /// runner unit (`unit_id == runner_id`) plus the runner's drain
 /// `executor_namespace` (`runner.<runner_id>`) and its `caps`. Staged into the
 /// step body so downstream `<slug>.lease.<field>` borrows resolve (R2). The
@@ -100,10 +102,11 @@ pub struct PresencePoolLease {
     pub caps: serde_json::Map<String, JsonValue>,
 }
 
-// ─── datacenter — Scheduler backend ──────────────────────────────────────────
+// ─── Scheduler backend (lease against an external allocator) ──────────────────
 
-/// Request params for a claim against a [`crate::types::Datacenter`]. All
-/// optional — an empty request asks the allocator for its default placement.
+/// Request params for a claim against a [`crate::types::Datacenter`] (the
+/// `Scheduler` backend). All optional — an empty request asks the allocator for
+/// its default placement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DatacenterClaim {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,23 +208,39 @@ pub enum SchedulerDetail {
     Http {},
 }
 
-// ─── Descriptor + registry ───────────────────────────────────────────────────
+// ─── Backend → schemas ───────────────────────────────────────────────────────
 
-/// Compile-time descriptor for a pool *kind*: the backend that services its
-/// claims plus lazy producers for its claim/lease JSON Schemas. One per pool
-/// resource kind, keyed by [`Self::kind_name`] (the resource-kind wire name).
-pub struct PoolKindDescriptor {
-    /// Resource-kind wire name — the join key to the resource registry
-    /// ([`crate::registry::lookup`]).
-    pub kind_name: &'static str,
-    /// Which backend services claims for this kind.
-    pub backend: PoolBackend,
-    /// Lazy JSON Schema for the claim request params (R2 validates
-    /// `resourcePool.request` against this).
-    pub claim_schema: fn() -> JsonValue,
-    /// Lazy JSON Schema for the granted lease (R2 emits it as
-    /// `definitions["Lease__<kind>"]`).
-    pub lease_schema: fn() -> JsonValue,
+/// The claim/lease JSON Schemas for one dispatch backend, produced lazily.
+/// Returned by [`schemas_for_backend`]; the compiler validates
+/// `resourcePool.request` against [`Self::claim`] and emits [`Self::lease`] as
+/// `definitions["Lease__<backend>"]`.
+pub struct PoolSchemas {
+    /// JSON Schema for the claim request params.
+    pub claim: JsonValue,
+    /// JSON Schema for the granted lease.
+    pub lease: JsonValue,
+}
+
+/// The claim/lease schemas for a dispatch backend. The single dispatch
+/// authority (service-side `models::capacity`) resolves a pool resource's axes
+/// to a [`PoolBackend`]; this is how it then obtains the backend's typed
+/// claim/lease shapes. Total over the closed [`PoolBackend`] set — every
+/// backend has a schema pair.
+pub fn schemas_for_backend(backend: PoolBackend) -> PoolSchemas {
+    match backend {
+        PoolBackend::Tokens => PoolSchemas {
+            claim: schema_value::<TokenPoolClaim>(),
+            lease: schema_value::<TokenPoolLease>(),
+        },
+        PoolBackend::Presence => PoolSchemas {
+            claim: schema_value::<PresencePoolClaim>(),
+            lease: schema_value::<PresencePoolLease>(),
+        },
+        PoolBackend::Scheduler => PoolSchemas {
+            claim: schema_value::<DatacenterClaim>(),
+            lease: schema_value::<DatacenterLease>(),
+        },
+    }
 }
 
 /// Render a `schemars`-derived type to a `serde_json::Value` schema, with
@@ -231,7 +250,7 @@ pub struct PoolKindDescriptor {
 /// This matters for tagged-union fields like [`DatacenterLease::scheduler`]:
 /// by default schemars factors the [`SchedulerDetail`] `oneOf` into a separate
 /// `definitions` entry and points the property at it with a `$ref`. The
-/// compiler emits the lease schema as a single AIR definition (`Lease__<kind>`)
+/// compiler emits the lease schema as a single AIR definition (`Lease__<backend>`)
 /// and the engine's `SchemaRegistry` resolves refs only against the workflow's
 /// own definitions map — a nested `$ref` to `SchedulerDetail` would be unresolvable.
 /// Inlining folds the `oneOf` straight into the `scheduler` property so the
@@ -244,39 +263,3 @@ fn schema_value<T: JsonSchema>() -> JsonValue {
     serde_json::to_value(schema).expect("schemars RootSchema serializes to a JSON object")
 }
 
-/// The two pool kinds. A static slice (not `inventory`) because the set is
-/// closed and small — the join key into this table is the resource kind's wire
-/// name, so it is intentionally co-located with the kind declarations rather
-/// than discovered at link time.
-static POOL_KINDS: &[PoolKindDescriptor] = &[
-    PoolKindDescriptor {
-        kind_name: "concurrency_limit",
-        backend: PoolBackend::Tokens,
-        claim_schema: schema_value::<TokenPoolClaim>,
-        lease_schema: schema_value::<TokenPoolLease>,
-    },
-    PoolKindDescriptor {
-        kind_name: "datacenter",
-        backend: PoolBackend::Scheduler,
-        claim_schema: schema_value::<DatacenterClaim>,
-        lease_schema: schema_value::<DatacenterLease>,
-    },
-    PoolKindDescriptor {
-        kind_name: "runner_group",
-        backend: PoolBackend::Presence,
-        claim_schema: schema_value::<PresencePoolClaim>,
-        lease_schema: schema_value::<PresencePoolLease>,
-    },
-];
-
-/// Look up a pool-kind descriptor by its resource-kind wire name. Returns `None`
-/// for non-pool kinds (postgres, smtp, …) — that absence is how a caller learns
-/// a resource is *not* claimable.
-pub fn pool_kind(kind_name: &str) -> Option<&'static PoolKindDescriptor> {
-    POOL_KINDS.iter().find(|d| d.kind_name == kind_name)
-}
-
-/// Every registered pool kind, in declaration order.
-pub fn all() -> &'static [PoolKindDescriptor] {
-    POOL_KINDS
-}

@@ -7,7 +7,7 @@
 	// Edits the `requirements` field directly (no `data` coupling): every mutation
 	// rebuilds the constraint list and calls `onchange(requirements | undefined)`.
 	// Hosted by `DeploymentSection` inside the Runner-group branch — placement
-	// requirements ONLY apply to the runner_group model (the engine's
+	// requirements ONLY apply to the presence `capacity` model (the engine's
 	// `satisfies()` guard runs only on the presence pool's `t_grant`), so the
 	// gating lives there rather than as an always-on section.
 	import type { components } from '$lib/api/schema';

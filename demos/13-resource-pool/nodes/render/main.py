@@ -2,7 +2,7 @@
 #
 # Seeded as a plain inline step (the demo seeder provisions templates, not
 # resources). To turn it into the shared-admission showcase: create a
-# `concurrency_limit` resource at /resources, then set this step's deploymentModel to
+# `capacity` resource at /resources (the `limit` preset, seeded N), then set this step's deploymentModel to
 # `{ mode: "executor", capacity: { alias: "<your-limit>" } }`. The compiler then wraps
 # this body behind a capacity claim against the limit's backing net: the net does
 # not start the body until a unit token is granted, and the grant is returned on

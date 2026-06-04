@@ -3515,15 +3515,15 @@ export interface components {
              * Format: int32
              * @description A configured integer unit count (the worker pool's `N`).
              */
-            amount: number;
+            capacity_amount: number;
             /** @enum {string} */
-            kind: "fixed";
+            capacity_kind: "fixed";
         } | {
             /** @enum {string} */
-            kind: "presence_driven";
+            capacity_kind: "presence_driven";
         } | {
             /** @enum {string} */
-            kind: "elastic";
+            capacity_kind: "elastic";
         };
         /**
          * @description The full point in the trait-space a `capacity` resource names. This is the
@@ -3537,7 +3537,7 @@ export interface components {
             liveness: components["schemas"]["Liveness"];
         };
         /**
-         * @description A binding to a `concurrency_limit` or `runner_group` resource for executor-pool admission (`docs/14`).
+         * @description A binding to a Tokens or Presence `capacity` resource for executor-pool admission (`docs/14`).
          *     Lives under [`DeploymentModel::Executor`]'s `capacity`; its presence makes the
          *     compiler wrap the executor body with a claim/register/release handshake
          *     against the pool resource's backing net so the engine's firing rule provides
@@ -3547,11 +3547,11 @@ export interface components {
          *     capacity binding"). It resolves at publish through the resource machinery to a backing
          *     net id + kind + claim/lease schemas; `request` is validated against the
          *     kind's `claim_schema`. The well-known-global fallback from the prototype is
-         *     gone — a pooled step must name a `concurrency_limit` or `runner_group` resource.
+         *     gone — a pooled step must name a Tokens or Presence `capacity` resource.
          */
         CapacityBinding: {
             /**
-             * @description Which `concurrency_limit`/`runner_group` resource (by workspace alias) to claim against.
+             * @description Which Tokens/Presence `capacity` resource (by workspace alias) to claim against.
              *     Required. Resolved at publish to a backing net id (`pool-<resource_id>`),
              *     kind, and claim/lease schemas.
              */
@@ -3580,7 +3580,7 @@ export interface components {
             axes: components["schemas"]["CapacityAxes"];
             /** @description UI label. */
             display_name: string;
-            /** @description Stable wire id (`worker` / `instrument` / `hpc`). */
+            /** @description Stable wire id (`worker` / `limit` / `instrument`). */
             name: string;
         };
         /**
@@ -4237,9 +4237,9 @@ export interface components {
          *     daemon pool (jobs dispatched over the NATS work queue and pulled by the
          *     long-running executor workers) vs an external cluster. Resource admission
          *     *is* scheduling, so:
-         *     - a `concurrency_limit` admission lives under [`DeploymentModel::Executor`]'s `capacity`
-         *       (the body runs on our executor pool holding the typed lease — R1–R3
-         *       machinery), and
+         *     - a seeded-token (`liveness=seeded`) capacity admission lives under
+         *       [`DeploymentModel::Executor`]'s `capacity` (the body runs on our executor
+         *       pool holding the typed lease — R1–R3 machinery), and
          *     - an external cluster is a `datacenter` resource bound under
          *       [`DeploymentModel::Scheduled`]'s `scheduler` (docs/13), with `operation`
          *       selecting submit (today's sbatch/dispatch) vs lease (R4).
@@ -5034,8 +5034,8 @@ export interface components {
             /**
              * @description `datacenter` resource alias (workspace alias) the loop holds a lease
              *     against. Resolved at publish to `pool-<resource_id>` + the
-             *     `Lease__datacenter` schema, the same path as `Scheduled.scheduler`
-             *     (`resolve_binding("datacenter")`).
+             *     `Lease__scheduler` schema, the same path as `Scheduled.scheduler`
+             *     (`resolve_binding(.., SchedulerLease, ..)`).
              */
             scheduler: string;
         };
@@ -5112,15 +5112,13 @@ export interface components {
             value: number;
         };
         /**
-         * @description How a capacity proves it is available (doc 23 §3 "liveness").
-         *
-         *     `lease` is reserved now (doc 24 §5) so the model has a slot for the
-         *     HPC/`datacenter` allocation path; this slice does not re-express the lease
-         *     adapter as a `capacity`, but the axis value must exist so a future preset
-         *     can name it.
+         * @description How a capacity proves it is available (doc 23 §3 "liveness"). This is the
+         *     axis the dispatch authority ([`CapacityAxes::backend`]) keys off, so the
+         *     vocabulary is 1:1 with the backing-net flavour (modulo the `consume`
+         *     quota-admission override).
          * @enum {string}
          */
-        Liveness: "competing_consumer" | "presence" | "lease";
+        Liveness: "competing_consumer" | "seeded" | "presence" | "lease";
         /** @description Configuration for the LLM backend. */
         LlmConfig: {
             /** @description API key. Falls back to provider-specific env var if absent. */
@@ -5717,6 +5715,15 @@ export interface components {
                 /** Format: int32 */
                 latest_version: number;
                 path: string;
+                /**
+                 * @description The latest version's public config — populated ONLY for `capacity`
+                 *     rows, so the editor's deployment picker can discriminate a capacity by
+                 *     its `liveness` axis (presence → runner group, seeded → concurrency
+                 *     limit, competing_consumer → worker) without an N+1 detail fetch per
+                 *     alias. `None` for every other kind: the list endpoint otherwise stays
+                 *     cheap and never carries per-version data.
+                 */
+                public_config?: unknown;
                 resource_type: string;
                 /** Format: date-time */
                 updated_at: string;
@@ -6546,6 +6553,15 @@ export interface components {
             /** Format: int32 */
             latest_version: number;
             path: string;
+            /**
+             * @description The latest version's public config — populated ONLY for `capacity`
+             *     rows, so the editor's deployment picker can discriminate a capacity by
+             *     its `liveness` axis (presence → runner group, seeded → concurrency
+             *     limit, competing_consumer → worker) without an N+1 detail fetch per
+             *     alias. `None` for every other kind: the list endpoint otherwise stays
+             *     cheap and never carries per-version data.
+             */
+            public_config?: unknown;
             resource_type: string;
             /** Format: date-time */
             updated_at: string;
@@ -8088,9 +8104,9 @@ export interface components {
             assetBindings?: components["schemas"]["AssetBinding"][];
             /**
              * @description Where/how the job is dispatched. `Executor` (default) = our executor
-             *     daemon pool over the NATS work queue, optionally under a `concurrency_limit`
-             *     admission (`Executor.capacity`). `Scheduled` = lease through an external
-             *     cluster (a `datacenter` resource, docs/13).
+             *     daemon pool over the NATS work queue, optionally under a Tokens or
+             *     Presence `capacity` admission (`Executor.capacity`). `Scheduled` =
+             *     lease through an external cluster (a `datacenter` resource, docs/13).
              *     `#[serde(default)]` + the `Executor` default ⇒ every existing
              *     template round-trips unchanged (same precedent as `retry_policy`).
              *
