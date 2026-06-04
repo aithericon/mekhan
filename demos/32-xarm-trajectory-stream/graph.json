@@ -8,11 +8,7 @@
         "type": "start",
         "label": "Start",
         "processName": "xArm Trajectory Feedback Stream",
-        "initial": {
-          "id": "in",
-          "label": "Begin",
-          "fields": []
-        }
+        "initial": { "id": "in", "label": "Begin", "fields": [] }
       }
     },
     {
@@ -23,8 +19,7 @@
       "data": {
         "type": "automated_step",
         "label": "Move (trajectory action, streaming feedback)",
-        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`). Commands a single-waypoint trajectory to the proven-reachable joint target [0, -0.3, -0.3, 0, 0.6, 0] (reused from demo 30) on the xArm 6 driven through ros2_control fake hardware. This is a STREAMING action node (`streamOutput: true`): as the controller follows the trajectory it publishes structured `FollowJointTrajectory_Feedback` frames (`{ header, joint_names, desired, actual, error }` — each a nested JointTrajectoryPoint), far richer than the turtle's scalar `{ remaining }`. The backend dedups the DUPLICATED frames rosbridge emits and emits each DISTINCT feedback as a streamed `OutputSet` on the node's `stream` handle; the slim control token carries `stream_count == number of distinct feedbacks` over the `control` edge to size the fold's end-of-stream gather barrier. The terminal action RESULT (`error_code`) rides `stdout_tail` ONLY — it is NOT a referenceable output, and success is implicit (the backend only succeeds when GoalStatus == 4 SUCCEEDED). The goal is authored as free-form JSON in `config.fields` and passed to rosbridge verbatim (nested array-of-structs, no mapper involvement); `interface_typedefs` carries the flat `FollowJointTrajectory_Result` typedef so the deriver can shape the result port for this non-bundled action. Runs on an `xarm_fleet` runner that satisfies `ros.robot_model == xarm6`; the rosbridge endpoint is runner-local (`EXECUTOR_ROS__WS_URL`).",
-        "streamOutput": true,
+        "description": "ROS `send_action_goal` to `/xarm6_traj_controller/follow_joint_trajectory` (`control_msgs/action/FollowJointTrajectory`). Commands a single-waypoint trajectory to the proven-reachable joint target [0, -0.3, -0.3, 0, 0.6, 0] (reused from demo 30) on the xArm 6 driven through ros2_control fake hardware. The node declares a Control/Scatter `out` channel `feedback` (max_fanout 4096): as the controller follows the trajectory it publishes structured `FollowJointTrajectory_Feedback` frames (`{ header, joint_names, desired, actual, error }` — each a nested JointTrajectoryPoint, far richer than the turtle's scalar `{ remaining }`); the ROS backend dedups the DUPLICATED frames rosbridge emits and streams each DISTINCT feedback as a `scatter_item` control token (docs/25) into the channel, then a `scatter_close` carrying the count. The compiler's per-channel gather barrier parks the gathered collection `{ output: [...] }` on the channel's gathered place, which the downstream `fold` consumer drains off `input.output`. The terminal action RESULT (`error_code`) rides `stdout_tail` ONLY — success is implicit (the backend only succeeds when GoalStatus == 4 SUCCEEDED). The goal is authored as free-form JSON in `config.fields` and passed to rosbridge verbatim (nested array-of-structs, no mapper involvement); `interface_typedefs` carries the flat `FollowJointTrajectory_Result` typedef so the deriver can shape the result port for this non-bundled action. Runs on an `xarm_fleet` runner that satisfies `ros.robot_model == xarm6`; the rosbridge endpoint is runner-local (`EXECUTOR_ROS__WS_URL`).",
         "deploymentModel": {
           "mode": "executor",
           "capacity": { "alias": "xarm_fleet" }
@@ -34,6 +29,16 @@
             { "capability": "ros", "field": "robot_model", "op": "eq", "value": "xarm6" }
           ]
         },
+        "channels": [
+          {
+            "name": "feedback",
+            "direction": "out",
+            "plane": "control",
+            "element": { "type": "any" },
+            "contract": "scatter",
+            "max_fanout": 4096
+          }
+        ],
         "executionSpec": {
           "backendType": "ros",
           "config": {
@@ -53,28 +58,38 @@
             ]
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Output",
-          "fields": [
-            { "name": "feedback_count", "label": "Feedback count", "kind": "number" }
-          ]
-        },
+        "output": { "id": "out", "label": "Output", "fields": [] },
         "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
       }
     },
     {
       "id": "fold",
-      "type": "stream_fold",
+      "type": "automated_step",
       "slug": "fold",
       "position": { "x": 600, "y": 160 },
       "data": {
-        "type": "stream_fold",
+        "type": "automated_step",
         "label": "Fold Feedback",
-        "description": "Drains the trajectory action's feedback stream (one structured `FollowJointTrajectory_Feedback` chunk per distinct feedback) and reduces it into an ordered Array, gating net completion on the end-of-stream count carried on the move node's control token.",
-        "resultVar": "item",
-        "reduce": {
-          "kind": "array"
+        "description": "Reducer job (docs/25 §2). Reads the move channel's gathered structured-feedback collection (the `{ output: [...] }` envelope merged onto its input token), counts the distinct frames and surfaces the first one verbatim. Replaces the retired in-net `StreamFold` node; proves rich, nested ROS action feedback survives the channel round-trip without depending on its inner field names.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Output",
+          "fields": [
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" },
+            { "name": "sample_frame", "label": "Sample frame", "kind": "json" }
+          ]
         }
       }
     },
@@ -86,47 +101,15 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          {
-            "targetField": "feedback_count",
-            "expression": "fold.output.len()"
-          },
-          {
-            "targetField": "sample_frame",
-            "expression": "if fold.output.len() > 0 { fold.output[0] } else { #{} }"
-          }
+          { "targetField": "feedback_count", "expression": "fold.feedback_count" },
+          { "targetField": "sample_frame", "expression": "fold.sample_frame" }
         ]
       }
     }
   ],
   "edges": [
-    {
-      "id": "e_start_move",
-      "source": "start",
-      "target": "move",
-      "targetHandle": "in",
-      "type": "sequence"
-    },
-    {
-      "id": "e_move_stream",
-      "source": "move",
-      "sourceHandle": "stream",
-      "target": "fold",
-      "targetHandle": "stream",
-      "type": "sequence"
-    },
-    {
-      "id": "e_move_control",
-      "source": "move",
-      "target": "fold",
-      "targetHandle": "control",
-      "type": "sequence"
-    },
-    {
-      "id": "e_fold_end",
-      "source": "fold",
-      "target": "end",
-      "targetHandle": "in",
-      "type": "sequence"
-    }
+    { "id": "e_start_move", "source": "start", "target": "move", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_move_feedback_fold", "source": "move", "sourceHandle": "feedback", "target": "fold", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_fold_end", "source": "fold", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

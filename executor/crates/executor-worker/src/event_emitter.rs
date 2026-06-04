@@ -7,7 +7,7 @@ use chrono::Utc;
 use tracing::{debug, error};
 
 use aithericon_executor_domain::{
-    ControlEmitEvent, EventCategory, ExecutionEvent, LogLevel, StatusDetail,
+    ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, LogLevel, StatusDetail,
 };
 
 use aithericon_executor_backend::traits::EventStream;
@@ -258,6 +258,45 @@ impl EventStream for StreamContext {
             StatusDetail::OutputSet { name, value },
         )
         .await;
+    }
+
+    async fn scatter_item(
+        &self,
+        channel: String,
+        scatter_uid: String,
+        idx: u64,
+        payload: serde_json::Value,
+    ) {
+        // A `ControlEmitEvent` carries no `EventCategory` — it routes purely on
+        // the job's `metadata` (petri net id + control_emit event route), so it
+        // is NOT category-gated like `maybe_emit`. Build it directly and publish
+        // through the emitter's control path (same wire the IPC `EmitControl`
+        // uses for the Python SDK's `scatter`).
+        let event = ControlEmitEvent {
+            execution_id: self.execution_id.clone(),
+            channel,
+            kind: ControlKind::ScatterItem,
+            payload_json: serde_json::to_string(&payload).unwrap_or_default(),
+            scatter_id: idx,
+            scatter_count: 0,
+            scatter_uid,
+            metadata: self.metadata.clone(),
+        };
+        self.emitter.emit_control(&event).await;
+    }
+
+    async fn scatter_close(&self, channel: String, scatter_uid: String, count: u64) {
+        let event = ControlEmitEvent {
+            execution_id: self.execution_id.clone(),
+            channel,
+            kind: ControlKind::ScatterClose,
+            payload_json: String::new(),
+            scatter_id: 0,
+            scatter_count: count,
+            scatter_uid,
+            metadata: self.metadata.clone(),
+        };
+        self.emitter.emit_control(&event).await;
     }
 }
 

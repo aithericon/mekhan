@@ -165,22 +165,32 @@ impl JobExecutor {
             }
         };
 
-        // Build StreamContext for real-time event streaming (if opted in).
+        // Build StreamContext for real-time event streaming. Opted in by EITHER
+        // a non-empty `stream_events` set (category-gated log/output/agent_turn)
+        // OR a declared streaming channel (docs/25): an in-process backend (ROS
+        // action feedback) emits `scatter_item`/`scatter_close` control tokens
+        // through this context's `emit_control` path, which is route-driven and
+        // NOT category-gated — so a channels-only job still needs the context
+        // even though its `categories` set is empty.
         let shared_sequence = Arc::new(AtomicU64::new(0));
-        let stream_ctx = job
-            .stream_events
-            .as_ref()
-            .filter(|cats| !cats.is_empty())
-            .map(|cats| {
-                Arc::new(StreamContext {
-                    categories: cats.iter().copied().collect(),
-                    emitter: self.reporter.event_emitter(),
-                    sequence: shared_sequence.clone(),
-                    execution_id: execution_id.clone(),
-                    source: self.reporter.source().to_string(),
-                    metadata: job.metadata.clone(),
-                })
-            });
+        let opted_into_events = job.stream_events.as_ref().is_some_and(|c| !c.is_empty());
+        let stream_ctx = if opted_into_events || !job.channels.is_empty() {
+            let categories = job
+                .stream_events
+                .as_ref()
+                .map(|cats| cats.iter().copied().collect())
+                .unwrap_or_default();
+            Some(Arc::new(StreamContext {
+                categories,
+                emitter: self.reporter.event_emitter(),
+                sequence: shared_sequence.clone(),
+                execution_id: execution_id.clone(),
+                source: self.reporter.source().to_string(),
+                metadata: job.metadata.clone(),
+            }))
+        } else {
+            None
+        };
 
         // Flush deferred staging events (collected before StreamContext existed).
         if let Some(ref ctx) = stream_ctx {

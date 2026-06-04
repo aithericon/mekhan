@@ -3,47 +3,30 @@
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 40,
-        "y": 160
-      },
+      "position": { "x": 40, "y": 160 },
       "data": {
         "type": "start",
         "label": "Start",
         "processName": "Turtle Rotate",
-        "initial": {
-          "id": "in",
-          "label": "Begin",
-          "fields": []
-        }
+        "initial": { "id": "in", "label": "Begin", "fields": [] }
       }
     },
     {
       "id": "teleport",
       "type": "automated_step",
       "slug": "teleport",
-      "position": {
-        "x": 320,
-        "y": 160
-      },
+      "position": { "x": 320, "y": 160 },
       "data": {
         "type": "automated_step",
         "label": "Teleport theta=0",
         "description": "ROS `call_service` to `/turtle1/teleport_absolute` (`turtlesim/srv/TeleportAbsolute`). Resets the turtle to a known pose (x=5.5, y=5.5, theta=0.0) so the subsequent `rotate_absolute` action always has a real rotation to perform (theta differs from the target), guaranteeing a non-empty feedback stream. Runs on a `ros_fleet` runner that satisfies `ros.robot_model == turtlesim`.",
         "deploymentModel": {
           "mode": "executor",
-          "capacity": {
-            "alias": "ros_fleet"
-          }
+          "capacity": { "alias": "ros_fleet" }
         },
         "requirements": {
           "constraints": [
-            {
-              "capability": "ros",
-              "field": "robot_model",
-              "op": "eq",
-              "value": "turtlesim"
-            }
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "turtlesim" }
           ]
         },
         "executionSpec": {
@@ -52,167 +35,104 @@
             "operation": "call_service",
             "interface_name": "/turtle1/teleport_absolute",
             "interface_type": "turtlesim/srv/TeleportAbsolute",
-            "fields": {
-              "x": 5.5,
-              "y": 5.5,
-              "theta": 0.0
-            }
+            "fields": { "x": 5.5, "y": 5.5, "theta": 0.0 }
           }
         },
-        "output": {
-          "id": "out",
-          "label": "Output",
-          "fields": []
-        },
-        "retryPolicy": {
-          "maxRetries": 0,
-          "backoff": "immediate"
-        }
+        "output": { "id": "out", "label": "Output", "fields": [] },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
       }
     },
     {
       "id": "rotate",
       "type": "automated_step",
       "slug": "rotate",
-      "position": {
-        "x": 600,
-        "y": 160
-      },
+      "position": { "x": 600, "y": 160 },
       "data": {
         "type": "automated_step",
-        "label": "Rotate (action)",
-        "description": "ROS `send_action_goal` to `/turtle1/rotate_absolute` (`turtlesim/action/RotateAbsolute`). Goal `{ theta }` is taken from the Start field `target_theta`. This is a STREAMING action node (`streamOutput: true`): the action server publishes `feedback { remaining }` as the turtle rotates, and the backend dedups consecutive-identical frames (rosbridge emits them duplicated) and emits each DISTINCT feedback as a streamed `OutputSet` on the node's `stream` handle. Those chunks flow to a `StreamFold(Array)` over the `stream` edge; the node's slim control token (carrying `stream_count == number of distinct feedbacks`) flows over the `control` edge and sizes the fold's end-of-stream gather barrier. The terminal action result (`delta`) is carried on `stdout_tail` \u2014 it is intentionally NOT an `outputs` entry, since any output entry both inflates `stream_count` and leaks a non-feedback token onto the stream place. Same `ros_fleet` placement + `ros.robot_model == turtlesim` Requirement.",
-        "streamOutput": true,
+        "label": "Rotate (action, streaming feedback)",
+        "description": "ROS `send_action_goal` to `/turtle1/rotate_absolute` (`turtlesim/action/RotateAbsolute`). As the turtle rotates, the action server publishes `feedback { remaining }`; the ROS backend dedups the consecutive-identical frames rosbridge emits and streams each DISTINCT feedback as a `scatter_item` control token (docs/25) into the node's Control/Scatter `out` channel `feedback` (max_fanout 1024). On the terminal result it stamps a `scatter_close` carrying the total count. The compiler's per-channel gather barrier (sized on that count) re-orders the items and parks the gathered feedback collection `{ output: [{ remaining }, ...] }` on the channel's gathered place, which the downstream `fold` consumer drains — no per-feedback token spams the marking and no feedback rides the node's `outputs` map. The terminal action `delta` rides `stdout_tail` only. Same `ros_fleet` placement + `ros.robot_model == turtlesim` Requirement.",
         "deploymentModel": {
           "mode": "executor",
-          "capacity": {
-            "alias": "ros_fleet"
-          }
+          "capacity": { "alias": "ros_fleet" }
         },
         "requirements": {
           "constraints": [
-            {
-              "capability": "ros",
-              "field": "robot_model",
-              "op": "eq",
-              "value": "turtlesim"
-            }
+            { "capability": "ros", "field": "robot_model", "op": "eq", "value": "turtlesim" }
           ]
         },
+        "channels": [
+          {
+            "name": "feedback",
+            "direction": "out",
+            "plane": "control",
+            "element": { "type": "any" },
+            "contract": "scatter",
+            "max_fanout": 1024
+          }
+        ],
         "executionSpec": {
           "backendType": "ros",
           "config": {
             "operation": "send_action_goal",
             "interface_name": "/turtle1/rotate_absolute",
             "interface_type": "turtlesim/action/RotateAbsolute",
-            "fields": {
-              "theta": 0.4
-            }
+            "fields": { "theta": 0.4 }
+          }
+        },
+        "output": { "id": "out", "label": "Output", "fields": [] },
+        "retryPolicy": { "maxRetries": 0, "backoff": "immediate" }
+      }
+    },
+    {
+      "id": "fold",
+      "type": "automated_step",
+      "slug": "fold",
+      "position": { "x": 880, "y": 160 },
+      "data": {
+        "type": "automated_step",
+        "label": "Fold Feedback",
+        "description": "Reducer job (docs/25 §2 — Fold was never a net concern). Reads the rotate channel's gathered feedback collection (the `{ output: [...] }` envelope merged onto its input token), counts the distinct feedbacks and surfaces the first `remaining`. Replaces the retired in-net `StreamFold` node.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
           }
         },
         "output": {
           "id": "out",
           "label": "Output",
           "fields": [
-            {
-              "name": "delta",
-              "label": "Delta",
-              "kind": "number"
-            },
-            {
-              "name": "feedback_count",
-              "label": "Feedback count",
-              "kind": "number"
-            }
+            { "name": "feedback_count", "label": "Feedback count", "kind": "number" },
+            { "name": "rotation_delta", "label": "Rotation delta", "kind": "number" }
           ]
-        },
-        "retryPolicy": {
-          "maxRetries": 0,
-          "backoff": "immediate"
-        }
-      }
-    },
-    {
-      "id": "fold",
-      "type": "stream_fold",
-      "slug": "fold",
-      "position": {
-        "x": 880,
-        "y": 160
-      },
-      "data": {
-        "type": "stream_fold",
-        "label": "Fold Feedback",
-        "description": "Drains the rotate action's feedback stream (one `{ remaining }` chunk per distinct feedback) and reduces it into an ordered Array, gating net completion on the end-of-stream count carried on rotate's control token.",
-        "resultVar": "item",
-        "reduce": {
-          "kind": "array"
         }
       }
     },
     {
       "id": "end",
       "type": "end",
-      "position": {
-        "x": 1160,
-        "y": 160
-      },
+      "position": { "x": 1160, "y": 160 },
       "data": {
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          {
-            "targetField": "feedback_count",
-            "expression": "fold.output.len()"
-          },
-          {
-            "targetField": "rotation_delta",
-            "expression": "if fold.output.len() > 0 { fold.output[0].remaining } else { 0.0 }"
-          },
-          {
-            "targetField": "final_theta",
-            "expression": "0.4"
-          }
+          { "targetField": "feedback_count", "expression": "fold.feedback_count" },
+          { "targetField": "rotation_delta", "expression": "fold.rotation_delta" },
+          { "targetField": "final_theta", "expression": "0.4" }
         ]
       }
     }
   ],
   "edges": [
-    {
-      "id": "e_start_teleport",
-      "source": "start",
-      "target": "teleport",
-      "targetHandle": "in",
-      "type": "sequence"
-    },
-    {
-      "id": "e_teleport_rotate",
-      "source": "teleport",
-      "target": "rotate",
-      "targetHandle": "in",
-      "type": "sequence"
-    },
-    {
-      "id": "e_rotate_stream",
-      "source": "rotate",
-      "sourceHandle": "stream",
-      "target": "fold",
-      "targetHandle": "stream",
-      "type": "sequence"
-    },
-    {
-      "id": "e_rotate_control",
-      "source": "rotate",
-      "target": "fold",
-      "targetHandle": "control",
-      "type": "sequence"
-    },
-    {
-      "id": "e_fold_end",
-      "source": "fold",
-      "target": "end",
-      "targetHandle": "in",
-      "type": "sequence"
-    }
+    { "id": "e_start_teleport", "source": "start", "target": "teleport", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_teleport_rotate", "source": "teleport", "target": "rotate", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_rotate_feedback_fold", "source": "rotate", "sourceHandle": "feedback", "target": "fold", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_fold_end", "source": "fold", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }
