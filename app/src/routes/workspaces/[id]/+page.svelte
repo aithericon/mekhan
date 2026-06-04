@@ -1,12 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
-	import Plus from '@lucide/svelte/icons/plus';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import UserPlus from '@lucide/svelte/icons/user-plus';
-	import Copy from '@lucide/svelte/icons/copy';
-	import ExternalLink from '@lucide/svelte/icons/external-link';
-	import BookOpen from '@lucide/svelte/icons/book-open';
+	import FolderKanban from '@lucide/svelte/icons/folder-kanban';
+	import ArrowRight from '@lucide/svelte/icons/arrow-right';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -22,19 +19,15 @@
 		listWorkspaceMembers,
 		addWorkspaceMember,
 		removeWorkspaceMember,
-		listProjects,
-		createProject,
 		resolveUserByEmail,
 		type WorkspaceSummary,
-		type WorkspaceMember,
-		type Project
+		type WorkspaceMember
 	} from '$lib/api/client';
 
 	const workspaceId = $derived($page.params.id ?? '');
 
 	let workspace = $state<WorkspaceSummary | null>(null);
 	let members = $state<WorkspaceMember[]>([]);
-	let projects = $state<Project[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -44,20 +37,13 @@
 	let addingMember = $state(false);
 	let addError = $state<string | null>(null);
 
-	// New-project form state
-	let newProjectSlug = $state('');
-	let newProjectName = $state('');
-	let creatingProject = $state(false);
-	let projectError = $state<string | null>(null);
-
 	async function load() {
 		loading = true;
 		error = null;
 		try {
-			[workspace, members, projects] = await Promise.all([
+			[workspace, members] = await Promise.all([
 				getWorkspace(workspaceId),
-				listWorkspaceMembers(workspaceId),
-				listProjects(workspaceId)
+				listWorkspaceMembers(workspaceId)
 			]);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load workspace';
@@ -101,42 +87,6 @@
 		}
 	}
 
-	async function handleCreateProject(e: Event) {
-		e.preventDefault();
-		const slug = newProjectSlug.trim();
-		const display = newProjectName.trim() || slug;
-		if (!slug) return;
-		creatingProject = true;
-		projectError = null;
-		try {
-			const p = await createProject(workspaceId, {
-				slug,
-				display_name: display,
-				description: ''
-			});
-			projects = [...projects, p];
-			newProjectSlug = '';
-			newProjectName = '';
-		} catch (e) {
-			projectError = e instanceof Error ? e.message : 'Failed to create project';
-		} finally {
-			creatingProject = false;
-		}
-	}
-
-	function bundleUrl(p: Project): string {
-		return `/api/v1/workspaces/${workspaceId}/projects/${p.id}/openapi.json`;
-	}
-
-	async function copyBundleUrl(p: Project) {
-		const url = `${window.location.origin}${bundleUrl(p)}`;
-		try {
-			await navigator.clipboard.writeText(url);
-		} catch {
-			// Fallback for browsers blocking clipboard write
-			prompt('Copy this URL', url);
-		}
-	}
 </script>
 
 <div class="mx-auto max-w-4xl px-6 py-8" data-testid="workspace-detail">
@@ -225,7 +175,7 @@
 				</CardContent>
 			</Card>
 
-			<!-- Projects -->
+			<!-- Projects (managed top-level, scoped to the active workspace) -->
 			<Card data-testid="projects-card">
 				<CardHeader>
 					<CardTitle>Projects</CardTitle>
@@ -234,88 +184,21 @@
 						OpenAPI bundle.
 					</CardDescription>
 				</CardHeader>
-				<CardContent class="space-y-4">
-					<form onsubmit={handleCreateProject} class="space-y-2">
-						<div class="grid gap-2 sm:grid-cols-2">
-							<Input
-								placeholder="slug"
-								bind:value={newProjectSlug}
-								data-testid="input-new-project-slug"
-							/>
-							<Input
-								placeholder="Display name"
-								bind:value={newProjectName}
-								data-testid="input-new-project-name"
-							/>
+				<CardContent>
+					<a
+						href="/projects"
+						class="flex items-center gap-3 rounded-md border border-border bg-card/50 p-3 text-sm hover:bg-accent/50"
+						data-testid="link-projects"
+					>
+						<FolderKanban class="size-5 text-muted-foreground" />
+						<div class="min-w-0 flex-1">
+							<div class="font-medium">Manage projects</div>
+							<div class="text-sm text-muted-foreground">
+								Create, attach templates, and view API contracts
+							</div>
 						</div>
-						<Button
-							type="submit"
-							disabled={creatingProject}
-							class="w-full"
-							data-testid="btn-create-project"
-						>
-							<Plus class="size-4" />
-							{creatingProject ? 'Creating…' : 'Create project'}
-						</Button>
-						{#if projectError}
-							<div class="text-xs text-destructive">{projectError}</div>
-						{/if}
-					</form>
-
-					<ul class="space-y-2">
-						{#each projects as p (p.id)}
-							<li
-								class="rounded-md border border-border bg-card/50 p-3 text-sm"
-								data-testid={`project-row-${p.slug}`}
-							>
-								<div class="flex items-start justify-between gap-2">
-									<a
-										href={`/workspaces/${workspaceId}/projects/${p.id}`}
-										class="min-w-0 flex-1"
-										data-testid={`link-project-${p.slug}`}
-									>
-										<div class="font-medium hover:underline">{p.display_name}</div>
-										<div class="truncate text-xs text-muted-foreground">{p.slug}</div>
-									</a>
-									<div class="flex gap-1">
-										<Button
-											variant="outline"
-											size="sm"
-											title="Open project — API contract, templates, settings"
-											onclick={() => goto(`/workspaces/${workspaceId}/projects/${p.id}`)}
-											data-testid={`btn-api-${p.slug}`}
-										>
-											<BookOpen class="size-3.5" />
-											API
-										</Button>
-										<Button
-											variant="ghost"
-											size="sm"
-											title="Copy OpenAPI bundle URL"
-											onclick={() => copyBundleUrl(p)}
-											data-testid={`btn-copy-bundle-${p.slug}`}
-										>
-											<Copy class="size-3.5" />
-										</Button>
-										<a
-											href={bundleUrl(p)}
-											target="_blank"
-											rel="noopener"
-											class="inline-flex h-8 items-center justify-center rounded-md px-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-											title="Open OpenAPI bundle in new tab"
-											data-testid={`link-open-bundle-${p.slug}`}
-										>
-											<ExternalLink class="size-3.5" />
-										</a>
-									</div>
-								</div>
-							</li>
-						{:else}
-							<li class="rounded-md border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
-								No projects yet
-							</li>
-						{/each}
-					</ul>
+						<ArrowRight class="size-4 text-muted-foreground" />
+					</a>
 				</CardContent>
 			</Card>
 		</div>
