@@ -3,8 +3,10 @@
 	// "Detail" / "Enroll here" deep-link `/fleet/{id}`), then DISPATCHES on its
 	// dispatch backend — mirroring the Control Plane's backend sections:
 	//
-	//   presence → [Board | Roster | Interfaces] sub-tabs SCOPED to that runner
-	//              group (the shared fleet components with their `group` filter).
+	//   presence → [Runners | Interfaces] sub-tabs SCOPED to that runner group. The
+	//              Runners tab is the consolidated roster (RunnerList) — the old
+	//              Board/Roster split was two views of the same data; the coverage
+	//              strip + pool-net link + live backends are folded into the roster.
 	//   queue    → a Workers view: the enrolled workers whose `group` is this
 	//              capacity's path, each a FleetCard (shared with WorkerPoolBoard).
 	//   tokens   → a Holders view: the seeded/in-use gauge + the live grant holders.
@@ -18,7 +20,6 @@
 	import UserPlus from '@lucide/svelte/icons/user-plus';
 	import Cpu from '@lucide/svelte/icons/cpu';
 	import KeyRound from '@lucide/svelte/icons/key-round';
-	import PresenceBoard from '$lib/components/fleet/PresenceBoard.svelte';
 	import RunnerList from '$lib/components/fleet/RunnerList.svelte';
 	import InterfacesCatalog from '$lib/components/fleet/InterfacesCatalog.svelte';
 	import EnrollSheet from '$lib/components/fleet/EnrollSheet.svelte';
@@ -32,7 +33,7 @@
 
 	let capacity = $state<CapacitySummary | null>(null);
 	let error = $state<string | null>(null);
-	let activeTab = $state<'board' | 'roster' | 'interfaces'>('board');
+	let activeTab = $state<'runners' | 'interfaces'>('runners');
 	let enrollOpen = $state(false);
 
 	// Workers in this queue group (loaded only for queue-backed capacities).
@@ -120,7 +121,9 @@
 					{/if}
 				</div>
 			</div>
-			{#if groupAlias && (backend === 'presence' || backend === 'queue')}
+			{#if groupAlias && backend === 'queue'}
+				<!-- Presence enroll lives in the runner-cards header row (RunnerList);
+					 the worker roster has no such row, so it keeps the header action. -->
 				<Button
 					variant="outline"
 					size="sm"
@@ -129,7 +132,7 @@
 					data-testid="group-enroll-here"
 				>
 					<UserPlus class="size-4" />
-					{backend === 'queue' ? 'Enroll worker here' : 'Enroll here'}
+					Enroll worker here
 				</Button>
 			{/if}
 		</div>
@@ -143,23 +146,21 @@
 		{/if}
 
 		{#if backend === 'presence' && groupAlias}
-			<!-- PRESENCE — Board / Roster / Interfaces, scoped to the runner group. -->
+			<!-- PRESENCE — one consolidated Runners roster + Interfaces, scoped to the
+				 runner group. -->
 			<Tabs.Root
 				value={activeTab}
 				onValueChange={(v) => (activeTab = v as typeof activeTab)}
 				class="mb-5"
 			>
 				<Tabs.List>
-					<Tabs.Trigger value="board" data-testid="group-tab-board">Board</Tabs.Trigger>
-					<Tabs.Trigger value="roster" data-testid="group-tab-roster">Roster</Tabs.Trigger>
+					<Tabs.Trigger value="runners" data-testid="group-tab-runners">Runners</Tabs.Trigger>
 					<Tabs.Trigger value="interfaces" data-testid="group-tab-interfaces">Interfaces</Tabs.Trigger>
 				</Tabs.List>
 			</Tabs.Root>
 
-			{#if activeTab === 'board'}
-				<PresenceBoard group={groupAlias} />
-			{:else if activeTab === 'roster'}
-				<RunnerList group={groupAlias} roster />
+			{#if activeTab === 'runners'}
+				<RunnerList group={groupAlias} roster onenroll={() => (enrollOpen = true)} />
 			{:else}
 				<InterfacesCatalog group={groupAlias} />
 			{/if}

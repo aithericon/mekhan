@@ -49,8 +49,8 @@ type PresenceById = Record<string, RunnerPresenceSnapshot | undefined>;
 /**
  * Constrain a runner list + its backing group resources to a single group alias.
  *
- * Used by the per-group detail views (PresenceBoard / RunnerList / InterfacesCatalog
- * given a `group` prop): keeps only the runners whose `group` matches `alias` and
+ * Used by the per-group detail views (RunnerList / InterfacesCatalog given a
+ * `group` prop): keeps only the runners whose `group` matches `alias` and
  * only the backing resource whose `path` matches. A `null`/`undefined` alias is the
  * no-op (the full cross-group lists pass through unchanged) — so the default,
  * unfiltered behaviour of every existing caller is preserved.

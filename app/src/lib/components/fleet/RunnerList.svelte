@@ -26,6 +26,7 @@
 	import Trash2 from '@lucide/svelte/icons/trash-2';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Info from '@lucide/svelte/icons/info';
+	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 	import {
 		listRunners,
 		getRunner,
@@ -45,6 +46,7 @@
 	import StatusDot from './StatusDot.svelte';
 	import BackendChips from './BackendChips.svelte';
 	import GroupSectionHeader from './GroupSectionHeader.svelte';
+	import CoverageStrip from './CoverageStrip.svelte';
 	import FleetEmpty from './FleetEmpty.svelte';
 	import EnrollSheet from './EnrollSheet.svelte';
 
@@ -54,10 +56,15 @@
 		 *  fleet split into sections (the Control Plane's runner-management panel). */
 		group?: string | null;
 		/** Roster mode: a per-group view (used by /fleet/[id]). Hides the
-		 *  group-section chrome (there is only one group) and scopes Enroll to it. */
+		 *  group-section chrome (there is only one group), adds the per-group
+		 *  coverage strip + pool-net link + freshness, and delegates Enroll to the
+		 *  page header (the single enroll action) via `onenroll`. */
 		roster?: boolean;
+		/** Roster-mode enroll handler — invoked instead of the in-component sheet so
+		 *  the page header's "Enroll here" is the one and only enroll affordance. */
+		onenroll?: () => void;
 	};
-	let { group = null, roster = false }: Props = $props();
+	let { group = null, roster = false, onenroll }: Props = $props();
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +74,7 @@
 	let tokens = $state<RegistrationTokenSummary[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let lastUpdated = $state<Date | null>(null);
 
 	// Filters
 	let onlineFilter = $state<'all' | 'online'>('all');
@@ -92,6 +100,29 @@
 	/** The fleet split into ordered sections (backed → unbacked → ungrouped). */
 	const sections = $derived(groupFleet(runners, presenceById, groups));
 
+	/** The backing group resource (for the pool-net deep-link), roster mode only. */
+	const groupResource = $derived<ResourceSummary | null>(groups[0] ?? null);
+
+	/** Per-backend coverage for THIS group: how many present runners advertise each
+	 *  backend — the strip that used to live on the (now-folded-in) Board. */
+	const coverage = $derived.by<{ backend: string; count: number }[]>(() => {
+		const counts = new Map<string, number>();
+		for (const r of runners) {
+			const snap = presenceById[r.id];
+			if (!snap?.present) continue;
+			for (const be of snap.backends ?? []) counts.set(be, (counts.get(be) ?? 0) + 1);
+		}
+		return [...counts.entries()]
+			.map(([backend, count]) => ({ backend, count }))
+			.sort((a, b) => a.backend.localeCompare(b.backend));
+	});
+
+	/** A runner's live backends (only meaningful while present). */
+	function liveBackends(id: string): string[] {
+		const snap = presenceById[id];
+		return snap?.present ? (snap.backends ?? []) : [];
+	}
+
 	/** Apply the online-only filter to a section's runners for display. */
 	function shown(section: FleetSection): RunnerSummary[] {
 		if (onlineFilter !== 'online') return section.runners;
@@ -100,8 +131,8 @@
 
 	// ── Load ───────────────────────────────────────────────────────────────────
 
-	async function load() {
-		loading = true;
+	async function load(silent = false) {
+		if (!silent) loading = true;
 		error = null;
 		try {
 			const [rPage, pSnaps, gPage, tPage] = await Promise.all([
@@ -120,6 +151,7 @@
 			runners = filtered.runners;
 			groups = filtered.groupResources;
 			tokens = group == null ? tPage.items : tPage.items.filter((t) => t.group === group);
+			lastUpdated = new Date();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load runners';
 			runners = [];
@@ -129,7 +161,11 @@
 	}
 
 	$effect(() => {
-		load();
+		void load();
+		// Roster (per-group detail) refreshes presence live, like the old Board did.
+		if (!roster) return;
+		const t = setInterval(() => void load(true), 5000);
+		return () => clearInterval(t);
 	});
 
 	// ── Actions ────────────────────────────────────────────────────────────────
@@ -207,14 +243,16 @@
 	}
 
 	function openEnroll() {
-		enrollOpen = true;
+		// Roster mode defers to the page header's single "Enroll here" action; the
+		// full-fleet mode owns its own sheet.
+		if (roster) onenroll?.();
+		else enrollOpen = true;
 	}
 </script>
 
 <!-- ── Toolbar ──────────────────────────────────────────────────────────────── -->
 <div class="space-y-4" data-testid="runner-list">
-	<div class="flex flex-wrap items-center gap-3">
-		<!-- Online/all filter -->
+	{#snippet statusFilter()}
 		<div class="flex items-center gap-2">
 			<span class="text-sm font-medium text-muted-foreground">Status</span>
 			<Select.Root
@@ -231,18 +269,69 @@
 				</Select.Content>
 			</Select.Root>
 		</div>
+	{/snippet}
 
-		<Button
-			variant="default"
-			size="sm"
-			onclick={openEnroll}
-			class="ml-auto gap-1.5"
-			data-testid="runner-enroll-button"
-		>
-			<Plus class="size-4" />
-			New runner
-		</Button>
-	</div>
+	{#if roster}
+		<!-- Info band: per-group backend coverage + poll freshness (the group name /
+			 online count already live in the page header). -->
+		{#if coverage.length > 0 || lastUpdated}
+			<div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+				<CoverageStrip entries={coverage} />
+				{#if lastUpdated}
+					<span class="text-sm tabular-nums text-muted-foreground"
+						>updated {lastUpdated.toLocaleTimeString()}</span
+					>
+				{/if}
+			</div>
+		{/if}
+
+		<!-- Runner-cards header row: title + status filter on the left, the two
+			 actions (View pool net · Enroll here) on the right. -->
+		<div class="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+			<div class="flex items-center gap-3">
+				<h3 class="text-sm font-semibold text-foreground">Runners</h3>
+				{@render statusFilter()}
+			</div>
+			<div class="flex items-center gap-2">
+				{#if groupResource}
+					<Button
+						href="/nets/pool-{groupResource.id}"
+						variant="outline"
+						size="sm"
+						class="gap-1.5"
+						data-testid="view-pool-net"
+					>
+						<ArrowUpRight class="size-4" />
+						View pool net
+					</Button>
+				{/if}
+				<Button
+					variant="default"
+					size="sm"
+					onclick={openEnroll}
+					class="gap-1.5"
+					data-testid="runner-enroll-button"
+				>
+					<Plus class="size-4" />
+					Enroll here
+				</Button>
+			</div>
+		</div>
+	{:else}
+		<div class="flex flex-wrap items-center gap-3">
+			{@render statusFilter()}
+			<Button
+				variant="default"
+				size="sm"
+				onclick={openEnroll}
+				class="ml-auto gap-1.5"
+				data-testid="runner-enroll-button"
+			>
+				<Plus class="size-4" />
+				New runner
+			</Button>
+		</div>
+	{/if}
 
 	<!-- ── Error ──────────────────────────────────────────────────────────────── -->
 	{#if error}
@@ -317,6 +406,11 @@
 											<p class="mt-1 truncate font-mono text-sm text-muted-foreground">
 												{runner.id}
 											</p>
+											{#if online && liveBackends(runner.id).length > 0}
+												<div class="mt-1.5">
+													<BackendChips backends={liveBackends(runner.id)} />
+												</div>
+											{/if}
 											<p class="mt-0.5 truncate text-sm text-muted-foreground">
 												Caps: <span class="font-mono"
 													>{capsSummary(runner.capabilities as Record<string, unknown>)}</span
@@ -406,8 +500,11 @@
 	{/if}
 </div>
 
-<!-- ── Enroll sheet (mint + reveal-once) ───────────────────────────────────── -->
-<EnrollSheet bind:open={enrollOpen} group={roster ? group : null} onenrolled={load} />
+<!-- ── Enroll sheet (mint + reveal-once) — full-fleet mode only; roster defers to
+	 the page header's single "Enroll here". ───────────────────────────────── -->
+{#if !roster}
+	<EnrollSheet bind:open={enrollOpen} group={null} onenrolled={load} />
+{/if}
 
 <!-- ── Runner detail drawer ────────────────────────────────────────────────── -->
 <Sheet.Root
