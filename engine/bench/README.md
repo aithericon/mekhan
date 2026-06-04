@@ -24,12 +24,19 @@ from the expensive, infra-dependent ones.
   NATS, no Docker, no engine HTTP server, nothing to start first.** This makes
   L1 deterministic, fast, and CI-friendly. Everything below is L1.
 
-- **L2 — live-driver macro-benchmarks (TODO, deferred).**
-  A future layer that drives a *running* engine over NATS to measure
-  end-to-end throughput, cross-net concurrency, and wake/hibernate latency —
-  the things that only exist once the real streaming/eventing stack is in the
-  loop. L2 will need infra up (`just infra nats-up`, etc.) and is intentionally
-  **not** part of L1. Marked TODO.
+- **L2 — live-driver macro-benchmarks (`live` binary, partially implemented).**
+  Drives a *running* `core-engine` over HTTP (which routes every append through
+  NATS/JetStream internally), so the same generator measured in L1 and L2 lets
+  you read the **I/O tax** directly as the difference. Needs a live engine
+  (`just infra nats-up && just run` → NATS :4333, engine :3030). Implemented:
+  `throughput` (write-path events/sec) and `concurrency` (does the single
+  `PETRI_GLOBAL` stream serialize concurrent nets?). **Deferred:** `wake`
+  (cold-rehydration I/O cost) — it needs a reliable net-eviction trigger, and
+  idle-hibernation did not evict nets within a usable window in testing (they
+  stayed `in_memory: true`), making a `wake` call a no-op on a hot net. The
+  correct measurement is restart-based (events persist in `PETRI_GLOBAL` across
+  a cold boot; the net rehydrates on first access) and is recipe-level
+  orchestration — a follow-up.
 
 ## Scaling axes
 
@@ -94,6 +101,13 @@ just bench match 2 100 7   # arity, tokens-per-place, samples
 just bench results         # list emitted JSON artifacts
 ```
 
+L2 (needs a running engine — `just infra nats-up && just run` in another shell):
+
+```bash
+just bench live-throughput 1000 5       # write-path events/sec
+just bench live-concurrency 32 100 5    # M nets at once; per-net work = 100
+```
+
 Each rung's size ladder is filtered to the `--max-*` cap. Only the measured op
 is timed (`std::time::Instant` brackets it); net construction / log building
 happens outside the timed region. Timings are summarized with nearest-rank
@@ -109,9 +123,9 @@ crate root (`CARGO_MANIFEST_DIR`), so it is CWD-independent.
 {
   "schema_version": 1,
   "run":     { "git_sha": "<short>", "timestamp_ms": 0, "host": "<name>", "profile": "debug|release" },
-  "layer":   "L1",
-  "axis":    "rehydration | single_net_eval | selection | binding",
-  "scenario":"replay_chain | eval_chain | eval_branches | eval_fanin | selection_branches | binding_a<arity>",
+  "layer":   "L1 | L2",
+  "axis":    "rehydration | single_net_eval | selection | binding | live_throughput | live_concurrency",
+  "scenario":"replay_chain | eval_chain | eval_branches | eval_fanin | selection_branches | binding_a<arity> | throughput_fanin | concurrency_fanin",
   "params":  { "...": "arbitrary, e.g. {\"n_events\":10000,\"shape\":\"ring4\"}" },
   "metrics": {
     "wall_ms": { "p50": 0, "p95": 0, "p99": 0, "mean": 0, "n": 7 },

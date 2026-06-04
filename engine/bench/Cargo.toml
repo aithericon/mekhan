@@ -12,8 +12,18 @@ aithericon-sdk    = { path = "../sdk" }
 serde             = { workspace = true }
 serde_json        = { workspace = true }
 tokio             = { workspace = true }
-clap              = { version = "4", features = ["derive"] }
+clap              = { version = "4", features = ["derive", "env"] }
+
+# L2 (live-driver) deps — only the `live` binary uses these. HTTP-only: the
+# engine routes every append through NATS internally, so `evaluate` wall-time
+# already captures the I/O tax. A direct NATS per-append-latency probe is a
+# future refinement (would add async-nats + futures).
+reqwest           = { workspace = true }
 
 [[bin]]
 name = "sweep"
 path = "src/bin/sweep.rs"
+
+[[bin]]
+name = "live"
+path = "src/bin/live.rs"

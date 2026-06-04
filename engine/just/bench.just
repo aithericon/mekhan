@@ -15,6 +15,10 @@
 #   just bench selection [max] [samples]
 #   just bench match [arity] [max] [samples]  (max = tokens-per-place; combos = max^arity)
 #   just bench results                        (list emitted JSON artifacts)
+#
+# L2 (live-engine; needs `just infra nats-up && just run` first):
+#   just bench live-throughput [max] [samples]
+#   just bench live-concurrency [max] [per-net] [samples]
 
 # Rehydration / replay axis: project a synthetic event log into a marking.
 replay max="30000" samples="7":
@@ -33,6 +37,20 @@ selection max="1000" samples="7":
 match arity="2" max="100" samples="7":
     cargo run --release -p petri-bench -- match --arity {{arity}} --max-tokens {{max}} --samples {{samples}}
 
-# List the JSON result artifacts emitted so far.
+# ---------------------------------------------------------------------------
+# L2 — live-engine macro-benchmarks. These REQUIRE a running core-engine.
+# Bring one up first (separate terminal):  just infra nats-up && just run
+# (NATS :4333, engine :3030). Override target with PETRI_ENGINE_URL.
+# ---------------------------------------------------------------------------
+
+# Write-path throughput: fire N transitions through one live net (incl. NATS).
+live-throughput max="1000" samples="5":
+    cargo run --release -p petri-bench --bin live -- throughput --max-events {{max}} --samples {{samples}}
+
+# Concurrent-net contention: evaluate M nets at once, vary M.
+live-concurrency max="32" per-net="100" samples="5":
+    cargo run --release -p petri-bench --bin live -- concurrency --max-nets {{max}} --per-net {{per-net}} --samples {{samples}}
+
+# List the JSON result artifacts emitted so far. (CWD here is engine/just.)
 results:
-    @ls -1 /Users/milanender/AithericonResearch/aithericon-platform/.claude/worktrees/bench-harness/engine/bench/results/*.json 2>/dev/null || echo "no results yet"
+    @ls -1 ../bench/results/*.json 2>/dev/null || echo "no results yet"
