@@ -16,7 +16,7 @@ pub mod staging;
 
 pub use batch::BatchRunner;
 pub use cancel::{CancellationRegistry, NatsCancelListener};
-pub use chunks::{ChunkRegistry, NatsChunkListener};
+pub use chunks::{datastream_subject, JetStreamTransport, StreamTransport};
 pub use completion::CompletionTracker;
 pub use config::{
     CancelConfig, CleanupPolicy, ExecutorConfig, JobSource, Lifetime, PythonCacheConfig,

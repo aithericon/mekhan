@@ -359,6 +359,13 @@ fn every_numbered_demo_has_a_snapshot_test_or_is_documented_skip() {
         // capability match + the `send_action_goal` streaming feedback path are
         // proven live by `just dev ros-up` + `mekhan test`.
         "29-turtle-rotate",
+        // 30-xarm-joint-move (ROS / xArm) is the same shape as 28/29: its ros
+        // AutomatedSteps target the `xarm_fleet` runner_group via
+        // `deploymentModel.capacity.alias` and carry a `ros` capability
+        // Requirement — neither resolvable by bare `compile_to_air` (empty
+        // KnownResources/capability registry). Proven live by
+        // `just dev xarm-up` + `mekhan test`.
+        "30-xarm-joint-move",
     ]
     .into_iter()
     .collect();

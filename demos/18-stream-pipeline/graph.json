@@ -18,8 +18,10 @@
       "data": {
         "type": "automated_step",
         "label": "Producer",
-        "description": "Emits one lowercase word chunk per set_output, mid-execution, on its stream side-channel.",
-        "streamOutput": true,
+        "description": "Stage 1: opens a Data/Out channel 'lower' and writes one lowercase word element per write, over the out-of-band transport.",
+        "channels": [
+          { "name": "lower", "direction": "out", "plane": "data", "element": { "type": "any" } }
+        ],
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -35,9 +37,11 @@
       "data": {
         "type": "automated_step",
         "label": "Uppercase Transform",
-        "description": "Stream consumer AND producer: receives the producer's chunks via chunks(), uppercases each, and re-streams it via set_output (streamInput + streamOutput).",
-        "streamInput": true,
-        "streamOutput": true,
+        "description": "Stage 2: a streaming transform — BOTH reader and writer. Declares a Data/In channel 'lower' (drained via stream('lower')) and a Data/Out channel 'upper' (written via open_output('upper')). Maps each element (uppercase) straight through; folds nothing.",
+        "channels": [
+          { "name": "lower", "direction": "in", "plane": "data", "element": { "type": "any" } },
+          { "name": "upper", "direction": "out", "plane": "data", "element": { "type": "any" } }
+        ],
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -53,8 +57,10 @@
       "data": {
         "type": "automated_step",
         "label": "Reducer",
-        "description": "streamInput reducer: receives the transform's uppercased chunks via chunks() and concatenates them into the final transcript.",
-        "streamInput": true,
+        "description": "Stage 3: declares a Data/In channel 'upper' wired from the transform's open handle, drains it via stream('upper'), and concatenates the already-uppercased elements into the final transcript.",
+        "channels": [
+          { "name": "upper", "direction": "in", "plane": "data", "element": { "type": "any" } }
+        ],
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -82,10 +88,8 @@
   ],
   "edges": [
     { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "transform", "targetHandle": "stream", "type": "sequence" },
-    { "id": "e_producer_control", "source": "producer", "target": "transform", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_transform_stream", "source": "transform", "sourceHandle": "stream", "target": "reducer", "targetHandle": "stream", "type": "sequence" },
-    { "id": "e_transform_control", "source": "transform", "target": "reducer", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_producer_lower_transform", "source": "producer", "sourceHandle": "lower", "target": "transform", "targetHandle": "lower", "type": "sequence" },
+    { "id": "e_transform_upper_reducer", "source": "transform", "sourceHandle": "upper", "target": "reducer", "targetHandle": "upper", "type": "sequence" },
     { "id": "e_reducer_end", "source": "reducer", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

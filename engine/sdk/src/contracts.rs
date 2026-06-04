@@ -66,6 +66,12 @@ pub struct ExecutorSubmit<'a> {
     pub output: Option<&'a PlaceHandle<DynamicToken>>,
     /// Optional signal place for log message events.
     pub log: Option<&'a PlaceHandle<DynamicToken>>,
+    /// Optional control-emit inbox place (streaming channels, docs/25). When
+    /// set, the job's routing meta carries `event_routes["control_emit"]` →
+    /// this place id, so the `ExecutorWatcher` deposits a mid-execution
+    /// `ControlEmitEvent` here for the node's `control_emit` transition to fan
+    /// out. Only wired when the AutomatedStep declares ≥1 OUT control channel.
+    pub control_in: Option<&'a PlaceHandle<DynamicToken>>,
 
     // ── Process context (optional) ──────────────────────────────────────
     /// Optional process ID for workflow event correlation.

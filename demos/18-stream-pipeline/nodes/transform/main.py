@@ -1,18 +1,20 @@
-# Transform — stage 2: a streaming map that is BOTH consumer and producer.
+# Transform — stage 2: a streaming transform, BOTH reader and writer (docs/25).
 #
-# This AutomatedStep has streamInput=true AND streamOutput=true:
-#   - streamInput: it is seeded at net entry (starts immediately) and receives
-#     the producer's chunks as they arrive over IPC via aithericon.chunks().
-#   - streamOutput: each set_output(...) call re-emits a chunk on THIS node's
-#     own stream side-channel, mid-execution, which the downstream reducer
-#     consumes via its own aithericon.chunks().
+# This step declares a Data/In channel "lower" AND a Data/Out channel "upper"
+# (graph.json), so it is simultaneously a stream consumer and producer:
+#   - IN: `aithericon.stream("lower")` drains the producer's byte stream as
+#     elements arrive (starting EARLY, when the producer's `open` reaches us).
+#   - OUT: `open_output("upper")` opens our own downstream stream; each
+#     `out.write(...)` re-emits a mapped element the reducer drains.
 #
-# So the transform folds NOTHING — it maps each chunk (uppercase here) and
-# streams the result straight through. The producer's completion (producer.out →
-# this node's `in`) is the EOF that ends our chunks() loop; our own completion
-# (this node's `out`, carrying our stream_count) is the EOF for the reducer.
+# So the transform folds NOTHING — it maps each element (uppercase) and streams
+# the result straight through. Wrapping the read loop inside the `open_output`
+# context means our `open` fires up front (reducer starts immediately) and our
+# `close` fires once the producer's stream ends and we have re-emitted every
+# element.
 
-from aithericon import chunks, set_output
+from aithericon import open_output, stream
 
-for i, chunk in enumerate(chunks()):
-    set_output(f"upper_{i}", str(chunk).upper())
+with open_output("upper") as out:
+    for word in stream("lower"):
+        out.write(str(word).upper())

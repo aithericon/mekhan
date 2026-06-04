@@ -99,6 +99,7 @@ async fn test_spec_env_vars() {
         priority: JobPriority::Medium,
         stream_events: None,
         feed_chunks: false,
+        channels: Vec::new(),
         wrapped_secrets: None,
     };
 

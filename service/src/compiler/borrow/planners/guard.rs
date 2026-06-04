@@ -791,14 +791,7 @@ pub(crate) fn guard_readarc_plan(
             // exactly like a Loop condition borrows its counter. Without this
             // arm no read-arc into the producer's parked place is synthesized
             // and the scatter resolves `__src` to `()` → zero items.
-            // A STREAMING Map (`stream_source`) has no `itemsRef` — its elements
-            // arrive on the `stream` edge as live tokens, not via a read-arc into
-            // a producer's parked place — so it must NOT synthesize one.
-            WorkflowNodeData::Map {
-                items_ref,
-                stream_source,
-                ..
-            } if !stream_source && !items_ref.trim().is_empty() => {
+            WorkflowNodeData::Map { items_ref, .. } if !items_ref.trim().is_empty() => {
                 vec![items_ref.clone()]
             }
             // A `Scheduled { operation: Submit }` AutomatedStep nested in a lease

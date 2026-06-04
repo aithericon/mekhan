@@ -241,6 +241,7 @@ fn definition(ctx: &mut Context) {
             catalogue: true,
             process: false,
             stream_output: None,
+            control_in: None,
         },
     );
 

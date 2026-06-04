@@ -16,11 +16,13 @@ pub mod status;
 pub use artifact::{Artifact, ArtifactCategory, ArtifactManifest};
 pub use batch::{BatchManifest, BatchResult, JobResult};
 pub use error::ExecutorError;
-pub use event::{EventCategory, ExecutionEvent, StagedEvent, StatusDetail};
+pub use event::{
+    ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, StagedEvent, StatusDetail,
+};
 pub use execute_contract::{ExecuteRequest, ExecuteResponse};
 pub use job::{
-    ExecutionJob, ExecutionSpec, InputDeclaration, InputSource, JobPriority, OutputDeclaration,
-    OutputUploadConfig,
+    ChannelManifestEntry, ExecutionJob, ExecutionSpec, InputDeclaration, InputSource, JobPriority,
+    OutputDeclaration, OutputUploadConfig,
 };
 pub use llm::{LlmStopReason, LlmToolCall, LlmTurnResult, LlmUsage, ToolSchema};
 pub use logs::{LogBatch, LogEntry, LogLevel, LogSummary};
@@ -103,6 +105,7 @@ mod tests {
             priority: JobPriority::High,
             stream_events: Some(vec![EventCategory::Metric, EventCategory::Log]),
             feed_chunks: false,
+            channels: Vec::new(),
             wrapped_secrets: None,
         };
 
@@ -153,6 +156,7 @@ mod tests {
             priority: JobPriority::Medium,
             stream_events: None,
             feed_chunks: false,
+            channels: Vec::new(),
             wrapped_secrets: None,
         };
 
@@ -194,6 +198,7 @@ mod tests {
             priority: JobPriority::Medium,
             stream_events: Some(vec![EventCategory::Metric, EventCategory::Log]),
             feed_chunks: false,
+            channels: Vec::new(),
             wrapped_secrets: None,
         };
         let json = serde_json::to_string(&job).unwrap();
@@ -453,6 +458,7 @@ mod tests {
             priority: JobPriority::Medium,
             stream_events: None,
             feed_chunks: false,
+            channels: Vec::new(),
             wrapped_secrets: None,
         };
 

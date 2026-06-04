@@ -10700,6 +10700,64 @@
           }
         }
       },
+      "Channel": {
+        "type": "object",
+        "description": "A statically-declared, typed port on an [`AutomatedStep`]. The job emits\n(`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized\nplace at runtime; the net wires edges to it by `name`. `contract` is set\nonly on `Control`-plane channels (the firing semantics); `max_fanout` caps\na `Scatter`'s fan-out width.",
+        "required": [
+          "name",
+          "direction",
+          "plane",
+          "element"
+        ],
+        "properties": {
+          "contract": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ControlContract"
+              }
+            ]
+          },
+          "direction": {
+            "$ref": "#/components/schemas/ChannelDirection"
+          },
+          "element": {
+            "$ref": "#/components/schemas/ElementType"
+          },
+          "max_fanout": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/ChannelPlane"
+          }
+        }
+      },
+      "ChannelDirection": {
+        "type": "string",
+        "description": "Which way a [`Channel`] flows relative to its owning node: `In` consumes\ntokens the node reads, `Out` produces tokens the node emits.",
+        "enum": [
+          "in",
+          "out"
+        ]
+      },
+      "ChannelPlane": {
+        "type": "string",
+        "description": "Which net plane a [`Channel`] rides on: `Control` carries slim control\ntokens that drive net firing (the borrow resolver can reference their\npayload fields downstream); `Data` carries out-of-band element payloads\n(large/binary), edge-wired only and never value-referenceable.",
+        "enum": [
+          "data",
+          "control"
+        ]
+      },
       "ChatMessage": {
         "type": "object",
         "description": "A single message in conversation history.\n\n`content` is a JSON value, not a bare string, because tool-result\nmessages (`role: tool`) carry the structured tool output directly; the\nadapters render it to the string each provider's wire format expects.\nText turns (system/user/assistant) carry a JSON string.",
@@ -11219,6 +11277,14 @@
           "none",
           "drop_oldest",
           "summarize_oldest"
+        ]
+      },
+      "ControlContract": {
+        "type": "string",
+        "description": "The firing contract of a CONTROL [`Channel`]: `Signal` deposits one token\nper emission (fire-and-forget downstream); `Scatter` fans out instance-\ncolored items closed by a count, sized at the gather barrier by `max_fanout`.",
+        "enum": [
+          "signal",
+          "scatter"
         ]
       },
       "CopyConfig": {
@@ -12303,6 +12369,59 @@
             "type": "string"
           }
         }
+      },
+      "ElementType": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "schema",
+              "type"
+            ],
+            "properties": {
+              "schema": {},
+              "type": {
+                "type": "string",
+                "enum": [
+                  "json"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "content_type",
+              "type"
+            ],
+            "properties": {
+              "content_type": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "binary"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "any"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The element type a [`Channel`] carries. `Json` declares a schema the\ncompiler typechecks against the `SchemaRegistry`; `Binary` carries opaque\nbytes tagged by `content_type`; `Any` is an untyped passthrough."
       },
       "Eligibility": {
         "type": "string",
@@ -18428,81 +18547,6 @@
           }
         }
       },
-      "StreamReduce": {
-        "oneOf": [
-          {
-            "type": "object",
-            "description": "Ordered array — sort chunks by stream sequence, project each `.value`\ninto a `Vec`. The default (matches Map's gather reduce).",
-            "required": [
-              "kind"
-            ],
-            "properties": {
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "array"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "String-join the chunk `.value`s (rendered as strings) in stream order,\noptionally separated by `sep`.",
-            "required": [
-              "kind"
-            ],
-            "properties": {
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "concat"
-                ]
-              },
-              "sep": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Numeric sum of the chunk `.value`s, in stream order.",
-            "required": [
-              "kind"
-            ],
-            "properties": {
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "sum"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Author-supplied Rhai over `__r` (the sorted array of\n`#{ value, __map_idx, __map_id }`), returning the reduced value.",
-            "required": [
-              "expr",
-              "kind"
-            ],
-            "properties": {
-              "expr": {
-                "type": "string"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "custom"
-                ]
-              }
-            }
-          }
-        ],
-        "description": "How a `StreamFold` folds the drained chunks into its single output token.\nTagged on `kind` (camelCase), mirroring the serde conventions of the other\nconfig enums. Each variant selects the gather barrier's reduce Rhai in\n`compiler/lower/stream_fold.rs`."
-      },
       "TaskBlockConfig": {
         "oneOf": [
           {
@@ -20692,7 +20736,14 @@
                 "items": {
                   "$ref": "#/components/schemas/AssetBinding"
                 },
-                "description": "Node-level asset bindings (docs/20 §5). Each entry stages an asset's\nwhole record collection as an ordinary input (`<alias>.json`) the\nnode code reads. `#[serde(default)]` ⇒ existing templates (field\nabsent → empty) round-trip unchanged (same precedent as\n`deployment_model`/`stream_output`)."
+                "description": "Node-level asset bindings (docs/20 §5). Each entry stages an asset's\nwhole record collection as an ordinary input (`<alias>.json`) the\nnode code reads. `#[serde(default)]` ⇒ existing templates (field\nabsent → empty) round-trip unchanged (same precedent as\n`deployment_model`/`channels`)."
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Channel"
+                },
+                "description": "Statically-declared streaming [`Channel`]s (docs/25). Each control-\noutput channel synthesizes a place `p_{id}_{name}` the job emits into\nat runtime via `emit`/`scatter`; downstream edges wire to it by\n`sourceHandle`/`targetHandle == name`. `#[serde(default)]` ⇒ existing\ntemplates (field absent → empty) round-trip unchanged."
               },
               "deploymentModel": {
                 "$ref": "#/components/schemas/DeploymentModel",
@@ -20732,14 +20783,6 @@
               "retryPolicy": {
                 "$ref": "#/components/schemas/RetryPolicy",
                 "description": "Retry behaviour on execution failure/timeout. Defaults to 3\nimmediate retries (the historical hardcoded value), so existing\ntemplates keep their prior semantics without re-authoring."
-              },
-              "streamInput": {
-                "type": "boolean",
-                "description": "Opt-in streaming CONSUMER. When `true`, the node exposes a second\nINPUT port \"stream\" and becomes a long-lived stateful reducer: it is\nseeded at net entry, receives the upstream producer's chunks over IPC\n(`aithericon.chunks()`), and folds them in-process. Wire the\nproducer's `stream` handle to this node's `stream` input and its\ncontrol `out` to this node's `in` (the control token's arrival is the\nend-of-stream / EOF trigger, carrying `stream_count`). The compiler\nderives the executor `feed_chunks` flag from this. Plain `bool` +\n`#[serde(default)]` ⇒ existing templates round-trip unchanged."
-              },
-              "streamOutput": {
-                "type": "boolean",
-                "description": "PROTOTYPE — opt-in streaming side-channel. When `true`, the node\nexposes a second output port \"stream\" and the compiler synthesizes a\nSignal place `p_{id}_stream` that receives ONE token per executor\n`EventCategory::Log` event (Python `log_info()/log_debug()/…`). An\nedge from the \"stream\" handle fires the downstream node once per log\ntoken; the normal \"out\" control token still governs termination.\nPlain `bool` + `#[serde(default)]` ⇒ existing templates (field\nabsent → `false`) round-trip unchanged (same precedent as\n`retry_policy`/`deployment_model`)."
               },
               "type": {
                 "type": "string",
@@ -20970,7 +21013,7 @@
               },
               "itemsRef": {
                 "type": "string",
-                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`. IGNORED when\n`stream_source` is set (a streaming Map sources elements from its\n`stream`/`control` edges, not a static array)."
+                "description": "Producer-namespaced reference to the array to scatter, carrying\nexactly one `[*]` boundary at iteration time (resolved through the\nRepeater items-ref machinery), e.g. `extract.tasks`."
               },
               "label": {
                 "type": "string"
@@ -20990,47 +21033,10 @@
                 "type": "string",
                 "description": "Field on each body output token whose value becomes the gathered\nelement (the per-iteration result the reduce collects)."
               },
-              "streamSource": {
-                "type": "boolean",
-                "description": "When `true`, this Map is a STREAMING map: instead of scattering the\nstatic `items_ref` array, it ingests a streaming producer's chunks\n(one element per chunk over the `stream` handle) and sizes its gather\nbarrier on the runtime `stream_count` (from the `control` handle).\nParallel-only — bodies fan out concurrently exactly like the array\npath; `__map_idx` (the producer sequence) restores order at the\ngather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps\nround-trip unchanged."
-              },
               "type": {
                 "type": "string",
                 "enum": [
                   "map"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "description": "Stream fold — drains a streaming producer's per-call `set_output` chunks\nand folds them into ONE output token via a declarative `reduce` strategy,\ngating completion behind an end-of-stream counted barrier sized by the\nproducer's `stream_count`. No body, no executor: the fold is pure Rhai in\nthe net. This is the clean extraction of the old `StreamConsumer`'s\ndefault `Rhai` dispatch; the body-dispatch streaming patterns live\nelsewhere now — per-chunk parallel map → a streaming-source `Map`;\nstateful in-process reduce → an `AutomatedStep` with `streamInput`. Parks\nthe reduced output write-once at `p_<id>_data` like Map.",
-            "required": [
-              "label",
-              "type"
-            ],
-            "properties": {
-              "description": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "label": {
-                "type": "string"
-              },
-              "reduce": {
-                "$ref": "#/components/schemas/StreamReduce",
-                "description": "How the drained chunks are folded into the single output token.\nDefaults to an ordered `Array` (sort by stream sequence, project\n`.value`)."
-              },
-              "resultVar": {
-                "type": "string",
-                "description": "Name of the output field that holds the reduced result; borrowable\ndownstream as `<slug>.<resultVar>`."
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "stream_fold"
                 ]
               }
             }

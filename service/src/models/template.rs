@@ -343,28 +343,13 @@ pub enum WorkflowNodeData {
         /// consolidation pivot).
         #[serde(rename = "deploymentModel", default)]
         deployment_model: DeploymentModel,
-        /// PROTOTYPE — opt-in streaming side-channel. When `true`, the node
-        /// exposes a second output port "stream" and the compiler synthesizes a
-        /// Signal place `p_{id}_stream` that receives ONE token per executor
-        /// `EventCategory::Log` event (Python `log_info()/log_debug()/…`). An
-        /// edge from the "stream" handle fires the downstream node once per log
-        /// token; the normal "out" control token still governs termination.
-        /// Plain `bool` + `#[serde(default)]` ⇒ existing templates (field
-        /// absent → `false`) round-trip unchanged (same precedent as
-        /// `retry_policy`/`deployment_model`).
-        #[serde(rename = "streamOutput", default)]
-        stream_output: bool,
-        /// Opt-in streaming CONSUMER. When `true`, the node exposes a second
-        /// INPUT port "stream" and becomes a long-lived stateful reducer: it is
-        /// seeded at net entry, receives the upstream producer's chunks over IPC
-        /// (`aithericon.chunks()`), and folds them in-process. Wire the
-        /// producer's `stream` handle to this node's `stream` input and its
-        /// control `out` to this node's `in` (the control token's arrival is the
-        /// end-of-stream / EOF trigger, carrying `stream_count`). The compiler
-        /// derives the executor `feed_chunks` flag from this. Plain `bool` +
-        /// `#[serde(default)]` ⇒ existing templates round-trip unchanged.
-        #[serde(rename = "streamInput", default)]
-        stream_input: bool,
+        /// Statically-declared streaming [`Channel`]s (docs/25). Each control-
+        /// output channel synthesizes a place `p_{id}_{name}` the job emits into
+        /// at runtime via `emit`/`scatter`; downstream edges wire to it by
+        /// `sourceHandle`/`targetHandle == name`. `#[serde(default)]` ⇒ existing
+        /// templates (field absent → empty) round-trip unchanged.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        channels: Vec<Channel>,
         /// Phase 4 — placement Requirements on a PRESENCE-pooled step. A set of
         /// typed [`Constraint`]s over the pool unit's advertised `caps` (the
         /// `runners.capabilities` blob keyed by capability name). At claim time
@@ -385,7 +370,7 @@ pub enum WorkflowNodeData {
         /// whole record collection as an ordinary input (`<alias>.json`) the
         /// node code reads. `#[serde(default)]` ⇒ existing templates (field
         /// absent → empty) round-trip unchanged (same precedent as
-        /// `deployment_model`/`stream_output`).
+        /// `deployment_model`/`channels`).
         #[serde(rename = "assetBindings", default, skip_serializing_if = "Vec::is_empty")]
         asset_bindings: Vec<AssetBinding>,
     },
@@ -509,21 +494,9 @@ pub enum WorkflowNodeData {
         description: Option<String>,
         /// Producer-namespaced reference to the array to scatter, carrying
         /// exactly one `[*]` boundary at iteration time (resolved through the
-        /// Repeater items-ref machinery), e.g. `extract.tasks`. IGNORED when
-        /// `stream_source` is set (a streaming Map sources elements from its
-        /// `stream`/`control` edges, not a static array).
+        /// Repeater items-ref machinery), e.g. `extract.tasks`.
         #[serde(rename = "itemsRef", default)]
         items_ref: String,
-        /// When `true`, this Map is a STREAMING map: instead of scattering the
-        /// static `items_ref` array, it ingests a streaming producer's chunks
-        /// (one element per chunk over the `stream` handle) and sizes its gather
-        /// barrier on the runtime `stream_count` (from the `control` handle).
-        /// Parallel-only — bodies fan out concurrently exactly like the array
-        /// path; `__map_idx` (the producer sequence) restores order at the
-        /// gather. Plain `bool` + `#[serde(default)]` ⇒ array-source Maps
-        /// round-trip unchanged.
-        #[serde(rename = "streamSource", default)]
-        stream_source: bool,
         /// Identifier the per-item element is bound to on each body token.
         /// Body guards / Python read `<item_var>.<field>`. Defaults to `item`.
         #[serde(rename = "itemVar", default = "default_item_var")]
@@ -536,30 +509,6 @@ pub enum WorkflowNodeData {
         /// element. Drives the `<map_slug>[*].<field>` borrow surface.
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<Port>,
-    },
-    /// Stream fold — drains a streaming producer's per-call `set_output` chunks
-    /// and folds them into ONE output token via a declarative `reduce` strategy,
-    /// gating completion behind an end-of-stream counted barrier sized by the
-    /// producer's `stream_count`. No body, no executor: the fold is pure Rhai in
-    /// the net. This is the clean extraction of the old `StreamConsumer`'s
-    /// default `Rhai` dispatch; the body-dispatch streaming patterns live
-    /// elsewhere now — per-chunk parallel map → a streaming-source `Map`;
-    /// stateful in-process reduce → an `AutomatedStep` with `streamInput`. Parks
-    /// the reduced output write-once at `p_<id>_data` like Map.
-    #[serde(rename = "stream_fold")]
-    StreamFold {
-        label: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-        /// Name of the output field that holds the reduced result; borrowable
-        /// downstream as `<slug>.<resultVar>`.
-        #[serde(rename = "resultVar", default = "default_stream_result_var")]
-        result_var: String,
-        /// How the drained chunks are folded into the single output token.
-        /// Defaults to an ordered `Array` (sort by stream sequence, project
-        /// `.value`).
-        #[serde(default)]
-        reduce: StreamReduce,
     },
     /// Pass-through control node that marks a named phase on the owning HPI
     /// process. Compiles to a shape transition (forwards the workflow token
@@ -872,7 +821,6 @@ impl WorkflowNodeData {
             | Self::Scope { label, .. }
             | Self::LeaseScope { label, .. }
             | Self::Map { label, .. }
-            | Self::StreamFold { label, .. }
             | Self::PhaseUpdate { label, .. }
             | Self::ProgressUpdate { label, .. }
             | Self::Failure { label, .. }
@@ -906,7 +854,6 @@ impl WorkflowNodeData {
             | Self::Scope { description, .. }
             | Self::LeaseScope { description, .. }
             | Self::Map { description, .. }
-            | Self::StreamFold { description, .. }
             | Self::PhaseUpdate { description, .. }
             | Self::ProgressUpdate { description, .. }
             | Self::Failure { description, .. }
@@ -1562,34 +1509,63 @@ fn default_item_var() -> String {
     "item".to_string()
 }
 
-/// Default `StreamFold.result_var` — chunks bind their value as `item`.
-fn default_stream_result_var() -> String {
-    "item".to_string()
+/// Which way a [`Channel`] flows relative to its owning node: `In` consumes
+/// tokens the node reads, `Out` produces tokens the node emits.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelDirection {
+    In,
+    Out,
 }
 
-/// How a `StreamFold` folds the drained chunks into its single output token.
-/// Tagged on `kind` (camelCase), mirroring the serde conventions of the other
-/// config enums. Each variant selects the gather barrier's reduce Rhai in
-/// `compiler/lower/stream_fold.rs`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-#[derive(Default)]
-pub enum StreamReduce {
-    /// Ordered array — sort chunks by stream sequence, project each `.value`
-    /// into a `Vec`. The default (matches Map's gather reduce).
-    #[default]
-    Array,
-    /// String-join the chunk `.value`s (rendered as strings) in stream order,
-    /// optionally separated by `sep`.
-    Concat {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        sep: Option<String>,
-    },
-    /// Numeric sum of the chunk `.value`s, in stream order.
-    Sum,
-    /// Author-supplied Rhai over `__r` (the sorted array of
-    /// `#{ value, __map_idx, __map_id }`), returning the reduced value.
-    Custom { expr: String },
+/// Which net plane a [`Channel`] rides on: `Control` carries slim control
+/// tokens that drive net firing (the borrow resolver can reference their
+/// payload fields downstream); `Data` carries out-of-band element payloads
+/// (large/binary), edge-wired only and never value-referenceable.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPlane {
+    Data,
+    Control,
+}
+
+/// The element type a [`Channel`] carries. `Json` declares a schema the
+/// compiler typechecks against the `SchemaRegistry`; `Binary` carries opaque
+/// bytes tagged by `content_type`; `Any` is an untyped passthrough.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ElementType {
+    Json { schema: serde_json::Value },
+    Binary { content_type: String },
+    Any,
+}
+
+/// The firing contract of a CONTROL [`Channel`]: `Signal` deposits one token
+/// per emission (fire-and-forget downstream); `Scatter` fans out instance-
+/// colored items closed by a count, sized at the gather barrier by `max_fanout`.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlContract {
+    Signal,
+    Scatter,
+}
+
+/// A statically-declared, typed port on an [`AutomatedStep`]. The job emits
+/// (`Out`) or reads (`In`) dynamic tokens into/from the channel's synthesized
+/// place at runtime; the net wires edges to it by `name`. `contract` is set
+/// only on `Control`-plane channels (the firing semantics); `max_fanout` caps
+/// a `Scatter`'s fan-out width.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct Channel {
+    pub name: String,
+    pub direction: ChannelDirection,
+    pub plane: ChannelPlane,
+    pub element: ElementType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<ControlContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_fanout: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
@@ -3032,11 +3008,8 @@ pub mod dsl {
                         retry_policy: exec.retry_policy.unwrap_or_default(),
                         // DSL does not model deployment topology — inline.
                         deployment_model: DeploymentModel::default(),
-                        // DSL does not model resource pools (yet).
-                        // DSL does not model streaming output (prototype flag).
-                        stream_output: false,
-                        // DSL does not model streaming input (reducer flag).
-                        stream_input: false,
+                        // DSL does not model streaming channels (yet).
+                        channels: Vec::new(),
                         requirements: None,
                         // DSL does not model asset bindings (yet).
                         asset_bindings: Vec::new(),
@@ -3282,13 +3255,11 @@ pub mod dsl {
                 | WorkflowNodeData::Failure { .. }
                 | WorkflowNodeData::Delay { .. }
                 | WorkflowNodeData::Timeout { .. }
-                | WorkflowNodeData::Map { .. }
-                | WorkflowNodeData::StreamFold { .. } => {
+                | WorkflowNodeData::Map { .. } => {
                     // DSL doesn't model the process-control / container nodes —
                     // GUI-authored for now. Same lossy-drop behaviour as
-                    // triggers. (Map's body sub-graph + itemsRef/resultVar, and
-                    // StreamConsumer/StreamFold's resultVar/reduce, have no DSL
-                    // schema yet.)
+                    // triggers. (Map's body sub-graph + itemsRef/resultVar have
+                    // no DSL schema yet.)
                 }
                 WorkflowNodeData::Agent {
                     model,

@@ -530,22 +530,6 @@ pub(crate) fn out_shape_lease_scope(node: &WorkflowNode, in_shape: &TokenShape) 
 }
 
 
-/// StreamFold: a parked-producer outbound shape — the old StreamConsumer `Rhai`
-/// fold — a FLAT `{ output: Any }` envelope, namespaced externally by slug so
-/// downstream nodes borrow `<slug>.output` (e.g. `consumer.output`).
-pub(crate) fn out_shape_stream_fold(node: &WorkflowNode, _in_shape: &TokenShape) -> TokenShape {
-    let WorkflowNodeData::StreamFold { .. } = &node.data else {
-        unreachable!("out_shape_stream_fold on non-StreamFold variant");
-    };
-    let mut o = TokenShape::object();
-    o.insert(
-        "output",
-        TokenShape::Any,
-        Provenance::new(node, "stream-fold reduced output (parked `<slug>.output`)"),
-    );
-    o
-}
-
 pub(crate) fn out_shape_map(node: &WorkflowNode, in_shape: &TokenShape) -> TokenShape {
     let WorkflowNodeData::Map { output, .. } = &node.data else {
         unreachable!("out_shape_map on non-Map variant");
@@ -839,7 +823,6 @@ pub(crate) fn is_parked_producer(graph: &WorkflowGraph, id: &str) -> bool {
                     | WorkflowNodeData::LeaseScope { .. }
                     | WorkflowNodeData::Join { .. }
                     | WorkflowNodeData::Map { .. }
-                    | WorkflowNodeData::StreamFold { .. }
             )
     })
 }

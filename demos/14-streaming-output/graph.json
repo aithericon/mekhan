@@ -22,8 +22,15 @@
       "data": {
         "type": "automated_step",
         "label": "Producer",
-        "description": "Emits one distinct-named chunk per word on its streaming side-channel (set_output per call, mid-execution).",
-        "streamOutput": true,
+        "description": "Opens a Data/Out channel 'words' and writes one element per word (out-of-band bytes bracketed by open/close control emissions). The bulk bytes never enter the net marking — the net sees only the open + close.",
+        "channels": [
+          {
+            "name": "words",
+            "direction": "out",
+            "plane": "data",
+            "element": { "type": "any" }
+          }
+        ],
         "executionSpec": {
           "backendType": "python",
           "entrypoint": "main.py",
@@ -45,14 +52,39 @@
     },
     {
       "id": "consumer",
-      "type": "stream_fold",
+      "type": "automated_step",
       "position": { "x": 620, "y": 160 },
       "data": {
-        "type": "stream_fold",
+        "type": "automated_step",
         "label": "Consumer",
-        "description": "Drains the producer's stream, concatenates the chunk values in stream order, and gates net completion on the end-of-stream count.",
-        "resultVar": "item",
-        "reduce": { "kind": "concat", "sep": " " }
+        "description": "Declares a Data/In channel 'words' wired from the producer's open handle. Drains the producer's byte stream via aithericon.stream('words') (starting EARLY, while the producer still produces), concatenates the elements in stream order, and sets the transcript output.",
+        "channels": [
+          {
+            "name": "words",
+            "direction": "in",
+            "plane": "data",
+            "element": { "type": "any" }
+          }
+        ],
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Folded",
+          "fields": [
+            { "name": "transcript", "label": "Transcript", "kind": "text" }
+          ]
+        }
       }
     },
     {
@@ -63,15 +95,14 @@
         "type": "end",
         "label": "Done",
         "resultMapping": [
-          { "targetField": "transcript", "expression": "consumer.output" }
+          { "targetField": "transcript", "expression": "consumer.transcript" }
         ]
       }
     }
   ],
   "edges": [
     { "id": "e_start_producer", "source": "start", "target": "producer", "targetHandle": "in", "type": "sequence" },
-    { "id": "e_producer_stream", "source": "producer", "sourceHandle": "stream", "target": "consumer", "targetHandle": "stream", "type": "sequence" },
-    { "id": "e_producer_control", "source": "producer", "target": "consumer", "targetHandle": "control", "type": "sequence" },
+    { "id": "e_producer_words_consumer", "source": "producer", "sourceHandle": "words", "target": "consumer", "targetHandle": "words", "type": "sequence" },
     { "id": "e_consumer_end", "source": "consumer", "target": "end", "targetHandle": "in", "type": "sequence" }
   ]
 }

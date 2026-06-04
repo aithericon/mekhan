@@ -691,8 +691,7 @@ mod tests {
                     output: output_port.clone(),
                     retry_policy: RetryPolicy::default(),
                     deployment_model: DeploymentModel::default(),
-                    stream_output: false,
-                    stream_input: false,
+                    channels: Vec::new(),
                     requirements: None,
                     asset_bindings: Vec::new(),
                 },
@@ -726,7 +725,7 @@ mod tests {
     /// constraints) MUST survive graph→Y.Doc→graph: the editor authors them off
     /// the Y.Doc and publish reads them back via `doc_to_graph` to inject the
     /// claim payload + run the registry validation. Same `#[serde(default)]`
-    /// drop class as `default_scheduler`/`stream_input`: an encoder that forgets
+    /// drop class as `default_scheduler`/`channels`: an encoder that forgets
     /// the field silently downgrades a constrained step to "matches any runner".
     #[test]
     fn automated_step_requirements_survive_ydoc_roundtrip() {
@@ -754,8 +753,7 @@ mod tests {
                         output: Port::empty_input(),
                         retry_policy: RetryPolicy::default(),
                         deployment_model: DeploymentModel::default(),
-                        stream_output: false,
-                        stream_input: false,
+                        channels: Vec::new(),
                         requirements,
                         asset_bindings: Vec::new(),
                     },

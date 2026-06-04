@@ -199,6 +199,7 @@ fn definition(ctx: &mut Context, bridged: bool, process: bool) {
             catalogue: true,
             process,
             stream_output: None,
+            control_in: None,
         },
     );
 }

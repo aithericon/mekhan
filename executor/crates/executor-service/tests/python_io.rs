@@ -28,6 +28,7 @@ mod python_io_tests {
             priority: JobPriority::Medium,
             stream_events: None,
             feed_chunks: false,
+            channels: Vec::new(),
             wrapped_secrets: None,
         }
     }
@@ -318,6 +319,7 @@ set_output("result", {"answer": result})
             priority: JobPriority::Medium,
             stream_events: None,
             feed_chunks: false,
+            channels: Vec::new(),
             wrapped_secrets: None,
         };
 

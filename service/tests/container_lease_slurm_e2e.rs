@@ -216,8 +216,7 @@ fn container_leased_loop_graph(
                     input: Port::empty_input(),
                     output: default_output_port(ExecutionBackendType::Python),
                     retry_policy: Default::default(),
-                    stream_output: false,
-                    stream_input: false,
+                    channels: Vec::new(),
                     requirements: None,
                     asset_bindings: Vec::new(),
                     deployment_model: DeploymentModel::Scheduled {

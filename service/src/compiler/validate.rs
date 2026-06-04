@@ -4,8 +4,7 @@
 use crate::compiler::error::CompileError;
 use crate::compiler::graph::WorkflowDiGraph;
 use crate::models::template::{
-    FieldKind, StreamReduce, WorkflowGraph, WorkflowNode, WorkflowNodeData,
-    DEFAULT_BRANCH_HANDLE_ID,
+    FieldKind, WorkflowGraph, WorkflowNode, WorkflowNodeData, DEFAULT_BRANCH_HANDLE_ID,
 };
 use petgraph::visit::Bfs;
 use petgraph::{algo::is_cyclic_directed, Direction};
@@ -585,63 +584,6 @@ pub(crate) fn validate_timeout(
 }
 
 
-/// Structural validation for a `StreamFold`: exactly one inbound `stream`
-/// handle edge + exactly one inbound `control` handle edge (the producer's data
-/// Signal place + its EOS/completion token). A `Custom` reduce expression must
-/// parse as a Rhai expression. StreamFold has no body — there is nothing more
-/// to wire.
-pub(crate) fn validate_stream_fold(
-    node: &WorkflowNode,
-    graph: &WorkflowGraph,
-    _wg: &WorkflowDiGraph<'_>,
-) -> Result<(), CompileError> {
-    let WorkflowNodeData::StreamFold { reduce, .. } = &node.data else {
-        unreachable!("validate_stream_fold on non-StreamFold variant");
-    };
-
-    // Count inbound edges per target handle — exactly one `stream` and one
-    // `control` are required (a missing/duplicated handle is a wiring bug).
-    let mut stream_edges = 0usize;
-    let mut control_edges = 0usize;
-    for edge in &graph.edges {
-        if edge.target != node.id {
-            continue;
-        }
-        match edge.target_handle.as_deref() {
-            Some("stream") => stream_edges += 1,
-            Some("control") => control_edges += 1,
-            _ => {}
-        }
-    }
-    if stream_edges != 1 {
-        return Err(CompileError::StreamFoldMissingHandle {
-            node_id: node.id.clone(),
-            handle: "stream",
-        });
-    }
-    if control_edges != 1 {
-        return Err(CompileError::StreamFoldMissingHandle {
-            node_id: node.id.clone(),
-            handle: "control",
-        });
-    }
-
-    // A `Custom` reduce expr is embedded verbatim into the gather transition's
-    // logic — syntax-check it here so a typo fails at publish, not at runtime.
-    if let StreamReduce::Custom { expr } = reduce {
-        let engine = rhai::Engine::new();
-        if let Err(err) = engine.compile_expression(expr) {
-            return Err(CompileError::StreamFoldInvalidReduce {
-                node_id: node.id.clone(),
-                expr: expr.clone(),
-                detail: format!("{err}"),
-            });
-        }
-    }
-
-    Ok(())
-}
-
 pub(crate) fn validate_map(
     node: &WorkflowNode,
     graph: &WorkflowGraph,
@@ -650,42 +592,12 @@ pub(crate) fn validate_map(
     let WorkflowNodeData::Map {
         items_ref,
         result_var,
-        stream_source,
         ..
     } = &node.data
     else {
         unreachable!("validate_map on non-Map variant");
     };
-    if *stream_source {
-        // Streaming Map: no itemsRef; instead require exactly one inbound
-        // `stream` edge + one `control` edge (the producer's chunk Signal place
-        // + its EOS/count token), mirroring StreamFold. The shared body /
-        // nested / terminal gates below still apply.
-        let mut stream_edges = 0usize;
-        let mut control_edges = 0usize;
-        for e in &graph.edges {
-            if e.target != node.id {
-                continue;
-            }
-            match e.target_handle.as_deref() {
-                Some("stream") => stream_edges += 1,
-                Some("control") => control_edges += 1,
-                _ => {}
-            }
-        }
-        if stream_edges != 1 {
-            return Err(CompileError::Validation(format!(
-                "streaming map '{}' requires exactly one inbound `stream` edge, found {stream_edges}",
-                node.id
-            )));
-        }
-        if control_edges != 1 {
-            return Err(CompileError::Validation(format!(
-                "streaming map '{}' requires exactly one inbound `control` edge, found {control_edges}",
-                node.id
-            )));
-        }
-    } else if items_ref.trim().is_empty() {
+    if items_ref.trim().is_empty() {
         return Err(CompileError::Validation(format!(
             "map '{}' must have a non-empty itemsRef",
             node.id
@@ -877,114 +789,13 @@ pub(crate) fn validate_parallel_split(
 /// only that token's data, not a merge. Legal Petri, rarely the intent. Warn
 /// (don't fail — existing graphs rely on it); the editor surfaces the same
 /// caveat per-node in the step reference panel.
-/// Structural validation for an `AutomatedStep`. Runs the streamInput reducer
-/// checks when `stream_input` is set, otherwise falls through to the
-/// unmerged-fan-in warning. A `streamInput` step legitimately has two inbound
-/// edges (`stream` + control `in`), so the fan-in warning is skipped for it.
+/// Structural validation for an `AutomatedStep` — the unmerged-fan-in warning.
 pub(crate) fn validate_automated_step(
     node: &WorkflowNode,
     graph: &WorkflowGraph,
     wg: &WorkflowDiGraph<'_>,
 ) -> Result<(), CompileError> {
-    use crate::models::template::DeploymentModel;
-    let WorkflowNodeData::AutomatedStep {
-        stream_input,
-        deployment_model,
-        ..
-    } = &node.data
-    else {
-        unreachable!("validate_automated_step on non-AutomatedStep variant");
-    };
-
-    if !*stream_input {
-        return warn_unmerged_fan_in(node, graph, wg);
-    }
-
-    let err = |detail: String| CompileError::StreamInputInvalid {
-        node_id: node.id.clone(),
-        detail,
-    };
-
-    // Inline executor only — pooled/leased/scheduled bypass the inline lifecycle
-    // that plumbs the IPC chunk feed, so a streamInput flag there would silently
-    // produce a broken net.
-    match deployment_model {
-        DeploymentModel::Executor { capacity: None, .. } => {}
-        DeploymentModel::Executor { capacity: Some(_), .. } => {
-            return Err(err(
-                "streamInput is unsupported on a pooled (Tokens/Presence capacity) deployment — \
-                 use a plain inline Executor step"
-                    .to_string(),
-            ));
-        }
-        DeploymentModel::Scheduled { .. } => {
-            return Err(err(
-                "streamInput is unsupported on a Scheduled (cluster) deployment — \
-                 use a plain inline Executor step"
-                    .to_string(),
-            ));
-        }
-    }
-
-    // Exactly one inbound `stream` edge + one control `in` edge.
-    let mut stream_src: Option<&str> = None;
-    let mut stream_edges = 0usize;
-    let mut control_src: Option<&str> = None;
-    let mut control_edges = 0usize;
-    for e in &graph.edges {
-        if e.target != node.id {
-            continue;
-        }
-        match e.target_handle.as_deref() {
-            Some("stream") => {
-                stream_edges += 1;
-                stream_src = Some(e.source.as_str());
-                if e.source_handle.as_deref() != Some("stream") {
-                    return Err(err(
-                        "the `stream` edge must come from a producer's `stream` output handle"
-                            .to_string(),
-                    ));
-                }
-            }
-            Some("in") => {
-                control_edges += 1;
-                control_src = Some(e.source.as_str());
-            }
-            _ => {}
-        }
-    }
-    if stream_edges != 1 {
-        return Err(err(format!(
-            "expected exactly one inbound `stream` edge, found {stream_edges}"
-        )));
-    }
-    if control_edges != 1 {
-        return Err(err(format!(
-            "expected exactly one inbound control `in` edge (the EOF trigger), found {control_edges}"
-        )));
-    }
-    // The stream + control edges must originate from the SAME producer, and that
-    // producer must be a `streamOutput` AutomatedStep.
-    if stream_src != control_src {
-        return Err(err(
-            "the `stream` and control `in` edges must come from the same streaming producer"
-                .to_string(),
-        ));
-    }
-    let producer = graph.nodes.iter().find(|n| Some(n.id.as_str()) == stream_src);
-    match producer.map(|n| &n.data) {
-        Some(WorkflowNodeData::AutomatedStep {
-            stream_output: true,
-            ..
-        }) => {}
-        _ => {
-            return Err(err(
-                "the upstream producer must be an AutomatedStep with streamOutput=true".to_string(),
-            ));
-        }
-    }
-
-    Ok(())
+    warn_unmerged_fan_in(node, graph, wg)
 }
 
 pub(crate) fn warn_unmerged_fan_in(
@@ -1001,6 +812,171 @@ pub(crate) fn warn_unmerged_fan_in(
             "unmerged fan-in: '{}' has {in_count} incoming edges and is not a Parallel Join; it will run once per upstream token (no merge). Insert a Parallel Join to combine inputs.",
             node.id
         );
+    }
+    Ok(())
+}
+
+// --- Streaming-channel validation (docs/25, Phase 1a) ---
+
+/// Validate every AutomatedStep's declared streaming [`Channel`]s:
+///
+/// - **No duplicate names** on one node (the synthesized place id
+///   `p_{id}_{name}` and the `channel_routes` map key must be unique).
+/// - **`Scatter` requires a positive `max_fanout`** — it sizes the counted
+///   gather barrier and bounds the loud over-fanout failure. A `Signal`
+///   channel must NOT carry one (no fan-out to bound).
+/// - **`contract` only on control channels** — a `Data`-plane channel has no
+///   firing contract (Phase 1b transport, not a control token).
+/// - **`Json` element schemas resolve + compile** against the workflow-level
+///   `definitions` (same `$ref` resolution the executor `SchemaRegistry` uses).
+/// - **Plane/wiring coherence** — a `Data`-plane channel has no Phase-1a
+///   lowering, so an edge wiring one (`sourceHandle == name`) is rejected loudly
+///   rather than silently dropping the byte stream.
+pub(crate) fn validate_channels(graph: &WorkflowGraph) -> Result<(), CompileError> {
+    use crate::models::template::{ChannelPlane, ControlContract, ElementType};
+
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
+            continue;
+        };
+        if channels.is_empty() {
+            continue;
+        }
+
+        let mut seen: HashSet<&str> = HashSet::new();
+        for ch in channels {
+            let invalid = |message: String| CompileError::ChannelInvalid {
+                node_id: node.id.clone(),
+                channel: ch.name.clone(),
+                message,
+            };
+
+            // Non-empty, unique name.
+            if ch.name.trim().is_empty() {
+                return Err(invalid("name must be non-empty".to_string()));
+            }
+            if !seen.insert(ch.name.as_str()) {
+                return Err(invalid("duplicate channel name on this node".to_string()));
+            }
+
+            match ch.plane {
+                ChannelPlane::Control => match ch.contract {
+                    Some(ControlContract::Scatter) => {
+                        match ch.max_fanout {
+                            Some(n) if n > 0 => {}
+                            _ => {
+                                return Err(invalid(
+                                    "scatter channels require a positive max_fanout".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    Some(ControlContract::Signal) => {
+                        if ch.max_fanout.is_some() {
+                            return Err(invalid(
+                                "signal channels must not declare max_fanout".to_string(),
+                            ));
+                        }
+                    }
+                    None => {
+                        return Err(invalid(
+                            "control channels require a contract (signal | scatter)".to_string(),
+                        ))
+                    }
+                },
+                ChannelPlane::Data => {
+                    // Data channels carry out-of-band bytes; the net sees only
+                    // the open/close bracket, never per-element tokens — so the
+                    // control-only firing knobs are nonsensical and rejected.
+                    if ch.contract.is_some() {
+                        return Err(invalid(
+                            "data channels must not declare a control contract".to_string(),
+                        ));
+                    }
+                    if ch.max_fanout.is_some() {
+                        return Err(invalid(
+                            "data channels must not declare max_fanout (control-plane only)"
+                                .to_string(),
+                        ));
+                    }
+                    // A `Binary` element must carry a non-empty content_type so
+                    // the transport/consumer can route the blob (the MIME hint
+                    // the binary envelope stamps, docs/25 §6).
+                    if let ElementType::Binary { content_type } = &ch.element {
+                        if content_type.trim().is_empty() {
+                            return Err(invalid(
+                                "binary data channels require a non-empty content_type".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // `Json` element schemas must resolve cleanly against `definitions`
+            // (then they compile against the runtime SchemaRegistry).
+            if let ElementType::Json { schema } = &ch.element {
+                if let Err((pointer, e)) =
+                    crate::compiler::schema_refs::validate_refs(schema, &graph.definitions)
+                {
+                    return Err(invalid(format!(
+                        "json element schema has an unresolved $ref at '{pointer}': {e}"
+                    )));
+                }
+            }
+        }
+
+    }
+
+    // Cross-plane wiring coherence: a channel edge must not splice a data-plane
+    // OUT channel into a control-plane IN channel (or vice versa). The two planes
+    // carry incompatible payloads — a control IN expects a flowing token, a data
+    // IN expects an OPEN descriptor — so a mismatched edge is a hard error the
+    // handle-name wiring (`wire.rs`) can't otherwise catch. Build a per-node
+    // `(channel name → plane)` index, then check every edge whose
+    // `source_handle`/`target_handle` both name a declared OUT/IN channel.
+    let mut node_channels: HashMap<&str, HashMap<&str, ChannelPlane>> = HashMap::new();
+    for node in &graph.nodes {
+        let WorkflowNodeData::AutomatedStep { channels, .. } = &node.data else {
+            continue;
+        };
+        let entry = node_channels.entry(node.id.as_str()).or_default();
+        for ch in channels {
+            entry.insert(ch.name.as_str(), ch.plane.clone());
+        }
+    }
+    for edge in &graph.edges {
+        let (Some(src_h), Some(tgt_h)) =
+            (edge.source_handle.as_deref(), edge.target_handle.as_deref())
+        else {
+            continue;
+        };
+        let Some(src_plane) = node_channels.get(edge.source.as_str()).and_then(|m| m.get(src_h))
+        else {
+            continue;
+        };
+        let Some(tgt_plane) = node_channels.get(edge.target.as_str()).and_then(|m| m.get(tgt_h))
+        else {
+            continue;
+        };
+        if !matches!(
+            (src_plane, tgt_plane),
+            (ChannelPlane::Data, ChannelPlane::Data)
+                | (ChannelPlane::Control, ChannelPlane::Control)
+        ) {
+            let plane_name = |p: &ChannelPlane| match p {
+                ChannelPlane::Data => "data",
+                ChannelPlane::Control => "control",
+            };
+            return Err(CompileError::ChannelInvalid {
+                node_id: edge.source.clone(),
+                channel: src_h.to_string(),
+                message: format!(
+                    "channel edge crosses planes: '{src_h}' is a {} channel but target '{tgt_h}' is a {} channel",
+                    plane_name(src_plane),
+                    plane_name(tgt_plane),
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -1378,8 +1354,7 @@ mod tests {
                 output: Port::empty_input(),
                 retry_policy: RetryPolicy::default(),
                 deployment_model: DeploymentModel::default(),
-                stream_output: false,
-                stream_input: false,
+                channels: Vec::new(),
                 requirements: None,
                 asset_bindings: Vec::new(),
             },

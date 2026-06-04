@@ -197,3 +197,55 @@ def test_noop_functions_dont_crash(monkeypatch):
     aithericon.log_debug("debug message")
     aithericon.log_metric("loss", 0.5)
     aithericon.log_metrics([{"name": "acc", "value": 0.9}])
+
+
+# ── data-plane stream() subject extraction (docs/25 §4) ──────────────
+# Regression: the consumer's stream() must lift the producer's transport
+# subject out of the OPEN descriptor token the engine deposits as input. The
+# token shape MUST match what executor_handlers.rs deposits:
+#   { kind:"open", channel:<name>, descriptor:{ subject, ... } }
+def test_subject_from_input_extracts_producer_subject(monkeypatch):
+    from aithericon._stream import _subject_from_input
+
+    subj = "executor.datastream.exec-prod-123.words"
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "input.json"), "w") as f:
+            json.dump(
+                {
+                    "kind": "open",
+                    "channel": "words",
+                    "descriptor": {
+                        "transport": "jetstream",
+                        "subject": subj,
+                        "content_type": "application/json",
+                    },
+                },
+                f,
+            )
+        monkeypatch.setenv("AITHERICON_INPUTS_DIR", tmp)
+        assert _subject_from_input("words") == subj
+        assert _subject_from_input("other") is None  # wrong channel -> no match
+
+
+def test_subject_from_input_finds_namespaced_open_token(monkeypatch):
+    from aithericon._stream import _subject_from_input
+
+    subj = "executor.datastream.exec-9.frames"
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "input.json"), "w") as f:
+            json.dump(
+                {"producer": {"kind": "open", "channel": "frames", "descriptor": {"subject": subj}}},
+                f,
+            )
+        monkeypatch.setenv("AITHERICON_INPUTS_DIR", tmp)
+        assert _subject_from_input("frames") == subj
+
+
+def test_subject_from_input_none_when_absent(monkeypatch):
+    from aithericon._stream import _subject_from_input
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "input.json"), "w") as f:
+            json.dump({"some_field": 1}, f)
+        monkeypatch.setenv("AITHERICON_INPUTS_DIR", tmp)
+        assert _subject_from_input("words") is None

@@ -20,7 +20,6 @@
 	// element into a collection borrowable downstream as `<map>[*].<field>`.
 	const REF_MAX = 22;
 	let itemsText = $derived.by(() => {
-		if (data.streamSource) return 'stream';
 		const r = (data.itemsRef ?? '').trim();
 		if (!r) return 'items';
 		return r.length > REF_MAX ? `${r.slice(0, REF_MAX - 1)}…` : r;
@@ -49,32 +48,13 @@
 	outline circles (bg-card fill, colored border) to distinguish them from the
 	filled body handles below.
 -->
-{#if data.streamSource}
-	<!-- Streaming source: ingest the producer's chunks (stream) + its EOS/count
-	     token (control), instead of scattering a static itemsRef array. -->
-	<Handle
-		id="stream"
-		type="target"
-		position={Position.Left}
-		style="top:35%;background:#06b6d4;border-color:#0891b2;"
-		title="Stream in — chunks from a streamOutput producer"
-	/>
-	<Handle
-		id="control"
-		type="target"
-		position={Position.Left}
-		style="top:65%;background:#06b6d4;border-color:#0891b2;"
-		title="Control in — producer EOS/completion token (sizes the gather)"
-	/>
-{:else}
-	<Handle
-		id="in"
-		type="target"
-		position={Position.Left}
-		class="!h-3 !w-3 !border-2 !bg-card !border-node-map"
-		title="Flow in — enter map"
-	/>
-{/if}
+<Handle
+	id="in"
+	type="target"
+	position={Position.Left}
+	class="!h-3 !w-3 !border-2 !bg-card !border-node-map"
+	title="Flow in — enter map"
+/>
 <Handle
 	id="out"
 	type="source"

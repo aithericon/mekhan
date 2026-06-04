@@ -31,8 +31,13 @@ from aithericon._files import File, file
 # Outputs
 from aithericon._outputs import set_output
 
-# Inbound live chunk feed (live IPC reducer)
-from aithericon._chunks import chunks
+# Control-token emission into statically-declared channels (signal + scatter)
+from aithericon._emit import emit
+from aithericon._scatter import scatter
+
+# Data-plane streaming channels: producer writer + consumer reader
+from aithericon._open_output import open_output
+from aithericon._stream import stream
 
 # Artifacts
 from aithericon._artifacts import log_artifact
@@ -59,7 +64,10 @@ __all__ = [
     "File",
     "file",
     "set_output",
-    "chunks",
+    "emit",
+    "scatter",
+    "open_output",
+    "stream",
     "log_artifact",
     "update_progress",
     "define_phases",

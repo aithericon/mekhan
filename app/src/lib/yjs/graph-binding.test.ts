@@ -641,9 +641,9 @@ describe('YjsGraphBinding', () => {
 		// assetBindings key (e.g. a section that ran before the Yjs sync
 		// completed and therefore spread a partial snapshot). We do this by
 		// constructing the update object with `delete` to guarantee the property
-		// is absent — the same way `{ ...staleData, streamOutput: true }` would
+		// is absent — the same way `{ ...staleData, label: 'edited' }` would
 		// look if staleData didn't have assetBindings yet.
-		const partialUpdate = { ...node1.data, streamOutput: true } as Extract<
+		const partialUpdate = { ...node1.data, label: 'edited' } as Extract<
 			WorkflowNodeData,
 			{ type: 'automated_step' }
 		>;

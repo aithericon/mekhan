@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f15",
   "name": "15 · Stream Python Body",
-  "description": "streamInput reducer: a single AutomatedStep with streamInput=true is a long-lived Python process that receives chunks via IPC (aithericon.chunks()) from a streaming producer. The producer (streamOutput=true) emits 4 word chunks (the/quick/brown/fox); the reducer (seeded at net entry) uppercases and concatenates them into 'THE QUICK BROWN FOX'. The Python script owns the reduction logic — no container node, no Petri-net gather barrier. Wire producer.stream → reducer.stream and producer.out → reducer.in (the EOF trigger).",
+  "description": "The Python body IS the reducer (docs/25). A producer AutomatedStep declares a Data/Out channel 'words' and writes 4 elements (the/quick/brown/fox) over an out-of-band transport. A reducer AutomatedStep declares a Data/In channel 'words' wired from the producer's open handle and drains the stream in-process via aithericon.stream('words') — uppercasing and concatenating each element into 'THE QUICK BROWN FOX'. The script owns the reduction logic; no container node, no Petri-net gather barrier — the net sees only the producer's open + close (data bytes never enter the marking).",
   "visibility": "public"
 }

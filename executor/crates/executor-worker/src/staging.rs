@@ -204,7 +204,7 @@ impl StagingHook for InjectEnvironmentHook {
 
     async fn stage(
         &self,
-        _job: &ExecutionJob,
+        job: &ExecutionJob,
         mut ctx: RunContext,
     ) -> Result<RunContext, ExecutorError> {
         ctx.env.insert(
@@ -229,6 +229,17 @@ impl StagingHook for InjectEnvironmentHook {
         );
         ctx.env
             .insert("AITHERICON_EXECUTION_ID".into(), ctx.execution_id.clone());
+
+        // The SDK's `_load_manifest()` reads AITHERICON_CHANNELS to validate
+        // local `emit()`/`scatter()` calls against the compiler-declared channel
+        // set. Serialize the job's manifest as the JSON array of
+        // `{name, plane, contract, element_kind}` entries the SDK expects.
+        ctx.env.insert(
+            "AITHERICON_CHANNELS".into(),
+            serde_json::to_string(&job.channels).map_err(|e| {
+                ExecutorError::StagingFailed(format!("serialize channel manifest: {e}"))
+            })?,
+        );
 
         debug!("injected AITHERICON_* env vars");
         Ok(ctx)
@@ -851,6 +862,7 @@ mod tests {
             priority: aithericon_executor_domain::JobPriority::Medium,
             stream_events: None,
             feed_chunks: false,
+            channels: Vec::new(),
             wrapped_secrets: None,
         }
     }
@@ -910,11 +922,30 @@ mod tests {
 
     #[tokio::test]
     async fn inject_environment_hook() {
+        use aithericon_executor_domain::ChannelManifestEntry;
+        use serde_json::json;
+
         let tmp = PathBuf::from("/tmp/staging-env-test");
         let ctx = test_context(&tmp);
 
+        let mut job = test_job();
+        job.channels = vec![
+            ChannelManifestEntry {
+                name: "progress".into(),
+                plane: "control".into(),
+                contract: Some("signal".into()),
+                element_kind: "json".into(),
+            },
+            ChannelManifestEntry {
+                name: "frames".into(),
+                plane: "data".into(),
+                contract: None,
+                element_kind: "binary".into(),
+            },
+        ];
+
         let hook = InjectEnvironmentHook;
-        let result = hook.stage(&test_job(), ctx).await.unwrap();
+        let result = hook.stage(&job, ctx).await.unwrap();
 
         assert!(result.env.contains_key("AITHERICON_RUN_DIR"));
         assert!(result.env.contains_key("AITHERICON_IPC_SOCKET"));
@@ -925,6 +956,18 @@ mod tests {
             result.env.get("AITHERICON_EXECUTION_ID").unwrap(),
             "test-staging"
         );
+
+        // The channel manifest is injected as the JSON array shape the SDK's
+        // `_load_manifest()` parses.
+        let channels_env = result
+            .env
+            .get("AITHERICON_CHANNELS")
+            .expect("AITHERICON_CHANNELS injected");
+        let parsed: serde_json::Value = serde_json::from_str(channels_env).unwrap();
+        assert_eq!(parsed, json!([
+            {"name": "progress", "plane": "control", "contract": "signal", "element_kind": "json"},
+            {"name": "frames", "plane": "data", "element_kind": "binary"},
+        ]));
     }
 
     #[tokio::test]

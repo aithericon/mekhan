@@ -1251,6 +1251,12 @@
       "type": "state"
     },
     {
+      "id": "p_producer_control_in",
+      "name": "Producer - Control Emit Inbox",
+      "token_schema": "#/definitions/DynamicToken",
+      "type": "signal"
+    },
+    {
       "id": "p_producer_ctrl",
       "name": "Producer - Control Token",
       "token_schema": "#/definitions/Ctrl__producer",
@@ -1269,16 +1275,10 @@
       "type": "state"
     },
     {
-      "id": "p_producer_stream",
-      "name": "Producer - Stream",
+      "id": "p_producer_words",
+      "name": "Producer - Data Channel 'words'",
       "token_schema": "#/definitions/DynamicToken",
       "type": "signal"
-    },
-    {
-      "id": "p_reducer_control_in",
-      "name": "Reducer - Control In",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
     },
     {
       "id": "p_reducer_ctrl",
@@ -1293,55 +1293,8 @@
       "type": "state"
     },
     {
-      "id": "p_reducer_dense_seq",
-      "initial_tokens": [
-        {
-          "n": 0
-        }
-      ],
-      "name": "Reducer - Dense Sequence Counter",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_reducer_exec_gate",
-      "initial_tokens": [
-        {}
-      ],
-      "name": "Reducer - Exec-ID Capture Gate",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_reducer_exec_id",
-      "name": "Reducer - Reducer Execution ID",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_reducer_feed_inbox",
-      "name": "Reducer - Feed Inbox",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_reducer_input",
-      "initial_tokens": [
-        {}
-      ],
-      "name": "Reducer - Input",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
       "id": "p_reducer_output",
       "name": "Reducer - Output",
-      "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
-    },
-    {
-      "id": "p_reducer_stream_in",
-      "name": "Reducer - Stream In",
       "token_schema": "#/definitions/DynamicToken",
       "type": "state"
     },
@@ -1855,7 +1808,6 @@
       "category": "executor",
       "handler_ids": [
         "executor_cancel",
-        "executor_stream_feed",
         "executor_submit"
       ]
     },
@@ -2293,7 +2245,7 @@
         }
       ],
       "logic": {
-        "source": "#{ log: evt, stream: evt }",
+        "source": "#{ log: evt }",
         "type": "rhai"
       },
       "name": "Log Output",
@@ -2301,11 +2253,6 @@
         {
           "cardinality": "single",
           "name": "log",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "stream",
           "schema_ref": "#/definitions/DynamicToken"
         }
       ],
@@ -2321,11 +2268,6 @@
         {
           "place": "producer/output_log",
           "port": "log",
-          "weight": 1
-        },
-        {
-          "place": "p_producer_stream",
-          "port": "stream",
           "weight": 1
         }
       ]
@@ -2588,7 +2530,7 @@
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Producer — Python-body streaming demo (demo 15).\\n#\\n# `streamOutput: true` (graph.json) makes every `set_output(name, value)` call\\n# emit an `OutputSet { name, value }` event PER CALL, mid-execution, onto this\\n# node's stream side-channel (the `p_producer_stream` Signal place). The\\n# downstream reducer (an AutomatedStep with streamInput=true) receives each chunk\\n# via `aithericon.chunks()` over IPC and folds them in-process.\\n#\\n# We emit one DISTINCT-named chunk per word, each value a plain string (distinct\\n# names matter: the stream token dedup id is content-addressable per output\\n# name). The reducer uppercases each chunk and concatenates them in stream order\\n# into \\\"THE QUICK BROWN FOX\\\".\\n#\\n# IMPORTANT: a streaming producer must emit ONLY stream chunks — every\\n# `set_output` becomes a stream token and is counted into `stream_count` (the\\n# end-of-stream N). Do NOT also set a `produced`/`count` control output here, or\\n# it inflates N and pollutes the consumer's reduction.\\n#\\n# At job end the executor stamps `stream_count` (= 4 here) on the terminal\\n# Completed detail; it rides the producer's control token to the consumer's\\n# \\\"control\\\" handle, where it sizes the end-of-stream gather barrier. The sleeps\\n# space the chunks out so they stream over time.\\n\\nimport time\\n\\nfrom aithericon import set_output\\n\\nwords = [\\\"the\\\", \\\"quick\\\", \\\"brown\\\", \\\"fox\\\"]\\nfor i, w in enumerate(words):\\n    set_output(f\\\"chunk_{i}\\\", w)\\n    time.sleep(1.0)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\", \"output\"] }; d.feed_chunks = false; d.executor_namespace = \"executor-python\"; #{ job: d }",
+        "source": "let d = input; d.job_id = \"producer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Producer — Python-body streaming demo (demo 15, docs/25).\\n#\\n# Declares a Data/Out channel \\\"words\\\" (graph.json). `open_output(\\\"words\\\")` fires\\n# an `open` control token EARLY carrying the transport descriptor, so the\\n# downstream reducer starts draining while this job still runs. Each\\n# `out.write(value)` publishes one out-of-band element envelope over the\\n# transport subject — the bytes never ride a net token. On context exit the EOF\\n# terminator + the `close` token (element count) are emitted.\\n#\\n# We write one element per word, each a plain string (Any element kind). The\\n# sleeps space the elements out so they genuinely stream over time. The reducer\\n# uppercases each element and concatenates them into \\\"THE QUICK BROWN FOX\\\".\\n\\nimport time\\n\\nfrom aithericon import open_output\\n\\nwords = [\\\"the\\\", \\\"quick\\\", \\\"brown\\\", \\\"fox\\\"]\\nwith open_output(\\\"words\\\") as out:\\n    for w in words:\\n        out.write(w)\\n        time.sleep(1.0)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/producer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"any\", \"name\": \"words\", \"plane\": \"data\"}] }; d.executor_namespace = \"executor-python\"; #{ job: d }",
         "type": "rhai"
       },
       "name": "Producer - Prepare",
@@ -2740,6 +2682,7 @@
       "effect_config": {
         "event_routes": {
           "artifact": "producer/sig_artifact",
+          "control_emit": "p_producer_control_in",
           "log": "producer/sig_log",
           "metric": "producer/sig_metric",
           "output": "producer/sig_output",
@@ -2783,6 +2726,7 @@
         "config": {
           "event_routes": {
             "artifact": "producer/sig_artifact",
+            "control_emit": "p_producer_control_in",
             "log": "producer/sig_log",
             "metric": "producer/sig_metric",
             "output": "producer/sig_output",
@@ -4093,13 +4037,13 @@
       },
       "inputs": [
         {
-          "place": "p_reducer_input",
+          "place": "p_producer_words",
           "port": "input",
           "weight": 1
         }
       ],
       "logic": {
-        "source": "let d = input; d.job_id = \"reducer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Reducer — demo 15 (AutomatedStep with streamInput=true).\\n#\\n# A streamInput AutomatedStep IS the reducer: it is seeded at net entry (starts\\n# immediately), receives the upstream producer's chunks via `aithericon.chunks()`\\n# over the IPC sidecar, does its own reduction (uppercase + concatenate), and\\n# emits the final result. No container node, no Petri-net gather barrier — this\\n# single step owns the reduction.\\n#\\n# `aithericon.chunks()` is a generator that yields chunk values as they arrive.\\n# It terminates when the producer's stream ends (the EOF sentinel, sent when the\\n# producer's control token reaches this node's `in`).\\n\\nfrom aithericon import chunks, set_output\\n\\nacc = []\\nfor chunk in chunks():\\n    acc.append(str(chunk).upper())\\n\\ntranscript = \\\" \\\".join(acc)\\nset_output(\\\"transcript\\\", transcript)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"transcript\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/reducer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"] }; d.feed_chunks = true; d.executor_namespace = \"executor-python\"; #{ job: d }",
+        "source": "let d = input; d.job_id = \"reducer\"; d.run = 0; d.retries = 0; d.max_retries = 3; let job_inputs = [#{\"name\": \"main.py\", \"required\": true, \"source\": #{\"content\": \"# Reducer — demo 15 (the AutomatedStep body IS the reducer, docs/25).\\n#\\n# This step declares a Data/In channel \\\"words\\\" wired from the producer's\\n# `open_output(\\\"words\\\")` handle (graph.json). `aithericon.stream(\\\"words\\\")` drains\\n# the producer's out-of-band byte stream as elements arrive — it starts the\\n# moment the producer's `open` descriptor reaches this node (EARLY, independent of\\n# the producer finishing) and yields one decoded element per envelope until the\\n# in-band EOF. The Python body does its own reduction (uppercase + concatenate)\\n# and emits the final result. No container node, no Petri-net gather barrier —\\n# this single step owns the reduction (docs/25 §2 retires net-native Fold).\\n\\nfrom aithericon import set_output, stream\\n\\nacc = [str(w).upper() for w in stream(\\\"words\\\")]\\n\\ntranscript = \\\" \\\".join(acc)\\nset_output(\\\"transcript\\\", transcript)\\n\", \"type\": \"raw\"}}]; job_inputs.push(#{ \"name\": \"input.json\", \"source\": #{ \"type\": \"inline\", \"value\": input } });  d.spec = #{ \"backend\": \"python\", \"inputs\": job_inputs, \"outputs\": [#{\"kind\": \"text\", \"name\": \"transcript\", \"required\": false}], \"config_ref\": #{ \"storage_path\": \"templates/00000000-0000-0000-0000-000000000000/v0/reducer/node-config.json\" }, \"stream_events\": [\"metric\", \"progress\", \"phase\", \"log\"], \"channels\": [#{\"element_kind\": \"any\", \"name\": \"words\", \"plane\": \"data\"}] }; d.executor_namespace = \"executor-python\"; #{ job: d }",
         "type": "rhai"
       },
       "name": "Reducer - Prepare",
@@ -4910,110 +4854,6 @@
       ]
     },
     {
-      "id": "t_edge_e_producer_control",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "input",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_producer_ctrl",
-          "port": "input",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ output: input }",
-        "type": "rhai"
-      },
-      "name": "Producer -> Reducer",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "output",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_reducer_control_in",
-          "port": "output",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_edge_e_producer_stream",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "input",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_producer_stream",
-          "port": "input",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ output: input }",
-        "type": "rhai"
-      },
-      "name": "Producer -> Reducer",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "output",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_reducer_stream_in",
-          "port": "output",
-          "weight": 1
-        }
-      ]
-    },
-    {
       "id": "t_end_proc_complete",
       "input_ports": [
         {
@@ -5140,6 +4980,68 @@
       ]
     },
     {
+      "effect_config": {
+        "channel_routes": {
+          "words": "p_producer_words"
+        }
+      },
+      "id": "t_producer_control_emit",
+      "input_ports": [
+        {
+          "cardinality": "single",
+          "name": "emit",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "input_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "inputs": [
+        {
+          "place": "p_producer_control_in",
+          "port": "emit",
+          "weight": 1
+        }
+      ],
+      "logic": {
+        "config": {
+          "channel_routes": {
+            "words": "p_producer_words"
+          }
+        },
+        "handler_id": "control_emit",
+        "type": "effect"
+      },
+      "name": "Producer - Control Emit",
+      "output_ports": [
+        {
+          "cardinality": "single",
+          "name": "p_producer_words",
+          "schema_ref": "#/definitions/DynamicToken"
+        }
+      ],
+      "output_schema": {
+        "properties": {
+          "DynamicToken": {
+            "$ref": "#/definitions/DynamicToken"
+          }
+        },
+        "type": "object"
+      },
+      "outputs": [
+        {
+          "place": "p_producer_words",
+          "port": "p_producer_words",
+          "weight": 1
+        }
+      ]
+    },
+    {
       "id": "t_producer_to_error_deadend",
       "input_ports": [
         {
@@ -5246,10 +5148,10 @@
         }
       ],
       "logic": {
-        "source": "let __d = tok; let __sc = if type_of(__d.detail) == \"map\" && \"stream_count\" in __d.detail { __d.detail.stream_count } else { 0 }; #{ data: __d, ctrl: #{ status: __d.status, task_id: __d.task_id, stream_count: __sc } }",
+        "source": "let d = tok; let c = #{}; for k in d.keys() { if k.starts_with(\"_\") || k == \"task_id\" || k == \"status\" { c[k] = d[k]; } } #{ data: d, ctrl: c }",
         "type": "rhai"
       },
-      "name": "Producer - Yield (park data, forward control + stream_count)",
+      "name": "Producer - Yield (park data, forward control)",
       "output_ports": [
         {
           "cardinality": "single",
@@ -5282,245 +5184,6 @@
           "weight": 1
         }
       ]
-    },
-    {
-      "id": "t_reducer_capture_exec_id",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "gate",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "submitted",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_reducer_exec_gate",
-          "port": "gate",
-          "weight": 1
-        },
-        {
-          "place": "reducer/submitted",
-          "port": "submitted",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ exec_id: #{ id: submitted.execution_id } }",
-        "type": "rhai"
-      },
-      "name": "Reducer - Capture Exec ID",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "exec_id",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_reducer_exec_id",
-          "port": "exec_id",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_reducer_eof",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "ctrl",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "exec",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_reducer_control_in",
-          "port": "ctrl",
-          "weight": 1
-        },
-        {
-          "place": "p_reducer_exec_id",
-          "port": "exec",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "let __seq = if \"stream_count\" in ctrl { ctrl.stream_count } else { 0 }; #{ feed: #{ execution_id: exec.id, sequence: __seq, is_eof: true } }",
-        "type": "rhai"
-      },
-      "name": "Reducer - Feed EOF",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "feed",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_reducer_feed_inbox",
-          "port": "feed",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_reducer_feed",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "chunk",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "seq",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "exec",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_reducer_stream_in",
-          "port": "chunk",
-          "weight": 1
-        },
-        {
-          "place": "p_reducer_dense_seq",
-          "port": "seq",
-          "weight": 1
-        },
-        {
-          "place": "p_reducer_exec_id",
-          "port": "exec",
-          "read": true,
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "source": "#{ feed: #{ execution_id: exec.id, value: chunk.detail.value, sequence: seq.n }, seq: #{ n: seq.n + 1 } }",
-        "type": "rhai"
-      },
-      "name": "Reducer - Feed Chunk",
-      "output_ports": [
-        {
-          "cardinality": "single",
-          "name": "feed",
-          "schema_ref": "#/definitions/DynamicToken"
-        },
-        {
-          "cardinality": "single",
-          "name": "seq",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "output_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "outputs": [
-        {
-          "place": "p_reducer_feed_inbox",
-          "port": "feed",
-          "weight": 1
-        },
-        {
-          "place": "p_reducer_dense_seq",
-          "port": "seq",
-          "weight": 1
-        }
-      ]
-    },
-    {
-      "id": "t_reducer_feed_effect",
-      "input_ports": [
-        {
-          "cardinality": "single",
-          "name": "feed",
-          "schema_ref": "#/definitions/DynamicToken"
-        }
-      ],
-      "input_schema": {
-        "properties": {
-          "DynamicToken": {
-            "$ref": "#/definitions/DynamicToken"
-          }
-        },
-        "type": "object"
-      },
-      "inputs": [
-        {
-          "place": "p_reducer_feed_inbox",
-          "port": "feed",
-          "weight": 1
-        }
-      ],
-      "logic": {
-        "handler_id": "executor_stream_feed",
-        "type": "effect"
-      },
-      "name": "Reducer - Stream Feed Effect"
     },
     {
       "id": "t_reducer_to_error_deadend",

@@ -79,10 +79,20 @@ class ExecutorSidecarStub:
                 request_serializer=executor__sidecar__pb2.ShutdownAckRequest.SerializeToString,
                 response_deserializer=executor__sidecar__pb2.SidecarResponse.FromString,
                 _registered_method=True)
+        self.EmitControl = channel.unary_unary(
+                '/aithericon.executor.ipc.ExecutorSidecar/EmitControl',
+                request_serializer=executor__sidecar__pb2.EmitControlRequest.SerializeToString,
+                response_deserializer=executor__sidecar__pb2.SidecarResponse.FromString,
+                _registered_method=True)
         self.StreamChunks = channel.unary_stream(
                 '/aithericon.executor.ipc.ExecutorSidecar/StreamChunks',
                 request_serializer=executor__sidecar__pb2.StreamChunksRequest.SerializeToString,
                 response_deserializer=executor__sidecar__pb2.ChunkMessage.FromString,
+                _registered_method=True)
+        self.PublishChunk = channel.unary_unary(
+                '/aithericon.executor.ipc.ExecutorSidecar/PublishChunk',
+                request_serializer=executor__sidecar__pb2.PublishChunkRequest.SerializeToString,
+                response_deserializer=executor__sidecar__pb2.SidecarResponse.FromString,
                 _registered_method=True)
         self.RetrieveFile = channel.unary_unary(
                 '/aithericon.executor.ipc.ExecutorSidecar/RetrieveFile',
@@ -148,12 +158,46 @@ class ExecutorSidecarServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def EmitControl(self, request, context):
+        """Dynamic control-token emission into a statically-declared output channel.
+        CONTROL plane: the child emits a `signal` (one control token) or a
+        `scatter` (N instance-colored items bracketed by a close that stamps the
+        count). DATA plane (1b): the child emits an `open` (carrying the JSON
+        transport DESCRIPTOR of a data channel it just opened) so the consumer can
+        start draining the out-of-band byte stream EARLY, then a `close` (stamping
+        the element count + terminal status) once the producer is done writing.
+        The sidecar validates the name+plane against the manifest, then publishes a
+        `control_emit` event to the EXECUTOR_EVENTS JetStream stream
+        (subject `executor.events.{execution_id}.control_emit`) which the engine
+        ingests to deposit a token into the channel's place. Fire-and-forget: the
+        engine never gates the emit.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def StreamChunks(self, request, context):
-        """Inbound live data feed: the child opens this server-stream and pulls
-        chunks the executor receives (over the EXECUTOR_CHUNKS JetStream feed)
-        while the child is still running. Drives the Python SDK's
-        `for chunk in aithericon.chunks()` live-reducer loop. The stream ends
-        when an in-band EOF sentinel (`ChunkMessage{is_eof:true}`) is reached.
+        """Data-plane CONSUMER read (`for elem in aithericon.stream(name)`): the
+        child opens this server-stream passing the PRODUCER's transport subject
+        (lifted from the `open` descriptor the engine delivered as this job's
+        input). The executor subscribes to that subject over the data-plane
+        `StreamTransport` and relays each binary envelope here while the producer
+        is still writing. Each yielded `ChunkMessage` is a binary envelope
+        `{ seq, content_type, payload, is_eof }`; the stream ends after the
+        in-band EOF sentinel (`ChunkMessage{is_eof:true}`).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PublishChunk(self, request, context):
+        """Outbound byte stream: the producer writer (`open_output(name)`) hands the
+        executor one framed element at a time; the executor publishes the binary
+        envelope onto the channel's datastream transport subject
+        (`executor.datastream.{execution_id}.{channel}`) so a consumer elsewhere
+        can drain it. The SDK holds no NATS/transport credentials; the executor
+        does. Unary + ordered: the writer awaits each publish so the transport's
+        ack window can back-pressure a too-fast producer.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -218,10 +262,20 @@ def add_ExecutorSidecarServicer_to_server(servicer, server):
                     request_deserializer=executor__sidecar__pb2.ShutdownAckRequest.FromString,
                     response_serializer=executor__sidecar__pb2.SidecarResponse.SerializeToString,
             ),
+            'EmitControl': grpc.unary_unary_rpc_method_handler(
+                    servicer.EmitControl,
+                    request_deserializer=executor__sidecar__pb2.EmitControlRequest.FromString,
+                    response_serializer=executor__sidecar__pb2.SidecarResponse.SerializeToString,
+            ),
             'StreamChunks': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamChunks,
                     request_deserializer=executor__sidecar__pb2.StreamChunksRequest.FromString,
                     response_serializer=executor__sidecar__pb2.ChunkMessage.SerializeToString,
+            ),
+            'PublishChunk': grpc.unary_unary_rpc_method_handler(
+                    servicer.PublishChunk,
+                    request_deserializer=executor__sidecar__pb2.PublishChunkRequest.FromString,
+                    response_serializer=executor__sidecar__pb2.SidecarResponse.SerializeToString,
             ),
             'RetrieveFile': grpc.unary_unary_rpc_method_handler(
                     servicer.RetrieveFile,
@@ -483,6 +537,33 @@ class ExecutorSidecar:
             _registered_method=True)
 
     @staticmethod
+    def EmitControl(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aithericon.executor.ipc.ExecutorSidecar/EmitControl',
+            executor__sidecar__pb2.EmitControlRequest.SerializeToString,
+            executor__sidecar__pb2.SidecarResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def StreamChunks(request,
             target,
             options=(),
@@ -499,6 +580,33 @@ class ExecutorSidecar:
             '/aithericon.executor.ipc.ExecutorSidecar/StreamChunks',
             executor__sidecar__pb2.StreamChunksRequest.SerializeToString,
             executor__sidecar__pb2.ChunkMessage.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PublishChunk(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aithericon.executor.ipc.ExecutorSidecar/PublishChunk',
+            executor__sidecar__pb2.PublishChunkRequest.SerializeToString,
+            executor__sidecar__pb2.SidecarResponse.FromString,
             options,
             channel_credentials,
             insecure,

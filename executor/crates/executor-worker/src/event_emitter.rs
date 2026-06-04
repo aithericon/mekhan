@@ -6,7 +6,9 @@ use async_nats::jetstream;
 use chrono::Utc;
 use tracing::{debug, error};
 
-use aithericon_executor_domain::{EventCategory, ExecutionEvent, LogLevel, StatusDetail};
+use aithericon_executor_domain::{
+    ControlEmitEvent, EventCategory, ExecutionEvent, LogLevel, StatusDetail,
+};
 
 use aithericon_executor_backend::traits::EventStream;
 
@@ -85,6 +87,14 @@ pub(crate) async fn publish_event<T: serde::Serialize>(
 #[async_trait::async_trait]
 pub trait EventEmitter: Send + Sync + 'static {
     async fn emit(&self, event: &ExecutionEvent);
+
+    /// Publish a dynamic control-token emission (`control_emit`) to NATS.
+    ///
+    /// Separate from `emit` because a `ControlEmitEvent` is not an
+    /// `ExecutionEvent` (no `EventCategory` / sequence) — it rides its own
+    /// `executor.events.{id}.control_emit` subject and is engine-ingested rather
+    /// than projected into the step-event timeline.
+    async fn emit_control(&self, event: &ControlEmitEvent);
 }
 
 /// Concrete `EventEmitter` backed by a NATS JetStream context.
@@ -113,6 +123,19 @@ impl EventEmitter for NatsEventEmitter {
             None,
             &event.execution_id,
             "streamed event",
+            event,
+        )
+        .await;
+    }
+
+    async fn emit_control(&self, event: &ControlEmitEvent) {
+        publish_event(
+            &self.jetstream,
+            subject_for(&self.subject_prefix, event.subject()),
+            event.msg_id().as_str(),
+            None,
+            &event.execution_id,
+            "control emit",
             event,
         )
         .await;

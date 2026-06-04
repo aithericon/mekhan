@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-000000000f14",
   "name": "14 · Streaming Output",
-  "description": "Prototype of the streaming-output side-channel. A producer AutomatedStep with streamOutput=true emits ~8 log_info() chunk events; the compiler routes them (via petri_event_log) into a Signal place p_producer_stream, and a consumer step wired from the producer's 'stream' handle fires once per token. The control 'out' token governs termination (producer -> End) as today; 'stream' is purely additive. Known prototype limits: no stream backpressure or end-of-stream sentinel.",
+  "description": "Data-plane streaming (docs/25). A producer AutomatedStep declares a Data/Out channel 'words' and writes 4 elements (the/quick/brown/fox) over an out-of-band transport bracketed by open/close control emissions — the bulk bytes never enter the net marking, so the net sees only two firings (open + close) regardless of element count. A consumer declares a Data/In channel 'words' wired from the producer's open handle; it drains the stream via aithericon.stream('words') EARLY (while the producer still produces), folds (concatenates) the elements in stream order, and emits the transcript 'the quick brown fox'. Replaces the retired net-native StreamFold node — the fold is a plain reducer job.",
   "visibility": "public"
 }
